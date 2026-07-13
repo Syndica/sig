@@ -21,7 +21,8 @@ const Shred = lib.shred.Shred;
 /// Takes in shreds, and writes out deshredded fec sets.
 /// For full docs see `services/shred_receiver.zig`.
 pub const Receiver = struct {
-    /// Borrowed from `init`'s caller; used only to grow `dead_slots`.
+    /// Borrowed from `init`'s caller; used only to grow `dead_slots` and
+    /// `slot_parents`.
     allocator: std.mem.Allocator,
 
     // We will ignore shreds outside of this range, as they're not useful to us
@@ -40,6 +41,17 @@ pub const Receiver = struct {
     /// blockstore row agave keeps even for dead slots. Pruned in
     /// `updateSlotRange` once the root advances past the slot.
     dead_slots: std.AutoHashMapUnmanaged(Slot, void),
+
+    /// First-seen `parent_slot` (i.e. `shred.slot - parent_offset`) for
+    /// every slot we have accepted a data shred from. A non-genesis slot
+    /// has a single parent in the canonical fork tree, so any later data
+    /// shred declaring a different parent is a protocol violation and
+    /// marks the slot dead. Agave enforces the same invariant in
+    /// `should_insert_data_shred` via `slot_meta.parent_slot` (agave
+    /// `ledger/src/blockstore.rs`); without it, fuzz-crafted shreds with
+    /// identical merkle roots but mismatched `parent_offset` slip past
+    /// the merkle/chained-merkle checks. Pruned in `updateSlotRange`.
+    slot_parents: std.AutoHashMapUnmanaged(Slot, Slot),
 
     in_progress: InProgressSets,
     done: DoneSets,
@@ -66,6 +78,7 @@ pub const Receiver = struct {
             .in_progress = in_progress,
             .done = done,
             .dead_slots = .empty,
+            .slot_parents = .empty,
 
             .allocator = allocator,
             .root_slot = 0,
@@ -78,6 +91,7 @@ pub const Receiver = struct {
         self.in_progress.deinit(allocator);
         self.done.deinit(allocator);
         self.dead_slots.deinit(allocator);
+        self.slot_parents.deinit(allocator);
     }
 
     /// Reset to the post-init state without freeing any heap memory. Intended
@@ -88,6 +102,7 @@ pub const Receiver = struct {
         self.in_progress.reset();
         self.done.reset();
         self.dead_slots.clearRetainingCapacity();
+        self.slot_parents.clearRetainingCapacity();
         self.root_slot = 0;
         self.max_slot = std.math.maxInt(Slot);
         self.features = .{};
@@ -112,6 +127,18 @@ pub const Receiver = struct {
         }
         for (stale_buf[0..stale_len]) |slot| _ = self.dead_slots.remove(slot);
 
+        // Same bounded prune for `slot_parents`.
+        stale_len = 0;
+        var pit = self.slot_parents.iterator();
+        while (pit.next()) |entry| {
+            if (entry.key_ptr.* < root_slot) {
+                if (stale_len == stale_buf.len) break;
+                stale_buf[stale_len] = entry.key_ptr.*;
+                stale_len += 1;
+            }
+        }
+        for (stale_buf[0..stale_len]) |slot| _ = self.slot_parents.remove(slot);
+
         // TODO: this is where we would add code to prune entries outside of the new range.
     }
 
@@ -120,11 +147,11 @@ pub const Receiver = struct {
     /// is unrecoverable, and the deshred-ring emission step suppresses
     /// output for the slot. The FEC accumulator's record of which shreds
     /// arrived for `slot` is left untouched — insertion-layer protocol
-    /// invariants are what gate further shreds, not this flag. In-progress
-    /// ctxs for dead slots are reclaimed by normal pool eviction and the
-    /// root-advance prune. OOM growing the dead-slot set is silently
-    /// dropped: the slot failed once; downstream callers already saw the
-    /// originating error.
+    /// invariants (`slot_parents`, chained-merkle equality) are what gate
+    /// further shreds, not this flag. In-progress ctxs for dead slots are
+    /// reclaimed by normal pool eviction and the root-advance prune. OOM
+    /// growing the dead-slot set is silently dropped: the slot failed
+    /// once; downstream callers already saw the originating error.
     pub fn markSlotDead(self: *Receiver, slot: Slot) void {
         self.dead_slots.put(self.allocator, slot, {}) catch {};
     }
@@ -204,6 +231,48 @@ pub const Receiver = struct {
             const merkle_layer_count = 7;
             if (shred.variant.merkle_count > merkle_layer_count - 1) {
                 return error.MerkleCountTooLarge;
+            }
+        }
+
+        // Per-slot `parent_slot` consistency. Every data shred in a slot
+        // must declare the same parent (`shred.slot - parent_offset`); the
+        // slot has a single position in the fork tree. Agave enforces this
+        // in `Blockstore::should_insert_data_shred` (the
+        // `meta_parent_slot != shred_parent` branch in
+        // `ledger/src/blockstore.rs`): a mismatch returns InvalidShred,
+        // which causes `mark_slot_dead_if_not_full`. Without this check,
+        // fuzz-crafted shreds whose proof bytes collide on a single merkle
+        // root can still smuggle in mismatched parents and slip past the
+        // merkle / chained-merkle equality checks above.
+        if (shred.variant.isData()) {
+            const parent_slot = shred.slot - shred.code_or_data.data.parent_offset;
+            // [agave] Drop data shreds whose declared parent is older than
+            // the current root: agave's
+            // `ShredFilterContext::should_discard_shred` rejects these at
+            // the layout level via `verify_shred_slots` (in
+            // `ledger/src/shred/filter.rs`) before they ever reach
+            // `insert_shreds`, so they never participate in the slot-meta
+            // `meta_parent_slot != shred_parent` check below and never
+            // trigger `mark_slot_dead_if_not_full`. Without this gate, a
+            // fuzz-crafted shred whose `parent_offset` chains to a
+            // pre-root slot would be treated here as a slot_parents
+            // conflict and incorrectly mark the slot dead, diverging from
+            // agave.
+            if (parent_slot < state.root_slot) return error.ShredParentBeforeRoot;
+            const gop = state.slot_parents.getOrPut(state.allocator, shred.slot) catch {
+                // OOM: skip the bookkeeping rather than fail-closed. The
+                // worst case is missing this check on a later shred, which
+                // mirrors agave's behavior when its slot meta lookup
+                // encounters allocator pressure.
+                return error.NoSpaceLeft;
+            };
+            if (gop.found_existing) {
+                if (gop.value_ptr.* != parent_slot) {
+                    state.markSlotDead(shred.slot);
+                    return error.ParentSlotMismatch;
+                }
+            } else {
+                gop.value_ptr.* = parent_slot;
             }
         }
 
