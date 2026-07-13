@@ -879,6 +879,31 @@ const Builder = struct {
     }
 };
 
+fn expectNextInstruction(
+    iterator: *VersionedTransaction.View.CompiledInstructionIter,
+    expected_program_id_index: u8,
+    expected_account_indexes: []const u8,
+    expected_data: []const u8,
+) !void {
+    const actual = (try iterator.next()) orelse
+        return error.ExpectedInstruction;
+
+    try testing.expectEqual(
+        expected_program_id_index,
+        actual.program_id_index,
+    );
+    try testing.expectEqualSlices(
+        u8,
+        expected_account_indexes,
+        actual.account_indexes,
+    );
+    try testing.expectEqualSlices(
+        u8,
+        expected_data,
+        actual.data,
+    );
+}
+
 test "parseTransaction: baseline legacy txn passes" {
     const signature = Signature.parse(
         "3B7i4RJ2gzYq1U3prY97TMUaMzGE1LRQB2td7z69Wtir3noBNJACFAwNWSp16uXKS2d6pw1mwYLgFUtdVXc8mFsJ",
@@ -968,39 +993,42 @@ test "parseTransaction: baseline legacy txn passes" {
     );
 
     var instructions = view.instructions();
-    const ix = (try instructions.next()).?;
-    try testing.expectEqual(@as(u8, 1), ix.program_id_index);
-    try testing.expectEqualSlices(u8, &.{0}, ix.account_indexes);
-    try testing.expectEqualSlices(u8, &ix_data, ix.data);
+    try expectNextInstruction(&instructions, 1, &.{0}, &ix_data);
     try testing.expectEqual(null, try instructions.next());
 
     var lookups = view.addressTableLookups();
     try testing.expectEqual(null, try lookups.next());
 }
 
-test "parseTransaction: layout offsets are transaction-relative" {
+test "parseTransaction: layouts are transaction-relative in a stream" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
 
-    var plain_buf: [VersionedTransaction.MAX_BYTES]u8 = undefined;
-    const plain_bytes = try b.serialize(.legacy, &plain_buf);
-
-    var plain_reader: SliceReader = .{ .bytes = plain_bytes };
-    const expected = try VersionedTransaction.parse(&plain_reader);
-
     const prefix_len = 17;
-    var prefixed_buf: [VersionedTransaction.MAX_BYTES + prefix_len]u8 = undefined;
-    @memset(prefixed_buf[0..prefix_len], 0xaa);
-    const prefixed_tx = try b.serialize(.legacy, prefixed_buf[prefix_len..]);
+    var stream: [prefix_len + 2 * VersionedTransaction.MAX_BYTES]u8 = undefined;
+    @memset(stream[0..prefix_len], 0xaa);
 
-    var prefixed_reader: SliceReader = .{
-        .bytes = prefixed_buf[0 .. prefix_len + prefixed_tx.len],
+    const first_bytes = try b.serialize(.legacy, stream[prefix_len..]);
+    const second_start = prefix_len + first_bytes.len;
+    const second_bytes = try b.serialize(.legacy, stream[second_start..]);
+    const stream_len = second_start + second_bytes.len;
+
+    var reader: SliceReader = .{
+        .bytes = stream[0..stream_len],
         .pos = prefix_len,
     };
-    const actual = try VersionedTransaction.parse(&prefixed_reader);
 
-    try testing.expectEqualDeep(expected, actual);
-    try testing.expectEqual(prefix_len + prefixed_tx.len, prefixed_reader.pos);
+    const first_layout = try VersionedTransaction.parse(&reader);
+    try testing.expectEqual(second_start, reader.bytesConsumed());
+
+    const second_layout = try VersionedTransaction.parse(&reader);
+    try testing.expectEqual(stream_len, reader.bytesConsumed());
+
+    // Both transactions have identical wire layouts even though they started
+    // at different absolute positions in the reader.
+    try testing.expectEqualDeep(first_layout, second_layout);
+    try testing.expectEqual(first_bytes.len, @as(usize, first_layout.payload_len));
+    try testing.expectEqual(second_bytes.len, @as(usize, second_layout.payload_len));
 }
 
 test "parseTransaction: NoSignatures" {
@@ -1272,10 +1300,7 @@ test "parseTransaction: v0 layout and lookup iterator" {
     );
 
     var instructions = view.instructions();
-    const ix = (try instructions.next()).?;
-    try testing.expectEqual(@as(u8, 1), ix.program_id_index);
-    try testing.expectEqualSlices(u8, &.{ 2, 7 }, ix.account_indexes);
-    try testing.expectEqualSlices(u8, &ix_data, ix.data);
+    try expectNextInstruction(&instructions, 1, &.{ 2, 7 }, &ix_data);
     try testing.expectEqual(null, try instructions.next());
 
     var lookups = view.addressTableLookups();
