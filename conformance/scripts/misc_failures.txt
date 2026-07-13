@@ -1,5 +1,3 @@
-instr/fixtures/bpf-loader-v3/c147e31023116aaec567c2f361f78c02509cbb22_1336603.fix
-instr/fixtures/bpf-loader-v3/crash-16024ef412d62b56856d9ce608805519d74852af.fix
 instr/fixtures/compute-budget/14197ffc9df6bccd59b71660946b1a0e.000db352.honggfuzz.bin.fix
 instr/fixtures/compute-budget/663ac092ab2043c0d0f6555055ec51e3.000db353.honggfuzz.bin.fix
 instr/fixtures/compute-budget/7c11b718221ffabdae5cfd4c82e623a0.000db33c.honggfuzz.bin.fix
