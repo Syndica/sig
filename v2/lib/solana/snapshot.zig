@@ -706,7 +706,7 @@ pub fn SnapshotIter(comptime BufReader: type) type {
 pub fn TarZstIter(comptime BufReader: type) type {
     lib.util.assertInterface(BufReader, struct {
         /// Get a slice of readable memory. Returns empty slice on EOF.
-        pub fn getBuffer(self: BufReader) ?[]const u8 {
+        pub fn getBuffer(self: BufReader) []const u8 {
             _ = .{self};
             return undefined;
         }
