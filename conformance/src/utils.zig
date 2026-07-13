@@ -277,17 +277,36 @@ pub fn createInstructionInfo(
             dedupe_map[acc.index] = @intCast(idx);
     }
 
+    // An account called as a program is write-demoted to read-only during
+    // message sanitization (unless an upgradeable loader is present). The
+    // instruction harness bypasses message compilation, so replicate the
+    // demotion here to match agave's `mock_compile_message` writability.
+    // agave sanitizes with an empty reserved-accounts set, so only the
+    // program-id demotion applies here (no sysvar/native-program demotion).
+    // [agave] https://github.com/anza-xyz/agave/blob/6dcc39fcba90fbb5c924c71a1ef287c234f56c17/accounts-db/src/accounts.rs#L105
+    const v3_id = sig.runtime.program.bpf_loader.v3.ID;
+    const is_upgradeable_loader_present = blk: {
+        if (program_id.equals(&v3_id)) break :blk true;
+        for (pb_instruction_accounts) |acc| {
+            const tc_acc = tc.getAccountAtIndex(@intCast(acc.index)) orelse continue;
+            if (tc_acc.pubkey.equals(&v3_id)) break :blk true;
+        }
+        break :blk false;
+    };
+
     var instruction_accounts = InstructionInfo.AccountMetas{};
     errdefer instruction_accounts.deinit(allocator);
 
     for (pb_instruction_accounts) |account| {
         const tc_acc = tc.getAccountAtIndex(@intCast(account.index)) orelse
             return error.AccountNotInTransaction;
+        const demote_program_id = tc_acc.pubkey.equals(&program_id) and
+            !is_upgradeable_loader_present;
         try instruction_accounts.append(allocator, .{
             .pubkey = tc_acc.pubkey,
             .index_in_transaction = @intCast(account.index),
             .is_signer = account.is_signer,
-            .is_writable = account.is_writable,
+            .is_writable = account.is_writable and !demote_program_id,
         });
     }
 
