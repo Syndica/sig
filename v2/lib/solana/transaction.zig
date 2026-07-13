@@ -525,7 +525,7 @@ pub const VersionedTransaction = struct {
 /// non-canonical encodings and values that overflow `u16`. Shared between
 /// `parseTransaction` and the merkle-linked stream walker in replay.zig,
 /// so both agree on framing rejects.
-pub fn readShortU16(reader: anytype) VersionedTransaction.ParseError!u16 {
+fn readShortU16(reader: anytype) VersionedTransaction.ParseError!u16 {
     var val: u32 = 0;
     for (0..3) |nth_byte| {
         const b = try reader.readByte();
