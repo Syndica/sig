@@ -728,6 +728,7 @@ const Builder = struct {
         .num_readonly_unsigned_accounts = 1,
     },
     account_keys: std.ArrayList(Pubkey) = .empty,
+    recent_blockhash: Hash = Hash.ZEROES,
     instructions: std.ArrayList(CompiledInstruction) = .empty,
     alts: std.ArrayList(AddressLookup) = .empty,
 
@@ -758,32 +759,64 @@ const Builder = struct {
         try self.signatures.appendNTimes(self.allocator, Signature.ZEROES, n);
     }
 
+    fn pushSig(self: *Builder, signature: Signature) !void {
+        try self.signatures.append(self.allocator, signature);
+    }
+
     /// Push `n` distinct pubkeys.
     fn pushKeys(self: *Builder, n: u8) !void {
         var i: u8 = 0;
         while (i < n) : (i += 1) try self.account_keys.append(self.allocator, pubkey(i));
     }
 
-    fn pushInstr(self: *Builder, program_id_index: u8, accounts: []const u8) !void {
+    fn pushKey(self: *Builder, pubkey_value: Pubkey) !void {
+        try self.account_keys.append(self.allocator, pubkey_value);
+    }
+
+    fn setRecentBlockhash(self: *Builder, recent_blockhash: Hash) void {
+        self.recent_blockhash = recent_blockhash;
+    }
+
+    fn pushInstrWithData(
+        self: *Builder,
+        program_id_index: u8,
+        accounts: []const u8,
+        data: []const u8,
+    ) !void {
         const accounts_copy = try self.allocator.dupe(u8, accounts);
         errdefer self.allocator.free(accounts_copy);
+        const data_copy = try self.allocator.dupe(u8, data);
+        errdefer self.allocator.free(data_copy);
         try self.instructions.append(self.allocator, .{
             .program_id_index = program_id_index,
             .accounts = .{ .items = accounts_copy },
-            .data = .{ .items = &.{} },
+            .data = .{ .items = data_copy },
         });
     }
 
-    fn pushAlt(self: *Builder, writable: []const u8, readonly: []const u8) !void {
+    fn pushInstr(self: *Builder, program_id_index: u8, accounts: []const u8) !void {
+        try self.pushInstrWithData(program_id_index, accounts, &.{});
+    }
+
+    fn pushAltWithKey(
+        self: *Builder,
+        account_key: Pubkey,
+        writable: []const u8,
+        readonly: []const u8,
+    ) !void {
         const w = try self.allocator.dupe(u8, writable);
         errdefer self.allocator.free(w);
         const r = try self.allocator.dupe(u8, readonly);
         errdefer self.allocator.free(r);
         try self.alts.append(self.allocator, .{
-            .account_key = pubkey(0xff),
+            .account_key = account_key,
             .writable_indexes = .{ .items = w },
             .readonly_indexes = .{ .items = r },
         });
+    }
+
+    fn pushAlt(self: *Builder, writable: []const u8, readonly: []const u8) !void {
+        try self.pushAltWithKey(pubkey(0xff), writable, readonly);
     }
 
     fn build(self: *Builder, kind: std.meta.Tag(VersionedMessage)) VersionedTransaction {
@@ -793,13 +826,13 @@ const Builder = struct {
             .legacy => .{ .legacy = .{
                 .header = self.header,
                 .account_keys = .{ .items = self.account_keys.items },
-                .recent_blockhash = Hash.ZEROES,
+                .recent_blockhash = self.recent_blockhash,
                 .instructions = .{ .items = self.instructions.items },
             } },
             .v0 => .{ .v0 = .{
                 .header = self.header,
                 .account_keys = .{ .items = self.account_keys.items },
-                .recent_blockhash = Hash.ZEROES,
+                .recent_blockhash = self.recent_blockhash,
                 .instructions = .{ .items = self.instructions.items },
                 .address_table_lookups = .{ .items = self.alts.items },
             } },
@@ -846,153 +879,22 @@ const Builder = struct {
     }
 };
 
-fn expectBaselineLegacyLayout(
-    payload_len: usize,
-    layout: VersionedTransaction.Layout,
-) !void {
-    try testing.expectEqual(payload_len, @as(usize, layout.payload_len));
-
-    try testing.expectEqual(@as(u16, 1), layout.signatures_off);
-    try testing.expectEqual(@as(u16, 65), layout.message_off);
-    try testing.expectEqual(@as(u16, 104), layout.message_len);
-    try testing.expectEqual(@as(u16, 69), layout.static_keys_off);
-    try testing.expectEqual(@as(u16, 133), layout.recent_blockhash_off);
-    try testing.expectEqual(@as(u16, 166), layout.instructions_off);
-    try testing.expectEqual(@as(u16, 169), layout.address_table_lookups_off);
-
-    try testing.expectEqual(VersionedMessage.VersionByte.legacy, layout.version);
-
-    try testing.expectEqual(@as(u8, 1), layout.signature_count);
-    try testing.expectEqual(@as(u8, 2), layout.static_key_count);
-    try testing.expectEqual(@as(u8, 1), layout.instruction_count);
-    try testing.expectEqual(@as(u8, 0), layout.address_table_lookup_count);
-
-    try testing.expectEqual(@as(u8, 0), layout.loaded_writable_count);
-    try testing.expectEqual(@as(u8, 0), layout.loaded_readonly_count);
-
-    try testing.expectEqual(@as(u8, 0), layout.num_readonly_signed_accounts);
-    try testing.expectEqual(@as(u8, 1), layout.num_readonly_unsigned_accounts);
-}
-
-fn expectViewMatchesBuilder(
-    b: *const Builder,
-    bytes: []const u8,
-    layout: *const VersionedTransaction.Layout,
-) !void {
-    const view: VersionedTransaction.View = .{
-        .layout = layout,
-        .payload = bytes,
-    };
-
-    try testing.expectEqual(bytes.len, @as(usize, layout.payload_len));
-    try testing.expectEqual(
-        @as(usize, layout.payload_len),
-        @as(usize, layout.message_off) + @as(usize, layout.message_len),
+test "parseTransaction: baseline legacy txn passes" {
+    const signature = Signature.parse(
+        "3B7i4RJ2gzYq1U3prY97TMUaMzGE1LRQB2td7z69Wtir3noBNJACFAwNWSp16uXKS2d6pw1mwYLgFUtdVXc8mFsJ",
     );
+    const fee_payer = Pubkey.parse("SyndicAgdEphcy5xhAKZAomTYhcF8xhC7za2UD9xeug");
+    const program = Pubkey.parse("ComputeBudget111111111111111111111111111111");
+    const recent_blockhash = Hash.parse("4uQeVj5tqViQh7yWWGStvkEG1Zmhx6uasJtWCJziofM");
+    const ix_data = [_]u8{ 0x34, 0x12, 0xab, 0xcd };
 
-    const header = view.header();
-    try testing.expectEqual(b.header.num_required_signatures, header.num_required_signatures);
-    try testing.expectEqual(
-        b.header.num_readonly_signed_accounts,
-        header.num_readonly_signed_accounts,
-    );
-    try testing.expectEqual(
-        b.header.num_readonly_unsigned_accounts,
-        header.num_readonly_unsigned_accounts,
-    );
-
-    try testing.expectEqual(@as(usize, b.signatures.items.len), @as(
-        usize,
-        layout.signature_count,
-    ));
-    try testing.expectEqual(@as(usize, b.account_keys.items.len), @as(
-        usize,
-        layout.static_key_count,
-    ));
-    try testing.expectEqual(@as(usize, b.instructions.items.len), @as(
-        usize,
-        layout.instruction_count,
-    ));
-    try testing.expectEqual(@as(usize, b.alts.items.len), @as(
-        usize,
-        layout.address_table_lookup_count,
-    ));
-
-    var expected_loaded_writable_count: usize = 0;
-    var expected_loaded_readonly_count: usize = 0;
-    for (b.alts.items) |alt| {
-        expected_loaded_writable_count += alt.writable_indexes.items.len;
-        expected_loaded_readonly_count += alt.readonly_indexes.items.len;
-    }
-
-    try testing.expectEqual(
-        expected_loaded_writable_count,
-        @as(usize, layout.loaded_writable_count),
-    );
-    try testing.expectEqual(
-        expected_loaded_readonly_count,
-        @as(usize, layout.loaded_readonly_count),
-    );
-    try testing.expectEqual(
-        expected_loaded_writable_count + expected_loaded_readonly_count,
-        view.loadedAddressCount(),
-    );
-    try testing.expectEqual(
-        b.account_keys.items.len + expected_loaded_writable_count + expected_loaded_readonly_count,
-        view.totalAccountCount(),
-    );
-    try testing.expectEqual(b.alts.items.len != 0, view.hasAddressTableLookups());
-
-    try testing.expectEqualSlices(
-        u8,
-        std.mem.sliceAsBytes(b.signatures.items),
-        std.mem.sliceAsBytes(view.signatures()),
-    );
-    try testing.expectEqualSlices(
-        u8,
-        std.mem.sliceAsBytes(b.account_keys.items),
-        std.mem.sliceAsBytes(view.staticAccountKeys()),
-    );
-
-    try testing.expectEqualSlices(u8, &Hash.ZEROES.data, &view.recentBlockhash().data);
-    try testing.expectEqualSlices(
-        u8,
-        bytes[layout.message_off..][0..layout.message_len],
-        view.messageBytes(),
-    );
-
-    var instructions = view.instructions();
-    for (b.instructions.items) |expected| {
-        const actual = (try instructions.next()).?;
-
-        try testing.expectEqual(expected.program_id_index, actual.program_id_index);
-        try testing.expectEqualSlices(u8, expected.accounts.items, actual.account_indexes);
-        try testing.expectEqualSlices(u8, expected.data.items, actual.data);
-    }
-    try testing.expectEqual(null, try instructions.next());
-
-    var lookups = view.addressTableLookups();
-    for (b.alts.items) |expected| {
-        const actual = (try lookups.next()).?;
-
-        try testing.expectEqualSlices(u8, &expected.account_key.data, &actual.account_key.data);
-        try testing.expectEqualSlices(
-            u8,
-            expected.writable_indexes.items,
-            actual.writable_indexes,
-        );
-        try testing.expectEqualSlices(
-            u8,
-            expected.readonly_indexes.items,
-            actual.readonly_indexes,
-        );
-    }
-    try testing.expectEqual(null, try lookups.next());
-}
-
-test "parseTransaction: legacy layout and view" {
-    var b = try Builder.baselineLegacy(testing.allocator);
+    var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
+    try b.pushSig(signature);
+    try b.pushKey(fee_payer);
+    try b.pushKey(program);
+    b.setRecentBlockhash(recent_blockhash);
+    try b.pushInstrWithData(1, &.{0}, &ix_data);
 
     var buf: [VersionedTransaction.MAX_BYTES]u8 = undefined;
     const bytes = try b.serialize(.legacy, &buf);
@@ -1000,27 +902,105 @@ test "parseTransaction: legacy layout and view" {
     var reader: SliceReader = .{ .bytes = bytes };
     const layout = try VersionedTransaction.parse(&reader);
 
-    try expectBaselineLegacyLayout(bytes.len, layout);
-    try expectViewMatchesBuilder(&b, bytes, &layout);
+    const expected_message_off = 1 + Signature.SIZE;
+    const expected_static_keys_off = expected_message_off + 3 + 1;
+    const expected_recent_blockhash_off = expected_static_keys_off + 2 * Pubkey.SIZE;
+    const expected_instructions_off = expected_recent_blockhash_off + Hash.SIZE + 1;
+    const expected_instruction_len = 1 + 1 + 1 + 1 + ix_data.len;
+    const expected_payload_len = expected_instructions_off + expected_instruction_len;
+
+    try testing.expectEqual(expected_payload_len, bytes.len);
+    try testing.expectEqual(bytes.len, reader.bytesConsumed());
+    try testing.expectEqual(@as(u16, expected_payload_len), layout.payload_len);
+    try testing.expectEqual(@as(u16, 1), layout.signatures_off);
+    try testing.expectEqual(@as(u16, expected_message_off), layout.message_off);
+    try testing.expectEqual(
+        @as(u16, expected_payload_len - expected_message_off),
+        layout.message_len,
+    );
+    try testing.expectEqual(
+        layout.payload_len,
+        layout.message_off + layout.message_len,
+    );
+    try testing.expectEqual(@as(u16, expected_static_keys_off), layout.static_keys_off);
+    try testing.expectEqual(
+        @as(u16, expected_recent_blockhash_off),
+        layout.recent_blockhash_off,
+    );
+    try testing.expectEqual(@as(u16, expected_instructions_off), layout.instructions_off);
+    try testing.expectEqual(@as(u16, expected_payload_len), layout.address_table_lookups_off);
+    try testing.expectEqual(VersionedMessage.VersionByte.legacy, layout.version);
+    try testing.expectEqual(@as(u8, 1), layout.signature_count);
+    try testing.expectEqual(@as(u8, 2), layout.static_key_count);
+    try testing.expectEqual(@as(u8, 1), layout.instruction_count);
+    try testing.expectEqual(@as(u8, 0), layout.address_table_lookup_count);
+    try testing.expectEqual(@as(u8, 0), layout.loaded_writable_count);
+    try testing.expectEqual(@as(u8, 0), layout.loaded_readonly_count);
+    try testing.expectEqual(@as(u8, 0), layout.num_readonly_signed_accounts);
+    try testing.expectEqual(@as(u8, 1), layout.num_readonly_unsigned_accounts);
+
+    const view: VersionedTransaction.View = .{ .layout = &layout, .payload = bytes };
+    const header = view.header();
+    try testing.expectEqual(@as(u8, 1), header.num_required_signatures);
+    try testing.expectEqual(@as(u8, 0), header.num_readonly_signed_accounts);
+    try testing.expectEqual(@as(u8, 1), header.num_readonly_unsigned_accounts);
+    try testing.expectEqual(@as(usize, 0), view.loadedAddressCount());
+    try testing.expectEqual(@as(usize, 2), view.totalAccountCount());
+    try testing.expect(!view.hasAddressTableLookups());
+
+    const expected_signatures = [_]Signature{signature};
+    const expected_keys = [_]Pubkey{ fee_payer, program };
+    try testing.expectEqualSlices(
+        u8,
+        std.mem.sliceAsBytes(expected_signatures[0..]),
+        std.mem.sliceAsBytes(view.signatures()),
+    );
+    try testing.expectEqualSlices(
+        u8,
+        std.mem.sliceAsBytes(expected_keys[0..]),
+        std.mem.sliceAsBytes(view.staticAccountKeys()),
+    );
+    try testing.expectEqualSlices(u8, &recent_blockhash.data, &view.recentBlockhash().data);
+    try testing.expectEqualSlices(
+        u8,
+        bytes[expected_message_off..expected_payload_len],
+        view.messageBytes(),
+    );
+
+    var instructions = view.instructions();
+    const ix = (try instructions.next()).?;
+    try testing.expectEqual(@as(u8, 1), ix.program_id_index);
+    try testing.expectEqualSlices(u8, &.{0}, ix.account_indexes);
+    try testing.expectEqualSlices(u8, &ix_data, ix.data);
+    try testing.expectEqual(null, try instructions.next());
+
+    var lookups = view.addressTableLookups();
+    try testing.expectEqual(null, try lookups.next());
 }
 
 test "parseTransaction: layout offsets are transaction-relative" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
 
-    const prefix_len = 17;
-    var buf: [VersionedTransaction.MAX_BYTES + prefix_len]u8 = undefined;
-    @memset(buf[0..prefix_len], 0xaa);
-    const bytes = try b.serialize(.legacy, buf[prefix_len..]);
+    var plain_buf: [VersionedTransaction.MAX_BYTES]u8 = undefined;
+    const plain_bytes = try b.serialize(.legacy, &plain_buf);
 
-    var reader: SliceReader = .{
-        .bytes = buf[0 .. prefix_len + bytes.len],
+    var plain_reader: SliceReader = .{ .bytes = plain_bytes };
+    const expected = try VersionedTransaction.parse(&plain_reader);
+
+    const prefix_len = 17;
+    var prefixed_buf: [VersionedTransaction.MAX_BYTES + prefix_len]u8 = undefined;
+    @memset(prefixed_buf[0..prefix_len], 0xaa);
+    const prefixed_tx = try b.serialize(.legacy, prefixed_buf[prefix_len..]);
+
+    var prefixed_reader: SliceReader = .{
+        .bytes = prefixed_buf[0 .. prefix_len + prefixed_tx.len],
         .pos = prefix_len,
     };
-    const layout = try VersionedTransaction.parse(&reader);
+    const actual = try VersionedTransaction.parse(&prefixed_reader);
 
-    try expectBaselineLegacyLayout(bytes.len, layout);
-    try expectViewMatchesBuilder(&b, bytes, &layout);
+    try testing.expectEqualDeep(expected, actual);
+    try testing.expectEqual(prefix_len + prefixed_tx.len, prefixed_reader.pos);
 }
 
 test "parseTransaction: NoSignatures" {
@@ -1191,14 +1171,26 @@ test "parseTransaction: AccountIndexOutOfBounds (no ALT)" {
 }
 
 test "parseTransaction: v0 layout and lookup iterator" {
+    const signature = Signature.parse(
+        "3B7i4RJ2gzYq1U3prY97TMUaMzGE1LRQB2td7z69Wtir3noBNJACFAwNWSp16uXKS2d6pw1mwYLgFUtdVXc8mFsJ",
+    );
+    const fee_payer = Pubkey.parse("SyndicAgdEphcy5xhAKZAomTYhcF8xhC7za2UD9xeug");
+    const program = Pubkey.parse("ComputeBudget111111111111111111111111111111");
+    const table_0 = Pubkey.parse("SysvarC1ock11111111111111111111111111111111");
+    const table_1 = Pubkey.parse("SysvarRent111111111111111111111111111111111");
+    const recent_blockhash = Hash.parse("4uQeVj5tqViQh7yWWGStvkEG1Zmhx6uasJtWCJziofM");
+    const ix_data = [_]u8{ 0xde, 0xad, 0xbe };
+
     var b: Builder = .{ .allocator = testing.allocator };
     defer b.deinit();
-    try b.pushSigs(1);
-    try b.pushKeys(2);
+    try b.pushSig(signature);
+    try b.pushKey(fee_payer);
+    try b.pushKey(program);
+    b.setRecentBlockhash(recent_blockhash);
     // Instruction references ALT-loaded addresses beyond the static keys.
-    try b.pushInstr(1, &.{ 2, 7 });
-    try b.pushAlt(&.{ 1, 3 }, &.{2});
-    try b.pushAlt(&.{4}, &.{ 0, 5 });
+    try b.pushInstrWithData(1, &.{ 2, 7 }, &ix_data);
+    try b.pushAltWithKey(table_0, &.{ 1, 3 }, &.{2});
+    try b.pushAltWithKey(table_1, &.{4}, &.{ 0, 5 });
 
     var buf: [VersionedTransaction.MAX_BYTES]u8 = undefined;
     const bytes = try b.serialize(.v0, &buf);
@@ -1206,12 +1198,97 @@ test "parseTransaction: v0 layout and lookup iterator" {
     var reader: SliceReader = .{ .bytes = bytes };
     const layout = try VersionedTransaction.parse(&reader);
 
+    const expected_message_off = 1 + Signature.SIZE;
+    const expected_static_keys_off = expected_message_off + 1 + 3 + 1;
+    const expected_recent_blockhash_off = expected_static_keys_off + 2 * Pubkey.SIZE;
+    const expected_instructions_off = expected_recent_blockhash_off + Hash.SIZE + 1;
+    const expected_instruction_len = 1 + 1 + 2 + 1 + ix_data.len;
+    const expected_address_table_lookups_off = expected_instructions_off +
+        expected_instruction_len + 1;
+    const expected_lookup_0_len = Pubkey.SIZE + 1 + 2 + 1 + 1;
+    const expected_lookup_1_len = Pubkey.SIZE + 1 + 1 + 1 + 2;
+    const expected_payload_len = expected_address_table_lookups_off +
+        expected_lookup_0_len + expected_lookup_1_len;
+
+    try testing.expectEqual(expected_payload_len, bytes.len);
+    try testing.expectEqual(bytes.len, reader.bytesConsumed());
+    try testing.expectEqual(@as(u16, expected_payload_len), layout.payload_len);
+    try testing.expectEqual(@as(u16, 1), layout.signatures_off);
+    try testing.expectEqual(@as(u16, expected_message_off), layout.message_off);
+    try testing.expectEqual(
+        @as(u16, expected_payload_len - expected_message_off),
+        layout.message_len,
+    );
+    try testing.expectEqual(
+        layout.payload_len,
+        layout.message_off + layout.message_len,
+    );
+    try testing.expectEqual(@as(u16, expected_static_keys_off), layout.static_keys_off);
+    try testing.expectEqual(
+        @as(u16, expected_recent_blockhash_off),
+        layout.recent_blockhash_off,
+    );
+    try testing.expectEqual(@as(u16, expected_instructions_off), layout.instructions_off);
+    try testing.expectEqual(
+        @as(u16, expected_address_table_lookups_off),
+        layout.address_table_lookups_off,
+    );
     try testing.expectEqual(VersionedMessage.VersionByte.v0, layout.version);
+    try testing.expectEqual(@as(u8, 1), layout.signature_count);
+    try testing.expectEqual(@as(u8, 2), layout.static_key_count);
+    try testing.expectEqual(@as(u8, 1), layout.instruction_count);
     try testing.expectEqual(@as(u8, 2), layout.address_table_lookup_count);
     try testing.expectEqual(@as(u8, 3), layout.loaded_writable_count);
     try testing.expectEqual(@as(u8, 3), layout.loaded_readonly_count);
+    try testing.expectEqual(@as(u8, 0), layout.num_readonly_signed_accounts);
+    try testing.expectEqual(@as(u8, 1), layout.num_readonly_unsigned_accounts);
 
-    try expectViewMatchesBuilder(&b, bytes, &layout);
+    const view: VersionedTransaction.View = .{ .layout = &layout, .payload = bytes };
+    const header = view.header();
+    try testing.expectEqual(@as(u8, 1), header.num_required_signatures);
+    try testing.expectEqual(@as(u8, 0), header.num_readonly_signed_accounts);
+    try testing.expectEqual(@as(u8, 1), header.num_readonly_unsigned_accounts);
+    try testing.expectEqual(@as(usize, 6), view.loadedAddressCount());
+    try testing.expectEqual(@as(usize, 8), view.totalAccountCount());
+    try testing.expect(view.hasAddressTableLookups());
+
+    const expected_signatures = [_]Signature{signature};
+    const expected_keys = [_]Pubkey{ fee_payer, program };
+    try testing.expectEqualSlices(
+        u8,
+        std.mem.sliceAsBytes(expected_signatures[0..]),
+        std.mem.sliceAsBytes(view.signatures()),
+    );
+    try testing.expectEqualSlices(
+        u8,
+        std.mem.sliceAsBytes(expected_keys[0..]),
+        std.mem.sliceAsBytes(view.staticAccountKeys()),
+    );
+    try testing.expectEqualSlices(u8, &recent_blockhash.data, &view.recentBlockhash().data);
+    try testing.expectEqualSlices(
+        u8,
+        bytes[expected_message_off..expected_payload_len],
+        view.messageBytes(),
+    );
+
+    var instructions = view.instructions();
+    const ix = (try instructions.next()).?;
+    try testing.expectEqual(@as(u8, 1), ix.program_id_index);
+    try testing.expectEqualSlices(u8, &.{ 2, 7 }, ix.account_indexes);
+    try testing.expectEqualSlices(u8, &ix_data, ix.data);
+    try testing.expectEqual(null, try instructions.next());
+
+    var lookups = view.addressTableLookups();
+    const lookup_0 = (try lookups.next()).?;
+    try testing.expectEqualSlices(u8, &table_0.data, &lookup_0.account_key.data);
+    try testing.expectEqualSlices(u8, &.{ 1, 3 }, lookup_0.writable_indexes);
+    try testing.expectEqualSlices(u8, &.{2}, lookup_0.readonly_indexes);
+
+    const lookup_1 = (try lookups.next()).?;
+    try testing.expectEqualSlices(u8, &table_1.data, &lookup_1.account_key.data);
+    try testing.expectEqualSlices(u8, &.{4}, lookup_1.writable_indexes);
+    try testing.expectEqualSlices(u8, &.{ 0, 5 }, lookup_1.readonly_indexes);
+    try testing.expectEqual(null, try lookups.next());
 }
 
 test "parseTransaction: AccountLoadedTwice" {
