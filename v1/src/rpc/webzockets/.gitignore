@@ -1,0 +1,13 @@
+# build outputs
+/.zig-cache
+/zig-cache
+/zig-out
+
+# desktop app config
+.DS_Store
+.vscode/
+
+# Autobahn testsuite reports
+/autobahn/client/reports
+/autobahn/server/reports
+/autobahn/server/server.log
