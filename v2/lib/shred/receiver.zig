@@ -631,6 +631,7 @@ pub const Receiver = struct {
 
         // starting fec set reconstruction now
         // NOTE: as an optimisation we should reconstruct directly into the out buffer
+        const data_received_before_recovery = fec_set_ctx.data_shreds_received;
         {
             const shreds_bitset, const shreds_reedsol_bufs = fec_set_ctx.erasureEncoded();
 
@@ -649,6 +650,41 @@ pub const Receiver = struct {
         }
 
         std.debug.assert(fec_set_ctx.data_shreds_received.count() == FecSetCtx.data_shreds_max);
+
+        // Re-validate every data shred we just reconstructed. RS recovery
+        // fills the erasure-protected region (header + payload) but leaves
+        // the trailer (chained_merkle_root, merkle proof, optional
+        // retransmitter sig) and the leading signature untouched, so we can
+        // only re-check invariants derivable from the recovered bytes:
+        // structural layout, slot/fec_set_idx vs the pinned ctx, variant
+        // consistency, and positional `slot_idx`. The merkle and
+        // chained-merkle roots are pinned on `FecSetCtx` from the first
+        // wire shred; a recovered shred can't disagree with values it
+        // doesn't carry.
+        //
+        // agave runs the equivalent gauntlet in
+        // `Blockstore::handle_shred_recovery` -> `check_insert_data_shred`.
+        for (0..FecSetCtx.data_shreds_max) |idx| {
+            if (data_received_before_recovery.isSet(idx)) continue;
+            var recovered_packet: Packet = .{
+                .data = fec_set_ctx.data_shreds_buf[idx],
+                .len = lib.shred.Shred.min_size,
+                .addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0),
+            };
+            const recovered = Shred.fromPacketChecked(&recovered_packet) catch {
+                state.markSlotDead(shred.slot);
+                return error.RecoveredShredMalformed;
+            };
+            if (recovered.slot != shred.slot or
+                recovered.fec_set_idx != shred.fec_set_idx or
+                !recovered.variant.isData() or
+                !recovered.variant.eql(fec_set_ctx.data_variant) or
+                recovered.slot_idx != shred.fec_set_idx + idx)
+            {
+                state.markSlotDead(shred.slot);
+                return error.RecoveredShredMalformed;
+            }
+        }
 
         // Dead-slot gate: insertion + RS recovery + re-validation have run
         // unconditionally (the FEC accumulator's record matches the
