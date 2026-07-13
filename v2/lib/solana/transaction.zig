@@ -1316,6 +1316,120 @@ test "parseTransaction: v0 layout and lookup iterator" {
     try testing.expectEqual(null, try lookups.next());
 }
 
+test "parseTransaction: variable instructions from nonzero reader offset" {
+    var b = try Builder.baselineLegacy(testing.allocator);
+    defer b.deinit();
+
+    b.allocator.free(b.instructions.items[0].accounts.items);
+    b.allocator.free(b.instructions.items[0].data.items);
+    b.instructions.clearRetainingCapacity();
+
+    try b.pushInstrWithData(1, &.{ 0, 1 }, &.{ 0xaa, 0xbb });
+
+    var accounts: [128]u8 = undefined;
+    @memset(&accounts, 1);
+    var data: [128]u8 = undefined;
+    for (&data, 0..) |*byte, i| byte.* = @intCast(i);
+
+    try b.pushInstrWithData(1, &accounts, &data);
+
+    const prefix_len = 17;
+    var buf: [prefix_len + VersionedTransaction.MAX_BYTES]u8 = undefined;
+    @memset(buf[0..prefix_len], 0xaa);
+
+    const bytes = try b.serialize(.legacy, buf[prefix_len..]);
+
+    var reader: SliceReader = .{
+        .bytes = buf[0 .. prefix_len + bytes.len],
+        .pos = prefix_len,
+    };
+    const layout = try VersionedTransaction.parse(&reader);
+
+    try testing.expectEqual(prefix_len + bytes.len, reader.bytesConsumed());
+    try testing.expectEqual(@as(u8, 2), layout.instruction_count);
+
+    const view: VersionedTransaction.View = .{
+        .layout = &layout,
+        .payload = bytes,
+    };
+
+    var instructions = view.instructions();
+    try expectNextInstruction(&instructions, 1, &.{ 0, 1 }, &.{ 0xaa, 0xbb });
+    try expectNextInstruction(&instructions, 1, &accounts, &data);
+    try testing.expectEqual(null, try instructions.next());
+}
+
+test "parseTransaction: empty instruction and lookup sections" {
+    inline for ([_]std.meta.Tag(VersionedMessage){ .legacy, .v0 }) |kind| {
+        var b: Builder = .{ .allocator = testing.allocator };
+        defer b.deinit();
+
+        try b.pushSigs(1);
+        try b.pushKeys(1);
+        b.header.num_readonly_unsigned_accounts = 0;
+
+        var buf: [VersionedTransaction.MAX_BYTES]u8 = undefined;
+        const bytes = try b.serialize(kind, &buf);
+
+        var reader: SliceReader = .{ .bytes = bytes };
+        const layout = try VersionedTransaction.parse(&reader);
+
+        try testing.expectEqual(bytes.len, reader.bytesConsumed());
+        try testing.expectEqual(@as(u8, 0), layout.instruction_count);
+        try testing.expectEqual(@as(u8, 0), layout.address_table_lookup_count);
+        try testing.expectEqual(layout.payload_len, layout.address_table_lookups_off);
+
+        const view: VersionedTransaction.View = .{
+            .layout = &layout,
+            .payload = bytes,
+        };
+
+        try testing.expect(!view.hasAddressTableLookups());
+
+        var instructions = view.instructions();
+        try testing.expectEqual(null, try instructions.next());
+
+        var lookups = view.addressTableLookups();
+        try testing.expectEqual(null, try lookups.next());
+    }
+}
+
+test "VersionedTransaction.Layout supports relocated payload" {
+    var b = try Builder.baselineLegacy(testing.allocator);
+    defer b.deinit();
+
+    const ix_data = [_]u8{ 0x11, 0x22, 0x33 };
+    b.allocator.free(b.instructions.items[0].accounts.items);
+    b.allocator.free(b.instructions.items[0].data.items);
+    b.instructions.clearRetainingCapacity();
+    try b.pushInstrWithData(1, &.{0}, &ix_data);
+
+    var source: [VersionedTransaction.MAX_BYTES]u8 = undefined;
+    const source_bytes = try b.serialize(.legacy, &source);
+
+    var reader: SliceReader = .{ .bytes = source_bytes };
+    const layout = try VersionedTransaction.parse(&reader);
+    try testing.expectEqual(source_bytes.len, reader.bytesConsumed());
+
+    var relocated: [VersionedTransaction.MAX_BYTES]u8 = undefined;
+    @memcpy(relocated[0..source_bytes.len], source_bytes);
+    const relocated_bytes = relocated[0..source_bytes.len];
+
+    const view: VersionedTransaction.View = .{
+        .layout = &layout,
+        .payload = relocated_bytes,
+    };
+
+    try testing.expectEqual(
+        @intFromPtr(relocated_bytes.ptr) + @as(usize, layout.static_keys_off),
+        @intFromPtr(view.staticAccountKeys().ptr),
+    );
+
+    var instructions = view.instructions();
+    try expectNextInstruction(&instructions, 1, &.{0}, &ix_data);
+    try testing.expectEqual(null, try instructions.next());
+}
+
 test "parseTransaction: AccountLoadedTwice" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
