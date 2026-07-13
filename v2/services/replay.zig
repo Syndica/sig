@@ -114,7 +114,8 @@ const BlockHashStates = [lib.replay.BlockPool.capacity]?Hash;
 const AccountRef = lib.accounts_db.AccountPool.AccountRef;
 const Pubkey = lib.solana.Pubkey;
 
-const MAX_ACCOUNT_ADDRESSES = lib.solana.transaction.VersionedTransaction.MAX_ACCOUNT_ADDRESSES;
+const VersionedTransaction = lib.solana.transaction.VersionedTransaction;
+const MAX_ACCOUNT_ADDRESSES = VersionedTransaction.MAX_ACCOUNT_ADDRESSES;
 
 pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
@@ -951,7 +952,7 @@ fn maybeContinueBlockExec(
     // Read transactions until we can't anymore, sending to exec as we go
     while (true) {
         const tx_ref = try transaction_pool.createId();
-        // TODO: this is a major leak risk, should use comptime errdefer unreachable
+        errdefer transaction_pool.destroyId(tx_ref);
 
         const tx_record = transaction_pool.indexToPtr(tx_ref);
 
@@ -1379,8 +1380,9 @@ const BlockDeserialState = struct {
 
                 var transaction_start_state = self.*;
 
-                const layout =
-                    try lib.solana.transaction.VersionedTransaction.parse(&reader);
+                const layout = try VersionedTransaction.parse(&reader);
+
+                std.debug.assert(layout.payload_len <= tx_record.payload.len);
 
                 var copy_reader = transaction_start_state.getReader(merkle_pool);
 
