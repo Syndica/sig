@@ -384,7 +384,7 @@ pub const VersionedTransaction = struct {
             const count: usize = self.layout.signature_count;
             const byte_len = count * Signature.SIZE;
 
-            std.debug.assert(offset + byte_len <= self.layout.payload_len);
+            std.debug.assert(offset <= self.payload.len);
             std.debug.assert(byte_len <= self.payload.len - offset);
 
             const ptr: [*]const Signature = @ptrCast(self.payload[offset..].ptr);
@@ -396,7 +396,7 @@ pub const VersionedTransaction = struct {
             const offset: usize = self.layout.message_off;
             const len: usize = self.layout.message_len;
 
-            std.debug.assert(offset <= self.layout.payload_len);
+            std.debug.assert(offset <= self.payload.len);
             std.debug.assert(len <= self.payload.len - offset);
 
             return self.payload[offset..][0..len];
@@ -407,7 +407,7 @@ pub const VersionedTransaction = struct {
             const count: usize = self.layout.static_key_count;
             const byte_len = count * Pubkey.SIZE;
 
-            std.debug.assert(offset + byte_len <= self.layout.payload_len);
+            std.debug.assert(offset <= self.payload.len);
             std.debug.assert(byte_len <= self.payload.len - offset);
 
             const ptr: [*]const Pubkey = @ptrCast(self.payload[offset..].ptr);
@@ -417,15 +417,16 @@ pub const VersionedTransaction = struct {
 
         pub fn recentBlockhash(self: View) *const Hash {
             const offset: usize = self.layout.recent_blockhash_off;
-            const len: usize = Hash.SIZE;
 
-            std.debug.assert(offset + len <= self.layout.payload_len);
-            std.debug.assert(len <= self.payload.len - offset);
+            std.debug.assert(offset <= self.payload.len);
+            std.debug.assert(Hash.SIZE <= self.payload.len - offset);
 
             return @ptrCast(self.payload[offset..].ptr);
         }
 
         pub fn instructions(self: View) CompiledInstructionIter {
+            std.debug.assert(self.layout.instructions_off <= self.payload.len);
+
             return .{
                 .reader = .{
                     .bytes = self.payload,
@@ -467,14 +468,12 @@ pub const VersionedTransaction = struct {
         };
 
         pub fn addressTableLookups(self: View) AddressTableLookupIter {
-            const offset: usize = self.layout.address_table_lookups_off;
-
-            std.debug.assert(offset <= self.payload.len);
+            std.debug.assert(self.layout.address_table_lookups_off <= self.payload.len);
 
             return .{
                 .reader = .{
                     .bytes = self.payload,
-                    .pos = offset,
+                    .pos = self.layout.address_table_lookups_off,
                 },
                 .remaining = self.layout.address_table_lookup_count,
             };
