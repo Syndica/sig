@@ -415,6 +415,14 @@ fn buildProtoEffects(
         fec_res.payload = payload.toOwnedSlice(st.allocator) catch @panic("OutOfMemory");
     }
 
+    // Any slot the Receiver flagged dead (per-slot parent_slot mismatch,
+    // cross-FEC chained-merkle chain break, merkle-root conflict on the
+    // per-FEC-set pin, malformed RS-recovered shred) rejects the whole
+    // block. Agave does the same via `mark_slot_dead_if_not_full` +
+    // `get_slot_entries_with_shred_info` returning `DeadSlot`.
+    if (st.receiver.dead_slots.count() > 0)
+        out.block_parse_result = .REJECTED_INVALID_HEADER;
+
     // Sort by (slot, fec_set_index) and chain-validate.
     std.sort.heap(FECSetParseResult, st.fec_set_results.items, {}, fecOrder);
 

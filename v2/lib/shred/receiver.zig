@@ -21,11 +21,25 @@ const Shred = lib.shred.Shred;
 /// Takes in shreds, and writes out deshredded fec sets.
 /// For full docs see `services/shred_receiver.zig`.
 pub const Receiver = struct {
+    /// Borrowed from `init`'s caller; used only to grow `dead_slots`.
+    allocator: std.mem.Allocator,
+
     // We will ignore shreds outside of this range, as they're not useful to us
     root_slot: Slot,
     max_slot: Slot,
 
     features: Features,
+
+    /// Slots that hit a fatal protocol violation. This is a *downstream
+    /// signal*: the deshred-ring emission step at the end of `processPacket`
+    /// suppresses output for any slot in the set, telling replay (and
+    /// the conformance harness) that the slot is unrecoverable.
+    /// Per-shred admission remains governed by protocol invariants;
+    /// `dead_slots` does not gate insertion, so the FEC accumulator's
+    /// record of which shreds arrived for the slot still matches the
+    /// blockstore row agave keeps even for dead slots. Pruned in
+    /// `updateSlotRange` once the root advances past the slot.
+    dead_slots: std.AutoHashMapUnmanaged(Slot, void),
 
     in_progress: InProgressSets,
     done: DoneSets,
@@ -51,7 +65,9 @@ pub const Receiver = struct {
         return .{
             .in_progress = in_progress,
             .done = done,
+            .dead_slots = .empty,
 
+            .allocator = allocator,
             .root_slot = 0,
             .max_slot = std.math.maxInt(Slot),
             .features = .{},
@@ -61,6 +77,7 @@ pub const Receiver = struct {
     pub fn deinit(self: *Receiver, allocator: std.mem.Allocator) void {
         self.in_progress.deinit(allocator);
         self.done.deinit(allocator);
+        self.dead_slots.deinit(allocator);
     }
 
     /// Reset to the post-init state without freeing any heap memory. Intended
@@ -70,6 +87,7 @@ pub const Receiver = struct {
     pub fn reset(self: *Receiver) void {
         self.in_progress.reset();
         self.done.reset();
+        self.dead_slots.clearRetainingCapacity();
         self.root_slot = 0;
         self.max_slot = std.math.maxInt(Slot);
         self.features = .{};
@@ -79,7 +97,36 @@ pub const Receiver = struct {
         self.root_slot = root_slot;
         self.max_slot = max_slot;
 
+        // Dead-slot entries below the new root are unreachable; drop them.
+        // Bounded scratch: anything above this in a single advance is a
+        // pathological state we surface as a missed cleanup, not a crash.
+        var stale_buf: [64]Slot = undefined;
+        var stale_len: usize = 0;
+        var it = self.dead_slots.iterator();
+        while (it.next()) |entry| {
+            if (entry.key_ptr.* < root_slot) {
+                if (stale_len == stale_buf.len) break;
+                stale_buf[stale_len] = entry.key_ptr.*;
+                stale_len += 1;
+            }
+        }
+        for (stale_buf[0..stale_len]) |slot| _ = self.dead_slots.remove(slot);
+
         // TODO: this is where we would add code to prune entries outside of the new range.
+    }
+
+    /// Mark `slot` as dead. The dead-slot flag is a *downstream signal*:
+    /// it tells consumers (replay, the conformance harness) that the slot
+    /// is unrecoverable, and the deshred-ring emission step suppresses
+    /// output for the slot. The FEC accumulator's record of which shreds
+    /// arrived for `slot` is left untouched — insertion-layer protocol
+    /// invariants are what gate further shreds, not this flag. In-progress
+    /// ctxs for dead slots are reclaimed by normal pool eviction and the
+    /// root-advance prune. OOM growing the dead-slot set is silently
+    /// dropped: the slot failed once; downstream callers already saw the
+    /// originating error.
+    pub fn markSlotDead(self: *Receiver, slot: Slot) void {
+        self.dead_slots.put(self.allocator, slot, {}) catch {};
     }
 
     // TODO: report return values to observability
@@ -340,6 +387,14 @@ pub const Receiver = struct {
         }
 
         std.debug.assert(fec_set_ctx.data_shreds_received.count() == FecSetCtx.data_shreds_max);
+
+        // Dead-slot gate: production emission to the deshred ring is
+        // suppressed for dead slots so replay receives no further data
+        // for the unrecoverable slot; the ctx is left in `in_progress`
+        // and reclaimed by normal pool eviction / root-advance prune.
+        if (state.dead_slots.contains(shred.slot)) {
+            return .fec_set_finished;
+        }
 
         // writing out deshredded fec set
         {
