@@ -525,7 +525,7 @@ const Tools = struct {
     ) Tools {
         const shred_stream_exe = blk: {
             const module = b.createModule(.{
-                .root_source_file = b.path("v2/scripts/shred_stream.zig"),
+                .root_source_file = b.path("v2/tools/shred_stream.zig"),
                 .target = config.target,
                 .optimize = config.optimize,
                 .imports = &.{
@@ -546,13 +546,13 @@ const Tools = struct {
         const lint_exe: Executable = .init(b, config.exe, .{
             .name = "sig-lint",
             .root_module = b.createModule(.{
-                .root_source_file = b.path("v2/lint/main.zig"),
+                .root_source_file = b.path("v2/tools/lint/main.zig"),
                 .target = b.graph.host,
                 .optimize = .ReleaseSafe,
             }),
         }, .{});
         unit_tests.add("lint-tests", b.createModule(.{
-            .root_source_file = b.path("v2/lint/main.zig"),
+            .root_source_file = b.path("v2/tools/lint/main.zig"),
             .target = b.graph.host,
             .optimize = .Debug,
         }));
@@ -567,7 +567,7 @@ const Tools = struct {
                     .root_module = b.createModule(.{
                         .target = b.graph.host,
                         .optimize = .Debug,
-                        .root_source_file = b.path("v2/scripts/gen_docs_entry.zig"),
+                        .root_source_file = b.path("v2/tools/gen_docs_entry.zig"),
                     }),
                 }),
             );

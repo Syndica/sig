@@ -339,7 +339,7 @@ pub fn build(b: *Build) !void {
     const std14_mod = shared_dep.module("std14");
 
     const cli_mod = b.createModule(.{
-        .root_source_file = b.path("cli.zig"),
+        .root_source_file = b.path("src/cli.zig"),
         .target = config.target,
         .optimize = config.optimize,
     });
@@ -385,14 +385,14 @@ pub fn build(b: *Build) !void {
         .root_module = b.createModule(.{
             .target = config.target,
             .optimize = config.optimize,
-            .root_source_file = b.path("memcpy.zig"),
+            .root_source_file = b.path("src/memcpy.zig"),
             .pic = true,
         }),
         .use_llvm = config.use_llvm,
     });
 
     const sig_mod = b.addModule("sig", .{
-        .root_source_file = b.path("sig.zig"),
+        .root_source_file = b.path("src/sig.zig"),
         .target = config.target,
         .optimize = config.optimize,
         .imports = imports_with_shared,
@@ -408,7 +408,7 @@ pub fn build(b: *Build) !void {
     const sig_exe = b.addExecutable(.{
         .name = "sig",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("cmd.zig"),
+            .root_source_file = b.path("src/cmd.zig"),
             .target = config.target,
             .optimize = config.optimize,
             .imports = imports_with_shared,
@@ -433,7 +433,7 @@ pub fn build(b: *Build) !void {
 
     const unit_tests_exe = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("tests.zig"),
+            .root_source_file = b.path("src/tests.zig"),
             .target = config.target,
             .optimize = config.optimize,
             .imports = imports_with_shared,
@@ -455,7 +455,7 @@ pub fn build(b: *Build) !void {
     const fuzz_exe = b.addExecutable(.{
         .name = "fuzz",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("fuzz.zig"),
+            .root_source_file = b.path("src/fuzz.zig"),
             .target = config.target,
             .optimize = config.optimize,
             .imports = imports_with_shared,
@@ -477,7 +477,7 @@ pub fn build(b: *Build) !void {
     const benchmark_exe = b.addExecutable(.{
         .name = "benchmark",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("benchmarks.zig"),
+            .root_source_file = b.path("src/benchmarks.zig"),
             .target = config.target,
             .optimize = config.optimize,
             .imports = imports_with_shared,
@@ -503,7 +503,7 @@ pub fn build(b: *Build) !void {
     const geyser_reader_exe = b.addExecutable(.{
         .name = "geyser",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("geyser/main.zig"),
+            .root_source_file = b.path("src/geyser/main.zig"),
             .target = config.target,
             .optimize = config.optimize,
             .imports = imports_with_shared,
@@ -521,7 +521,7 @@ pub fn build(b: *Build) !void {
     const vm_exe = b.addExecutable(.{
         .name = "vm",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("vm/main.zig"),
+            .root_source_file = b.path("src/vm/main.zig"),
             .target = config.target,
             .optimize = config.optimize,
             .imports = imports_with_shared,
@@ -539,7 +539,7 @@ pub fn build(b: *Build) !void {
     const test_send_transactions_exe = b.addExecutable(.{
         .name = "test_send_transactions",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("transaction_sender/test_send_transactions.zig"),
+            .root_source_file = b.path("src/transaction_sender/test_send_transactions.zig"),
             .target = config.target,
             .optimize = config.optimize,
             .imports = imports_with_shared,
@@ -556,7 +556,7 @@ pub fn build(b: *Build) !void {
     const test_mock_transfers_exe = b.addExecutable(.{
         .name = "test_mock_transfers",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("transaction_sender/test_mock_transfers.zig"),
+            .root_source_file = b.path("src/transaction_sender/test_mock_transfers.zig"),
             .target = config.target,
             .optimize = config.optimize,
             .imports = imports_with_shared,
@@ -631,7 +631,7 @@ fn generateNonCirculatingSupply(b: *Build, use_llvm: bool) Build.LazyPath {
         .root_module = b.createModule(.{
             .target = b.graph.host,
             .optimize = .Debug,
-            .root_source_file = b.path("scripts/gen_non_circulating_supply.zig"),
+            .root_source_file = b.path("src/scripts/gen_non_circulating_supply.zig"),
             .imports = &.{
                 .{
                     .name = "base58",
@@ -640,7 +640,7 @@ fn generateNonCirculatingSupply(b: *Build, use_llvm: bool) Build.LazyPath {
                 .{
                     .name = "non-circulating-supply-zon",
                     .module = b.createModule(.{
-                        .root_source_file = b.path("rpc/non_circulating_supply.zon"),
+                        .root_source_file = b.path("src/rpc/non_circulating_supply.zon"),
                     }),
                 },
             },
@@ -821,7 +821,7 @@ const ssh = struct {
             static.exe = b.addExecutable(.{
                 .name = "send-file",
                 .root_module = b.createModule(.{
-                    .root_source_file = b.path("scripts/send-file.zig"),
+                    .root_source_file = b.path("src/scripts/send-file.zig"),
                     .target = b.graph.host,
                     .link_libc = true,
                 }),

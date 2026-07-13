@@ -33,12 +33,12 @@ pub const VALIDATOR_DIR = "validator/";
 /// subdirectory of {VALIDATOR_DIR} which contains the accounts database
 pub const ACCOUNTS_DB_SUBDIR = "accounts_db/";
 /// persistent data used as test inputs
-pub const TEST_DATA_DIR = "../data/test-data/";
+pub const TEST_DATA_DIR = "data/test-data/";
 /// ephemeral state produced by tests
-pub const TEST_STATE_DIR = "../data/test-state/";
-pub const FUZZ_DATA_DIR = "../data/fuzz-data/";
+pub const TEST_STATE_DIR = "data/test-state/";
+pub const FUZZ_DATA_DIR = "data/fuzz-data/";
 pub const BENCHMARK_RESULTS_DIR = "results/";
-pub const GENESIS_DIR = "../data/genesis-files/";
+pub const GENESIS_DIR = "data/genesis-files/";
 
 /// The maximum cluster size supported by sig. Raise this number to support
 /// larger clusters. It's used in cases when we need to assume an upper bound,

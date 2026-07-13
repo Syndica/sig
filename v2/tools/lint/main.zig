@@ -26,14 +26,13 @@ const project_paths = [_][]const u8{
     "build.zig",
     "v2/init",
     "v2/lib",
-    "v2/lint",
     "v2/services",
-    "v2/scripts",
+    "v2/tools",
     "v2/components/runtime",
 };
 const test_inclusion_roots = [_][]const u8{
     "v2/lib/lib.zig",
-    "v2/lint/main.zig",
+    "v2/tools/lint/main.zig",
     // The runtime uses a `foo/lib.zig` layout instead of v2's `foo.zig` next
     // to `foo/` convention, so it can't participate in the test_inclusion
     // check without a wholesale restructure of the runtime tree. Its own

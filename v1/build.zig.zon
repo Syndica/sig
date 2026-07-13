@@ -45,7 +45,7 @@
             .hash = "zig_tracy-0.13.0-4TLLR1ZkAAAKZh0Gimq4P-Hyyd3b38XfFecg00aAqIaR",
         },
         .webzockets = .{
-            .path = "rpc/webzockets",
+            .path = "src/rpc/webzockets",
         },
         .sqlite = .{
             .url = "https://www.sqlite.org/2025/sqlite-amalgamation-3490200.zip",
