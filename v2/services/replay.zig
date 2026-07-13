@@ -145,9 +145,11 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     try bootstrap(
         logger,
         runner,
+        rw.status_cache_updates_in,
         rw.snapshot_metadata_in,
         &forest,
         rw.block_pool,
+        exec_registry,
         exec_states,
         blockhash_states,
     );
@@ -303,9 +305,11 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 fn bootstrap(
     logger: tel.Logger("main"),
     runner: lib.runner.Connection,
+    status_cache_updates_in: *lib.accounts_db.StatusCacheUpdates,
     snapshot_metadata: *lib.accounts_db.RuntimeMetadata,
     forest: *MerkleForest,
     block_pool: *lib.replay.BlockPool,
+    exec_registry: *lib.replay.ExecutionRegistry,
     exec_states: *BlockExecStates,
     blockhash_states: *BlockHashStates,
 ) !void {
@@ -313,6 +317,20 @@ fn bootstrap(
     // Drain the blockhash queue into the block tree. accountsdb writes into
     // this ring blocks waiting for the reader (us).
     var root_block = bhq: {
+        const ExecutionRegistryUpdate = lib.accounts_db.StatusCacheUpdate;
+        var exec_reg_updates_buf: [512]ExecutionRegistryUpdate = undefined;
+        var exec_reg_updates: std.ArrayList(ExecutionRegistryUpdate) =
+            .initBuffer(&exec_reg_updates_buf);
+
+        var status_cache_updates = status_cache_updates_in.getView(.reader);
+        defer status_cache_updates.close();
+
+        while (true) {
+            const updates = try status_cache_updates.getBufferBlocking(runner);
+            if (updates.len == 0) break;
+            try exec_reg_updates.appendSliceBounded(updates);
+        }
+
         var blockhashes_in = snapshot_metadata.blockhash_queue.hashes.getView(.reader);
         defer blockhashes_in.close();
         var last_block: ?lib.replay.BlockRef = null;
@@ -335,6 +353,21 @@ fn bootstrap(
         }
 
         const root_block = last_block orelse return error.NoBlockhashesInSnapshot;
+
+        const max_age = 300;
+
+        const bhq_view: replay.BlockhashQueueView = .{
+            .latest_block = root_block,
+            .pool = block_pool,
+            .hashes = blockhash_states,
+        };
+        for (exec_reg_updates.items) |*update| {
+            const block_ref = bhq_view.getBlockRefIfValidForAge(
+                &update.status_map_entry.hash,
+                max_age,
+            ).opt() orelse continue;
+            try exec_registry.insert(block_ref, &update.status_map_entry.status.key_slice);
+        }
 
         break :bhq root_block;
     };
@@ -1688,6 +1721,9 @@ test "bootstrap creates root block and chains blockhashes" {
     var service_view = activity.serviceView();
     const runner: lib.runner.Connection = .{ .activity = &service_view };
 
+    var status_cache_updates: lib.accounts_db.StatusCacheUpdates = undefined;
+    status_cache_updates.init();
+
     var metadata: lib.accounts_db.RuntimeMetadata = undefined;
     metadata.init();
     metadata.block_id = .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");
@@ -1716,6 +1752,9 @@ test "bootstrap creates root block and chains blockhashes" {
     const pool: *lib.replay.BlockPool = @ptrCast(&pool_buf);
     pool.init();
 
+    const exec_registry = try allocator.create(lib.replay.ExecutionRegistry);
+    exec_registry.init();
+
     var forest: MerkleForest = try .init(allocator);
     defer forest.deinit(allocator);
 
@@ -1729,7 +1768,17 @@ test "bootstrap creates root block and chains blockhashes" {
 
     const logger = tel.Logger("main").noop;
 
-    try bootstrap(logger, runner, &metadata, &forest, pool, exec_states, blockhash_states);
+    try bootstrap(
+        logger,
+        runner,
+        &status_cache_updates,
+        &metadata,
+        &forest,
+        pool,
+        exec_registry,
+        exec_states,
+        blockhash_states,
+    );
 
     // find root in pool
     var root_opt: ?lib.replay.BlockRef = null;

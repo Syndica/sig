@@ -68,6 +68,14 @@ pub fn main() !void {
     }
     snapshot_metadata.ptr().populateSlot(fixture.manifest.shreds.parent_slot);
 
+    var status_cache_updates_in: Region(lib.accounts_db.StatusCacheUpdates) = try .simple();
+    {
+        const updates = status_cache_updates_in.ptr();
+        updates.init();
+        var view = updates.getView(.writer);
+        view.close();
+    }
+
     var replay_scratch: Region([lib.replay.scratch_buffer_size]u8) = try .simple();
 
     var account_pool: Region(lib.accounts_db.AccountPool) =
@@ -129,6 +137,7 @@ pub fn main() !void {
             .rw = .{
                 .scratch_memory = replay_scratch.finish(),
                 .snapshot_metadata_in = snapshot_metadata.finish(),
+                .status_cache_updates_in = status_cache_updates_in.finish(),
                 .deshredded_in = shreds_to_replay.finish(),
                 .replay_transaction_pool = transaction_pool.finish(),
                 .block_pool = block_pool.finish(),

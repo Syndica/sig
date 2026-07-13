@@ -16,6 +16,7 @@ pub const accounts_db = struct {
         config: *lib.accounts_db.RootedConfig,
         ready_snapshot_in: *lib.snapshot.SnapshotData,
         snapshot_metadata_out: *lib.accounts_db.RuntimeMetadata,
+        status_cache_updates_out: *lib.accounts_db.StatusCacheUpdates,
         account_pool: *lib.accounts_db.AccountPool,
         replay_lookups: *lib.accounts_db.AccountLookups,
         tel: *lib.telemetry.Region,
@@ -61,6 +62,7 @@ pub const replay = struct {
     pub const ReadWrite = struct {
         scratch_memory: *[lib.replay.scratch_buffer_size]u8,
         snapshot_metadata_in: *lib.accounts_db.RuntimeMetadata,
+        status_cache_updates_in: *lib.accounts_db.StatusCacheUpdates,
         deshredded_in: *lib.shred.DeshredRing,
         replay_transaction_pool: *lib.replay.TransactionPool,
         block_pool: *lib.replay.BlockPool,

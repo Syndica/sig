@@ -863,9 +863,15 @@ pub fn SnapshotIter(comptime BufReader: type) type {
             if (!std.mem.eql(u8, &version, expected)) return error.InvalidVersion;
         }
 
+        pub const StatusCacheOut = struct {
+            runner: lib.runner.Connection,
+            updates: *lib.accounts_db.StatusCacheUpdates.Iterator(.writer),
+        };
+
         pub fn readMetadata(
             self: *Self,
             fba: *std.heap.FixedBufferAllocator,
+            status_cache_out_opt: ?StatusCacheOut,
         ) !void {
             switch (self.state) {
                 .metadata => {},
@@ -876,13 +882,60 @@ pub fn SnapshotIter(comptime BufReader: type) type {
             // read /snapshots/status_cache & /snapshots/{slot}/{slot} (can be in any order)
             const tar_file = (try self.tar_iter.next()) orelse return error.MissingMetadata;
             if (std.mem.eql(u8, tar_file.name, "snapshots/status_cache")) {
-                try StatusCacheHeader.skip(&self.tar_iter.reader);
+                try streamStatusCache(&self.tar_iter.reader, status_cache_out_opt);
                 _ = (try self.tar_iter.next()) orelse return error.MissingMetadata;
                 self.manifest = try Manifest.read(fba, &self.tar_iter.reader);
             } else {
                 self.manifest = try Manifest.read(fba, &self.tar_iter.reader);
                 _ = (try self.tar_iter.next()) orelse return error.MissingMetadata;
-                try StatusCacheHeader.skip(&self.tar_iter.reader);
+                try streamStatusCache(&self.tar_iter.reader, status_cache_out_opt);
+            }
+        }
+
+        fn streamStatusCache(
+            /// `std.Io.Reader` or equivalent interface.
+            r: anytype,
+            status_cache_out_opt: ?StatusCacheOut,
+        ) !void {
+            const status_cache: StatusCacheHeader = try .init(r);
+            var sd_iter = status_cache.slot_deltas.iterator();
+            std.debug.assert(sd_iter.slot_deltas_remaining != 0);
+            for (0..sd_iter.slot_deltas_remaining) |_| {
+                const sd_entry = try sd_iter.next(r) orelse unreachable;
+                var sm_iter = sd_entry.status_map.iterator();
+                std.debug.assert(sm_iter.status_map_entries_remaining != 0);
+                for (0..sm_iter.status_map_entries_remaining) |_| {
+                    const sm_entry = try sm_iter.next(r) orelse unreachable;
+                    var sl_iter = sm_entry.status_list.iterator();
+                    std.debug.assert(sl_iter.status_entries_remaining != 0);
+                    for (0..sl_iter.status_entries_remaining) |_| {
+                        if (status_cache_out_opt) |status_cache_out| {
+                            const sl_entry = try sl_iter.next(r) orelse unreachable;
+                            try sendStatusCacheUpdateBlocking(
+                                status_cache_out.runner,
+                                status_cache_out.updates,
+                                .from(sd_entry, sm_entry, sl_entry),
+                            );
+                        } else {
+                            std.debug.assert(try sl_iter.skip(r));
+                        }
+                    }
+                }
+            }
+        }
+
+        fn sendStatusCacheUpdateBlocking(
+            runner: lib.runner.Connection,
+            updates: *lib.accounts_db.StatusCacheUpdates.Iterator(.writer),
+            update: lib.accounts_db.StatusCacheUpdate,
+        ) !void {
+            while (true) {
+                const dst = updates.next() orelse {
+                    try runner.activity.signalIdleSpinning();
+                    continue;
+                };
+                dst.* = update;
+                updates.markUsed();
             }
         }
 
@@ -1213,7 +1266,7 @@ test "deserialized snapshot matches generated snapshot json" {
     var fba: std.heap.FixedBufferAllocator = .init(fba_buf);
     var snapshot_iter: SnapshotIter(*SnapshotBufReader) = .init(&snapshot_reader);
     try snapshot_iter.checkVersion();
-    try snapshot_iter.readMetadata(&fba);
+    try snapshot_iter.readMetadata(&fba, null);
 
     try expectEqual(jsonU64(merged.get("slot").?), snapshot_iter.manifest.?.bank_fields.slot);
     try expectEqual(jsonU64(merged.get("slot").?), snapshot_iter.manifest.?.accounts_db_fields.slot);
