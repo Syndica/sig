@@ -1229,7 +1229,7 @@ test "BufferPool init deinit" {
 test "BufferPool readBlocking" {
     const allocator = std.testing.allocator;
 
-    const file = try std.fs.cwd().openFile("data/test-data/test_account_file", .{});
+    const file = try std.fs.cwd().openFile(sig.TEST_DATA_DIR ++ "test_account_file", .{});
     defer file.close();
     const file_id = FileId.fromInt(1);
 
@@ -1245,7 +1245,7 @@ test "BufferPool readIoUringSubmitAndWait" {
 
     const allocator = std.testing.allocator;
 
-    const file = try std.fs.cwd().openFile("data/test-data/test_account_file", .{});
+    const file = try std.fs.cwd().openFile(sig.TEST_DATA_DIR ++ "test_account_file", .{});
     defer file.close();
     const file_id = FileId.fromInt(1);
 
@@ -1259,7 +1259,7 @@ test "BufferPool readIoUringSubmitAndWait" {
 test "BufferPool basic usage" {
     const allocator = std.testing.allocator;
 
-    const file = try std.fs.cwd().openFile("data/test-data/test_account_file", .{});
+    const file = try std.fs.cwd().openFile(sig.TEST_DATA_DIR ++ "test_account_file", .{});
     defer file.close();
     const file_id = FileId.fromInt(1);
 
@@ -1321,7 +1321,7 @@ test "BufferPool allocation sizes" {
 test "BufferPool filesize > frame_size * num_frames" {
     const allocator = std.testing.allocator;
 
-    const file = try std.fs.cwd().openFile("data/test-data/test_account_file", .{});
+    const file = try std.fs.cwd().openFile(sig.TEST_DATA_DIR ++ "test_account_file", .{});
     defer file.close();
     const file_id = FileId.fromInt(1);
 
@@ -1364,7 +1364,7 @@ test "BufferPool filesize > frame_size * num_frames" {
 test "BufferPool random read" {
     const allocator = std.testing.allocator;
 
-    const file = try std.fs.cwd().openFile("data/test-data/test_account_file", .{});
+    const file = try std.fs.cwd().openFile(sig.TEST_DATA_DIR ++ "test_account_file", .{});
     defer file.close();
     const file_id = FileId.fromInt(1);
 
@@ -1484,7 +1484,7 @@ test "BufferPool random read" {
 test "AccountDataHandle bincode" {
     const allocator = std.testing.allocator;
 
-    const file = try std.fs.cwd().openFile("data/test-data/test_account_file", .{});
+    const file = try std.fs.cwd().openFile(sig.TEST_DATA_DIR ++ "test_account_file", .{});
     defer file.close();
     const file_id = FileId.fromInt(1);
 
@@ -1548,7 +1548,7 @@ test "BufferPool failed read" {
     var bp = try BufferPool.init(std.testing.allocator, 1024);
     defer bp.deinit(std.testing.allocator);
 
-    const file = try std.fs.cwd().openFile("data/test-data/test_account_file", .{});
+    const file = try std.fs.cwd().openFile(sig.TEST_DATA_DIR ++ "test_account_file", .{});
 
     const read = try bp.read(std.testing.allocator, file, FileId.fromInt(0), 0, 1000);
     read.deinit(std.testing.allocator);

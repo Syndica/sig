@@ -22,7 +22,7 @@ const max_line_length = 100;
 
 // Generated and data-heavy files with intentional long lines.
 const excluded_paths = [_][]const u8{
-    "lib/crypto/ed25519/wycheproof.zig",
+    "v2/lib/crypto/ed25519/wycheproof.zig",
 };
 
 /// Sanity check files skipped exist to keep list in sync with repo
