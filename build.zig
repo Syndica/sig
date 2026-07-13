@@ -70,7 +70,10 @@ pub fn build(b: *Build) !void {
     ci_step.dependOn(test_step);
     ci_step.dependOn(install_step);
     ci_step.dependOn(lint_step);
-    ci_step.dependOn(&b.addFmt(.{ .check = true, .paths = &.{"."} }).step);
+    ci_step.dependOn(&b.addFmt(.{
+        .check = true,
+        .paths = &.{ "build.zig", "build.zig.zon", "v2", "scripts" },
+    }).step);
 
     // docs
     const docs_step = b.step("docs", "Emit docs");
@@ -89,6 +92,7 @@ const Config = struct {
     filters: []const []const u8,
     allow_no_sha: bool,
     allow_no_avx512: bool,
+    long_tests: bool,
     debug_skip_shred_sig_verify: bool,
     debug_skip_shred_version_check: bool,
 
@@ -97,6 +101,11 @@ const Config = struct {
         const use_kcov = b.option(bool, "kcov", "Use kcov to run the tests.") orelse false;
         const use_llvm = b.option(bool, "use-llvm", "Force usage of LLVM") orelse true;
         if (use_kcov and !use_llvm) @panic("cannot use kcov without llvm");
+        const filters = b.option(
+            []const []const u8,
+            "filter",
+            "List of unit test filters.",
+        ) orelse &.{};
         return .{
             .target = b.standardTargetOptions(.{}),
             .optimize = optimize,
@@ -126,11 +135,7 @@ const Config = struct {
                 "tracy-on-demand",
                 "Start capturing profiler data when tracy starts",
             ) orelse false,
-            .filters = b.option(
-                []const []const u8,
-                "filter",
-                "List of unit test filters.",
-            ) orelse &.{},
+            .filters = filters,
             .allow_no_sha = b.option(
                 bool,
                 "allow-no-sha",
@@ -146,6 +151,11 @@ const Config = struct {
                     "target without these features is a compile-time error so the performance " ++
                     "hit is not silently accepted.",
             ) orelse (optimize == .Debug),
+            .long_tests = b.option(
+                bool,
+                "long-tests",
+                "Run extra tests that take a long time, for more exhaustive coverage.",
+            ) orelse (filters.len != 0),
             .debug_skip_shred_sig_verify = b.option(
                 bool,
                 "debug-skip-shred-sig-verify",
@@ -170,6 +180,9 @@ const Dependencies = struct {
     zstd: *Build.Module,
     rocksdb: *Build.Module,
     rocksdb_c: *Build.Module,
+    poseidon: *Build.Module,
+    secp256k1: *Build.Module,
+    blst: *Build.Module,
 
     pub fn load(b: *Build, config: Config) Dependencies {
         const rocksdb_dep = b.dependency("rocksdb", .{
@@ -179,32 +192,47 @@ const Dependencies = struct {
         });
         rocksdb_dep.artifact("rocksdb").root_module.sanitize_c = .off;
 
+        // Options must match every `b.dependency("tracy", ...)` call anywhere
+        // in the workspace (in particular v1/build.zig). Any drift produces
+        // two `tracy` Module instances rooted at the same source file, which
+        // Zig 0.15 rejects when both sig and sig_v2 live in one compilation
+        // (e.g. under conformance/).
+        const tracy_mod = b.dependency("tracy", .{
+            .target = config.target,
+            .optimize = config.optimize,
+            .tracy_enable = config.tracy_enable,
+            .tracy_on_demand = config.tracy_on_demand,
+            .tracy_no_exit = config.tracy_no_exit,
+            .tracy_no_system_tracing = false,
+            .tracy_callstack = 6,
+        }).module("tracy");
+        tracy_mod.sanitize_c = .off;
+
         return .{
-            // Options must match the `b.dependency("tracy", ...)` call in
-            // shared/build.zig exactly. Any drift produces two `tracy` Module
-            // instances rooted at the same source file, which Zig 0.15 rejects
-            // when both sig and sig_v2 live in one compilation (e.g. under
-            // conformance/).
-            .tracy = b.dependency("tracy", .{
-                .target = config.target,
-                .optimize = config.optimize,
-                .tracy_enable = config.tracy_enable,
-                .tracy_on_demand = config.tracy_on_demand,
-                .tracy_no_exit = config.tracy_no_exit,
-                .tracy_no_system_tracing = false,
-                .tracy_callstack = 6,
-            }).module("tracy"),
+            .tracy = tracy_mod,
             .base58 = b.dependency("base58", .{
                 .target = config.target,
                 .optimize = config.optimize,
             }).module("base58"),
-            // Options must match shared/build.zig's zstd dep. See tracy comment above.
+            // Options must match v1/build.zig's zstd dep. See tracy comment above.
             .zstd = b.dependency("zstd", .{
                 .target = config.target,
                 .optimize = config.optimize,
             }).module("zstd"),
             .rocksdb = rocksdb_dep.module("bindings"),
             .rocksdb_c = rocksdb_dep.module("rocksdb"),
+            .poseidon = b.dependency("poseidon", .{
+                .target = config.target,
+                .optimize = config.optimize,
+            }).module("poseidon"),
+            .secp256k1 = b.dependency("secp256k1", .{
+                .target = config.target,
+                .optimize = config.optimize,
+            }).module("secp256k1"),
+            .blst = b.dependency("blst", .{
+                .target = config.target,
+                .optimize = config.optimize,
+            }).module("blst"),
         };
     }
 };
@@ -212,6 +240,7 @@ const Dependencies = struct {
 /// All the modules, libraries, and executables that compose the main sig
 /// validator binary. Does not include any tests, developer tools, docs, etc.
 const Sig = struct {
+    runtime: Runtime,
     lib: *Build.Module,
     services_mod: *Build.Module,
     start_service: *Build.Module,
@@ -225,7 +254,7 @@ const Sig = struct {
         lib: *Build.Step.Compile,
     };
 
-    const services = @typeInfo(@import("init/services.zig")).@"struct".decls;
+    const services = @typeInfo(@import("v2/init/services.zig")).@"struct".decls;
 
     pub fn init(b: *Build, config: Config, deps: Dependencies, unit_tests: *UnitTests) Sig {
         const build_options = b.addOptions();
@@ -243,33 +272,11 @@ const Sig = struct {
         );
         const build_options_mod = build_options.createModule();
 
-        // Consume shared's exported modules instead of building our own from
-        // the same source files. Two `b.createModule` calls on features.zon /
-        // the generated feature-set-id.zig produce distinct Module instances
-        // that Zig 0.15 rejects when both sig and sig_v2 live in one
-        // compilation (e.g. under conformance/).
-        //
-        // Options must match the `b.dependency("shared", ...)` call in
-        // sig/build.zig exactly so that Zig deduplicates the two dep chains
-        // into a single `shared` Package instance. Any drift produces two
-        // distinct Packages, each with its own `feature-set-id` module.
-        const shared_dep = b.dependency("shared", .{
-            .target = config.target,
-            .optimize = config.optimize,
-            .@"long-tests" = false,
-            .@"allow-no-sha" = config.allow_no_sha,
-            .@"allow-no-avx512" = config.allow_no_avx512,
-            .@"use-llvm" = config.use_llvm,
-            .@"enable-tracy" = config.tracy_enable,
-            .@"tracy-on-demand" = config.tracy_on_demand,
-            .@"tracy-no-exit" = config.tracy_no_exit,
-        });
-        const features = shared_dep.module("features-zon");
-        const feature_set_id = shared_dep.module("feature-set-id");
+        const runtime: Runtime = .init(b, config, deps, unit_tests);
 
         // Exported by name so downstream packages can `dep.module("sig_v2")`.
         const lib = b.addModule("sig_v2", .{
-            .root_source_file = b.path("lib/lib.zig"),
+            .root_source_file = b.path("v2/lib/lib.zig"),
             .target = config.target,
             .optimize = config.optimize,
             .imports = &.{
@@ -277,14 +284,14 @@ const Sig = struct {
                 .{ .name = "tracy", .module = deps.tracy },
                 .{ .name = "build-options", .module = build_options_mod },
                 .{ .name = "zstd", .module = deps.zstd },
-                .{ .name = "features-zon", .module = features },
-                .{ .name = "feature-set-id", .module = feature_set_id },
+                .{ .name = "features-zon", .module = runtime.features_zon },
+                .{ .name = "feature-set-id", .module = runtime.feature_set_id },
             },
         });
         unit_tests.add("lib", lib);
 
         const start_service = b.createModule(.{
-            .root_source_file = b.path("init/start_service.zig"),
+            .root_source_file = b.path("v2/init/start_service.zig"),
             .target = config.target,
             .optimize = config.optimize,
             .error_tracing = true,
@@ -296,7 +303,7 @@ const Sig = struct {
         unit_tests.add("start_service", start_service);
 
         const services_mod = b.createModule(.{
-            .root_source_file = b.path("init/services.zig"),
+            .root_source_file = b.path("v2/init/services.zig"),
             .target = config.target,
             .optimize = config.optimize,
             .imports = &.{
@@ -305,7 +312,7 @@ const Sig = struct {
         });
 
         const sig_init = b.createModule(.{
-            .root_source_file = b.path("init/main.zig"),
+            .root_source_file = b.path("v2/init/main.zig"),
             .target = config.target,
             .optimize = config.optimize,
             .imports = &.{
@@ -320,7 +327,7 @@ const Sig = struct {
 
         inline for (services, &service_libs) |service, *service_lib_entry| {
             const service_mod = b.createModule(.{
-                .root_source_file = b.path("services").path(b, service.name ++ ".zig"),
+                .root_source_file = b.path("v2/services").path(b, service.name ++ ".zig"),
                 .target = config.target,
                 .optimize = config.optimize,
                 .single_threaded = true,
@@ -350,6 +357,7 @@ const Sig = struct {
         }
 
         return .{
+            .runtime = runtime,
             .lib = lib,
             .services_mod = services_mod,
             .start_service = start_service,
@@ -363,6 +371,130 @@ const Sig = struct {
         };
     }
 };
+
+const Runtime = struct {
+    /// The runtime library module (root: v2/components/runtime/lib.zig)
+    module: *Build.Module,
+    /// features.zon exposed as a module so runtime/core/features.zig
+    /// can consume the feature list without doubly-rooting the .zon file.
+    features_zon: *Build.Module,
+    /// Generated at build time from features.zon; hashes the feature set into
+    /// a single ID that's baked into the runtime library.
+    feature_set_id: *Build.Module,
+
+    pub fn init(
+        b: *Build,
+        config: Config,
+        deps: Dependencies,
+        unit_tests: *UnitTests,
+    ) Runtime {
+        const runtime_dir = "v2/components/runtime";
+
+        const build_options = b.addOptions();
+        build_options.addOption(bool, "long_tests", config.long_tests);
+        build_options.addOption(bool, "allow_no_sha", config.allow_no_sha);
+        build_options.addOption(bool, "allow_no_avx512", config.allow_no_avx512);
+
+        const std14_mod = b.addModule("std14", .{
+            .root_source_file = b.path(runtime_dir ++ "/std14.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+        });
+
+        const feature_set_id_exe = b.addExecutable(.{
+            .name = "gen_feature_set_id",
+            .root_module = b.createModule(.{
+                .target = b.graph.host,
+                .optimize = .Debug,
+                .root_source_file = b.path(runtime_dir ++ "/scripts/gen_feature_set_id.zig"),
+                .imports = &.{
+                    .{
+                        .name = "base58",
+                        .module = b.dependency("base58", .{}).module("base58"),
+                    },
+                    .{
+                        .name = "features",
+                        .module = b.createModule(.{
+                            .root_source_file = b.path(runtime_dir ++ "/core/features.zon"),
+                        }),
+                    },
+                },
+            }),
+            .use_llvm = config.use_llvm,
+        });
+        const feature_set_id_gen = b.addRunArtifact(feature_set_id_exe);
+        // Exposed via addModule so external packages (in particular sig_v2's
+        // lib module and v1 via its dep on this package) can consume the same
+        // Module instance instead of building their own. Without this,
+        // `b.createModule` on the same features.zon / feature-set-id.zig from
+        // two build subgraphs produces two distinct Modules rooted at the
+        // same file, which Zig 0.15 rejects in one compilation.
+        const feature_set_id = b.addModule("feature-set-id", .{
+            .root_source_file = feature_set_id_gen.addOutputFileArg("feature-set-id.zig"),
+        });
+        const features_zon = b.addModule("features-zon", .{
+            .root_source_file = b.path(runtime_dir ++ "/core/features.zon"),
+        });
+
+        const gh_table = b.createModule(.{
+            .root_source_file = generateTable(b, config.use_llvm, runtime_dir),
+            .target = config.target,
+            .optimize = config.optimize,
+        });
+
+        const imports: []const Build.Module.Import = &.{
+            .{ .name = "base58", .module = deps.base58 },
+            .{ .name = "blst", .module = deps.blst },
+            .{ .name = "build-options", .module = build_options.createModule() },
+            .{ .name = "feature-set-id", .module = feature_set_id },
+            .{ .name = "features-zon", .module = features_zon },
+            .{ .name = "poseidon", .module = deps.poseidon },
+            .{ .name = "secp256k1", .module = deps.secp256k1 },
+            .{ .name = "std14", .module = std14_mod },
+            .{ .name = "table", .module = gh_table },
+            .{ .name = "tracy", .module = deps.tracy },
+        };
+
+        // Exported as "shared" (not "runtime") so v1 can still consume it via
+        // its dep on this package without touching all of its
+        // `@import("shared")` sites. If we ever rename all those imports,
+        // this can move to `b.addModule("runtime", ...)`.
+        const module = b.addModule("runtime", .{
+            .root_source_file = b.path(runtime_dir ++ "/lib.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = imports,
+        });
+
+        unit_tests.add("runtime", module);
+
+        return .{
+            .module = module,
+            .features_zon = features_zon,
+            .feature_set_id = feature_set_id,
+        };
+    }
+};
+
+fn generateTable(b: *Build, use_llvm: bool, runtime_dir: []const u8) Build.LazyPath {
+    const gen = b.addExecutable(.{
+        .name = "generator_chain",
+        .root_module = b.createModule(.{
+            .target = b.graph.host,
+            .optimize = .Debug,
+            .root_source_file = b.path(
+                b.fmt("{s}/scripts/generator_chain.zig", .{runtime_dir}),
+            ),
+        }),
+        .use_llvm = use_llvm,
+    });
+    const run = b.addRunArtifact(gen);
+    const generated = run.captureStdOut();
+    const wf = b.addWriteFiles();
+    const table_file = wf.addCopyFile(generated, "table.zig");
+    wf.step.dependOn(&run.step);
+    return table_file;
+}
 
 /// Everything other than Sig itself: developer tools, ci scripts, docs,
 /// integration tests, etc.
@@ -379,7 +511,7 @@ const Tools = struct {
     }{
         .{
             .name = "gossip",
-            .root_source_file = "tests/gossip/main.zig",
+            .root_source_file = "v2/tests/gossip/main.zig",
             .services = &.{ "gossip", "telemetry" },
         },
     };
@@ -393,7 +525,7 @@ const Tools = struct {
     ) Tools {
         const shred_stream_exe = blk: {
             const module = b.createModule(.{
-                .root_source_file = b.path("scripts/shred_stream.zig"),
+                .root_source_file = b.path("v2/scripts/shred_stream.zig"),
                 .target = config.target,
                 .optimize = config.optimize,
                 .imports = &.{
@@ -414,13 +546,13 @@ const Tools = struct {
         const lint_exe: Executable = .init(b, config.exe, .{
             .name = "sig-lint",
             .root_module = b.createModule(.{
-                .root_source_file = b.path("lint/main.zig"),
+                .root_source_file = b.path("v2/lint/main.zig"),
                 .target = b.graph.host,
                 .optimize = .ReleaseSafe,
             }),
         }, .{});
         unit_tests.add("lint-tests", b.createModule(.{
-            .root_source_file = b.path("lint/main.zig"),
+            .root_source_file = b.path("v2/lint/main.zig"),
             .target = b.graph.host,
             .optimize = .Debug,
         }));
@@ -435,7 +567,7 @@ const Tools = struct {
                     .root_module = b.createModule(.{
                         .target = b.graph.host,
                         .optimize = .Debug,
-                        .root_source_file = b.path("scripts/gen_docs_entry.zig"),
+                        .root_source_file = b.path("v2/scripts/gen_docs_entry.zig"),
                     }),
                 }),
             );

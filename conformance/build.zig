@@ -48,6 +48,30 @@ pub fn build(b: *Build) void {
         "Re-generate protobuf definitions from the protosol dependency pinned in build.zig.zon.",
     );
 
+    // Every option we pass to sig_v2 directly must also be forwarded through
+    // v1 (via the `sig` dependency below) with the same value. If any
+    // option-value pair drifts between the two dep chains, Zig 0.15 treats
+    // them as distinct sig_v2 packages and refuses to link the two `runtime`
+    // module instances into one binary. The comments in v1/build.zig's
+    // Config document each forwarded option.
+    const sig_v2_common_options = .{
+        .target = target,
+        .optimize = optimize,
+        .@"long-tests" = false,
+        .@"allow-no-sha" = allow_no_sha,
+        .@"allow-no-avx512" = allow_no_avx512,
+        .@"use-llvm" = true,
+        .@"enable-tracy" = false,
+        .@"tracy-on-demand" = false,
+        .@"tracy-no-exit" = false,
+        // The shred-parse harness feeds the Receiver shreds whose merkle
+        // roots are not signed by any known leader, so sig_v2 is built with
+        // the ed25519 verify path stubbed out at comptime. Shred-version
+        // checking stays on (the default).
+        .@"debug-skip-shred-sig-verify" = true,
+        .@"debug-skip-shred-version-check" = false,
+    };
+
     const sig_dep = b.dependency("sig", .{
         .target = target,
         .optimize = optimize,
@@ -55,20 +79,17 @@ pub fn build(b: *Build) void {
         .ledger = .hashmap,
         .@"allow-no-sha" = allow_no_sha,
         .@"allow-no-avx512" = allow_no_avx512,
+        .@"long-tests" = false,
+        .@"use-llvm" = true,
+        .@"enable-tracy" = false,
+        .@"tracy-on-demand" = false,
+        .@"tracy-no-exit" = false,
+        .@"debug-skip-shred-sig-verify" = true,
+        .@"debug-skip-shred-version-check" = false,
     });
     const sig_mod = sig_dep.module("sig");
 
-    // The shred-parse harness feeds the Receiver shreds whose merkle roots
-    // are not signed by any known leader, so sig_v2 is built with the
-    // ed25519 verify path stubbed out at comptime. Shred-version checking
-    // stays on (the default).
-    const sig_v2_dep = b.dependency("sig_v2", .{
-        .target = target,
-        .optimize = optimize,
-        .@"allow-no-sha" = allow_no_sha,
-        .@"allow-no-avx512" = allow_no_avx512,
-        .@"debug-skip-shred-sig-verify" = true,
-    });
+    const sig_v2_dep = b.dependency("sig_v2", sig_v2_common_options);
     const sig_v2_mod = sig_v2_dep.module("sig_v2");
 
     const pb_dep = b.dependency("pb", .{

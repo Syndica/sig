@@ -4,14 +4,11 @@
     .paths = .{
         "build.zig.zon",
         "build.zig",
-        "lib",
-        "init",
-        "services",
+        "v2",
     },
     .minimum_zig_version = "0.15.2",
     .fingerprint = 0xce1f2b0ea0d47009,
     .dependencies = .{
-        .shared = .{ .path = "../shared" },
         .base58 = .{
             .url = "git+https://github.com/Syndica/base58-zig#2acfa605d23d4d565a7e5a8ff35ea4a827eaaab9",
             .hash = "base58-0.2.0-wW0iYMIiAABft2x6NlD5mMmFx7-VWfHJq5EAgVQw068t",
@@ -27,6 +24,19 @@
         .rocksdb = .{
             .url = "git+https://github.com/Syndica/rocksdb-zig#baceb67dc9c66e8ba40a83da3de3fd959b889e57",
             .hash = "rocksdb-9.7.4-z_CUTg_HAABgQurZzAhpJL5Erij8ZnppTmy3g1LIM8br",
+        },
+        // runtime deps
+        .poseidon = .{
+            .url = "git+https://github.com/Rexicon226/zig-poseidon#b73e6ec762676a38bde76f7689eec0806aeeddaa",
+            .hash = "poseidon-0.2.0-2qOpvz-3DQBhqfX5onUg3vP2lkcljFPAkHiDEQFkdJCu",
+        },
+        .secp256k1 = .{
+            .url = "git+https://github.com/Syndica/secp256k1-zig#24771ad4fbca40a2d0b9a7a2c8bb410e6e238249",
+            .hash = "secp256k1-0.5.0-2oLmGRAHAACjbp4BBLAoCU6Sotb_gqChbYOIIvBejN0V",
+        },
+        .blst = .{
+            .url = "git+https://github.com/supranational/blst#806515251de5cfb9761ad12eb2f2f151b1ad0277",
+            .hash = "blst-0.3.16-fvxk1c82MABYUm65ch0-wpo2CSs1x5TCuBLvgQng0uRC",
         },
     },
 }

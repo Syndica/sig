@@ -30,6 +30,9 @@ pub const Config = struct {
     long_tests: bool,
     allow_no_sha: bool,
     allow_no_avx512: bool,
+    /// Forwarded to the sig_v2 dependency.
+    debug_skip_shred_sig_verify: bool,
+    debug_skip_shred_version_check: bool,
     version: std.SemanticVersion,
 
     pub fn fromBuild(b: *Build) !Config {
@@ -150,6 +153,16 @@ pub const Config = struct {
                     "without these features is a compile-time error so the performance hit is " ++
                     "not silently accepted.",
             ) orelse (optimize == .Debug),
+            .debug_skip_shred_sig_verify = b.option(
+                bool,
+                "debug-skip-shred-sig-verify",
+                "Forwarded to sig_v2. See sig_v2's build.zig for details.",
+            ) orelse false,
+            .debug_skip_shred_version_check = b.option(
+                bool,
+                "debug-skip-shred-version-check",
+                "Forwarded to sig_v2. See sig_v2's build.zig for details.",
+            ) orelse false,
             .version = s: {
                 const maybe_version_string = b.option(
                     []const u8,
@@ -307,7 +320,7 @@ pub fn build(b: *Build) !void {
     }).module("tracy");
     tracy_mod.sanitize_c = .off; // Workaround UB in Tracy.
 
-    const shared_dep = b.dependency("shared", .{
+    const shared_dep = b.dependency("sig_v2", .{
         .target = config.target,
         .optimize = config.optimize,
         .@"long-tests" = config.long_tests,
@@ -317,11 +330,16 @@ pub fn build(b: *Build) !void {
         .@"enable-tracy" = config.enable_tracy,
         .@"tracy-on-demand" = config.tracy_on_demand,
         .@"tracy-no-exit" = config.tracy_no_exit,
+        // Forwarded so downstream builds (in particular conformance/) can
+        // match the options they pass to sig_v2 directly. See the option
+        // definitions in Config for the full rationale.
+        .@"debug-skip-shred-sig-verify" = config.debug_skip_shred_sig_verify,
+        .@"debug-skip-shred-version-check" = config.debug_skip_shred_version_check,
     });
     const std14_mod = shared_dep.module("std14");
 
     const cli_mod = b.createModule(.{
-        .root_source_file = b.path("src/cli.zig"),
+        .root_source_file = b.path("cli.zig"),
         .target = config.target,
         .optimize = config.optimize,
     });
@@ -353,7 +371,7 @@ pub fn build(b: *Build) !void {
     };
     // zig fmt: on
 
-    const shared_mod = shared_dep.module("shared");
+    const shared_mod = shared_dep.module("runtime");
 
     const imports_with_shared = b.allocator.alloc(
         Build.Module.Import,
@@ -367,14 +385,14 @@ pub fn build(b: *Build) !void {
         .root_module = b.createModule(.{
             .target = config.target,
             .optimize = config.optimize,
-            .root_source_file = b.path("src/memcpy.zig"),
+            .root_source_file = b.path("memcpy.zig"),
             .pic = true,
         }),
         .use_llvm = config.use_llvm,
     });
 
     const sig_mod = b.addModule("sig", .{
-        .root_source_file = b.path("src/sig.zig"),
+        .root_source_file = b.path("sig.zig"),
         .target = config.target,
         .optimize = config.optimize,
         .imports = imports_with_shared,
@@ -390,7 +408,7 @@ pub fn build(b: *Build) !void {
     const sig_exe = b.addExecutable(.{
         .name = "sig",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/cmd.zig"),
+            .root_source_file = b.path("cmd.zig"),
             .target = config.target,
             .optimize = config.optimize,
             .imports = imports_with_shared,
@@ -415,7 +433,7 @@ pub fn build(b: *Build) !void {
 
     const unit_tests_exe = b.addTest(.{
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/tests.zig"),
+            .root_source_file = b.path("tests.zig"),
             .target = config.target,
             .optimize = config.optimize,
             .imports = imports_with_shared,
@@ -437,7 +455,7 @@ pub fn build(b: *Build) !void {
     const fuzz_exe = b.addExecutable(.{
         .name = "fuzz",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/fuzz.zig"),
+            .root_source_file = b.path("fuzz.zig"),
             .target = config.target,
             .optimize = config.optimize,
             .imports = imports_with_shared,
@@ -459,7 +477,7 @@ pub fn build(b: *Build) !void {
     const benchmark_exe = b.addExecutable(.{
         .name = "benchmark",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/benchmarks.zig"),
+            .root_source_file = b.path("benchmarks.zig"),
             .target = config.target,
             .optimize = config.optimize,
             .imports = imports_with_shared,
@@ -485,7 +503,7 @@ pub fn build(b: *Build) !void {
     const geyser_reader_exe = b.addExecutable(.{
         .name = "geyser",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/geyser/main.zig"),
+            .root_source_file = b.path("geyser/main.zig"),
             .target = config.target,
             .optimize = config.optimize,
             .imports = imports_with_shared,
@@ -503,7 +521,7 @@ pub fn build(b: *Build) !void {
     const vm_exe = b.addExecutable(.{
         .name = "vm",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/vm/main.zig"),
+            .root_source_file = b.path("vm/main.zig"),
             .target = config.target,
             .optimize = config.optimize,
             .imports = imports_with_shared,
@@ -521,7 +539,7 @@ pub fn build(b: *Build) !void {
     const test_send_transactions_exe = b.addExecutable(.{
         .name = "test_send_transactions",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/transaction_sender/test_send_transactions.zig"),
+            .root_source_file = b.path("transaction_sender/test_send_transactions.zig"),
             .target = config.target,
             .optimize = config.optimize,
             .imports = imports_with_shared,
@@ -538,7 +556,7 @@ pub fn build(b: *Build) !void {
     const test_mock_transfers_exe = b.addExecutable(.{
         .name = "test_mock_transfers",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("src/transaction_sender/test_mock_transfers.zig"),
+            .root_source_file = b.path("transaction_sender/test_mock_transfers.zig"),
             .target = config.target,
             .optimize = config.optimize,
             .imports = imports_with_shared,
@@ -622,7 +640,7 @@ fn generateNonCirculatingSupply(b: *Build, use_llvm: bool) Build.LazyPath {
                 .{
                     .name = "non-circulating-supply-zon",
                     .module = b.createModule(.{
-                        .root_source_file = b.path("src/rpc/non_circulating_supply.zon"),
+                        .root_source_file = b.path("rpc/non_circulating_supply.zon"),
                     }),
                 },
             },

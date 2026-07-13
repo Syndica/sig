@@ -8,14 +8,17 @@ sudo -iu sig bash <<'EOF' | tee /dev/null
     git fetch
 
     if [[ $(git rev-parse HEAD) == $(git rev-parse remotes/origin/$BRANCH) ]] && \
-        [ -f /home/sig/sig/zig-out/bin/sig ]; then
+        [ -f /home/sig/sig/v1/zig-out/bin/sig ]; then
         echo sig is unchanged, skipping update
         exit 58
     fi
 
     git checkout remotes/origin/$BRANCH
     echo building sig
-    zig build -Doptimize=ReleaseSafe -Dno-run sig
+    # v1 (formerly the repo root) is now a nested build. The zig-out/bin/sig
+    # artifact ends up under v1/zig-out/bin/ — the run.sh wrapper reads it
+    # from there.
+    (cd v1 && zig build -Doptimize=ReleaseSafe -Dno-run sig)
 
     echo > /home/sig/sig/metrics/.env
     ip="$(curl -fsS https://checkip.amazonaws.com || echo fail)"

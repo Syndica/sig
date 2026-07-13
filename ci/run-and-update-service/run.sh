@@ -30,4 +30,8 @@ fi
 # space.
 rm -f "$BASE_DIR/validator-*.tar.zst"
 
-"$BASE_DIR/zig-out/bin/sig" $@ 2>>"$BASE_DIR/logs/sig.log" >>"$BASE_DIR/logs/sig.log"
+# v1 was formerly the repo root, so its zig-out (and therefore the sig
+# binary produced by `zig build ... sig`) now lives at $BASE_DIR/v1/zig-out.
+# Keep the working directory at $BASE_DIR so relative test/data paths stay
+# resolvable the same way they did before v2 took over the root.
+"$BASE_DIR/v1/zig-out/bin/sig" $@ 2>>"$BASE_DIR/logs/sig.log" >>"$BASE_DIR/logs/sig.log"

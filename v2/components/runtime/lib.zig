@@ -1,4 +1,4 @@
-pub const ELF_DATA_DIR = "data/test-elfs/";
+pub const ELF_DATA_DIR = "v2/components/runtime/data/test-elfs/";
 
 comptime {
     if (@import("builtin").is_test) {
