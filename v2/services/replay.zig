@@ -114,6 +114,8 @@ const BlockHashStates = [lib.replay.BlockPool.capacity]?Hash;
 const AccountRef = lib.accounts_db.AccountPool.AccountRef;
 const Pubkey = lib.solana.Pubkey;
 
+const MAX_ACCOUNT_ADDRESSES = lib.solana.transaction.VersionedTransaction.MAX_ACCOUNT_ADDRESSES;
+
 pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     rw.tel.signalReady();
@@ -970,15 +972,19 @@ fn maybeContinueBlockExec(
         // NOTE: in the future this should be "sent" to the transaction scheduler, not to exec
         // directly
         {
-            var held_accounts_buf: [128]AccountRef = undefined;
-            var held_accounts: u8 = 0;
+            var held_accounts_buf: [MAX_ACCOUNT_ADDRESSES]AccountRef = undefined;
+
+            const static_keys = transaction.staticAccountKeys();
+            const static_count = static_keys.len;
+            const loaded_writable_count: usize = transaction.layout.loaded_writable_count;
+            const total_account_count: usize = transaction.totalAccountCount();
 
             std.debug.assert(
-                transaction.totalAccountCount() <= held_accounts_buf.len,
+                total_account_count <= held_accounts_buf.len,
             );
 
-            for (transaction.staticAccountKeys()) |*key| {
-                held_accounts_buf[held_accounts] = fetchBlocking(
+            for (static_keys, 0..) |*key, i| {
+                held_accounts_buf[i] = fetchBlocking(
                     unrooted,
                     key,
                     block_ref,
@@ -986,74 +992,88 @@ fn maybeContinueBlockExec(
                     account_pool,
                     rooted_lookups,
                 );
-                held_accounts += 1;
             }
 
-            // TODO(Preston): Integrate ALT iteration (need to use a two-pass iteration here)
+            // Loaded writable accounts immediately follow the static accounts.
+            // Loaded readonly accounts immediately follow all loaded writable accounts.
+            var writable_cursor = static_count;
+            var readonly_cursor = static_count + loaded_writable_count;
 
-            const address_lookups: []const lib.solana.transaction.AddressLookup =
-                switch (transaction.message) {
-                    .legacy => &.{},
-                    .v0 => |v0| v0.address_table_lookups.items,
-                };
+            var atls_iter = transaction.addressTableLookups();
+            while (try atls_iter.next()) |lookup| {
+                const table_account_ref = fetchBlocking(
+                    unrooted,
+                    lookup.account_key,
+                    block_ref,
+                    block_pool,
+                    account_pool,
+                    rooted_lookups,
+                );
 
-            const Pass = enum { write, read };
+                if (table_account_ref == .invalid)
+                    @panic("missing address lookup table / TODO: handle bad blocks");
 
-            // looked up accounts are writable first, then readable
-            for (@as([]const Pass, &.{ .write, .read })) |pass| {
-                for (address_lookups) |lookup| {
-                    const account_ref = fetchBlocking(
+                const table_account: *lib.accounts_db.AccountPool.Account =
+                    account_pool.getAccount(table_account_ref);
+
+                defer if (table_account.unref()) account_pool.free(table_account_ref);
+
+                // NOTE: this is *not* a conformant implementation of an Address Lookup Table
+                // lookup; we need to respect the fields in the ALT account's header.
+                // Here we are just skipping over the header (56 bytes), which means we could be
+                // fetching accounts which are not yet active in the ALT.
+                const table_data = table_account.getData();
+                const header_len = 56;
+                if (table_data.len < header_len or (table_data.len - header_len) % Pubkey.SIZE != 0)
+                    @panic("invalid ALT / TODO: handle bad blocks");
+
+                const address_bytes = table_data[header_len..];
+                const address_count = address_bytes.len / Pubkey.SIZE;
+                const address_ptr: [*]const Pubkey = @ptrCast(address_bytes);
+
+                const table_pubkeys = address_ptr[0..address_count];
+
+                for (lookup.writable_indexes) |account_idx| {
+                    if (account_idx >= table_pubkeys.len)
+                        @panic("bad ALT lookup / TODO: handle bad blocks");
+                    const account_pk: *const Pubkey = &address_ptr[account_idx];
+
+                    std.debug.assert(writable_cursor < static_count + loaded_writable_count);
+
+                    held_accounts_buf[writable_cursor] = fetchBlocking(
                         unrooted,
-                        &lookup.account_key,
+                        account_pk,
                         block_ref,
                         block_pool,
                         account_pool,
                         rooted_lookups,
                     );
+                    writable_cursor += 1;
+                }
 
-                    if (account_ref == .invalid)
-                        @panic("missing address lookup table / TODO: handle bad blocks");
+                for (lookup.readonly_indexes) |account_idx| {
+                    if (account_idx >= table_pubkeys.len)
+                        @panic("bad ALT lookup / TODO: handle bad blocks");
+                    const account_pk: *const Pubkey = &address_ptr[account_idx];
 
-                    const ALT_account: *lib.accounts_db.AccountPool.Account =
-                        account_pool.getAccount(account_ref);
+                    std.debug.assert(readonly_cursor < total_account_count);
 
-                    defer if (ALT_account.unref()) account_pool.free(account_ref);
-
-                    // NOTE: this is *not* a conformant implementation of an Address Lookup Table
-                    // lookup; we need to respect the fields in the ALT account's header.
-                    // Here we are just skipping over the header (56 bytes), which means we could be
-                    // fetching accounts which are not yet active in the ALT.
-                    const ALT_data = ALT_account.getData();
-                    const header_len = 56;
-                    if (ALT_data.len < header_len or (ALT_data.len - header_len) % 32 != 0)
-                        @panic("invalid ALT / TODO: handle bad blocks");
-                    const ALT_pubkeys: []const Pubkey = @ptrCast(ALT_data[header_len..]);
-
-                    const indexes = switch (pass) {
-                        .write => lookup.writable_indexes.items,
-                        .read => lookup.readonly_indexes.items,
-                    };
-
-                    for (indexes) |account_idx| {
-                        if (account_idx >= ALT_pubkeys.len)
-                            @panic("bad ALT lookup / TODO: handle bad blocks");
-                        const account_pk: *const Pubkey = &ALT_pubkeys[account_idx];
-
-                        if (held_accounts >= held_accounts_buf.len)
-                            @panic("too many accounts for transaction / TODO: handle bad blocks");
-
-                        held_accounts_buf[held_accounts] = fetchBlocking(
-                            unrooted,
-                            account_pk,
-                            block_ref,
-                            block_pool,
-                            account_pool,
-                            rooted_lookups,
-                        );
-                        held_accounts += 1;
-                    }
+                    held_accounts_buf[readonly_cursor] = fetchBlocking(
+                        unrooted,
+                        account_pk,
+                        block_ref,
+                        block_pool,
+                        account_pool,
+                        rooted_lookups,
+                    );
+                    readonly_cursor += 1;
                 }
             }
+
+            std.debug.assert(writable_cursor == static_count + loaded_writable_count);
+            std.debug.assert(readonly_cursor == total_account_count);
+
+            const held_accounts: u8 = @intCast(total_account_count);
 
             const request: *lib.replay.ExecRequest = exec_request_sender.next() orelse
                 @panic("no space");
