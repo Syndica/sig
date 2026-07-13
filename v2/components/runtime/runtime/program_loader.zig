@@ -20,7 +20,7 @@ const AccountLoadError = sig.runtime.execution_interfaces.AccountLoadError;
 
 pub const ProgramMap = struct {
     inner: sig.utils.collections.PubkeyMap(LoadedProgram),
-    lock: sig.sync.RwLock,
+    lock: std.Thread.RwLock.DefaultRwLock,
 
     pub const empty = ProgramMap{
         .inner = .empty,

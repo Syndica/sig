@@ -1,6 +1,5 @@
 comptime {
     if (@import("builtin").is_test) {
-        _ = @import("blockhash_queue.zig");
         _ = @import("epoch_schedule.zig");
         _ = @import("features.zig");
         _ = @import("hash.zig");
@@ -14,7 +13,6 @@ comptime {
     }
 }
 
-pub const blockhash_queue = @import("blockhash_queue.zig");
 pub const epoch_schedule = @import("epoch_schedule.zig");
 pub const features = @import("features.zig");
 pub const hash = @import("hash.zig");
@@ -26,7 +24,6 @@ pub const time = @import("time.zig");
 pub const transaction = @import("transaction.zig");
 pub const transaction_error = @import("transaction_error.zig");
 
-pub const BlockhashQueue = blockhash_queue.BlockhashQueue;
 pub const EpochSchedule = epoch_schedule.EpochSchedule;
 pub const FeatureSet = features.Set;
 pub const Hash = hash.Hash;

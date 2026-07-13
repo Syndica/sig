@@ -11,7 +11,6 @@ pub const exit = @import("exit.zig");
 pub const Channel = channel.Channel;
 pub const Mux = mux.Mux;
 pub const RwMux = mux.RwMux;
-pub const RwLock = shared.sync.RwLock;
 pub const OnceCell = once_cell.OnceCell;
 pub const ReferenceCounter = reference_counter.ReferenceCounter;
 pub const Rc = reference_counter.Rc;
@@ -22,3 +21,9 @@ pub const ThreadPool = thread_pool.ThreadPool;
 pub const ExitCondition = exit.ExitCondition;
 
 pub const normalizeDeinitFunction = shared_memory.normalizeDeinitFunction;
+
+/// We use DefaultRwLock to avoid UB in pthread's RwLock, which relies on some
+/// assumptions that Sig does not conform to:
+/// - it must be pinned to a memory location
+/// - it does not support recursive lockShared calls from the same thread
+pub const RwLock = @import("std").Thread.RwLock.DefaultRwLock;

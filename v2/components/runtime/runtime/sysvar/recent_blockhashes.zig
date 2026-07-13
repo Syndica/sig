@@ -39,42 +39,6 @@ pub const RecentBlockhashes = struct {
     //     return self.entries.buffer[0];
     // }
 
-    pub fn fromBlockhashQueue(
-        allocator: Allocator,
-        queue: *const BlockhashQueue,
-    ) Allocator.Error!RecentBlockhashes {
-        const IndexAndEntry = struct {
-            index: u64,
-            entry: Entry,
-
-            pub fn compareFn(_: void, a: @This(), b: @This()) bool {
-                return a.index > b.index;
-            }
-        };
-
-        var entries = try std.ArrayListUnmanaged(IndexAndEntry).initCapacity(
-            allocator,
-            queue.hash_infos.count(),
-        );
-        defer entries.deinit(allocator);
-
-        for (queue.hash_infos.keys(), queue.hash_infos.values()) |hash, info| {
-            entries.appendAssumeCapacity(.{
-                .index = info.index,
-                .entry = .{
-                    .blockhash = hash,
-                    .lamports_per_signature = info.lamports_per_signature,
-                },
-            });
-        }
-        std.sort.heap(IndexAndEntry, entries.items, {}, IndexAndEntry.compareFn);
-
-        var self: RecentBlockhashes = .INIT;
-        const num_entries = @min(entries.items.len, MAX_ENTRIES);
-        for (entries.items[0..num_entries]) |entry| self.entries.appendAssumeCapacity(entry.entry);
-        return self;
-    }
-
     pub fn initWithEntries(entries: []const Entry) RecentBlockhashes {
         if (!builtin.is_test) @compileError("only for tests");
         std.debug.assert(entries.len <= MAX_ENTRIES);
@@ -97,23 +61,6 @@ pub const RecentBlockhashes = struct {
         return self;
     }
 };
-
-test "from blockhash queue" {
-    const allocator = std.testing.allocator;
-    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
-
-    const queue = try BlockhashQueue.initRandom(allocator, prng.random(), 1000);
-    defer queue.deinit(allocator);
-
-    const recent_blockhashes = try RecentBlockhashes.fromBlockhashQueue(allocator, &queue);
-
-    for (recent_blockhashes.entries.constSlice(), 0..) |entry, i| {
-        const info = queue.hash_infos.get(entry.blockhash) orelse unreachable;
-        try std.testing.expectEqual(info.index, queue.last_hash_index - i);
-    }
-
-    try std.testing.expect(!recent_blockhashes.isEmpty());
-}
 
 test "serialize and deserialize" {
     const allocator = std.testing.allocator;

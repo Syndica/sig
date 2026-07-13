@@ -2,6 +2,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../sig.zig");
 const tracy = @import("tracy");
+const shared = @import("shared");
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;
@@ -306,11 +307,44 @@ pub fn updateRecentBlockhashes(
     var zone = tracy.Zone.init(@src(), .{ .name = "updateRecentBlockhashes" });
     defer zone.deinit();
 
-    const recent_blockhashes = try RecentBlockhashes.fromBlockhashQueue(
-        allocator,
-        blockhash_queue,
-    );
+    const recent_blockhashes = try convertBlockhashes(allocator, blockhash_queue);
     try updateSysvarAccount(RecentBlockhashes, allocator, recent_blockhashes, deps);
+}
+
+fn convertBlockhashes(
+    allocator: Allocator,
+    queue: *const BlockhashQueue,
+) Allocator.Error!RecentBlockhashes {
+    const IndexAndEntry = struct {
+        index: u64,
+        entry: RecentBlockhashes.Entry,
+
+        pub fn compareFn(_: void, a: @This(), b: @This()) bool {
+            return a.index > b.index;
+        }
+    };
+
+    var entries = try std.ArrayListUnmanaged(IndexAndEntry).initCapacity(
+        allocator,
+        queue.hash_infos.count(),
+    );
+    defer entries.deinit(allocator);
+
+    for (queue.hash_infos.keys(), queue.hash_infos.values()) |hash, info| {
+        entries.appendAssumeCapacity(.{
+            .index = info.index,
+            .entry = .{
+                .blockhash = hash,
+                .lamports_per_signature = info.lamports_per_signature,
+            },
+        });
+    }
+    std.sort.heap(IndexAndEntry, entries.items, {}, IndexAndEntry.compareFn);
+
+    var self: RecentBlockhashes = .INIT;
+    const num_entries = @min(entries.items.len, RecentBlockhashes.MAX_ENTRIES);
+    for (entries.items[0..num_entries]) |entry| self.entries.appendAssumeCapacity(entry.entry);
+    return self;
 }
 
 pub const UpdateSysvarAccountDeps = struct {
@@ -1090,4 +1124,21 @@ test "update all sysvars" {
         try std.testing.expectEqual(new_lamports_per_signature, entry.lamports_per_signature);
         try expectSysvarAccountChange(rent, old_account, new_account);
     }
+}
+
+test convertBlockhashes {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const queue = try BlockhashQueue.initRandom(allocator, prng.random(), 1000);
+    defer queue.deinit(allocator);
+
+    const recent_blockhashes = try convertBlockhashes(allocator, &queue);
+
+    for (recent_blockhashes.entries.constSlice(), 0..) |entry, i| {
+        const info = queue.hash_infos.get(entry.blockhash) orelse unreachable;
+        try std.testing.expectEqual(info.index, queue.last_hash_index - i);
+    }
+
+    try std.testing.expect(!recent_blockhashes.isEmpty());
 }
