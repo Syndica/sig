@@ -7,7 +7,7 @@ const programs = sig.runtime.program;
 
 const Feature = sig.core.features.Feature;
 
-pub const TOTAL_COUNT_BUILTINS: usize = 9;
+pub const TOTAL_COUNT_BUILTINS: usize = 8;
 pub const BUILTIN_COSTS: std.StaticStringMap(BuiltinCost) = costs: {
     @setEvalBranchQuota(10_000);
     const entries = MIGRATING_BUILTIN_COSTS ++ NON_MIGRATING_BUILTIN_COSTS;
@@ -62,10 +62,6 @@ pub const NON_MIGRATING_BUILTIN_COSTS = [_]struct { []const u8, BuiltinCost }{
     .{
         &programs.bpf_loader.v3.ID.data,
         .{ .not_migrating = programs.bpf_loader.v3.COMPUTE_UNITS },
-    },
-    .{
-        &programs.bpf_loader.v4.ID.data,
-        .{ .not_migrating = programs.bpf_loader.v4.COMPUTE_UNITS },
     },
     .{
         &programs.precompiles.secp256k1.ID.data,
