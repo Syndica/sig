@@ -440,13 +440,15 @@ pub const VersionedTransaction = struct {
             reader: SliceReader,
             remaining: u8,
 
-            pub fn next(
-                self: *CompiledInstructionIter,
-            ) VersionedTransaction.ParseError!?struct {
+            pub const Item = struct {
                 program_id_index: u8,
                 account_indexes: []const u8,
                 data: []const u8,
-            } {
+            };
+
+            pub fn next(
+                self: *CompiledInstructionIter,
+            ) VersionedTransaction.ParseError!?Item {
                 if (self.remaining == 0) return null;
 
                 const program_id_index = try self.reader.readByte();
@@ -483,13 +485,15 @@ pub const VersionedTransaction = struct {
             reader: SliceReader,
             remaining: u8,
 
-            pub fn next(
-                self: *AddressTableLookupIter,
-            ) VersionedTransaction.ParseError!?struct {
+            pub const Item = struct {
                 account_key: *const Pubkey,
                 writable_indexes: []const u8,
                 readonly_indexes: []const u8,
-            } {
+            };
+
+            pub fn next(
+                self: *AddressTableLookupIter,
+            ) VersionedTransaction.ParseError!?Item {
                 if (self.remaining == 0) return null;
 
                 const account_key_bytes =
