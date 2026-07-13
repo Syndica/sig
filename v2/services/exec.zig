@@ -5,7 +5,6 @@
 //! 4) delta LT
 //!
 
-const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
 const tracy = @import("tracy");
