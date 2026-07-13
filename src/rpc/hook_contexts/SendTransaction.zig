@@ -92,12 +92,8 @@ pub fn sendTransaction(
         self.account_store.reader().forSlot(&preflight_slot_ref.constants().ancestors),
     );
 
-    const require_static_nonce_account = preflight_slot_ref.constants().feature_set.active(
-        .require_static_nonce_account,
-        preflight_slot,
-    );
     const durable_nonce_info: ?struct { Pubkey, Hash } =
-        if (getDurableNonce(&transaction, require_static_nonce_account)) |nonce|
+        if (getDurableNonce(&transaction)) |nonce|
             .{ nonce, transaction.recent_blockhash }
         else
             null;
@@ -376,11 +372,7 @@ fn sanitizeTransaction(
     preflight_slot_ref: *const SlotTracker.Reference,
     slot_account_reader: SlotAccountReader,
 ) !RuntimeTransaction {
-    const enable_static_ixn_limit = preflight_slot_ref.constants().feature_set.active(
-        .static_instruction_limit,
-        preflight_slot,
-    );
-    if (enable_static_ixn_limit and tx.msg.instructions.len > MAX_INSTRUCTION_TRACE_LENGTH) {
+    if (tx.msg.instructions.len > MAX_INSTRUCTION_TRACE_LENGTH) {
         return error.SanitizeFailure;
     }
 

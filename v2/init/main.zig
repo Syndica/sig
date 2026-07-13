@@ -24,6 +24,7 @@ const topology = lib.topology;
 const Region = topology.Region;
 const ServiceRegions = topology.ServiceRegions;
 
+/// Config for Sig, including service-specific configured values.
 const Config = struct {
     sandboxing_mode: SandboxingMode,
 
@@ -151,14 +152,14 @@ const Config = struct {
 /// a `ServiceLayout` whose `.ro`/`.rw` fields hold the typed regions matching the
 /// service's `ReadOnly`/`ReadWrite` schema in `init/services.zig`.
 const Topology = struct {
-    net: ServiceRegions(services.net),
-    gossip: ServiceRegions(services.gossip),
-    shred_receiver: ServiceRegions(services.shred_receiver),
-    replay: ServiceRegions(services.replay),
-    snapshot: ServiceRegions(services.snapshot),
-    accounts_db: ServiceRegions(services.accounts_db),
-    telemetry: ServiceRegions(services.telemetry),
-    exec: ServiceRegions(services.exec),
+    net: ServiceRegions(.from(services.net)),
+    gossip: ServiceRegions(.from(services.gossip)),
+    shred_receiver: ServiceRegions(.from(services.shred_receiver)),
+    replay: ServiceRegions(.from(services.replay)),
+    snapshot: ServiceRegions(.from(services.snapshot)),
+    accounts_db: ServiceRegions(.from(services.accounts_db)),
+    telemetry: ServiceRegions(.from(services.telemetry)),
+    exec: ServiceRegions(.from(services.exec)),
 };
 
 pub fn main() !void {
@@ -257,6 +258,9 @@ pub fn main() !void {
     var snapshot_ready_to_accounts_db: Region(lib.snapshot.SnapshotDataRing) = try .simple();
     snapshot_ready_to_accounts_db.ptr().init();
 
+    var snapshot_metadata: Region(lib.accounts_db.RuntimeMetadata) = try .simple();
+    snapshot_metadata.ptr().init();
+
     const unrooted_memory = config.accounts_db.unrooted.toBytes();
     var account_pool: Region(lib.accounts_db.AccountPool) =
         try .sized(@sizeOf(lib.accounts_db.AccountPool) + unrooted_memory);
@@ -319,6 +323,7 @@ pub fn main() !void {
         .shred_receiver = .{
             .ro = .{ .config = shred_recv_config.finish() },
             .rw = .{
+                .snapshot_metadata = snapshot_metadata.finish(),
                 .tvu_socket = net_to_shred.finish(),
                 .deshredded_out = shreds_to_replay.finish(),
                 .tel = telemetry_region.finish(),
@@ -327,6 +332,7 @@ pub fn main() !void {
         .replay = .{
             .ro = .{},
             .rw = .{
+                .snapshot_metadata_in = snapshot_metadata.finish(),
                 .deshredded_in = shreds_to_replay.finish(),
                 .replay_transaction_pool = transaction_pool.finish(),
                 .block_pool = block_pool.finish(),
@@ -347,6 +353,7 @@ pub fn main() !void {
             .rw = .{
                 .config = accounts_db_config.finish(),
                 .ready_snapshot_in = snapshot_ready_to_accounts_db.finish(),
+                .snapshot_metadata_out = snapshot_metadata.finish(),
                 .account_pool = account_pool.finish(),
                 .replay_lookups = replay_account_lookups.finish(),
                 .tel = telemetry_region.finish(),

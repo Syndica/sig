@@ -1,7 +1,33 @@
 const std = @import("std");
 
-/// A mem pool of []Item, intended to be shared across processes.
-/// NOTE: this is not an atomic pool - the same thread is expected create and destroy all nodes.
+/// Fixed capacity pool whose header and item storage are laid out in one contiguous buffer.
+/// Intended for shared memory because every stored reference is an ItemId index. No process
+/// address is stored in the pool. Pointers returned by create() are computed from the current
+/// process mapping and are only valid in that process.
+///
+/// NOTE: this is not an atomic pool. The same thread is expected to create and destroy all nodes.
+///
+/// Free slots store item ids in the same memory as items, so Item must be large and aligned
+/// enough to hold an optional item id.
+///
+/// create() allocates one Item and returns *Item. createId() returns the slot index, which can
+/// be stored in shared memory and converted to a pointer in each process.
+///
+/// ```zig
+/// const IntPool = SharedPool(u64, 4);
+///
+/// // This storage would typically be a shared memory mapping. Stack storage used here
+/// // for simplicity.
+/// var storage: [IntPool.size()]u8 align(@alignOf(IntPool)) = undefined;
+/// const pool: *IntPool = @ptrCast(&storage);
+/// pool.init();
+///
+/// const item_id = try pool.createId();
+/// item_id.ptr(pool).* = 42;
+///
+/// pool.destroyId(item_id);
+/// ```
+///
 pub fn SharedPool(Item: type, cap: usize) type {
     // bits required for the power-of-two integer needed to store capacity+1 items
     const int_bits = @max(
@@ -157,9 +183,33 @@ pub fn SharedPool(Item: type, cap: usize) type {
     };
 }
 
-/// A mem pool of []Item
-/// Asserts Item to have an alignment and size >= IdInt
-/// NOTE: this pool is not atomic, but is designed such that it could be made atomic easily
+/// Runtime sized in process pool backed by a caller provided Item buffer.
+/// Unlike SharedPool, this struct stores a pointer to the backing buffer. That pointer is valid
+/// only in the process that created the pool, so this type should not be embedded in shared memory.
+///
+/// NOTE: this pool is not atomic, but is designed such that it could be made atomic easily.
+///
+/// Free slots store item ids in the same memory as items, so Item must be large and aligned
+/// enough to hold an optional item id.
+///
+/// create() allocates one Item and returns *Item. createId() returns the slot index, which can be
+/// converted back to a pointer while using the same Pool value.
+///
+/// ```zig
+/// const U64Pool = Pool(u64, u16);
+///
+/// var items: [4]u64 = undefined;
+/// var pool = U64Pool.init(items[0..]);
+///
+/// const item = try pool.create();
+/// item.* = 42;
+///
+/// const item_id = pool.ptrToIndex(item);
+/// item_id.ptr(&pool).* = 43;
+///
+/// pool.destroyId(item_id);
+/// ```
+///
 pub fn Pool(Item: type, IdInt: type) type {
     switch (IdInt) {
         u8, u16, u32, u64 => {},
@@ -238,6 +288,14 @@ pub fn Pool(Item: type, IdInt: type) type {
                 .len = @intCast(buf.len),
                 .buf = buf.ptr,
             };
+        }
+
+        /// Rebuilds the free list in place, returning every item to the pool
+        /// without freeing or reallocating the backing buffer. The buffer
+        /// contents are clobbered.
+        pub fn reset(self: *PoolSelf) void {
+            const item_buf: []Item = @ptrCast(self.buf[0..self.len]);
+            self.* = init(item_buf);
         }
 
         // take head off free_list

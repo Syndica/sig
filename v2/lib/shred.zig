@@ -12,6 +12,7 @@ comptime {
 }
 
 pub const Receiver = @import("shred/receiver.zig").Receiver;
+pub const FecSetCtx = @import("shred/receiver.zig").FecSetCtx;
 
 const Hash = solana.Hash;
 const Slot = solana.Slot;
@@ -28,6 +29,14 @@ pub const RecvConfig = extern struct {
 };
 
 pub const DeshredRing = Ring(1024, DeshreddedFecSet);
+
+/// Maximum number of data (or coding) shreds the protocol allows in a slot.
+/// A shred whose `slot_idx` is at or above this bound is rejected at parse;
+/// an FEC set whose last shred would land past the bound is rejected at the
+/// receiver.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/shred.rs#L125-L126
+pub const max_shreds_per_slot: u32 = 32_768;
 
 /// NOTE: these are not necessarily unique IDs - under equivocation there may be multiple FEC sets
 ///       of the same FecSetId.
@@ -271,8 +280,8 @@ pub const Shred = extern struct {
             if (flags.last_shred_in_slot and !flags.data_complete)
                 return error.DataShredMarkedCompleteIsNotLastInSet;
 
-            // TODO: support the upcoming feature shredXP8xLjJWp1AWh3gAFsFn4GSH1vohhCMDHw5koU, which
-            // drops data shreds with data_complete=true that aren't the last data shred in the set.
+            // `discard_unexpected_data_complete_shreds` is enforced in
+            // `Receiver.processPacket` (needs the activation slot).
 
             // TODO: drop shreds with last_shred_in_slot that aren't the last data shred in the set.
 
@@ -293,6 +302,11 @@ pub const Shred = extern struct {
             if (code_header.code_count + code_header.data_count > 256)
                 return error.CodeOrDataCountTooLarge;
         }
+
+        // Reject shreds past the per-slot index bound.
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/shred/shred_data.rs#L19
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/shred/shred_code.rs#L40
+        if (shred.slot_idx >= max_shreds_per_slot) return error.SlotIndexTooHigh;
 
         return shred;
     }
