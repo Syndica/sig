@@ -367,14 +367,12 @@ pub const VersionedTransaction = struct {
         }
 
         pub fn loadedAddressCount(self: View) usize {
-            return @as(
-                usize,
-                self.layout.loaded_writeable_count + self.layout.loaded_readonly_count,
-            );
+            return @as(usize, self.layout.loaded_writable_count) +
+                @as(usize, self.layout.loaded_readonly_count);
         }
 
         pub fn totalAccountCount(self: View) usize {
-            return self.loadedAddressCount() + self.layout.static_key_count;
+            return @as(usize, self.layout.static_key_count) + self.loadedAddressCount();
         }
 
         pub fn hasAddressTableLookups(self: View) bool {
