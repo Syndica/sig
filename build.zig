@@ -1,3 +1,6 @@
+//! This defines the build process for v2.
+//! conformance/ and v1/ each have their own build.zig
+
 const std = @import("std");
 const Build = std.Build;
 
@@ -314,6 +317,27 @@ const Sig = struct {
 
         _ = addRuntime(b, config, deps, unit_tests, lib, feature_set_id, features_zon);
 
+        const accounts_db_api = b.addModule("accounts_db_api", .{
+            .root_source_file = b.path("v2/components/accounts_db/api.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = &.{
+                .{ .name = "tracy", .module = deps.tracy },
+                .{ .name = "lib", .module = lib },
+            },
+        });
+        const accounts_db = b.addModule("accounts_db", .{
+            .root_source_file = b.path("v2/components/accounts_db/component.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = &.{
+                .{ .name = "tracy", .module = deps.tracy },
+                .{ .name = "lib", .module = lib },
+                .{ .name = "api", .module = accounts_db_api },
+            },
+        });
+        unit_tests.add("lib", lib);
+
         const topology = b.createModule(.{
             .root_source_file = b.path("v2/init/topology.zig"),
             .target = config.target,
@@ -343,6 +367,7 @@ const Sig = struct {
             .optimize = config.optimize,
             .imports = &.{
                 .{ .name = "lib", .module = lib },
+                .{ .name = "accounts_db_api", .module = accounts_db_api },
             },
         });
 
@@ -355,6 +380,7 @@ const Sig = struct {
                 .{ .name = "tracy", .module = deps.tracy },
                 .{ .name = "services", .module = services_mod },
                 .{ .name = "topology", .module = topology },
+                .{ .name = "accounts_db_api", .module = accounts_db_api },
             },
         });
         unit_tests.add("sig-init", sig_init);
@@ -374,6 +400,8 @@ const Sig = struct {
                     .{ .name = "start_service", .module = start_service },
                     .{ .name = "tracy", .module = deps.tracy },
                     .{ .name = "services", .module = services_mod },
+                    .{ .name = "accounts_db_api", .module = accounts_db_api },
+                    .{ .name = "accounts_db", .module = accounts_db },
                 },
             });
             unit_tests.add(service.name, service_mod);

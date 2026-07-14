@@ -2,13 +2,14 @@ const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
 const services = @import("services");
+const accounts_db = @import("accounts_db");
 
 const tel = lib.telemetry;
 
 const SnapshotIter = lib.solana.snapshot.SnapshotIter;
 
-const Rooted = lib.accounts_db.Rooted;
-const AccountPool = lib.accounts_db.AccountPool;
+const Rooted = accounts_db.Rooted;
+const AccountPool = accounts_db.AccountPool;
 
 comptime {
     _ = start;

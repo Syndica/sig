@@ -1,6 +1,5 @@
 comptime {
     if (@import("builtin").is_test) {
-        _ = @import("accounts_db.zig");
         _ = @import("clock.zig");
         _ = @import("collections.zig");
         _ = @import("crypto.zig");
@@ -34,7 +33,6 @@ pub const snapshot = @import("snapshot.zig");
 pub const runner = @import("runner.zig");
 pub const telemetry = @import("telemetry.zig");
 pub const replay = @import("replay.zig");
-pub const accounts_db = @import("accounts_db.zig");
 pub const fio = @import("fio.zig");
 
 pub const test_data_dir = "../data/test-data/";

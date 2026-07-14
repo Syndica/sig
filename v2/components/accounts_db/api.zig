@@ -1,21 +1,11 @@
 const std = @import("std");
-const lib = @import("lib.zig");
+const lib = @import("lib");
 
-comptime {
-    if (@import("builtin").is_test) {
-        _ = @import("accounts_db/pool.zig");
-        _ = @import("accounts_db/rooted.zig");
-        _ = @import("accounts_db/table.zig");
-    }
-}
+pub const AccountPool = @import("pool.zig").AccountPool;
 
 const Pubkey = lib.solana.Pubkey;
 const Hash = lib.solana.Hash;
 const Slot = lib.solana.Slot;
-
-pub const AccountPool = @import("accounts_db/pool.zig").AccountPool;
-pub const Rooted = @import("accounts_db/rooted.zig").Rooted;
-pub const Table = @import("accounts_db/table.zig").Table;
 
 pub const RootedConfig = extern struct {
     file_len: u32,

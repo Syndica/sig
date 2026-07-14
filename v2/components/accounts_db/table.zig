@@ -1,5 +1,5 @@
 const std = @import("std");
-const lib = @import("../lib.zig");
+const lib = @import("lib");
 
 const Pubkey = lib.solana.Pubkey;
 const Slot = lib.solana.Slot;

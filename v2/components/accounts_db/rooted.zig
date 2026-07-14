@@ -1,16 +1,18 @@
 const std = @import("std");
-const lib = @import("../lib.zig");
+const lib = @import("lib");
 const tracy = @import("tracy");
+const api = @import("api");
+const component = @import("component.zig");
 
 const tel = lib.telemetry;
 
 const FileWriter = lib.fio.FileWriter;
 const FileReader = lib.fio.FileReader;
 
-const Table = lib.accounts_db.Table;
-const AccountPool = lib.accounts_db.AccountPool;
-const AccountLookups = lib.accounts_db.AccountLookups;
-const RuntimeMetadata = lib.accounts_db.RuntimeMetadata;
+const Table = component.Table;
+const AccountPool = component.AccountPool;
+const AccountLookups = api.AccountLookups;
+const RuntimeMetadata = api.RuntimeMetadata;
 
 const Pubkey = lib.solana.Pubkey;
 const Slot = lib.solana.Slot;

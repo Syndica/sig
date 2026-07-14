@@ -8,16 +8,17 @@
 //!   types that list the types that the service expects to find in its regions.
 
 const lib = @import("lib");
+const accounts_db_api = @import("accounts_db_api");
 
 pub const accounts_db = struct {
     pub const ReadOnly = struct {};
 
     pub const ReadWrite = struct {
-        config: *lib.accounts_db.RootedConfig,
+        config: *accounts_db_api.RootedConfig,
         ready_snapshot_in: *lib.snapshot.SnapshotDataRing,
-        snapshot_metadata_out: *lib.accounts_db.RuntimeMetadata,
-        account_pool: *lib.accounts_db.AccountPool,
-        replay_lookups: *lib.accounts_db.AccountLookups,
+        snapshot_metadata_out: *accounts_db_api.RuntimeMetadata,
+        account_pool: *accounts_db_api.AccountPool,
+        replay_lookups: *accounts_db_api.AccountLookups,
         tel: *lib.telemetry.Region,
     };
 };
@@ -59,7 +60,7 @@ pub const replay = struct {
     pub const ReadOnly = struct {};
 
     pub const ReadWrite = struct {
-        snapshot_metadata_in: *lib.accounts_db.RuntimeMetadata,
+        snapshot_metadata_in: *accounts_db_api.RuntimeMetadata,
         deshredded_in: *lib.shred.DeshredRing,
         replay_transaction_pool: *lib.replay.TransactionPool,
         block_pool: *lib.replay.BlockPool,
@@ -75,7 +76,7 @@ pub const shred_receiver = struct {
 
     pub const ReadWrite = struct {
         /// Gets slot (& soon leader-schedule info) from replay / runtime init.
-        snapshot_metadata: *lib.accounts_db.RuntimeMetadata,
+        snapshot_metadata: *accounts_db_api.RuntimeMetadata,
 
         /// Transaction Validation Unit (TVU) UDP socket, i.e. where we receive
         /// shreds. This is typically port 8002. While we've obtained a net

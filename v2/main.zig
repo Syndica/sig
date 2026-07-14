@@ -21,6 +21,8 @@ const services = @import("services");
 const topology = @import("topology");
 const tel = lib.telemetry;
 
+const accounts_db_api = @import("accounts_db_api");
+
 const Region = topology.Region;
 const ServiceRegions = topology.ServiceRegions;
 
@@ -233,8 +235,8 @@ pub fn main() !void {
     var snapshot_config: Region(lib.snapshot.SnapshotConfig) = try .simple();
     try populateSnapshotConfig(snapshot_config.ptr(), config.snapshot, config.cluster);
 
-    var accounts_db_config: Region(lib.accounts_db.RootedConfig) = try .sized(
-        @sizeOf(lib.accounts_db.RootedConfig) + config.accounts_db.rooted.toBytes(),
+    var accounts_db_config: Region(accounts_db_api.RootedConfig) = try .sized(
+        @sizeOf(accounts_db_api.RootedConfig) + config.accounts_db.rooted.toBytes(),
     );
     accounts_db_config.ptr().file_len = @intCast(config.accounts_db.file.len);
     @memcpy(
@@ -258,18 +260,18 @@ pub fn main() !void {
     var snapshot_ready_to_accounts_db: Region(lib.snapshot.SnapshotDataRing) = try .simple();
     snapshot_ready_to_accounts_db.ptr().init();
 
-    var snapshot_metadata: Region(lib.accounts_db.RuntimeMetadata) = try .simple();
+    var snapshot_metadata: Region(accounts_db_api.RuntimeMetadata) = try .simple();
     snapshot_metadata.ptr().init();
 
     const unrooted_memory = config.accounts_db.unrooted.toBytes();
-    var account_pool: Region(lib.accounts_db.AccountPool) =
-        try .sized(@sizeOf(lib.accounts_db.AccountPool) + unrooted_memory);
+    var account_pool: Region(accounts_db_api.AccountPool) =
+        try .sized(@sizeOf(accounts_db_api.AccountPool) + unrooted_memory);
     account_pool.ptr().init(unrooted_memory);
 
     var shreds_to_replay: Region(lib.shred.DeshredRing) = try .simple();
     shreds_to_replay.ptr().init();
 
-    var replay_account_lookups: Region(lib.accounts_db.AccountLookups) = try .simple();
+    var replay_account_lookups: Region(accounts_db_api.AccountLookups) = try .simple();
     replay_account_lookups.ptr().init();
 
     var transaction_pool: Region(lib.replay.TransactionPool) =
