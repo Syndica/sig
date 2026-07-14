@@ -689,7 +689,7 @@ pub const Rooted = struct {
     pub fn queueRead(
         self: *Rooted,
         logger: tel.Logger("Rooted.queueRead"),
-        pubkey: *const Pubkey,
+        request: *const AccountLookups.Request,
     ) !bool {
         const lookup_idx = self.free_lookups;
         if (lookup_idx == invalid_lookup_index) {
@@ -704,16 +704,23 @@ pub const Rooted = struct {
             self.free_lookups = lookup_idx;
         }
 
-        const entry = self.table.get(pubkey);
+        node.result.id = request.id;
+        node.result.pubkey = request.pubkey;
+
+        const entry = self.table.get(&request.pubkey);
         if (entry.isEmpty()) { // not found. complete immediately.
-            node.result = .{ .pubkey = pubkey.*, .account_index = .invalid };
+            node.result = .{
+                .id = request.id,
+                .pubkey = request.pubkey,
+                .account_index = .invalid,
+            };
             node.next = self.ready_lookups;
             self.ready_lookups = lookup_idx;
             return true;
         }
 
         const acc_idx = try self.account_pool.alloc(entry.len);
-        node.result = .{ .pubkey = pubkey.*, .account_index = acc_idx };
+        node.result = .{ .id = request.id, .pubkey = request.pubkey, .account_index = acc_idx };
 
         // prepare the account (these must be set before self.account_pool.free() on the same index)
         const account = self.account_pool.getAccount(acc_idx);
@@ -732,7 +739,10 @@ pub const Rooted = struct {
     }
 
     // Consume
-    pub fn pollRead(self: *Rooted, logger: tel.Logger("Rooted.pollReady")) !?LookupResult {
+    pub fn pollRead(
+        self: *Rooted,
+        logger: tel.Logger("Rooted.pollReady"),
+    ) !?LookupResult {
         // check if lookup in ready queue
         var lookup_idx = self.ready_lookups;
         if (lookup_idx >= self.lookup_nodes.len) {
