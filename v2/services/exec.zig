@@ -11,6 +11,7 @@ const lib = @import("lib");
 const tracy = @import("tracy");
 const services = @import("services");
 const replay_api = @import("replay_api");
+const runtime = @import("runtime");
 
 comptime {
     _ = start;
@@ -64,6 +65,8 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
                     );
 
                 _ = transaction;
+
+                _ = runtime.runtime.transaction_execution.loadAndExecuteTransaction;
 
                 const response: *replay_api.ExecResponse = response_writer.next() orelse
                     @panic("cant write");
