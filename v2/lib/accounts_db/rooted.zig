@@ -958,6 +958,15 @@ const RootedTestState = struct {
     const test_account_pool_memory_len = 64 * 1024;
     const test_file_name = "rooted-test.db";
 
+    const Account = struct {
+        pubkey: Pubkey,
+        owner: Pubkey,
+        lamports: u64,
+        rent_epoch: Epoch,
+        executable: bool,
+        data: []const u8,
+    };
+
     fn init(logger: tel.Logger("Rooted.test")) !RootedTestState {
         const gpa = std.testing.allocator;
 
@@ -1015,6 +1024,27 @@ const RootedTestState = struct {
         gpa.free(self.account_pool_memory);
         self.tmp.cleanup();
     }
+
+    fn putAccounts(
+        self: *RootedTestState,
+        logger: tel.Logger("Rooted.test"),
+        accounts: []const Account,
+    ) !void {
+        try self.rooted.beginTransaction(.from(logger), 1);
+        for (accounts) |account| {
+            var data_reader = std.Io.Reader.fixed(account.data);
+            try self.rooted.put(.from(logger), &data_reader, .{
+                .slot = 1,
+                .pubkey = account.pubkey,
+                .owner = account.owner,
+                .lamports = account.lamports,
+                .rent_epoch = account.rent_epoch,
+                .executable = account.executable,
+                .data_len = account.data.len,
+            });
+        }
+        try self.rooted.commitTransaction(.from(logger));
+    }
 };
 
 test "rooted lookup preserves request id for missing account" {
@@ -1035,50 +1065,84 @@ test "rooted lookup preserves request id for missing account" {
     try std.testing.expectEqual(AccountPool.AccountRef.invalid, result.account_index);
 }
 
-test "rooted preserves ids across multiple concurrent reads" {
+test "rooted preserves user data across multiple concurrent reads" {
     const logger = tel.Logger("Rooted.test").noop;
     var state = try RootedTestState.init(logger);
     defer state.deinit();
 
-    const ids = [_]AccountLookups.RequestUserData{ 10, 20, 30 };
-    const pks = [_]Pubkey{
-        Pubkey.parse("F4GpAFr6vrxU3Y887F3XWkXRgybCVjZNk63m72f6pump"),
-        Pubkey.parse("9oDndFiC7RW42vZcmSzacTKMWE9kgeqnzwXDGLSkpump"),
-        Pubkey.parse("USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB"),
+    const user_data = [_]AccountLookups.RequestUserData{ 10, 20, 30 };
+    const accounts = [_]RootedTestState.Account{
+        .{
+            .pubkey = Pubkey.parse("F4GpAFr6vrxU3Y887F3XWkXRgybCVjZNk63m72f6pump"),
+            .owner = Pubkey.parse("11111111111111111111111111111111"),
+            .lamports = 42,
+            .rent_epoch = 0,
+            .executable = false,
+            .data = "first rooted account",
+        },
+        .{
+            .pubkey = Pubkey.parse("9oDndFiC7RW42vZcmSzacTKMWE9kgeqnzwXDGLSkpump"),
+            .owner = Pubkey.parse("ComputeBudget111111111111111111111111111111"),
+            .lamports = 84,
+            .rent_epoch = 1,
+            .executable = false,
+            .data = "second rooted account data",
+        },
+        .{
+            .pubkey = Pubkey.parse("USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB"),
+            .owner = Pubkey.parse("SysvarRent111111111111111111111111111111111"),
+            .lamports = 126,
+            .rent_epoch = 2,
+            .executable = true,
+            .data = "third rooted account payload",
+        },
     };
 
+    try state.putAccounts(logger, &accounts);
+
     // Queue all three before polling.
-    for (pks, ids) |pk, id| {
+    for (accounts, user_data) |account, req_user_data| {
         try std.testing.expect(try state.rooted.queueRead(.from(logger), &.{
-            .req_user_data = id,
-            .pubkey = pk,
+            .req_user_data = req_user_data,
+            .pubkey = account.pubkey,
         }));
     }
 
     var seen: [3]bool = @splat(false);
+    var released: usize = 0;
 
     var completed: usize = 0;
-    while (completed < ids.len) {
+    while (completed < user_data.len) {
         const result = try state.rooted.pollRead(.from(logger)) orelse continue;
 
-        for (ids, 0..) |id, i| {
-            if (result.req_user_data == id) {
+        const account_index = for (user_data, 0..) |req_user_data, i| {
+            if (result.req_user_data == req_user_data) {
                 try std.testing.expect(!seen[i]);
                 seen[i] = true;
-                break;
+                break i;
             }
         } else {
-            return error.UnexpectedRequestId;
-        }
+            return error.UnexpectedRequestUserData;
+        };
+        const expected = accounts[account_index];
 
         completed += 1;
 
-        if (result.account_index != .invalid) {
-            const account = state.account_pool.getAccount(result.account_index);
-            if (account.unref()) state.account_pool.free(result.account_index);
-        }
+        try std.testing.expect(result.account_index != .invalid);
+        const account = state.account_pool.getAccount(result.account_index);
+        defer if (account.unref()) state.account_pool.free(result.account_index);
+        released += 1;
+
+        try std.testing.expect(result.pubkey.equals(&expected.pubkey));
+        try std.testing.expect(account.pubkey.equals(&expected.pubkey));
+        try std.testing.expect(account.owner.equals(&expected.owner));
+        try std.testing.expectEqual(expected.lamports, account.lamports);
+        try std.testing.expectEqual(expected.rent_epoch, account.rent_epoch);
+        try std.testing.expectEqual(expected.executable, account.data.executable);
+        try std.testing.expectEqualStrings(expected.data, account.getData());
     }
 
+    try std.testing.expectEqual(accounts.len, released);
     try std.testing.expectEqual(
         [_]bool{ true, true, true },
         seen,
