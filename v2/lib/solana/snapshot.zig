@@ -75,10 +75,12 @@ pub const StatusCache = struct {
     }
 
     /// Discards an InstructionError union. Most variants are void; Custom is u32; BorshIoError is Vec(u8).
+    ///
+    /// See SerdeInstructionError in agave's runtime/src/serde_snapshot/status_cache.rs
     fn discardInstructionError(r: anytype) !void {
         switch (try readInt(u32, r)) {
             25 => try r.discardAll(4), // Custom: u32
-            45 => { // BorshIoError: Vec(u8)
+            44 => { // BorshIoError: Vec(u8)
                 const len = try readInt(u64, r);
                 try r.discardAll(len);
             },
