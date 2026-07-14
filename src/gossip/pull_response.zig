@@ -182,4 +182,7 @@ test "gossip.pull_response: zero-capacity filter does not divide by zero" {
         100,
     );
     defer result.deinit();
+
+    // the filter matches nothing, so all 8 inserted entries pass through
+    try std.testing.expectEqual(@as(usize, 8), result.items.len);
 }
