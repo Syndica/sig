@@ -101,7 +101,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                 errdefer |err| std.debug.panic("AccountReader: {}", .{err});
 
                 const req = lib.accounts_db.AccountLookups.Request{
-                    .id = 0, // TODO(Preston): id management
+                    .req_user_data = 0, // TODO(Preston): id management
                     .pubkey = pubkey.*,
                 };
 

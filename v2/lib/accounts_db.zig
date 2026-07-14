@@ -31,15 +31,17 @@ pub const AccountLookups = extern struct {
 
     /// Request-supplied id to match responses to requests.
     /// Opaque to accounts_db service, so it's usage is up to the callers.
-    pub const Id = u32;
+    pub const RequestUserData = u32;
 
     pub const Request = extern struct {
-        id: Id,
+        /// Opaque to accounts_db service, so it's usage is up to the callers.
+        req_user_data: RequestUserData,
         pubkey: Pubkey,
     };
+
     pub const Result = extern struct {
-        /// Matches the request id of the Request that this Result is responding to.
-        id: Id,
+        /// Matches the `req_user_data` field of the Request that this Result is responding to.
+        req_user_data: RequestUserData,
         pubkey: Pubkey,
         account_index: AccountPool.AccountRef, // .invalid if not found
     };

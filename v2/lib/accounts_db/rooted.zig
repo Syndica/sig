@@ -704,13 +704,13 @@ pub const Rooted = struct {
             self.free_lookups = lookup_idx;
         }
 
-        node.result.id = request.id;
+        node.result.req_user_data = request.req_user_data;
         node.result.pubkey = request.pubkey;
 
         const entry = self.table.get(&request.pubkey);
         if (entry.isEmpty()) { // not found. complete immediately.
             node.result = .{
-                .id = request.id,
+                .req_user_data = request.req_user_data,
                 .pubkey = request.pubkey,
                 .account_index = .invalid,
             };
@@ -720,7 +720,11 @@ pub const Rooted = struct {
         }
 
         const acc_idx = try self.account_pool.alloc(entry.len);
-        node.result = .{ .id = request.id, .pubkey = request.pubkey, .account_index = acc_idx };
+        node.result = .{
+            .req_user_data = request.req_user_data,
+            .pubkey = request.pubkey,
+            .account_index = acc_idx,
+        };
 
         // prepare the account (these must be set before self.account_pool.free() on the same index)
         const account = self.account_pool.getAccount(acc_idx);
@@ -1018,16 +1022,16 @@ test "rooted lookup preserves request id for missing account" {
     var state = try RootedTestState.init(logger);
     defer state.deinit();
 
-    const id: AccountLookups.Id = 1234;
+    const id: AccountLookups.RequestUserData = 1234;
     const missing_pk = Pubkey.parse("SysvarC1ock11111111111111111111111111111111");
 
     try std.testing.expect(try state.rooted.queueRead(.from(logger), &.{
-        .id = id,
+        .req_user_data = id,
         .pubkey = missing_pk,
     }));
 
     const result = (try state.rooted.pollRead(.from(logger))).?;
-    try std.testing.expectEqual(id, result.id);
+    try std.testing.expectEqual(id, result.req_user_data);
     try std.testing.expectEqual(AccountPool.AccountRef.invalid, result.account_index);
 }
 
@@ -1036,7 +1040,7 @@ test "rooted preserves ids across multiple concurrent reads" {
     var state = try RootedTestState.init(logger);
     defer state.deinit();
 
-    const ids = [_]AccountLookups.Id{ 10, 20, 30 };
+    const ids = [_]AccountLookups.RequestUserData{ 10, 20, 30 };
     const pks = [_]Pubkey{
         Pubkey.parse("F4GpAFr6vrxU3Y887F3XWkXRgybCVjZNk63m72f6pump"),
         Pubkey.parse("9oDndFiC7RW42vZcmSzacTKMWE9kgeqnzwXDGLSkpump"),
@@ -1046,7 +1050,7 @@ test "rooted preserves ids across multiple concurrent reads" {
     // Queue all three before polling.
     for (pks, ids) |pk, id| {
         try std.testing.expect(try state.rooted.queueRead(.from(logger), &.{
-            .id = id,
+            .req_user_data = id,
             .pubkey = pk,
         }));
     }
@@ -1058,7 +1062,7 @@ test "rooted preserves ids across multiple concurrent reads" {
         const result = try state.rooted.pollRead(.from(logger)) orelse continue;
 
         for (ids, 0..) |id, i| {
-            if (result.id == id) {
+            if (result.req_user_data == id) {
                 try std.testing.expect(!seen[i]);
                 seen[i] = true;
                 break;
