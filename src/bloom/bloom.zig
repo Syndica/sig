@@ -61,7 +61,7 @@ pub const Bloom = struct {
     }
 
     pub fn contains(self: *const Bloom, key: []const u8) bool {
-        if (self.bits.capacity() == 0) return false;
+        if (self.keys.items.len == 0 or self.bits.capacity() == 0) return false;
         for (self.keys.items) |hash_index| {
             const i = self.pos(key, hash_index);
             if (self.bits.isSet(i)) {
@@ -192,6 +192,15 @@ test "zero-capacity filter does not divide by zero" {
     try bloom.addKey(1);
     try testing.expect(!bloom.contains(&[_]u8{ 1, 2, 3 }));
     bloom.add(&[_]u8{ 1, 2, 3 });
+}
+
+test "filter with no keys matches nothing" {
+    // capacity but no keys: the loop has nothing to check, so contains must
+    // report no match rather than falling through to true
+    var bloom = try Bloom.init(testing.allocator, 64, null);
+    defer bloom.deinit();
+
+    try testing.expect(!bloom.contains(&[_]u8{ 1, 2, 3 }));
 }
 
 test "deserialized zero-capacity filter does not divide by zero" {
