@@ -324,7 +324,7 @@ pub const Appender = struct {
         self: Appender,
         comptime id: Id,
         comptime layout: tel.LatencyHistogram.Layout,
-    ) tel.LatencyHistogram.Raw {
+    ) tel.LatencyHistogram {
         const header_words = tel.LatencyHistogram.Layout.header_words;
         const element_count = layout.elementsFromBucketCount();
         const elem_offs = self.histogram_data_end.fetchAdd(header_words + element_count, .acq_rel);
