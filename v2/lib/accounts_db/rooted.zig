@@ -941,3 +941,142 @@ pub const Rooted = struct {
         }
     }
 };
+
+const RootedTestState = struct {
+    tmp: std.testing.TmpDir,
+    rooted: *Rooted,
+    table_memory: []u8,
+    account_pool_memory: []align(@alignOf(AccountPool)) u8,
+    account_pool: *AccountPool,
+    runtime_metadata: RuntimeMetadata,
+
+    const test_table_memory_len = 64 * 1024;
+    const test_account_pool_memory_len = 64 * 1024;
+    const test_file_name = "rooted-test.db";
+
+    fn init(logger: tel.Logger("Rooted.test")) !RootedTestState {
+        const gpa = std.testing.allocator;
+
+        var tmp = std.testing.tmpDir(.{});
+        errdefer tmp.cleanup();
+
+        const rooted = try gpa.create(Rooted);
+        errdefer gpa.destroy(rooted);
+
+        const table_memory = try gpa.alloc(u8, test_table_memory_len);
+        errdefer gpa.free(table_memory);
+        @memset(table_memory, 0);
+
+        const account_pool_memory = try gpa.alignedAlloc(
+            u8,
+            .of(AccountPool),
+            @sizeOf(AccountPool) + test_account_pool_memory_len,
+        );
+        errdefer gpa.free(account_pool_memory);
+
+        const account_pool: *AccountPool = @ptrCast(account_pool_memory.ptr);
+        account_pool.init(test_account_pool_memory_len);
+
+        var runtime_metadata: RuntimeMetadata = undefined;
+        runtime_metadata.init();
+
+        var activity: lib.runner.Activity = .{};
+        var service_view = activity.serviceView();
+        try rooted.init(
+            .from(logger),
+            .{ .activity = &service_view },
+            tmp.dir,
+            test_file_name,
+            table_memory,
+            account_pool,
+            &runtime_metadata,
+        );
+
+        return .{
+            .tmp = tmp,
+            .rooted = rooted,
+            .table_memory = table_memory,
+            .account_pool_memory = account_pool_memory,
+            .account_pool = account_pool,
+            .runtime_metadata = runtime_metadata,
+        };
+    }
+
+    fn deinit(self: *RootedTestState) void {
+        const gpa = std.testing.allocator;
+
+        self.rooted.deinit();
+        gpa.destroy(self.rooted);
+        gpa.free(self.table_memory);
+        gpa.free(self.account_pool_memory);
+        self.tmp.cleanup();
+    }
+};
+
+test "rooted lookup preserves request id for missing account" {
+    const logger = tel.Logger("Rooted.test").noop;
+    var state = try RootedTestState.init(logger);
+    defer state.deinit();
+
+    const id: AccountLookups.Id = 1234;
+    const missing_pk = Pubkey.parse("SysvarC1ock11111111111111111111111111111111");
+
+    try std.testing.expect(try state.rooted.queueRead(.from(logger), &.{
+        .id = id,
+        .pubkey = missing_pk,
+    }));
+
+    const result = (try state.rooted.pollRead(.from(logger))).?;
+    try std.testing.expectEqual(id, result.id);
+    try std.testing.expectEqual(AccountPool.AccountRef.invalid, result.account_index);
+}
+
+test "rooted preserves ids across multiple concurrent reads" {
+    const logger = tel.Logger("Rooted.test").noop;
+    var state = try RootedTestState.init(logger);
+    defer state.deinit();
+
+    const ids = [_]AccountLookups.Id{ 10, 20, 30 };
+    const pks = [_]Pubkey{
+        Pubkey.parse("F4GpAFr6vrxU3Y887F3XWkXRgybCVjZNk63m72f6pump"),
+        Pubkey.parse("9oDndFiC7RW42vZcmSzacTKMWE9kgeqnzwXDGLSkpump"),
+        Pubkey.parse("USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB"),
+    };
+
+    // Queue all three before polling.
+    for (pks, ids) |pk, id| {
+        try std.testing.expect(try state.rooted.queueRead(.from(logger), &.{
+            .id = id,
+            .pubkey = pk,
+        }));
+    }
+
+    var seen: [3]bool = @splat(false);
+
+    var completed: usize = 0;
+    while (completed < ids.len) {
+        const result = try state.rooted.pollRead(.from(logger)) orelse continue;
+
+        for (ids, 0..) |id, i| {
+            if (result.id == id) {
+                try std.testing.expect(!seen[i]);
+                seen[i] = true;
+                break;
+            }
+        } else {
+            return error.UnexpectedRequestId;
+        }
+
+        completed += 1;
+
+        if (result.account_index != .invalid) {
+            const account = state.account_pool.getAccount(result.account_index);
+            if (account.unref()) state.account_pool.free(result.account_index);
+        }
+    }
+
+    try std.testing.expectEqual(
+        [_]bool{ true, true, true },
+        seen,
+    );
+}
