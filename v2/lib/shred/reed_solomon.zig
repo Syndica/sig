@@ -647,7 +647,7 @@ test pshufbFallback {
     };
 
     const actual = pshufbFallback(a, mask);
-    if (builtin.cpu.has(.x86, .ssse3)) {
+    if (comptime builtin.cpu.has(.x86, .ssse3)) {
         const calculated = @extern(
             *const fn (@Vector(16, u8), @Vector(16, u8)) callconv(.c) @Vector(16, u8),
             .{ .name = "llvm.x86.ssse3.pshuf.b.128" },
