@@ -10,6 +10,7 @@ const start = @import("start_service");
 const lib = @import("lib");
 const tracy = @import("tracy");
 const services = @import("services");
+const replay_api = @import("replay_api");
 
 comptime {
     _ = start;
@@ -30,7 +31,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     var deserial_fba: std.heap.FixedBufferAllocator = .init(&deserialised_buf);
 
     while (true) {
-        const request: *const lib.replay.ExecRequest = request_reader.next() orelse {
+        const request: *const replay_api.ExecRequest = request_reader.next() orelse {
             try runner.activity.signalIdleSpinning();
             continue;
         };
@@ -64,7 +65,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
 
                 _ = transaction;
 
-                const response: *lib.replay.ExecResponse = response_writer.next() orelse
+                const response: *replay_api.ExecResponse = response_writer.next() orelse
                     @panic("cant write");
                 response.* = .{
                     .task_id = request.task_id,

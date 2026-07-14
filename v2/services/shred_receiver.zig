@@ -52,8 +52,9 @@ const start = @import("start_service");
 const lib = @import("lib");
 const tracy = @import("tracy");
 const services = @import("services");
+const shred = @import("shred");
 
-const Receiver = lib.shred.Receiver;
+const Receiver = shred.Receiver;
 
 comptime {
     _ = start;

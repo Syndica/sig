@@ -2,9 +2,10 @@ const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
 const services = @import("services");
+const snapshot = @import("snapshot");
 const tel = lib.telemetry;
 
-const download = lib.snapshot.download;
+const download = snapshot.download;
 
 const Metrics = download.Metrics;
 const DownloadResult = download.DownloadResult;
@@ -58,14 +59,14 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
             });
             break :blk existing;
         },
-        .downloaded => |snapshot| blk: {
+        .downloaded => |snap| blk: {
             logger.info().logf("snapshot download completed slot={d} hash={f} path={s}/{f}", .{
-                snapshot.slot,
-                snapshot.hash,
+                snap.slot,
+                snap.hash,
                 snapshot_dir_path,
-                snapshot,
+                snap,
             });
-            break :blk snapshot;
+            break :blk snap;
         },
         .failed => |reason| {
             logger.err().logf("snapshot download failed reason={s}", .{

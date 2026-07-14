@@ -9,13 +9,19 @@
 
 const lib = @import("lib");
 const accounts_db_api = @import("accounts_db_api");
+const shred_api = @import("shred_api");
+const gossip_api = @import("gossip_api");
+const snapshot_api = @import("snapshot_api");
+const replay_api = @import("replay_api");
 
 pub const accounts_db = struct {
+    pub const components = &.{"accounts_db"};
+
     pub const ReadOnly = struct {};
 
     pub const ReadWrite = struct {
         config: *accounts_db_api.RootedConfig,
-        ready_snapshot_in: *lib.snapshot.SnapshotDataRing,
+        ready_snapshot_in: *snapshot_api.SnapshotDataRing,
         snapshot_metadata_out: *accounts_db_api.RuntimeMetadata,
         account_pool: *accounts_db_api.AccountPool,
         replay_lookups: *accounts_db_api.AccountLookups,
@@ -24,13 +30,15 @@ pub const accounts_db = struct {
 };
 
 pub const exec = struct {
+    pub const components = &.{"runtime"};
+
     pub const ReadOnly = struct {
-        replay_transaction_pool: *const lib.replay.TransactionPool,
-        block_pool: *const lib.replay.BlockPool,
+        replay_transaction_pool: *const replay_api.TransactionPool,
+        block_pool: *const replay_api.BlockPool,
     };
 
     pub const ReadWrite = struct {
-        exec_req_response: *lib.replay.ExecReqResponse,
+        exec_req_response: *replay_api.ExecReqResponse,
     };
 };
 
@@ -45,33 +53,39 @@ pub const net = struct {
 };
 
 pub const gossip = struct {
+    pub const components = &.{"gossip"};
+
     pub const ReadOnly = struct {
-        config: *const lib.gossip.Config,
+        config: *const gossip_api.Config,
     };
 
     pub const ReadWrite = struct {
         net_pair: *lib.net.Pair,
-        gossip_to_snapshot: *lib.snapshot.SnapshotSourceRing,
+        gossip_to_snapshot: *snapshot_api.SnapshotSourceRing,
         tel: *lib.telemetry.Region,
     };
 };
 
 pub const replay = struct {
+    pub const components = &.{"replay"};
+
     pub const ReadOnly = struct {};
 
     pub const ReadWrite = struct {
         snapshot_metadata_in: *accounts_db_api.RuntimeMetadata,
-        deshredded_in: *lib.shred.DeshredRing,
-        replay_transaction_pool: *lib.replay.TransactionPool,
-        block_pool: *lib.replay.BlockPool,
-        exec_req_response: *lib.replay.ExecReqResponse,
+        deshredded_in: *shred_api.DeshredRing,
+        replay_transaction_pool: *replay_api.TransactionPool,
+        block_pool: *replay_api.BlockPool,
+        exec_req_response: *replay_api.ExecReqResponse,
         tel: *lib.telemetry.Region,
     };
 };
 
 pub const shred_receiver = struct {
+    pub const components = &.{"shred"};
+
     pub const ReadOnly = struct {
-        config: *const lib.shred.RecvConfig,
+        config: *const shred_api.RecvConfig,
     };
 
     pub const ReadWrite = struct {
@@ -89,20 +103,22 @@ pub const shred_receiver = struct {
         ///
         /// NOTE: it will be more performant in future to only send headers down
         /// the ring buffer, and write to a shared fec-set pool.
-        deshredded_out: *lib.shred.DeshredRing,
+        deshredded_out: *shred_api.DeshredRing,
 
         tel: *lib.telemetry.Region,
     };
 };
 
 pub const snapshot = struct {
+    pub const components = &.{"snapshot"};
+
     pub const ReadOnly = struct {
-        config: *const lib.snapshot.SnapshotConfig,
+        config: *const snapshot_api.SnapshotConfig,
     };
 
     pub const ReadWrite = struct {
-        source_from_gossip: *lib.snapshot.SnapshotSourceRing,
-        ready_snapshot_out: *lib.snapshot.SnapshotDataRing,
+        source_from_gossip: *snapshot_api.SnapshotSourceRing,
+        ready_snapshot_out: *snapshot_api.SnapshotDataRing,
         tel: *lib.telemetry.Region,
     };
 };

@@ -85,13 +85,14 @@ const tracy = @import("tracy");
 const services = @import("services");
 const tel = lib.telemetry;
 
-const replay = lib.replay;
+const shred_api = @import("shred_api");
+const replay_api = @import("replay_api");
 
 const Hash = lib.solana.Hash;
 const Slot = lib.solana.Slot;
 
-const Shred = lib.shred.Shred;
-const FecSetId = lib.shred.FecSetId;
+const Shred = shred_api.Shred;
+const FecSetId = shred_api.FecSetId;
 
 const Pool = lib.collections.Pool;
 
@@ -108,9 +109,9 @@ pub const ReadWrite = services.replay.ReadWrite;
 
 var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
-const DeserialStates = [lib.replay.BlockPool.capacity]?BlockDeserialState;
-const BlockExecStates = [lib.replay.BlockPool.capacity]?BlockExecState;
-const BlockHashStates = [lib.replay.BlockPool.capacity]?Hash;
+const DeserialStates = [replay_api.BlockPool.capacity]?BlockDeserialState;
+const BlockExecStates = [replay_api.BlockPool.capacity]?BlockExecState;
+const BlockHashStates = [replay_api.BlockPool.capacity]?Hash;
 
 pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
@@ -138,7 +139,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         var blockhashes_in = rw.snapshot_metadata_in.blockhash_queue.hashes.getView(.reader);
         defer blockhashes_in.close();
 
-        var latest_block: ?lib.replay.BlockPool.ItemId = null;
+        var latest_block: ?replay_api.BlockPool.ItemId = null;
         while (true) {
             const hashes = try blockhashes_in.getBufferBlocking(runner);
             if (hashes.len == 0) break; // blockhashes_out closed their end
@@ -176,7 +177,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             defer zone.deinit();
             try runner.activity.signalActive();
 
-            const response: *const lib.replay.ExecResponse = exec_response_receiver.next() orelse
+            const response: *const replay_api.ExecResponse = exec_response_receiver.next() orelse
                 unreachable;
             defer exec_response_receiver.markUsed();
 
@@ -215,7 +216,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             defer zone.deinit();
             try runner.activity.signalActive();
 
-            const deshredded_fec_set: *const lib.shred.DeshreddedFecSet =
+            const deshredded_fec_set: *const shred_api.DeshreddedFecSet =
                 deshredded_iter.next() orelse unreachable;
             defer deshredded_iter.markUsed();
 
@@ -480,7 +481,7 @@ fn setChildBlockRef(
     parent: *const MerkleNode,
     child: *MerkleNode,
     forest_pool: *MerkleForest.NodePool,
-    block_pool: *lib.replay.BlockPool,
+    block_pool: *replay_api.BlockPool,
 ) !void {
     std.debug.assert(child.block_ref == .null);
     const parent_block_ref = parent.block_ref.opt() orelse return; // a)
@@ -517,7 +518,7 @@ fn setChildTreeBlockRefs(
     parent: *MerkleNode,
     child: *MerkleNode,
     forest_pool: *MerkleForest.NodePool,
-    block_pool: *lib.replay.BlockPool,
+    block_pool: *replay_api.BlockPool,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "setChildTreeBlockRefs" });
     defer zone.deinit();
@@ -541,11 +542,11 @@ fn setChildTreeBlockRefs(
 fn insertFecSet(
     logger: tel.Logger("main"),
     // to be transformed and inserted into the forest
-    deshredded_node: *const lib.shred.DeshreddedFecSet,
+    deshredded_node: *const shred_api.DeshreddedFecSet,
     forest: *MerkleForest,
     // block associated parameters
     // additional blocks may be allocated when inserting a fec set
-    block_pool: *lib.replay.BlockPool,
+    block_pool: *replay_api.BlockPool,
 ) error{OutOfSpace}!?*MerkleNode {
     const zone = tracy.Zone.init(@src(), .{ .name = "insertFecSet" });
     defer zone.deinit();
@@ -597,12 +598,12 @@ fn maybeContinueBlockExec(
     // newly inserted node (or, rarely, when called recursively, the idx=0 ancestor of the block)
     node: *MerkleNode,
     // the block_ref of the newly inserted node
-    block_ref: replay.BlockRef,
+    block_ref: replay_api.BlockRef,
 
     // pools
     forest_pool: *MerkleForest.NodePool,
-    block_pool: *replay.BlockPool,
-    transaction_pool: *lib.replay.TransactionPool,
+    block_pool: *replay_api.BlockPool,
+    transaction_pool: *replay_api.TransactionPool,
 
     // per-block states
     block_exec_states: *BlockExecStates,
@@ -610,13 +611,13 @@ fn maybeContinueBlockExec(
 
     // for sending exec requests
     // NOTE: we should instead be sending to the transaction scheduler (when it is implemented)
-    exec_request_sender: *replay.ExecReqResponse.RequestRing.Iterator(.writer),
+    exec_request_sender: *replay_api.ExecReqResponse.RequestRing.Iterator(.writer),
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "maybeContinueBlockExec" });
     defer zone.deinit();
 
     {
-        const block: *const replay.Node = block_ref.ptr(block_pool);
+        const block: *const replay_api.Node = block_ref.ptr(block_pool);
 
         // parentless blocks shouldn't ever reach this stage
         const block_parent = block.parent.opt().?;
@@ -698,7 +699,7 @@ fn maybeContinueBlockExec(
         // NOTE: in the future this should be "sent" to the transaction scheduler, not to exec
         // directly
         {
-            const request: *lib.replay.ExecRequest = exec_request_sender.next() orelse
+            const request: *replay_api.ExecRequest = exec_request_sender.next() orelse
                 @panic("no space");
             defer exec_request_sender.markUsed();
             request.* = .{
@@ -1043,7 +1044,7 @@ const MerkleNode = extern struct {
 
     // allocated upon insertion of 1st fec set, copied down through children
     // TODO: eviction
-    block_ref: lib.replay.BlockRef.Optional,
+    block_ref: replay_api.BlockRef.Optional,
 
     payload_len: u16,
 
@@ -1178,7 +1179,7 @@ test "MerkleForest tree put" {
     const d_hash: Hash = .parse("4UahX8LzYC7xnubvP9QzRHmPPYovtcNYo7rBXKpp3ADM");
     const e_hash: Hash = .parse("An7mDXKMpRninZw6rvqc4wnQ6ukqd3ARko6QmPitjx8B");
 
-    const a: lib.shred.DeshreddedFecSet = .{
+    const a: shred_api.DeshreddedFecSet = .{
         .chained_merkle_root = .parse("DWCWjQciWoWDzJKwqUZ1ntKqTyXtLVt4C8aL7biBJZ4z"), // prev slot
         .merkle_root = a_hash,
 
@@ -1191,7 +1192,7 @@ test "MerkleForest tree put" {
         .payload_buf = undefined,
     };
 
-    const b: lib.shred.DeshreddedFecSet = .{
+    const b: shred_api.DeshreddedFecSet = .{
         .chained_merkle_root = a_hash,
         .merkle_root = b_hash,
 
@@ -1204,7 +1205,7 @@ test "MerkleForest tree put" {
         .payload_buf = undefined,
     };
 
-    const c: lib.shred.DeshreddedFecSet = .{
+    const c: shred_api.DeshreddedFecSet = .{
         .chained_merkle_root = b_hash,
         .merkle_root = c_hash,
 
@@ -1217,7 +1218,7 @@ test "MerkleForest tree put" {
         .payload_buf = undefined,
     };
 
-    const d: lib.shred.DeshreddedFecSet = .{
+    const d: shred_api.DeshreddedFecSet = .{
         .chained_merkle_root = c_hash,
         .merkle_root = d_hash,
 
@@ -1231,7 +1232,7 @@ test "MerkleForest tree put" {
     };
 
     // new slot
-    const e: lib.shred.DeshreddedFecSet = .{
+    const e: shred_api.DeshreddedFecSet = .{
         .chained_merkle_root = d_hash,
         .merkle_root = e_hash,
 
@@ -1244,8 +1245,8 @@ test "MerkleForest tree put" {
         .payload_buf = undefined,
     };
 
-    var pool_buf: [lib.replay.BlockPool.size()]u8 align(@alignOf(lib.replay.BlockPool)) = undefined;
-    const pool: *lib.replay.BlockPool = @ptrCast(&pool_buf);
+    var pool_buf: [replay_api.BlockPool.size()]u8 align(@alignOf(replay_api.BlockPool)) = undefined;
+    const pool: *replay_api.BlockPool = @ptrCast(&pool_buf);
     pool.init();
 
     const logger = tel.Logger("main").noop;
@@ -1257,9 +1258,10 @@ test "MerkleForest tree put" {
     // give the ancestor block a BlockRef, so that it may propagate
     // NOTE: it is expected that the root-most fec set to be inserted first this way as a special
     //       case. In a real environment this would be the last fec set in the rooted slot.
-    a_inserted.block_ref = .init(replay.BlockRef.fromInt(8053));
+    a_inserted.block_ref = .init(replay_api.BlockRef.fromInt(8053));
 
-    const expected_block_ref: replay.BlockRef.Optional = .init(replay.BlockRef.fromInt(8053));
+    const expected_block_ref: replay_api.BlockRef.Optional =
+        .init(replay_api.BlockRef.fromInt(8053));
 
     const d_inserted = (try insertFecSet(logger, &d, &tree, pool)).?;
     try std.testing.expect(d_inserted.parent == .null);

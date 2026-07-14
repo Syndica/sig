@@ -1,22 +1,14 @@
 const std = @import("std");
-const lib = @import("lib.zig");
+const lib = @import("lib");
 
 const Slot = lib.solana.Slot;
 const Hash = lib.solana.Hash;
-
-pub const download = @import("snapshot/download.zig");
-
-comptime {
-    if (@import("builtin").is_test) {
-        _ = @import("snapshot/download.zig");
-    }
-}
 
 pub const SnapshotSourceRing = lib.ipc.Ring(256, SnapshotSource);
 
 pub const SnapshotSource = extern struct {
     from: lib.solana.Pubkey,
-    rpc_addr: lib.gossip.Address,
+    rpc_addr: lib.net.Address,
     slot: lib.solana.Slot,
     hash: lib.solana.Hash,
 };

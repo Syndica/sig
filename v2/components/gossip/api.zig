@@ -1,17 +1,8 @@
 const std = @import("std");
 const tracy = @import("tracy");
-const lib = @import("lib.zig");
+const lib = @import("lib");
 
 pub const bincode = lib.solana.bincode;
-pub const GossipNode = @import("gossip/node.zig").GossipNode;
-pub const Metrics = @import("gossip/Metrics.zig");
-comptime {
-    if (@import("builtin").is_test) {
-        _ = @import("gossip/Metrics.zig");
-        _ = @import("gossip/bincode.zig");
-        _ = @import("gossip/node.zig");
-    }
-}
 
 const Signature = lib.solana.Signature;
 const Pubkey = lib.solana.Pubkey;
@@ -48,9 +39,9 @@ pub const Config = extern struct {
     advertise_tvu_port: bool,
 
     pub const InitParams = struct {
-        cluster_info: lib.gossip.ClusterInfo,
+        cluster_info: ClusterInfo,
         // TODO: this should live in signing service
-        keypair: lib.gossip.KeyPair,
+        keypair: KeyPair,
         turbine_recv_port: u16,
         advertise_tvu_port: bool,
 
@@ -58,7 +49,7 @@ pub const Config = extern struct {
             return @sizeOf(Config);
         }
 
-        pub fn init(self: InitParams, data: *lib.gossip.Config) void {
+        pub fn init(self: InitParams, data: *Config) void {
             data.keypair = self.keypair;
             data.cluster_info = self.cluster_info;
             data.turbine_recv_port = self.turbine_recv_port;
@@ -67,37 +58,8 @@ pub const Config = extern struct {
     };
 };
 
-// For std.meta.eql compatibility inside `serviceMap` & defined repr across processes
-pub const Address = extern struct {
-    is_v6: bool,
-    ip: [16]u8,
-    port: u16,
-
-    pub fn fromNetAddress(net_addr: std.net.Address) Address {
-        return .{
-            .is_v6 = net_addr.any.family == std.posix.AF.INET6,
-            .ip = switch (net_addr.any.family) {
-                std.posix.AF.INET6 => net_addr.in6.sa.addr,
-                std.posix.AF.INET => @bitCast([_]u32{ net_addr.in.sa.addr, 0, 0, 0 }),
-                else => unreachable,
-            },
-            .port = net_addr.getPort(),
-        };
-    }
-
-    pub fn toNetAddress(self: *const Address) std.net.Address {
-        if (self.is_v6) return .initIp6(self.ip, self.port, 0, 0);
-        return .initIp4(self.ip[0..4].*, self.port);
-    }
-
-    pub fn format(self: Address, w: *std.Io.Writer) !void {
-        return self.toNetAddress().format(w);
-    }
-
-    pub fn withPort(self: Address, new_port: u16) Address {
-        return .{ .is_v6 = self.is_v6, .ip = self.ip, .port = new_port };
-    }
-};
+pub const Address = lib.net.Address;
+const IpAddr = lib.net.IpAddr;
 
 /// Bootstrapping network information needed to run a Gossip Node
 pub const ClusterInfo = extern struct {
@@ -213,11 +175,6 @@ pub const ClusterInfo = extern struct {
 };
 
 // ---- Gossip Protocol type definitions ----
-
-const IpAddr = union(enum(u32)) {
-    v4: [4]u8,
-    v6: [16]u8,
-};
 
 pub const BloomFilter = struct {
     keys: bincode.Vec(u64),

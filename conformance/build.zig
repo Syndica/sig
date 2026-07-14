@@ -91,6 +91,8 @@ pub fn build(b: *Build) void {
 
     const sig_v2_dep = b.dependency("sig_v2", sig_v2_common_options);
     const sig_v2_mod = sig_v2_dep.module("lib");
+    const shred_api_mod = sig_v2_dep.module("shred_api");
+    const shred_mod = sig_v2_dep.module("shred");
 
     const pb_dep = b.dependency("pb", .{
         .target = target,
@@ -101,6 +103,8 @@ pub fn build(b: *Build) void {
     const common_imports = [_]Build.Module.Import{
         .{ .name = "sig", .module = sig_mod },
         .{ .name = "sig_v2", .module = sig_v2_mod },
+        .{ .name = "shred_api", .module = shred_api_mod },
+        .{ .name = "shred", .module = shred_mod },
         .{ .name = "protobuf", .module = pb_mod },
         .{ .name = "build-options", .module = build_options.createModule() },
     };

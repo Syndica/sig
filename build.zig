@@ -2,6 +2,7 @@
 //! conformance/ and v1/ each have their own build.zig
 
 const std = @import("std");
+
 const Build = std.Build;
 
 const test_install_dir: Build.Step.InstallArtifact.Options.Dir = .{
@@ -17,7 +18,7 @@ pub fn build(b: *Build) !void {
     // -- Artifacts -------------------------
 
     var unit_tests: UnitTests = .init(b, config);
-    const sig: Sig = .init(b, config, deps, &unit_tests);
+    const sig: Sig = try .init(b, config, deps, &unit_tests);
     const tools: Tools = .init(b, config, deps, &unit_tests, sig);
 
     // -- CLI Commands (Top Level Steps) ----
@@ -247,9 +248,10 @@ const Sig = struct {
     services_mod: *Build.Module,
     start_service: *Build.Module,
     service_libs: [services.len]Service,
-    sig_init: *Build.Module,
+    main: *Build.Module,
     exe: Executable,
     topology: *Build.Module,
+    api_imports: []const Build.Module.Import,
 
     const Service = struct {
         name: []const u8,
@@ -259,7 +261,7 @@ const Sig = struct {
 
     const services = @typeInfo(@import("v2/services.zig")).@"struct".decls;
 
-    pub fn init(b: *Build, config: Config, deps: Dependencies, unit_tests: *UnitTests) Sig {
+    pub fn init(b: *Build, config: Config, deps: Dependencies, unit_tests: *UnitTests) !Sig {
         const build_options = b.addOptions();
         build_options.addOption(bool, "allow_no_sha", config.allow_no_sha);
         build_options.addOption(bool, "allow_no_avx512", config.allow_no_avx512);
@@ -315,28 +317,60 @@ const Sig = struct {
         });
         unit_tests.add("lib", lib);
 
-        _ = addRuntime(b, config, deps, unit_tests, lib, feature_set_id, features_zon);
+        // Components: one per subdir of v2/components/. Each gets lib, tracy, and build-options
+        var components: std.StringHashMapUnmanaged(Component) = .empty;
+        var api_import_list: std.ArrayList(Build.Module.Import) = .empty;
+        {
+            var dir = try b.build_root.handle.openDir(
+                "v2/components",
+                .{ .iterate = true },
+            );
+            defer dir.close();
+            var it = dir.iterate();
+            while (try it.next()) |entry| {
+                if (entry.kind != .directory) continue;
+                if (std.mem.eql(u8, entry.name, "runtime")) continue;
+                const name = b.dupe(entry.name);
 
-        const accounts_db_api = b.addModule("accounts_db_api", .{
-            .root_source_file = b.path("v2/components/accounts_db/api.zig"),
-            .target = config.target,
-            .optimize = config.optimize,
-            .imports = &.{
-                .{ .name = "tracy", .module = deps.tracy },
-                .{ .name = "lib", .module = lib },
-            },
-        });
-        const accounts_db = b.addModule("accounts_db", .{
-            .root_source_file = b.path("v2/components/accounts_db/component.zig"),
-            .target = config.target,
-            .optimize = config.optimize,
-            .imports = &.{
-                .{ .name = "tracy", .module = deps.tracy },
-                .{ .name = "lib", .module = lib },
-                .{ .name = "api", .module = accounts_db_api },
-            },
-        });
-        unit_tests.add("lib", lib);
+                const comp_dir = b.fmt("v2/components/{s}", .{name});
+                const imports: []const Build.Module.Import = &.{
+                    .{ .name = "lib", .module = lib },
+                    .{ .name = "tracy", .module = deps.tracy },
+                    .{ .name = "build-options", .module = build_options_mod },
+                };
+
+                const api_name = b.fmt("{s}_api", .{name});
+                const api = b.addModule(api_name, .{
+                    .root_source_file = b.path(b.fmt("{s}/api.zig", .{comp_dir})),
+                    .target = config.target,
+                    .optimize = config.optimize,
+                    .imports = imports,
+                });
+                unit_tests.add(api_name, api);
+
+                const component = b.addModule(name, .{
+                    .root_source_file = b.path(b.fmt("{s}/component.zig", .{comp_dir})),
+                    .target = config.target,
+                    .optimize = config.optimize,
+                    .imports = concatImports(b, &.{
+                        imports,
+                        &.{.{ .name = "api", .module = api }},
+                    }),
+                });
+                unit_tests.add(name, component);
+
+                try components.put(b.allocator, name, .{ .api = api, .component = component });
+                try api_import_list.append(b.allocator, .{ .name = api_name, .module = api });
+            }
+        }
+
+        // runtime is special cased because it needs codegen and a bunch of extra deps that
+        // no other component uses.
+        const runtime = addRuntime(b, config, deps, unit_tests, lib, features_zon, feature_set_id);
+        try components.put(b.allocator, "runtime", runtime);
+        try api_import_list.append(b.allocator, .{ .name = "runtime_api", .module = runtime.api });
+
+        const api_imports = try api_import_list.toOwnedSlice(b.allocator);
 
         const topology = b.createModule(.{
             .root_source_file = b.path("v2/init/topology.zig"),
@@ -365,29 +399,54 @@ const Sig = struct {
             .root_source_file = b.path("v2/services.zig"),
             .target = config.target,
             .optimize = config.optimize,
-            .imports = &.{
-                .{ .name = "lib", .module = lib },
-                .{ .name = "accounts_db_api", .module = accounts_db_api },
-            },
+            .imports = concatImports(b, &.{
+                &.{.{ .name = "lib", .module = lib }},
+                api_imports,
+            }),
         });
 
-        const sig_init = b.createModule(.{
+        const main = b.createModule(.{
             .root_source_file = b.path("v2/main.zig"),
             .target = config.target,
             .optimize = config.optimize,
-            .imports = &.{
-                .{ .name = "lib", .module = lib },
-                .{ .name = "tracy", .module = deps.tracy },
-                .{ .name = "services", .module = services_mod },
-                .{ .name = "topology", .module = topology },
-                .{ .name = "accounts_db_api", .module = accounts_db_api },
-            },
+            .imports = concatImports(b, &.{
+                &.{
+                    .{ .name = "lib", .module = lib },
+                    .{ .name = "tracy", .module = deps.tracy },
+                    .{ .name = "services", .module = services_mod },
+                    .{ .name = "topology", .module = topology },
+                },
+                api_imports,
+            }),
         });
-        unit_tests.add("sig-init", sig_init);
+        unit_tests.add("main", main);
+
+        // Services opt in to specific component impls with
+        // `pub const components = &.{"foo","bar"}` in their `services.zig`
+        // entry (see the comment on that decl). Services with no
+        // `components` decl get no component modules.
+        const services_root = @import("v2/services.zig");
+        const base_service_imports: []const Build.Module.Import = &.{
+            .{ .name = "lib", .module = lib },
+            .{ .name = "start_service", .module = start_service },
+            .{ .name = "tracy", .module = deps.tracy },
+            .{ .name = "services", .module = services_mod },
+        };
 
         var service_libs: [services.len]Service = undefined;
-
         inline for (services, &service_libs) |service, *service_lib_entry| {
+            const service_def = @field(services_root, service.name);
+            const component_names: []const []const u8 = if (@hasDecl(service_def, "components"))
+                service_def.components
+            else
+                &.{};
+
+            const service_component_imports =
+                try b.allocator.alloc(Build.Module.Import, component_names.len);
+            for (component_names, service_component_imports) |cname, *import| {
+                import.* = .{ .name = cname, .module = components.get(cname).?.component };
+            }
+
             const service_mod = b.createModule(.{
                 .root_source_file = b.path("v2/services").path(b, service.name ++ ".zig"),
                 .target = config.target,
@@ -395,14 +454,11 @@ const Sig = struct {
                 .single_threaded = true,
                 .omit_frame_pointer = false,
                 .error_tracing = true,
-                .imports = &.{
-                    .{ .name = "lib", .module = lib },
-                    .{ .name = "start_service", .module = start_service },
-                    .{ .name = "tracy", .module = deps.tracy },
-                    .{ .name = "services", .module = services_mod },
-                    .{ .name = "accounts_db_api", .module = accounts_db_api },
-                    .{ .name = "accounts_db", .module = accounts_db },
-                },
+                .imports = concatImports(b, &.{
+                    base_service_imports,
+                    api_imports,
+                    service_component_imports,
+                }),
             });
             unit_tests.add(service.name, service_mod);
 
@@ -411,7 +467,7 @@ const Sig = struct {
                 .root_module = service_mod,
                 .use_llvm = config.use_llvm,
             });
-            sig_init.linkLibrary(service_lib);
+            main.linkLibrary(service_lib);
 
             service_lib_entry.* = .{
                 .name = service.name,
@@ -425,15 +481,21 @@ const Sig = struct {
             .services_mod = services_mod,
             .start_service = start_service,
             .service_libs = service_libs,
-            .sig_init = sig_init,
+            .main = main,
             .exe = .init(b, config.exe, .{
-                .name = "sig-init",
-                .root_module = sig_init,
+                .name = "sig",
+                .root_module = main,
                 .use_llvm = config.use_llvm,
             }, .{}),
             .topology = topology,
+            .api_imports = api_imports,
         };
     }
+};
+
+const Component = struct {
+    api: *Build.Module,
+    component: *Build.Module,
 };
 
 pub fn addRuntime(
@@ -444,7 +506,7 @@ pub fn addRuntime(
     lib: *Build.Module,
     features_zon: *Build.Module,
     feature_set_id: *Build.Module,
-) *Build.Module {
+) Component {
     const runtime_dir = "v2/components/runtime";
 
     const build_options = b.addOptions();
@@ -459,55 +521,77 @@ pub fn addRuntime(
     });
 
     const gh_table = b.createModule(.{
-        .root_source_file = generateTable(b, config.use_llvm, runtime_dir),
+        .root_source_file = blk: {
+            const gen = b.addExecutable(.{
+                .name = "generator_chain",
+                .root_module = b.createModule(.{
+                    .target = b.graph.host,
+                    .optimize = .Debug,
+                    .root_source_file = b.path(
+                        b.fmt("{s}/scripts/generator_chain.zig", .{runtime_dir}),
+                    ),
+                }),
+                .use_llvm = config.use_llvm,
+            });
+            const run = b.addRunArtifact(gen);
+            const generated = run.captureStdOut();
+            const wf = b.addWriteFiles();
+            const table_file = wf.addCopyFile(generated, "table.zig");
+            wf.step.dependOn(&run.step);
+            break :blk table_file;
+        },
         .target = config.target,
         .optimize = config.optimize,
     });
 
-    const imports: []const Build.Module.Import = &.{
-        .{ .name = "base58", .module = deps.base58 },
-        .{ .name = "blst", .module = deps.blst },
-        .{ .name = "build-options", .module = build_options.createModule() },
-        .{ .name = "lib", .module = lib },
-        .{ .name = "feature-set-id", .module = feature_set_id },
-        .{ .name = "features-zon", .module = features_zon },
-        .{ .name = "poseidon", .module = deps.poseidon },
-        .{ .name = "secp256k1", .module = deps.secp256k1 },
-        .{ .name = "std14", .module = std14_mod },
-        .{ .name = "table", .module = gh_table },
-        .{ .name = "tracy", .module = deps.tracy },
-    };
+    const api = b.createModule(.{
+        .root_source_file = b.path(runtime_dir ++ "/api.zig"),
+        .target = config.target,
+        .optimize = config.optimize,
+        .imports = &.{},
+    });
+    unit_tests.add("runtime_api", api);
 
-    const module = b.addModule("runtime", .{
+    const component = b.addModule("runtime", .{
         .root_source_file = b.path(runtime_dir ++ "/lib.zig"),
         .target = config.target,
         .optimize = config.optimize,
-        .imports = imports,
+        .imports = &.{
+            .{ .name = "base58", .module = deps.base58 },
+            .{ .name = "blst", .module = deps.blst },
+            .{ .name = "build-options", .module = build_options.createModule() },
+            .{ .name = "lib", .module = lib },
+            .{ .name = "feature-set-id", .module = feature_set_id },
+            .{ .name = "features-zon", .module = features_zon },
+            .{ .name = "poseidon", .module = deps.poseidon },
+            .{ .name = "secp256k1", .module = deps.secp256k1 },
+            .{ .name = "std14", .module = std14_mod },
+            .{ .name = "table", .module = gh_table },
+            .{ .name = "tracy", .module = deps.tracy },
+        },
     });
 
-    unit_tests.add("runtime", module);
+    unit_tests.add("runtime", component);
 
-    return module;
+    return .{
+        .api = api,
+        .component = component,
+    };
 }
 
-fn generateTable(b: *Build, use_llvm: bool, runtime_dir: []const u8) Build.LazyPath {
-    const gen = b.addExecutable(.{
-        .name = "generator_chain",
-        .root_module = b.createModule(.{
-            .target = b.graph.host,
-            .optimize = .Debug,
-            .root_source_file = b.path(
-                b.fmt("{s}/scripts/generator_chain.zig", .{runtime_dir}),
-            ),
-        }),
-        .use_llvm = use_llvm,
-    });
-    const run = b.addRunArtifact(gen);
-    const generated = run.captureStdOut();
-    const wf = b.addWriteFiles();
-    const table_file = wf.addCopyFile(generated, "table.zig");
-    wf.step.dependOn(&run.step);
-    return table_file;
+fn concatImports(
+    b: *Build,
+    groups: []const []const Build.Module.Import,
+) []const Build.Module.Import {
+    var total: usize = 0;
+    for (groups) |g| total += g.len;
+    const out = b.allocator.alloc(Build.Module.Import, total) catch @panic("oom");
+    var i: usize = 0;
+    for (groups) |g| {
+        @memcpy(out[i..][0..g.len], g);
+        i += g.len;
+    }
+    return out;
 }
 
 /// Everything other than Sig itself: developer tools, ci scripts, docs,
@@ -588,7 +672,7 @@ const Tools = struct {
 
             const doc_modules: []const struct { name: []const u8, module: *Build.Module } = &.{
                 .{ .name = "start_service", .module = sig.start_service },
-                .{ .name = "sig_init", .module = sig.sig_init },
+                .{ .name = "sig_init", .module = sig.main },
                 .{ .name = "lib", .module = sig.lib },
             };
 
@@ -630,12 +714,20 @@ const Tools = struct {
                     .root_source_file = b.path(description.root_source_file),
                     .target = config.target,
                     .optimize = config.optimize,
-                    .imports = &.{
-                        .{ .name = "lib", .module = sig.lib },
-                        .{ .name = "tracy", .module = deps.tracy },
-                        .{ .name = "services", .module = sig.services_mod },
-                        .{ .name = "topology", .module = sig.topology },
-                    },
+                    .imports = concatImports(b, &.{
+                        &.{
+                            .{ .name = "lib", .module = sig.lib },
+                            .{ .name = "tracy", .module = deps.tracy },
+                            .{ .name = "services", .module = sig.services_mod },
+                            .{ .name = "topology", .module = sig.topology },
+                        },
+                        // Black-box tests build shared-memory regions the same
+                        // way `main.zig` does, so they need every component's
+                        // public api. Component implementations are pulled in
+                        // via `linkLibrary(service_lib)` below rather than
+                        // module imports.
+                        sig.api_imports,
+                    }),
                 }),
                 .use_llvm = config.use_llvm,
             }, .{ .dest_dir = test_install_dir });

@@ -2,7 +2,8 @@
 //! ping other nodes, and participate in the cluster to share around GossipValues.
 
 const std = @import("std");
-const lib = @import("../lib.zig");
+const lib = @import("lib");
+const api = @import("api");
 const tel = lib.telemetry;
 
 const assert = std.debug.assert;
@@ -15,11 +16,11 @@ const Hash = lib.solana.Hash;
 const Slot = lib.solana.Slot;
 
 const bincode = lib.solana.bincode;
-const GossipMessage = lib.gossip.GossipMessage;
-const GossipData = lib.gossip.GossipData;
-const GossipValue = lib.gossip.GossipValue;
-const BloomFilter = lib.gossip.BloomFilter;
-const Metrics = lib.gossip.Metrics;
+const GossipMessage = api.GossipMessage;
+const GossipData = api.GossipData;
+const GossipValue = api.GossipValue;
+const BloomFilter = api.BloomFilter;
+const Metrics = @import("Metrics.zig");
 
 pub fn GossipNode(comptime Effects: type) type {
     lib.util.assertInterface(Effects, struct {
@@ -228,8 +229,8 @@ pub fn GossipNode(comptime Effects: type) type {
         pub const Config = struct {
             effects: Effects,
             shred_version: u16,
-            socket_map: lib.gossip.SocketMap,
-            entrypoints: []const lib.gossip.Address,
+            socket_map: api.SocketMap,
+            entrypoints: []const api.Address,
         };
 
         pub fn init(

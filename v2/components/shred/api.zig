@@ -1,18 +1,10 @@
 const std = @import("std");
 const tracy = @import("tracy");
-const solana = @import("solana.zig");
-const ipc = @import("ipc.zig");
-const net = @import("net.zig");
+const lib = @import("lib");
 
-comptime {
-    if (@import("builtin").is_test) {
-        _ = @import("shred/receiver.zig");
-        _ = @import("shred/reed_solomon.zig");
-    }
-}
-
-pub const Receiver = @import("shred/receiver.zig").Receiver;
-pub const FecSetCtx = @import("shred/receiver.zig").FecSetCtx;
+const solana = lib.solana;
+const ipc = lib.ipc;
+const net = lib.net;
 
 const Hash = solana.Hash;
 const Slot = solana.Slot;

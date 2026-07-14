@@ -5,6 +5,9 @@ const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
 const services = @import("services");
+const gossip_api = @import("gossip_api");
+const snapshot_api = @import("snapshot_api");
+const gossip = @import("gossip");
 const tel = lib.telemetry;
 
 const Pair = lib.net.Pair;
@@ -13,7 +16,7 @@ const Packet = lib.net.Packet;
 const Pubkey = lib.solana.Pubkey;
 const Signature = lib.solana.Signature;
 
-const GossipNode = lib.gossip.GossipNode;
+const GossipNode = gossip.GossipNode;
 
 comptime {
     _ = start;
@@ -30,7 +33,7 @@ var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
 pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
-    const metrics = rw.tel.metricAppender().appendFields(lib.gossip.Metrics, .{
+    const metrics = rw.tel.metricAppender().appendFields(gossip.Metrics, .{
         .prefix = @tagName(name),
     });
     rw.tel.signalReady();
@@ -47,8 +50,8 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
 
     const Effects = struct {
         packet_writer: *lib.net.Pair.PacketRing.Iterator(.writer),
-        keypair: *const lib.gossip.KeyPair,
-        snapshot_writer: *lib.snapshot.SnapshotSourceRing.Iterator(.writer),
+        keypair: *const gossip_api.KeyPair,
+        snapshot_writer: *snapshot_api.SnapshotSourceRing.Iterator(.writer),
 
         const Self = @This();
 
@@ -98,7 +101,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     };
 
     // TODO: add .rpc for serving snapshots
-    var sockets: lib.gossip.SocketMap.Builder = .{};
+    var sockets: gossip_api.SocketMap.Builder = .{};
     sockets.set(.gossip, ro.config.cluster_info.public_ip.withPort(rw.net_pair.port));
     if (ro.config.advertise_tvu_port) {
         sockets.set(.tvu, ro.config.cluster_info.public_ip.withPort(ro.config.turbine_recv_port));
@@ -106,7 +109,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
 
     var now = lib.clock.wallclock(.ms);
     var fba = std.heap.FixedBufferAllocator.init(&scratch_memory);
-    var gossip = try GossipNode(Effects).init(&fba, now, metrics, .{
+    var node = try GossipNode(Effects).init(&fba, now, metrics, .{
         .effects = effects,
         .shred_version = ro.config.cluster_info.shred_version,
         .socket_map = sockets.asSocketMap(),
@@ -116,7 +119,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     var it = rw.net_pair.recv.get(.reader);
     while (true) {
         now = lib.clock.wallclock(.ms);
-        try gossip.poll(.from(logger), now);
+        try node.poll(.from(logger), now);
 
         const packet = it.next() orelse {
             // TODO(ink): detect whether our output ring buffers (`packet_writer` and co)
@@ -128,7 +131,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
             continue;
         };
         try runner.activity.signalActive();
-        gossip.processPacket(.from(logger), now, packet);
+        node.processPacket(.from(logger), now, packet);
         it.markUsed();
     }
 }

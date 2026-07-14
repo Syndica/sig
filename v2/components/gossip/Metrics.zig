@@ -1,19 +1,20 @@
-const lib = @import("../lib.zig");
+const lib = @import("lib");
+const api = @import("api");
 const tel = lib.telemetry;
 
 const Metrics = @This();
-discoveries: tel.Variant(lib.gossip.GossipData),
+discoveries: tel.Variant(api.GossipData),
 
 valid_packets: tel.Counter,
 invalid_packets: tel.Counter,
 
-processed_messages: tel.Variant(lib.gossip.GossipMessage),
+processed_messages: tel.Variant(api.GossipMessage),
 invalid_messages: tel.Variant(InvalidMessage),
 
-pushed_messages: tel.Variant(lib.gossip.GossipMessage),
-pushed_values: tel.Variant(lib.gossip.GossipData),
+pushed_messages: tel.Variant(api.GossipMessage),
+pushed_values: tel.Variant(api.GossipData),
 
-table_entry_count: tel.Variant(lib.gossip.GossipData),
+table_entry_count: tel.Variant(api.GossipData),
 
 pub const InvalidMessage = error{
     InvalidSignature,

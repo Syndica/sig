@@ -1,6 +1,7 @@
 const std = @import("std");
 const tracy = @import("tracy");
-const lib = @import("../lib.zig");
+const lib = @import("lib");
+const api = @import("api");
 const reed_sol = @import("reed_solomon.zig");
 const build_options = @import("build-options");
 
@@ -13,10 +14,10 @@ const Signature = solana.Signature;
 
 const Packet = net.Packet;
 
-const DeshreddedFecSet = lib.shred.DeshreddedFecSet;
-const DeshredRing = lib.shred.DeshredRing;
-const FecSetId = lib.shred.FecSetId;
-const Shred = lib.shred.Shred;
+const DeshreddedFecSet = api.DeshreddedFecSet;
+const DeshredRing = api.DeshredRing;
+const FecSetId = api.FecSetId;
+const Shred = api.Shred;
 
 /// Takes in shreds, and writes out deshredded fec sets.
 /// For full docs see `services/shred_receiver.zig`.
@@ -115,9 +116,9 @@ pub const Receiver = struct {
                 return error.ShredVersionMismatch;
 
             // reject shreds greater than the max per slot
-            if (shred.fec_set_idx > lib.shred.max_shreds_per_slot - FecSetCtx.fec_shred_count)
+            if (shred.fec_set_idx > api.max_shreds_per_slot - FecSetCtx.fec_shred_count)
                 return error.FecSetIndexTooHigh;
-            if (shred.slot_idx >= lib.shred.max_shreds_per_slot)
+            if (shred.slot_idx >= api.max_shreds_per_slot)
                 return error.SlotIndexTooHigh;
 
             // ignore any with bad counts or indices (SIMD 0317 enforces this)

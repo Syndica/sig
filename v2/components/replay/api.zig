@@ -1,10 +1,8 @@
-const solana = @import("solana.zig");
-const collections = @import("collections.zig");
-const ipc = @import("ipc.zig");
+const lib = @import("lib");
 
-pub const TransactionPool = collections.SharedPool([1232]u8, 10_000);
+pub const TransactionPool = lib.collections.SharedPool([1232]u8, 10_000);
 
-pub const BlockPool = collections.SharedPool(Node, 1024);
+pub const BlockPool = lib.collections.SharedPool(Node, 1024);
 
 /// NOTE: this is what we use for referencing blocks. This is equivalent to the block's index
 /// our block mem pool. If you want what Agave calls the "Block ID", this is the merkle root of
@@ -18,7 +16,7 @@ pub const Node = extern struct {
     parent: BlockRef.Optional = .null,
     child: BlockRef.Optional = .null,
     sibling: BlockRef.Optional = .null,
-    slot: solana.Slot,
+    slot: lib.solana.Slot,
 };
 
 pub const ExecReqResponse = extern struct {
@@ -28,8 +26,8 @@ pub const ExecReqResponse = extern struct {
     // completion queue
     response_ring: ResponseRing,
 
-    pub const RequestRing = ipc.Ring(256, ExecRequest);
-    pub const ResponseRing = ipc.Ring(256, ExecResponse);
+    pub const RequestRing = lib.ipc.Ring(256, ExecRequest);
+    pub const ResponseRing = lib.ipc.Ring(256, ExecResponse);
 
     pub fn init(self: *ExecReqResponse) void {
         self.request_ring.init();

@@ -1,16 +1,17 @@
 const std = @import("std");
-const lib = @import("../lib.zig");
+const lib = @import("lib");
+const api = @import("api");
 const tel = lib.telemetry;
 
-const Address = lib.gossip.Address;
+const Address = lib.net.Address;
 const Pubkey = lib.solana.Pubkey;
 const Slot = lib.solana.Slot;
 const Hash = lib.solana.Hash;
 const IoUring = std.os.linux.IoUring;
 
-const FinalSnapshot = lib.snapshot.ReadySnapshot;
-const SnapshotSourceRing = lib.snapshot.SnapshotSourceRing;
-const KnownValidators = lib.snapshot.SnapshotConfig.KnownValidators;
+const FinalSnapshot = api.ReadySnapshot;
+const SnapshotSourceRing = api.SnapshotSourceRing;
+const KnownValidators = api.SnapshotConfig.KnownValidators;
 
 const AddressContext = std.hash_map.AutoContext(Address);
 
