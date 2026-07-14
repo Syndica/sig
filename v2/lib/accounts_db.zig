@@ -6,6 +6,7 @@ comptime {
         _ = @import("accounts_db/pool.zig");
         _ = @import("accounts_db/rooted.zig");
         _ = @import("accounts_db/table.zig");
+        _ = @import("accounts_db/unrooted.zig");
     }
 }
 
@@ -14,6 +15,7 @@ const Hash = lib.solana.Hash;
 const Slot = lib.solana.Slot;
 
 pub const AccountPool = @import("accounts_db/pool.zig").AccountPool;
+pub const Unrooted = @import("accounts_db/unrooted.zig").Unrooted;
 pub const Rooted = @import("accounts_db/rooted.zig").Rooted;
 pub const Table = @import("accounts_db/table.zig").Table;
 
