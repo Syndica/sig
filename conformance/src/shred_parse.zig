@@ -363,6 +363,60 @@ fn executeShredParse(
         st.drainCompletions();
     }
 
+    // Post-loop: synthesize a completion entry for any in-progress ctx that
+    // reached 32/32 data shreds but whose dead-slot flag suppressed the
+    // ring emission. Agave's `check_insert_data_shred` doesn't consult
+    // `is_dead`, so its blockstore row fills regardless and
+    // `solfuzz-agave` emits the completed set in `fec_set_results`. Match
+    // that by peeking `receiver.in_progress` for `data_shreds_received ==
+    // 32` and constructing the same `FECSetParseResult` fields the ring
+    // path would have populated. RS-recovered shreds we didn't capture on
+    // the wire *are* readable here from `ctx.data_shreds_buf` because the
+    // ctx stayed in `in_progress` \u2014 use them so the emitted payload matches
+    // agave's blockstore.
+    for (st.receiver.in_progress.signature_map.values()) |fec_set_ctx| {
+        if (fec_set_ctx.data_shreds_received.count() != FecSetCtx.fec_shred_count) continue;
+
+        var total_payload_len: usize = 0;
+        var data_complete = false;
+        var slot_complete = false;
+        for (&fec_set_ctx.data_shreds_buf) |*buf| {
+            const ds: *const Shred = .fromBufferUnchecked(buf);
+            const flags = ds.code_or_data.data.flags;
+            total_payload_len += ds.dataPayload().len;
+            slot_complete = slot_complete or flags.last_shred_in_slot;
+            if (flags.data_complete) {
+                data_complete = true;
+                break;
+            }
+        }
+
+        const payload_copy = try allocator.alloc(u8, total_payload_len);
+        var written: usize = 0;
+        for (&fec_set_ctx.data_shreds_buf) |*buf| {
+            const ds: *const Shred = .fromBufferUnchecked(buf);
+            const p = ds.dataPayload();
+            @memcpy(payload_copy[written..][0..p.len], p);
+            written += p.len;
+            if (ds.code_or_data.data.flags.data_complete) break;
+        }
+        std.debug.assert(written == total_payload_len);
+
+        const first: *const Shred = .fromBufferUnchecked(&fec_set_ctx.data_shreds_buf[0]);
+        try st.fec_set_results.append(allocator, .{
+            .merkle_root = fec_set_ctx.merkle_root,
+            .chained_merkle_root = fec_set_ctx.chained_merkle_root,
+            .payload = payload_copy,
+            .slot = first.slot,
+            .fec_set_index = first.fec_set_idx,
+            .parent_offset = first.code_or_data.data.parent_offset,
+            .num_data_shreds = FEC_DATA_SHREDS,
+            .num_coding_shreds = FEC_CODING_SHREDS,
+            .data_complete = data_complete,
+            .slot_complete = slot_complete,
+        });
+    }
+
     return try buildProtoEffects(allocator, st, ctx.shred_version);
 }
 
@@ -399,6 +453,14 @@ fn buildProtoEffects(
     );
     out.shred_results.appendSliceAssumeCapacity(st.shred_parse_results.items);
 
+    // Any slot the Receiver flagged dead (per-slot parent_slot mismatch,
+    // cross-FEC chained-merkle chain break, merkle-root conflict on the
+    // per-FEC-set pin, malformed RS-recovered shred) rejects the whole
+    // block. Agave does the same via `mark_slot_dead_if_not_full` +
+    // `get_slot_entries_with_shred_info` returning `DeadSlot`.
+    if (st.receiver.dead_slots.count() > 0)
+        out.block_parse_result = .REJECTED_INVALID_HEADER;
+
     // Fill in per-FEC-set payload + parent_offset from the data-shred
     // captures. Every captured shred sits in exactly one FEC set; iterate
     // captures once per FEC set (bounded to 32 shreds per set, ~64
@@ -418,7 +480,9 @@ fn buildProtoEffects(
     // Sort by (slot, fec_set_index) and chain-validate.
     std.sort.heap(FECSetParseResult, st.fec_set_results.items, {}, fecOrder);
 
-    // Cross-FEC chained_merkle_root check (not enforced by the Receiver).
+    // Cross-FEC chained_merkle_root check on completed sets. Redundant with
+    // the Receiver's per-shred check (see `lookupFecSetRoots`) but kept as a
+    // belt-and-braces invariant assertion on the emitted output.
     var i: usize = 0;
     while (i < st.fec_set_results.items.len) {
         // Contiguous run of FEC sets for one slot.
