@@ -1390,6 +1390,15 @@ pub fn executeV3Upgrade(
         const buffer = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.buffer));
         defer buffer.release();
 
+        if (!buffer.context.is_writable) {
+            try ic.tc.log("Buffer account not writeable", .{});
+            return InstructionError.InvalidArgument;
+        }
+        if (!buffer.isOwnedByCurrentProgram()) {
+            try ic.tc.log("Buffer account not owned by loader", .{});
+            return InstructionError.IncorrectProgramId;
+        }
+
         switch (try buffer.deserializeFromAccountData(allocator, V3State)) {
             .buffer => |data| {
                 if (data.authority_address == null or
