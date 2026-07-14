@@ -200,15 +200,18 @@ pub fn convertExecutionError(err: ExecutionError) struct { i64, ExecutionErrorKi
         EbpfError.CallOutsideTextSegment =>                         .{ 8, .Ebpf, "callx attempted to call outside of the text segment" },
         EbpfError.ExceededMaxInstructions =>                        .{ 9, .Ebpf, "exceeded CUs meter at BPF instruction" },
         EbpfError.JitNotCompiled =>                                 .{ 10, .Ebpf, "program has not been JIT-compiled" },
-        EbpfError.InvalidVirtualAddress =>                          .{ 11, .Ebpf, "invalid virtual address" },
-        EbpfError.InvalidMemoryRegion =>                            .{ 12, .Ebpf, "Invalid memory region at index" },
-        EbpfError.AccessViolation =>                                .{ 13, .Ebpf, "Access violation" },
-        EbpfError.StackAccessViolation =>                           .{ 14, .Ebpf, "Access violation in stack frame" },
-        EbpfError.InvalidInstruction =>                             .{ 15, .Ebpf, "invalid BPF instruction" },
-        EbpfError.UnsupportedInstruction =>                         .{ 16, .Ebpf, "unsupported BPF instruction" },
-        // EbpfError.ExhaustedTextSegment =>                           .{ 17, .Ebpf, "Compilation exhausted text segment at BPF instruction" },
-        // EbpfError.LibcInvocationFailed =>                           .{ 18, .Ebpf, "Libc calling returned error code" },
-        EbpfError.VerifierError =>                                  .{ 19, .Ebpf, "Verifier error" },
+        // Agave has no dedicated EBPF error for this; the identical relocation
+        // check ([agave] sbpf elf.rs `if refd_addr == 0`) yields
+        // `EbpfError::ElfError(..)`, whose discriminant serializes to code 1.
+        EbpfError.InvalidVirtualAddress =>                          .{ 1, .Ebpf, "ELF error" },
+        EbpfError.InvalidMemoryRegion =>                            .{ 11, .Ebpf, "Invalid memory region at index" },
+        EbpfError.AccessViolation =>                                .{ 12, .Ebpf, "Access violation" },
+        EbpfError.StackAccessViolation =>                           .{ 13, .Ebpf, "Access violation in stack frame" },
+        EbpfError.InvalidInstruction =>                             .{ 14, .Ebpf, "invalid BPF instruction" },
+        EbpfError.UnsupportedInstruction =>                         .{ 15, .Ebpf, "unsupported BPF instruction" },
+        // EbpfError.ExhaustedTextSegment =>                           .{ 16, .Ebpf, "Compilation exhausted text segment at BPF instruction" },
+        // EbpfError.LibcInvocationFailed =>                           .{ 17, .Ebpf, "Libc calling returned error code" },
+        EbpfError.VerifierError =>                                  .{ 18, .Ebpf, "Verifier error" },
         // EbpfError.SyscallError => @panic("Sig should not return an Ebpf syscall error"),
 
         SyscallError.InvalidString =>                               .{ 1, .Syscall, "invalid utf-8 sequence" },
