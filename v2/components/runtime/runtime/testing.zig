@@ -411,7 +411,7 @@ pub fn expectTransactionContextEqual(
     if (expected.prev_lamports_per_signature != actual.prev_lamports_per_signature)
         return error.LamportsPerSignatureMismatch;
 
-    if (!expected.prev_blockhash.eql(actual.prev_blockhash))
+    if (!expected.prev_blockhash.eql(&actual.prev_blockhash))
         return error.LastBlockhashMismatch;
 
     try expectTransactionReturnDataEqual(expected.return_data, actual.return_data);

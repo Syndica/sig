@@ -981,8 +981,9 @@ pub const GetBlockProduction = struct {
         pub fn jsonStringify(self: ByIdentity, jw: anytype) !void {
             try jw.beginObject();
             for (self.map.keys(), self.map.values()) |key, value| {
-                const base58string = key.base58String();
-                try jw.objectField(base58string.constSlice());
+                var b58_buf: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
+                const base58string = key.base58String(&b58_buf);
+                try jw.objectField(base58string);
                 try jw.write(value);
             }
             try jw.endObject();
@@ -1139,7 +1140,8 @@ pub const GetGenesisHash = struct {
             /// `*std.json.WriteStream(...)`
             jw: anytype,
         ) !void {
-            try jw.write(self.hash.base58String().slice());
+            var b58_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
+            try jw.write(self.hash.base58String(&b58_buf));
         }
     };
 };
@@ -1313,7 +1315,8 @@ pub const GetLeaderSchedule = struct {
 
             var it = self.value.iterator();
             while (it.next()) |entry| {
-                try jw.objectField(entry.key_ptr.base58String().slice());
+                var b58_buf: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
+                try jw.objectField(entry.key_ptr.base58String(&b58_buf));
                 try jw.write(entry.value_ptr.*);
             }
 

@@ -1141,11 +1141,14 @@ test "rpc.account_codec.parse_token: token account with extensions" {
         try std.testing.expect(result != null);
         switch (result.?) {
             .account => |ui_account| {
-                const mint_str = mint_pubkey.base58String().constSlice();
-                const owner_str = owner_pubkey.base58String().constSlice();
-                const acc_mint = ui_account.mint.base58String().constSlice();
+                var expected_b58: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
+                var actual_b58: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
+                const mint_str = mint_pubkey.base58String(&expected_b58);
+                const owner_str = owner_pubkey.base58String(&actual_b58);
+                var scratch_b58: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
+                const acc_mint = ui_account.mint.base58String(&scratch_b58);
                 try std.testing.expectEqualStrings(mint_str, acc_mint);
-                const acc_owner = ui_account.owner.base58String().constSlice();
+                const acc_owner = ui_account.owner.base58String(&scratch_b58);
                 try std.testing.expectEqualStrings(owner_str, acc_owner);
                 try std.testing.expectEqual(@as(u64, 42), ui_account.tokenAmount.amount);
                 try std.testing.expectEqual(@as(u8, 2), ui_account.tokenAmount.decimals);
@@ -1159,7 +1162,7 @@ test "rpc.account_codec.parse_token: token account with extensions" {
                 try std.testing.expect(ui_account.rentExemptReserve == null);
                 try std.testing.expect(ui_account.delegatedAmount == null);
                 try std.testing.expect(ui_account.closeAuthority != null);
-                const close_auth = ui_account.closeAuthority.?.base58String().constSlice();
+                const close_auth = ui_account.closeAuthority.?.base58String(&scratch_b58);
                 try std.testing.expectEqualStrings(owner_str, close_auth);
             },
             else => try std.testing.expect(false),
@@ -1185,15 +1188,17 @@ test "rpc.account_codec.parse_token: token account with extensions" {
         try std.testing.expect(result != null);
         switch (result.?) {
             .mint => |ui_mint| {
-                const owner_str = owner_pubkey.base58String().constSlice();
+                var expected_b58: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
+                var actual_b58: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
+                const owner_str = owner_pubkey.base58String(&expected_b58);
                 try std.testing.expect(ui_mint.mintAuthority != null);
-                const mint_auth = ui_mint.mintAuthority.?.base58String().constSlice();
+                const mint_auth = ui_mint.mintAuthority.?.base58String(&actual_b58);
                 try std.testing.expectEqualStrings(owner_str, mint_auth);
                 try std.testing.expectEqual(@as(u64, 42), ui_mint.supply.value);
                 try std.testing.expectEqual(@as(u8, 3), ui_mint.decimals);
                 try std.testing.expect(ui_mint.isInitialized);
                 try std.testing.expect(ui_mint.freezeAuthority != null);
-                const freeze_auth = ui_mint.freezeAuthority.?.base58String().constSlice();
+                const freeze_auth = ui_mint.freezeAuthority.?.base58String(&actual_b58);
                 try std.testing.expectEqualStrings(owner_str, freeze_auth);
             },
             else => try std.testing.expect(false),
@@ -1220,14 +1225,19 @@ test "rpc.account_codec.parse_token: token account with extensions" {
                 try std.testing.expectEqual(@as(u8, 3), ui_multisig.numValidSigners);
                 try std.testing.expect(ui_multisig.isInitialized);
                 try std.testing.expectEqual(@as(usize, 3), ui_multisig.signers.len);
-                const s1_str = signer1.base58String().constSlice();
-                const s2_str = signer2.base58String().constSlice();
-                const s3_str = signer3.base58String().constSlice();
-                const sig0 = ui_multisig.signers.get(0).base58String().constSlice();
+                var expected_b58: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
+                var actual_b58: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
+                const s1_str = signer1.base58String(&expected_b58);
+                const sig0_pk = ui_multisig.signers.get(0);
+                const sig0 = sig0_pk.base58String(&actual_b58);
                 try std.testing.expectEqualStrings(s1_str, sig0);
-                const sig1 = ui_multisig.signers.get(1).base58String().constSlice();
+                const s2_str = signer2.base58String(&expected_b58);
+                const sig1_pk = ui_multisig.signers.get(1);
+                const sig1 = sig1_pk.base58String(&actual_b58);
                 try std.testing.expectEqualStrings(s2_str, sig1);
-                const sig2 = ui_multisig.signers.get(2).base58String().constSlice();
+                const s3_str = signer3.base58String(&expected_b58);
+                const sig2_pk = ui_multisig.signers.get(2);
+                const sig2 = sig2_pk.base58String(&actual_b58);
                 try std.testing.expectEqualStrings(s3_str, sig2);
             },
             else => try std.testing.expect(false),
@@ -1327,11 +1337,14 @@ test "rpc.account_codec.parse_token: token account with extensions conformance" 
     switch (result.?) {
         .account => |ui_account| {
             // Verify base fields (same assertions as before)
-            const mint_str = mint_pubkey.base58String().constSlice();
-            const owner_str = owner_pubkey.base58String().constSlice();
-            const acc_mint = ui_account.mint.base58String().constSlice();
+            var expected_b58: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
+            var actual_b58: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
+            var scratch_b58: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
+            const mint_str = mint_pubkey.base58String(&expected_b58);
+            const owner_str = owner_pubkey.base58String(&actual_b58);
+            const acc_mint = ui_account.mint.base58String(&scratch_b58);
             try std.testing.expectEqualStrings(mint_str, acc_mint);
-            const acc_owner = ui_account.owner.base58String().constSlice();
+            const acc_owner = ui_account.owner.base58String(&scratch_b58);
             try std.testing.expectEqualStrings(owner_str, acc_owner);
             try std.testing.expectEqual(@as(u64, 42), ui_account.tokenAmount.amount);
             try std.testing.expectEqual(AccountState.initialized, ui_account.state);

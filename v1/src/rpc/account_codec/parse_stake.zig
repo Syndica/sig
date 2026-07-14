@@ -220,19 +220,21 @@ test "rpc.account_codec.parse_stake: parse stake accounts" {
 
         const ui_account = result.initialized;
         try std.testing.expectEqual(@as(u64, 42), ui_account.meta.rentExemptReserve.value);
+        var expected_b58: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
+        var actual_b58: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
         try std.testing.expectEqualStrings(
-            pubkey.base58String().constSlice(),
-            ui_account.meta.authorized.staker.base58String().constSlice(),
+            pubkey.base58String(&expected_b58),
+            ui_account.meta.authorized.staker.base58String(&actual_b58),
         );
         try std.testing.expectEqualStrings(
-            pubkey.base58String().constSlice(),
-            ui_account.meta.authorized.withdrawer.base58String().constSlice(),
+            pubkey.base58String(&expected_b58),
+            ui_account.meta.authorized.withdrawer.base58String(&actual_b58),
         );
         try std.testing.expectEqual(@as(i64, 0), ui_account.meta.lockup.unixTimestamp);
         try std.testing.expectEqual(@as(u64, 1), ui_account.meta.lockup.epoch);
         try std.testing.expectEqualStrings(
-            custodian.base58String().constSlice(),
-            ui_account.meta.lockup.custodian.base58String().constSlice(),
+            custodian.base58String(&expected_b58),
+            ui_account.meta.lockup.custodian.base58String(&actual_b58),
         );
         try std.testing.expect(ui_account.stake == null);
     }
@@ -286,17 +288,19 @@ test "rpc.account_codec.parse_stake: parse stake accounts" {
 
         // Verify meta
         try std.testing.expectEqual(@as(u64, 42), ui_account.meta.rentExemptReserve.value);
+        var expected_b58: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
+        var actual_b58: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
         try std.testing.expectEqualStrings(
-            pubkey.base58String().constSlice(),
-            ui_account.meta.authorized.staker.base58String().constSlice(),
+            pubkey.base58String(&expected_b58),
+            ui_account.meta.authorized.staker.base58String(&actual_b58),
         );
 
         // Verify stake
         try std.testing.expect(ui_account.stake != null);
         const ui_stake = ui_account.stake.?;
         try std.testing.expectEqualStrings(
-            voter_pubkey.base58String().constSlice(),
-            ui_stake.delegation.voter.base58String().constSlice(),
+            voter_pubkey.base58String(&expected_b58),
+            ui_stake.delegation.voter.base58String(&actual_b58),
         );
         try std.testing.expectEqual(@as(u64, 20), ui_stake.delegation.stake.value);
         try std.testing.expectEqual(@as(u64, 2), ui_stake.delegation.activationEpoch.value);

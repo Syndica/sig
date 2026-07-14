@@ -82,7 +82,7 @@ pub fn verify(
             sig_offsets.signature_offset,
             32 * 2, // 1 scalar + 1 point
         );
-        const signature: sig.core.Signature = .fromBytes(signature_bytes[0..64].*);
+        const signature: sig.core.Signature = sig.core.Signature.fromBytes(signature_bytes[0..64]).*;
 
         const pubkey_bytes = try getInstructionData(
             data,

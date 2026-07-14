@@ -549,7 +549,7 @@ fn GenericShred(shred_type: ShredType) type {
             const root = try self.merkleRoot();
             const signature = layout.getLeaderSignature(self.payload) orelse
                 return error.InvalidSignature;
-            return try signature.verify(leader, &root.data);
+            return try signature.verify(&leader, &root.data);
         }
 
         /// this is the data that is signed by the signature
@@ -566,7 +566,7 @@ fn GenericShred(shred_type: ShredType) type {
             const offset = try retransmitterSignatureOffset(self.common.variant);
             const end = offset + Signature.SIZE;
             if (self.payload.len < end) return error.InvalidPayloadSize;
-            return .fromBytes(self.payload[offset..][0..64].*);
+            return Signature.fromBytes(self.payload[offset..][0..64]).*;
         }
     };
 }
@@ -1146,7 +1146,7 @@ pub const layout = struct {
 
     pub fn getLeaderSignature(shred: []const u8) ?Signature {
         if (shred.len < Signature.SIZE) return null;
-        return .fromBytes(shred[0..SIZE_OF_SIGNATURE].*);
+        return Signature.fromBytes(shred[0..SIZE_OF_SIGNATURE]).*;
     }
 
     pub fn merkleRoot(shred: []const u8) ?Hash {

@@ -432,7 +432,7 @@ fn insertFromSnapshotArchive(
 
             if (maybe_manifest.?.accounts_db_fields.slot != slot_and_hash.slot)
                 return error.MismatchingManifestSlot;
-            if (!maybe_manifest.?.bank_extra.accounts_lt_hash.checksum().eql(slot_and_hash.hash))
+            if (!maybe_manifest.?.bank_extra.accounts_lt_hash.checksum().eql(&slot_and_hash.hash))
                 return error.MismatchingManifestAccountsLtHash;
 
             // Read /accounts/{slot}.{id}
@@ -491,7 +491,7 @@ fn insertFromSnapshotArchive(
 
                 // Header's hash is obsolete and always zero:
                 // https://github.com/anza-xyz/agave/blob/v3.0/accounts-db/src/append_vec.rs#L1335-L1339
-                if (!header.hash.eql(Hash.ZEROES)) {
+                if (!header.hash.eql(&Hash.ZEROES)) {
                     return error.InvalidAccount;
                 }
 

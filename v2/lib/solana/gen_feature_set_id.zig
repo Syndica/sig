@@ -1,4 +1,8 @@
-//! Generates the feature set ID constant.
+//! Generates the FEATURE_SET_ID constant.
+//!
+//! This file is not directly exposed as a part of the library, rather it is codegen
+//! that produces a file that is exposed as its own module, and re-exported by this
+//! library in features.zig.
 
 const std = @import("std");
 const base58 = @import("base58");

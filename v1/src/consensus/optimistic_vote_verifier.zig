@@ -95,7 +95,7 @@ pub const OptimisticConfirmationVerifier = struct {
         for (before_or_equal_root.items) |slot_and_hash| {
             const is_root_slot = slot_and_hash.slot == root.slot;
             const root_hash_mismatch =
-                is_root_slot and root.hash != null and !slot_and_hash.hash.eql(root.hash.?);
+                is_root_slot and root.hash != null and !slot_and_hash.hash.eql(&root.hash.?);
             const not_in_ancestors = !root.ancestors.containsSlot(slot_and_hash.slot);
             const not_rooted = !(try ledger.reader().isRoot(allocator, slot_and_hash.slot));
             if (root_hash_mismatch or (!is_root_slot and not_in_ancestors and not_rooted)) {

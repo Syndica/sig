@@ -78,7 +78,7 @@ pub fn insertBankHash(
 ) !void {
     const allocator = sig.utils.allocators.failing.allocator(.{}); // no allocations needed for hash
     if (try self.ledger.db.get(allocator, schema.bank_hash, slot)) |prev_value| {
-        if (frozen_hash.eql(prev_value.frozenHash()) and prev_value.isDuplicateConfirmed()) {
+        if (frozen_hash.eql(&prev_value.frozenHash()) and prev_value.isDuplicateConfirmed()) {
             // Don't overwrite is_duplicate_confirmed == true with is_duplicate_confirmed == false,
             // which may happen on startup when procesing from ledger processor because the
             // blocks may not reflect earlier observed gossip votes from before the restart.

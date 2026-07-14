@@ -46,7 +46,7 @@ pub const LatestValidatorVotes = struct {
 
     fn containsHash(slice: []const Hash, needle: Hash) bool {
         for (slice) |item| {
-            if (item.eql(needle)) return true;
+            if (item.eql(&needle)) return true;
         }
         return false;
     }

@@ -8,6 +8,9 @@ const Pubkey = lib.solana.Pubkey;
 
 pub const pippenger = @import("ed25519/pippenger.zig");
 pub const straus = @import("ed25519/straus.zig");
+pub const generic = @import("ed25519/generic.zig");
+pub const avx512 = @import("ed25519/avx512.zig");
+pub const wycheproof = @import("ed25519/wycheproof.zig");
 
 pub const mul = straus.mul;
 pub const mulManyWithSameScalar = straus.mulManyWithSameScalar;
@@ -18,8 +21,6 @@ const convention: std.builtin.CallingConvention = switch (builtin.mode) {
     else => .auto,
 };
 
-const generic = @import("ed25519/generic.zig");
-const avx512 = @import("ed25519/avx512.zig");
 const has_avx512 = builtin.cpu.arch == .x86_64 and
     std.Target.x86.featureSetHas(builtin.cpu.features, .avx512ifma) and
     std.Target.x86.featureSetHas(builtin.cpu.features, .avx512vl);

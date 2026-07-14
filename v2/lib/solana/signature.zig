@@ -85,7 +85,8 @@ pub const Signature = extern struct {
     }
 
     pub fn jsonStringify(self: Signature, writer: anytype) @TypeOf(writer.*).Error!void {
-        try writer.print("\"{s}\"", .{self.base58String().slice()});
+        var buf: [BASE58_MAX_SIZE]u8 = undefined;
+        try writer.print("\"{s}\"", .{self.base58String(&buf)});
     }
 
     pub fn jsonParse(

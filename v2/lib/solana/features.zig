@@ -21,23 +21,7 @@ pub const ZonInfo = struct {
     name: [:0]const u8,
     pubkey: [:0]const u8,
     description: [:0]const u8,
-    status: union(enum) {
-        /// The feature has been removed from the feature set and its implementation has been removed from source.
-        /// The feature is not advertised as a supported feature for fuzzing (i.e. it will not be toggled on).
-        reverted,
-        /// The feature is contained in the feature set but its implementation is not complete.
-        /// The feature is not advertised as a supported feature for fuzzing (i.e. it will not be toggled on).
-        unsupported,
-        /// The feature is contained in the feature set and its implementation is complete.
-        /// The feature is advertised as a supported feature for fuzzing (i.e. it may be toggled on and off).
-        supported,
-        /// The feature is contained in the feature set, its implementation is complete, and the inactive path remains in source.
-        /// The feature is advertised as a hardcoded feature for fuzzing (i.e. it is always toggled on).
-        hardcoded_for_fuzzing,
-        /// The feature is contained in the feature set, its implementation is complete, and the inactive path has been removed from source.
-        /// The feature is advertised as a hardcoded feature for fuzzing (i.e. it is always toggled on).
-        hardcoded,
-    },
+    status: Status,
     /// Optional note about the feature status.
     /// Required for all unsupported features.
     note: ?[:0]const u8 = null,
@@ -47,6 +31,27 @@ pub const ZonInfo = struct {
             @panic("invalid pubkey in feature definition");
         return @bitCast(key.data[0..8].*);
     }
+};
+
+/// The lifecycle status of a `Feature`. Promoted to a top-level type so
+/// consumers (in particular the conformance harness's `status_map`) can
+/// reference it directly.
+pub const Status = union(enum) {
+    /// The feature has been removed from the feature set and its implementation has been removed from source.
+    /// The feature is not advertised as a supported feature for fuzzing (i.e. it will not be toggled on).
+    reverted,
+    /// The feature is contained in the feature set but its implementation is not complete.
+    /// The feature is not advertised as a supported feature for fuzzing (i.e. it will not be toggled on).
+    unsupported,
+    /// The feature is contained in the feature set and its implementation is complete.
+    /// The feature is advertised as a supported feature for fuzzing (i.e. it may be toggled on and off).
+    supported,
+    /// The feature is contained in the feature set, its implementation is complete, and the inactive path remains in source.
+    /// The feature is advertised as a hardcoded feature for fuzzing (i.e. it is always toggled on).
+    hardcoded_for_fuzzing,
+    /// The feature is contained in the feature set, its implementation is complete, and the inactive path has been removed from source.
+    /// The feature is advertised as a hardcoded feature for fuzzing (i.e. it is always toggled on).
+    hardcoded,
 };
 
 /// All known features past and present.
@@ -98,6 +103,18 @@ pub const pubkey_map: std.EnumArray(Feature, Pubkey) = blk: {
     var s: std.enums.EnumFieldStruct(Feature, Pubkey, null) = undefined;
     for (@typeInfo(Feature).@"enum".fields, features) |field, feature| {
         @field(s, field.name) = .parse(feature.pubkey);
+    }
+    break :blk .init(s);
+};
+
+/// Maps each `Feature` to its corresponding `Status`. Used by the
+/// conformance harness to warn when a fixture references a feature that's
+/// reverted or unsupported in sig.
+pub const status_map: std.EnumArray(Feature, Status) = blk: {
+    @setEvalBranchQuota(features.len * 1000);
+    var s: std.enums.EnumFieldStruct(Feature, Status, null) = undefined;
+    for (@typeInfo(Feature).@"enum".fields, features) |field, feature| {
+        @field(s, field.name) = feature.status;
     }
     break :blk .init(s);
 };
@@ -161,6 +178,21 @@ pub const Set = struct {
                 destination.* = slot;
                 return;
             }
+        } else {
+            @branchHint(.unlikely);
+            return error.InvalidPubkey;
+        }
+    }
+
+    /// Look up a `Feature` by the "id" (first 8 bytes) of its pubkey. Used by
+    /// the conformance harness to translate the u64 identifiers in
+    /// protobuf-encoded fixtures back into `Feature` enum values.
+    pub fn getById(self: *Set, id: u64) !Feature {
+        for (0..self.array.values.len) |i| {
+            const feature: Feature = @enumFromInt(i);
+            const feature_pubkey = pubkey_map.getPtrConst(feature).*;
+            const feature_id: u64 = @bitCast(feature_pubkey.data[0..8].*);
+            if (feature_id == id) return feature;
         } else {
             @branchHint(.unlikely);
             return error.InvalidPubkey;

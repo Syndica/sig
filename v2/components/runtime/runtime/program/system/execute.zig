@@ -640,7 +640,7 @@ fn advanceNonceAccount(
 
             const next_durable_nonce = nonce.initDurableNonceFromHash(ic.tc.prev_blockhash);
 
-            if (data.durable_nonce.eql(next_durable_nonce)) {
+            if (data.durable_nonce.eql(&next_durable_nonce)) {
                 try ic.tc.log(
                     "Advance nonce account: nonce can only advance once per slot",
                     .{},
@@ -714,7 +714,7 @@ fn withdrawNonceAccount(
             .initialized => |data| {
                 if (lamports == from_account.account.lamports) {
                     const durable_nonce = nonce.initDurableNonceFromHash(ic.tc.prev_blockhash);
-                    if (durable_nonce.eql(data.durable_nonce)) {
+                    if (durable_nonce.eql(&data.durable_nonce)) {
                         try ic.tc.log(
                             "Withdraw nonce account: nonce can only advance once per slot",
                             .{},

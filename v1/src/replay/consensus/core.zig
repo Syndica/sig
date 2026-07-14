@@ -706,7 +706,7 @@ pub const TowerConsensus = struct {
         frozen_hash: Hash,
         ancestor_hashes_replay_update_sender: *Channel(AncestorHashesReplayUpdate),
     ) !void {
-        std.debug.assert(!frozen_hash.eql(Hash.ZEROES));
+        std.debug.assert(!frozen_hash.eql(&Hash.ZEROES));
         if (slot <= root) return;
 
         var f_stats = progress_map.getForkStats(slot) orelse
@@ -718,7 +718,7 @@ pub const TowerConsensus = struct {
             slot,
             frozen_hash,
         )) |prev_entry| {
-            std.debug.assert(prev_entry.value.eql(frozen_hash));
+            std.debug.assert(prev_entry.value.eql(&frozen_hash));
             // Already processed this signal
             return;
         }
@@ -4528,7 +4528,7 @@ test "edge cases - duplicate slot" {
         defer root_ref.release();
         break :blk root_ref.state().hash.readCopy().?;
     };
-    std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
+    std.debug.assert(root_slot0_hash.eql(&.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
     const slot1: Slot = 1;
@@ -4707,7 +4707,7 @@ test "edge cases - duplicate confirmed slot" {
         defer root_ref.release();
         break :blk root_ref.state().hash.readCopy().?;
     };
-    std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
+    std.debug.assert(root_slot0_hash.eql(&.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
     const slot1: Slot = 1;
@@ -4891,7 +4891,7 @@ test "edge cases - gossip verified vote hashes" {
         defer root_ref.release();
         break :blk root_ref.state().hash.readCopy().?;
     };
-    std.debug.assert(root_slot0_hash.eql(.ZEROES)); // assert initial root hash
+    std.debug.assert(root_slot0_hash.eql(&.ZEROES)); // assert initial root hash
 
     // -- slot1 -- //
     const slot1: Slot = 1;
@@ -6418,12 +6418,12 @@ test "detect and mark duplicate confirmed fork" {
     // Assert: slot 1 is now marked as duplicate-confirmed
     const stats1 = progress.getForkStats(1).?;
     try std.testing.expect(stats1.duplicate_confirmed_hash != null);
-    try std.testing.expect(stats1.duplicate_confirmed_hash.?.eql(slot1_hash));
+    try std.testing.expect(stats1.duplicate_confirmed_hash.?.eql(&slot1_hash));
 
     // Assert: slot_data tracks the duplicate-confirmed slot
     const dup_hash = consensus.slot_data.duplicate_confirmed_slots.get(1);
     try std.testing.expect(dup_hash != null);
-    try std.testing.expect(dup_hash.?.eql(slot1_hash));
+    try std.testing.expect(dup_hash.?.eql(&slot1_hash));
 
     // Assert fork choice: heaviest slot should be slot 2 (the processed slot)
     try std.testing.expectEqual(2, consensus.fork_choice.heaviestOverallSlot().slot);
@@ -6982,7 +6982,7 @@ test "successful fork switch (switch_proof)" {
             &consensus.fork_choice,
         );
         switch (decision2) {
-            .switch_proof => |h| try std.testing.expect(h.eql(Hash.ZEROES)),
+            .switch_proof => |h| try std.testing.expect(h.eql(&Hash.ZEROES)),
             else => try std.testing.expect(false),
         }
 
@@ -7023,7 +7023,7 @@ test "successful fork switch (switch_proof)" {
         &consensus.fork_choice,
     );
     switch (decision) {
-        .switch_proof => |h| try std.testing.expect(h.eql(Hash.ZEROES)),
+        .switch_proof => |h| try std.testing.expect(h.eql(&Hash.ZEROES)),
         .same_fork => {},
         else => try std.testing.expect(false),
     }

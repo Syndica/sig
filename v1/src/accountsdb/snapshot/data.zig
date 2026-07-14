@@ -842,11 +842,12 @@ pub const FullSnapshotFileInfo = struct {
     });
 
     pub fn snapshotArchiveName(self: FullSnapshotFileInfo) SnapshotArchiveNameStr {
-        const b58_str = self.hash.base58String();
+        var b58_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
+        const b58_str = self.hash.base58String(&b58_buf);
         var out: SnapshotArchiveNameStr = .{};
         std.fmt.format(out.writer(), "snapshot-{d}-{s}.tar.zst", .{
             self.slot,
-            b58_str.constSlice(),
+            b58_str,
         }) catch unreachable;
         return out;
     }
@@ -976,12 +977,13 @@ pub const IncrementalSnapshotFileInfo = struct {
     });
 
     pub fn snapshotArchiveName(self: IncrementalSnapshotFileInfo) SnapshotArchiveNameStr {
-        const b58_str = self.hash.base58String();
+        var b58_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
+        const b58_str = self.hash.base58String(&b58_buf);
         var out: SnapshotArchiveNameStr = .{};
         std.fmt.format(out.writer(), "incremental-snapshot-{d}-{d}-{s}.tar.zst", .{
             self.base_slot,
             self.slot,
-            b58_str.constSlice(),
+            b58_str,
         }) catch unreachable;
         return out;
     }
@@ -1595,9 +1597,10 @@ test FullSnapshotFileInfo {
     const snapshot_info = try FullSnapshotFileInfo.parseFileNameTarZst(snapshot_name);
 
     try std.testing.expectEqual(269, snapshot_info.slot);
+    var b58_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
     try std.testing.expectEqualStrings(
         "EAHHZCVccCdAoCXH8RWxvv9edcwjY2boqni9MJuh3TCn",
-        snapshot_info.hash.base58String().constSlice(),
+        snapshot_info.hash.base58String(&b58_buf),
     );
 
     try std.testing.expectEqualStrings(
@@ -1623,9 +1626,10 @@ test IncrementalSnapshotFileInfo {
 
     try std.testing.expectEqual(269, snapshot_info.base_slot);
     try std.testing.expectEqual(307, snapshot_info.slot);
+    var b58_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
     try std.testing.expectEqualStrings(
         "4JLFzdaaqkSrmHs55bBDhZrQjHYZvqU1vCcQ5mP22pdB",
-        snapshot_info.hash.base58String().constSlice(),
+        snapshot_info.hash.base58String(&b58_buf),
     );
 
     try std.testing.expectEqualStrings(

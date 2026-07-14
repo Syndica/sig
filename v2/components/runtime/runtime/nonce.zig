@@ -35,7 +35,7 @@ pub const Versions = union(enum) {
             .current => |state| switch (state) {
                 .uninitialized => return null,
                 .initialized => |data| {
-                    return if (durable_nonce.eql(data.durable_nonce)) data else null;
+                    return if (durable_nonce.eql(&data.durable_nonce)) data else null;
                 },
             },
         }

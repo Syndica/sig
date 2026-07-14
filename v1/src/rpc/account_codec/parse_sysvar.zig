@@ -427,9 +427,11 @@ test "rpc.account_codec.parse_sysvar: parse sysvars" {
         try std.testing.expect(result.? == .recent_blockhashes);
         const entries = result.?.recent_blockhashes.constSlice();
         try std.testing.expectEqual(@as(usize, 1), entries.len);
+        var expected_b58: [sig.core.Hash.BASE58_MAX_SIZE]u8 = undefined;
+        var actual_b58: [sig.core.Hash.BASE58_MAX_SIZE]u8 = undefined;
         try std.testing.expectEqualStrings(
-            hash.base58String().constSlice(),
-            entries[0].blockhash.base58String().constSlice(),
+            hash.base58String(&expected_b58),
+            entries[0].blockhash.base58String(&actual_b58),
         );
         const lps = entries[0].feeCalculator.lamportsPerSignature.value;
         try std.testing.expectEqual(@as(u64, 10), lps);

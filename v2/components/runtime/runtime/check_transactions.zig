@@ -349,7 +349,7 @@ pub fn checkLoadAndAdvanceMessageNonceAccount(
     next_lamports_per_signature: u64,
     account_reader: AccountReader,
 ) AccountLoadError!?struct { LoadedAccount, u64 } {
-    if (transaction.recent_blockhash.eql(next_durable_nonce.*)) return null;
+    if (transaction.recent_blockhash.eql(next_durable_nonce)) return null;
 
     const address, var nonce_account, const nonce_data =
         try loadMessageNonceAccount(

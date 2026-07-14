@@ -180,8 +180,10 @@ pub const RepairMessage = union(RepairMessageType) {
                 var message: [MAX_SERIALIZED_SIZE - Signature.SIZE]u8 = undefined;
                 @memcpy(message[0..4], serialized[0..4]);
                 @memcpy(message[4..].ptr, serialized[4 + Signature.SIZE ..]);
-                header.signature.verify(header.sender, message[0 .. serialized.len - Signature.SIZE]) catch
-                    return error.InvalidSignature;
+                header.signature.verify(
+                    &header.sender,
+                    message[0 .. serialized.len - Signature.SIZE],
+                ) catch return error.InvalidSignature;
             },
         }
     }
@@ -414,7 +416,7 @@ const testHelpers = struct {
         random.bytes(&signature);
 
         return .{
-            .signature = .fromBytes(signature),
+            .signature = Signature.fromBytes(&signature).*,
             .sender = Pubkey.initRandom(random),
             .recipient = Pubkey.initRandom(random),
             .timestamp = random.int(u64),

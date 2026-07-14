@@ -413,9 +413,10 @@ test "genesis_config deserialize testnet config" {
     defer config.deinit(allocator);
 
     try std.testing.expectEqual(ClusterType.testnet, config.cluster_type);
+    var b58_buf: [sig.core.Hash.BASE58_MAX_SIZE]u8 = undefined;
     try std.testing.expectEqualStrings(
         "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY",
-        config.hash.base58String().constSlice(),
+        config.hash.base58String(&b58_buf),
     );
 }
 
@@ -427,9 +428,10 @@ test "genesis_config deserialize devnet config" {
     defer config.deinit(allocator);
 
     try std.testing.expectEqual(ClusterType.devnet, config.cluster_type);
+    var b58_buf: [sig.core.Hash.BASE58_MAX_SIZE]u8 = undefined;
     try std.testing.expectEqualStrings(
         "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
-        config.hash.base58String().constSlice(),
+        config.hash.base58String(&b58_buf),
     );
 }
 
@@ -441,9 +443,10 @@ test "genesis_config deserialize mainnet config" {
     defer config.deinit(allocator);
 
     try std.testing.expectEqual(ClusterType.mainnet, config.cluster_type);
+    var b58_buf: [sig.core.Hash.BASE58_MAX_SIZE]u8 = undefined;
     try std.testing.expectEqualStrings(
         "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
-        config.hash.base58String().constSlice(),
+        config.hash.base58String(&b58_buf),
     );
 }
 

@@ -296,12 +296,14 @@ pub fn parseInstruction(
     stack_height: ?u32,
 ) !UiInstruction {
     const program_name = ParsableProgram.fromID(program_id) orelse return error.ProgramNotParsable;
+    var b58_buf: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
+    const program_id_str = program_id.base58String(&b58_buf);
 
     switch (program_name) {
         .addressLookupTable => {
             return allocParsed(arena, .{ .parsed = .{
                 .program = "address-lookup-table",
-                .program_id = try arena.dupe(u8, program_id.base58String().constSlice()),
+                .program_id = try arena.dupe(u8, program_id_str),
                 .parsed = try parseAddressLookupTableInstruction(
                     arena,
                     instruction,
@@ -313,7 +315,7 @@ pub fn parseInstruction(
         .splAssociatedTokenAccount => {
             return allocParsed(arena, .{ .parsed = .{
                 .program = "spl-associated-token-account",
-                .program_id = try arena.dupe(u8, program_id.base58String().constSlice()),
+                .program_id = try arena.dupe(u8, program_id_str),
                 .parsed = try parseAssociatedTokenInstruction(
                     arena,
                     instruction,
@@ -325,7 +327,7 @@ pub fn parseInstruction(
         .splMemo => {
             return allocParsed(arena, .{ .parsed = .{
                 .program = "spl-memo",
-                .program_id = try arena.dupe(u8, program_id.base58String().constSlice()),
+                .program_id = try arena.dupe(u8, program_id_str),
                 .parsed = try parseMemoInstruction(arena, instruction.data),
                 .stack_height = stack_height,
             } });
@@ -333,7 +335,7 @@ pub fn parseInstruction(
         .splToken => {
             return allocParsed(arena, .{ .parsed = .{
                 .program = "spl-token",
-                .program_id = try arena.dupe(u8, program_id.base58String().constSlice()),
+                .program_id = try arena.dupe(u8, program_id_str),
                 .parsed = try parseTokenInstruction(
                     arena,
                     instruction,
@@ -345,7 +347,7 @@ pub fn parseInstruction(
         .bpfLoader => {
             return allocParsed(arena, .{ .parsed = .{
                 .program = "bpf-loader",
-                .program_id = try arena.dupe(u8, program_id.base58String().constSlice()),
+                .program_id = try arena.dupe(u8, program_id_str),
                 .parsed = try parseBpfLoaderInstruction(
                     arena,
                     instruction,
@@ -357,7 +359,7 @@ pub fn parseInstruction(
         .bpfUpgradeableLoader => {
             return allocParsed(arena, .{ .parsed = .{
                 .program = "bpf-upgradeable-loader",
-                .program_id = try arena.dupe(u8, program_id.base58String().constSlice()),
+                .program_id = try arena.dupe(u8, program_id_str),
                 .parsed = try parseBpfUpgradeableLoaderInstruction(
                     arena,
                     instruction,
@@ -369,7 +371,7 @@ pub fn parseInstruction(
         .stake => {
             return allocParsed(arena, .{ .parsed = .{
                 .program = @tagName(program_name),
-                .program_id = try arena.dupe(u8, program_id.base58String().constSlice()),
+                .program_id = try arena.dupe(u8, program_id_str),
                 .parsed = try parseStakeInstruction(
                     arena,
                     instruction,
@@ -381,7 +383,7 @@ pub fn parseInstruction(
         .system => {
             return allocParsed(arena, .{ .parsed = .{
                 .program = @tagName(program_name),
-                .program_id = try arena.dupe(u8, program_id.base58String().constSlice()),
+                .program_id = try arena.dupe(u8, program_id_str),
                 .parsed = try parseSystemInstruction(
                     arena,
                     instruction,
@@ -393,7 +395,7 @@ pub fn parseInstruction(
         .vote => {
             return allocParsed(arena, .{ .parsed = .{
                 .program = @tagName(program_name),
-                .program_id = try arena.dupe(u8, program_id.base58String().constSlice()),
+                .program_id = try arena.dupe(u8, program_id_str),
                 .parsed = try parseVoteInstruction(
                     arena,
                     instruction,
@@ -414,15 +416,16 @@ pub fn makeUiPartiallyDecodedInstruction(
     stack_height: ?u32,
 ) !UiPartiallyDecodedInstruction {
     const program_id_index: usize = @intCast(instruction.program_id_index);
+    var b58_buf: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
     const program_id_str = if (account_keys.get(program_id_index)) |pk|
-        try arena.dupe(u8, pk.base58String().constSlice())
+        try arena.dupe(u8, pk.base58String(&b58_buf))
     else
         try arena.dupe(u8, "unknown");
 
     var accounts = try arena.alloc([]const u8, instruction.accounts.len);
     for (instruction.accounts, 0..) |acct_idx, i| {
         accounts[i] = if (account_keys.get(@intCast(acct_idx))) |pk|
-            try arena.dupe(u8, pk.base58String().constSlice())
+            try arena.dupe(u8, pk.base58String(&b58_buf))
         else
             try arena.dupe(u8, "unknown");
     }
@@ -859,12 +862,14 @@ fn checkNumVoteAccounts(accounts: []const u8, num: usize) !void {
 
 /// Convert a Pubkey to a JSON string value
 fn pubkeyToValue(arena: Allocator, pubkey: Pubkey) !JsonValue {
-    return .{ .string = try arena.dupe(u8, pubkey.base58String().constSlice()) };
+    var buf: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
+    return .{ .string = try arena.dupe(u8, pubkey.base58String(&buf)) };
 }
 
 /// Convert a Hash to a JSON string value
 fn hashToValue(arena: Allocator, hash: Hash) !JsonValue {
-    return .{ .string = try arena.dupe(u8, hash.base58String().constSlice()) };
+    var buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
+    return .{ .string = try arena.dupe(u8, hash.base58String(&buf)) };
 }
 
 /// Convert VoteAuthorize to a JSON Value, mirroring agave's serde-json
@@ -5519,18 +5524,19 @@ test makeUiPartiallyDecodedInstruction {
     );
 
     // Verify program ID is base58 of key2
+    var b58_buf: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
     try std.testing.expectEqualStrings(
-        key2.base58String().constSlice(),
+        key2.base58String(&b58_buf),
         result.programId,
     );
     // Verify accounts are resolved to base58 strings
     try std.testing.expectEqual(@as(usize, 2), result.accounts.len);
     try std.testing.expectEqualStrings(
-        key0.base58String().constSlice(),
+        key0.base58String(&b58_buf),
         result.accounts[0],
     );
     try std.testing.expectEqualStrings(
-        key1.base58String().constSlice(),
+        key1.base58String(&b58_buf),
         result.accounts[1],
     );
     // stackHeight preserved
@@ -5567,8 +5573,9 @@ test "parse_instruction.parseUiInstruction: unknown program falls back to partia
         .parsed => |p| {
             switch (p.*) {
                 .partially_decoded => |pd| {
+                    var b58_buf: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
                     try std.testing.expectEqualStrings(
-                        unknown_program.base58String().constSlice(),
+                        unknown_program.base58String(&b58_buf),
                         pd.programId,
                     );
                     try std.testing.expectEqual(@as(usize, 1), pd.accounts.len);
@@ -5683,20 +5690,21 @@ test "parse_instruction.parseInstruction: system createAccountAllowPrefund with 
                 try std.testing.expectEqual(@as(i64, 1_000_000), lamports.integer);
 
                 const new_account_val = info_val.object.get("newAccount").?;
+                var b58_buf: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
                 try std.testing.expectEqualStrings(
-                    new_account.base58String().constSlice(),
+                    new_account.base58String(&b58_buf),
                     new_account_val.string,
                 );
 
                 const source_val = info_val.object.get("source").?;
                 try std.testing.expectEqualStrings(
-                    source.base58String().constSlice(),
+                    source.base58String(&b58_buf),
                     source_val.string,
                 );
 
                 const owner_val = info_val.object.get("owner").?;
                 try std.testing.expectEqualStrings(
-                    owner.base58String().constSlice(),
+                    owner.base58String(&b58_buf),
                     owner_val.string,
                 );
 
@@ -5757,14 +5765,15 @@ test "parse_instruction.parseInstruction: system createAccountAllowPrefund no so
                 const info_val = pi.parsed.object.get("info").?;
 
                 const new_account_val = info_val.object.get("newAccount").?;
+                var b58_buf: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
                 try std.testing.expectEqualStrings(
-                    new_account.base58String().constSlice(),
+                    new_account.base58String(&b58_buf),
                     new_account_val.string,
                 );
 
                 const owner_val = info_val.object.get("owner").?;
                 try std.testing.expectEqualStrings(
-                    owner.base58String().constSlice(),
+                    owner.base58String(&b58_buf),
                     owner_val.string,
                 );
 
@@ -7172,16 +7181,17 @@ test "parse_vote update_commission_collector inflation_rewards" {
                     type_val.string,
                 );
                 const info = obj.get("info").?.object;
+                var b58_buf: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
                 try std.testing.expectEqualStrings(
-                    vote_pubkey.base58String().constSlice(),
+                    vote_pubkey.base58String(&b58_buf),
                     info.get("voteAccount").?.string,
                 );
                 try std.testing.expectEqualStrings(
-                    new_collector_pubkey.base58String().constSlice(),
+                    new_collector_pubkey.base58String(&b58_buf),
                     info.get("newCollector").?.string,
                 );
                 try std.testing.expectEqualStrings(
-                    withdrawer_pubkey.base58String().constSlice(),
+                    withdrawer_pubkey.base58String(&b58_buf),
                     info.get("withdrawAuthority").?.string,
                 );
                 try std.testing.expectEqualStrings(

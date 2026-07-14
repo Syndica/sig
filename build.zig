@@ -289,6 +289,7 @@ const Sig = struct {
             },
         });
         unit_tests.add("lib", lib);
+        runtime.module.addImport("lib", lib);
 
         const start_service = b.createModule(.{
             .root_source_file = b.path("v2/init/start_service.zig"),
@@ -389,6 +390,7 @@ const Runtime = struct {
         unit_tests: *UnitTests,
     ) Runtime {
         const runtime_dir = "v2/components/runtime";
+        const solana_dir = "v2/lib/solana";
 
         const build_options = b.addOptions();
         build_options.addOption(bool, "long_tests", config.long_tests);
@@ -406,7 +408,7 @@ const Runtime = struct {
             .root_module = b.createModule(.{
                 .target = b.graph.host,
                 .optimize = .Debug,
-                .root_source_file = b.path(runtime_dir ++ "/scripts/gen_feature_set_id.zig"),
+                .root_source_file = b.path(solana_dir ++ "/gen_feature_set_id.zig"),
                 .imports = &.{
                     .{
                         .name = "base58",
@@ -415,7 +417,7 @@ const Runtime = struct {
                     .{
                         .name = "features",
                         .module = b.createModule(.{
-                            .root_source_file = b.path(runtime_dir ++ "/core/features.zon"),
+                            .root_source_file = b.path(solana_dir ++ "/features.zon"),
                         }),
                     },
                 },
@@ -433,7 +435,7 @@ const Runtime = struct {
             .root_source_file = feature_set_id_gen.addOutputFileArg("feature-set-id.zig"),
         });
         const features_zon = b.addModule("features-zon", .{
-            .root_source_file = b.path(runtime_dir ++ "/core/features.zon"),
+            .root_source_file = b.path(solana_dir ++ "/features.zon"),
         });
 
         const gh_table = b.createModule(.{
@@ -455,10 +457,6 @@ const Runtime = struct {
             .{ .name = "tracy", .module = deps.tracy },
         };
 
-        // Exported as "shared" (not "runtime") so v1 can still consume it via
-        // its dep on this package without touching all of its
-        // `@import("shared")` sites. If we ever rename all those imports,
-        // this can move to `b.addModule("runtime", ...)`.
         const module = b.addModule("runtime", .{
             .root_source_file = b.path(runtime_dir ++ "/lib.zig"),
             .target = config.target,

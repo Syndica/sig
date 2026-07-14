@@ -123,7 +123,7 @@ pub const VoteTransaction = union(enum) {
             .vote => |self_vote| {
                 const other_vote = other.vote;
                 return self_vote.timestamp == other_vote.timestamp and
-                    self_vote.hash.eql(other_vote.hash) and
+                    self_vote.hash.eql(&other_vote.hash) and
                     std.mem.eql(Slot, self_vote.slots, other_vote.slots);
             },
             inline //
@@ -134,7 +134,7 @@ pub const VoteTransaction = union(enum) {
                 const other_pl = @field(other, @tagName(tag));
                 if (self_pl.lockouts.items.len != other_pl.lockouts.items.len or
                     self_pl.timestamp != other_pl.timestamp or
-                    !self_pl.hash.eql(other_pl.hash) //
+                    !self_pl.hash.eql(&other_pl.hash) //
                 ) return false;
                 for (self_pl.lockouts.items, other_pl.lockouts.items) |self_lo, other_lo| {
                     if (self_lo.slot != other_lo.slot or
@@ -624,7 +624,7 @@ test "vote_transaction.VoteTransaction - hash" {
         .hash = test_hash,
         .timestamp = null,
     } };
-    try std.testing.expect(test_hash.eql(vote.getHash()));
+    try std.testing.expect(test_hash.eql(&vote.getHash()));
 
     var vote_state_update = VoteTransaction{ .vote_state_update = .{
         .lockouts = try std.ArrayListUnmanaged(Lockout)
@@ -634,7 +634,7 @@ test "vote_transaction.VoteTransaction - hash" {
         .root = 100,
     } };
     defer vote_state_update.deinit(std.testing.allocator);
-    try std.testing.expect(test_hash.eql(vote_state_update.getHash()));
+    try std.testing.expect(test_hash.eql(&vote_state_update.getHash()));
 
     var compact_vote_state_update = VoteTransaction{ .compact_vote_state_update = .{
         .lockouts = try std.ArrayListUnmanaged(Lockout)
@@ -644,7 +644,7 @@ test "vote_transaction.VoteTransaction - hash" {
         .root = 100,
     } };
     defer compact_vote_state_update.deinit(std.testing.allocator);
-    try std.testing.expect(test_hash.eql(compact_vote_state_update.getHash()));
+    try std.testing.expect(test_hash.eql(&compact_vote_state_update.getHash()));
 
     var tower_sync = VoteTransaction{ .tower_sync = .{
         .lockouts = try std.ArrayListUnmanaged(Lockout)
@@ -655,5 +655,5 @@ test "vote_transaction.VoteTransaction - hash" {
         .block_id = Hash.ZEROES,
     } };
     defer tower_sync.deinit(std.testing.allocator);
-    try std.testing.expect(test_hash.eql(tower_sync.getHash()));
+    try std.testing.expect(test_hash.eql(&tower_sync.getHash()));
 }

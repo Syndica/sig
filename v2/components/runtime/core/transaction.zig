@@ -178,7 +178,10 @@ pub const Transaction = struct {
         const signatures = try allocator.alloc(Signature, try readShortU16(reader));
         errdefer allocator.free(signatures);
 
-        for (signatures) |*sgn| sgn.* = .fromBytes(try reader.readBytesNoEof(Signature.SIZE));
+        for (signatures) |*sgn| {
+            const bytes = try reader.readBytesNoEof(Signature.SIZE);
+            sgn.* = Signature.fromBytes(&bytes).*;
+        }
         var peekable = sig.utils.io.peekableReader(reader);
         const version = try Version.deserialize(&peekable);
         return .{

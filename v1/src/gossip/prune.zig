@@ -123,7 +123,7 @@ pub const PruneData = struct {
         var d: [PACKET_DATA_SIZE]u8 = undefined;
         const data = try bincode.writeToSlice(&d, signable_data, .{});
         // verify
-        try self.signature.verify(self.pubkey, data);
+        try self.signature.verify(&self.pubkey, data);
     }
 
     pub fn verifyWithPrefix(self: *const PruneData) !void {
@@ -138,7 +138,7 @@ pub const PruneData = struct {
         var d: [PACKET_DATA_SIZE]u8 = undefined;
         const data = try bincode.writeToSlice(&d, signable_data, .{});
         // verify
-        try self.signature.verify(self.pubkey, data);
+        try self.signature.verify(&self.pubkey, data);
     }
 };
 

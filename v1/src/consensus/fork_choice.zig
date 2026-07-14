@@ -1080,7 +1080,7 @@ pub const ForkChoice = struct {
         var ancestor_iterator = self.ancestorIterator(node_key.*);
         while (ancestor_iterator.next()) |ancestor| {
             if (ancestor.slot == maybe_ancestor_key.slot and
-                ancestor.hash.eql(maybe_ancestor_key.hash))
+                ancestor.hash.eql(&maybe_ancestor_key.hash))
             {
                 return true;
             }

@@ -126,9 +126,10 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !DistributedReward
     );
     params.accounts_lt_hash.set(lt_hash);
 
+    var b58_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
     params.logger.info().logf(
         "froze slot {} with hash {s}",
-        .{ params.hash_slot.slot, slot_hash.get().*.?.base58String().slice() },
+        .{ params.hash_slot.slot, slot_hash.get().*.?.base58String(&b58_buf) },
     );
 
     tracy.frameMarkNamed("slots frozen");

@@ -22,7 +22,11 @@ pub const MAX_TARGET_LEN: usize = blk: {
     break :blk "/".len + SnapSpec.fmtLenValue(.{
         .base_slot = std.math.maxInt(sig.core.Slot),
         .slot = std.math.maxInt(sig.core.Slot),
-        .hash = sig.core.Hash.base58String(.{ .data = .{255} ** sig.core.Hash.SIZE }).constSlice(),
+        .hash = blk2: {
+            var buf: [sig.core.Hash.BASE58_MAX_SIZE]u8 = undefined;
+            const h: sig.core.Hash = .{ .data = .{255} ** sig.core.Hash.SIZE };
+            break :blk2 h.base58String(&buf);
+        },
     });
 };
 

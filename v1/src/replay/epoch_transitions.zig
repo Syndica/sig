@@ -662,7 +662,7 @@ fn migrateBuiltinProgramToCoreBpf(
         } else 0);
 
         const hash = sig.core.Hash.init(source.data[offset..end_offset]);
-        if (!hash.eql(expected_hash)) {
+        if (!hash.eql(&expected_hash)) {
             return error.BuildHashMismatch;
         }
     }

@@ -1,20 +1,13 @@
 const sig = @import("../../lib.zig");
+const lib = @import("lib");
 const std = @import("std");
 const std14 = @import("std14");
 const builtin = @import("builtin");
 const build_options = @import("build-options");
 
-comptime {
-    if (builtin.is_test) {
-        _ = @import("generic.zig");
-        _ = @import("pippenger.zig");
-        _ = @import("straus.zig");
-        _ = @import("wycheproof.zig");
-    }
-}
 
-pub const pippenger = @import("pippenger.zig");
-pub const straus = @import("straus.zig");
+pub const pippenger = lib.crypto.ed25519.pippenger;
+pub const straus = lib.crypto.ed25519.straus;
 
 pub const mul = straus.mul;
 pub const mulManyWithSameScalar = straus.mulManyWithSameScalar;
@@ -25,8 +18,8 @@ const convention: std.builtin.CallingConvention = switch (builtin.mode) {
     else => .auto,
 };
 
-const generic = @import("generic.zig");
-const avx512 = @import("avx512.zig");
+const generic = lib.crypto.ed25519.generic;
+const avx512 = lib.crypto.ed25519.avx512;
 const has_avx512 = builtin.cpu.arch == .x86_64 and
     std.Target.x86.featureSetHas(builtin.cpu.features, .avx512ifma) and
     std.Target.x86.featureSetHas(builtin.cpu.features, .avx512vl);
@@ -38,12 +31,6 @@ comptime {
         );
 }
 pub const use_avx125 = has_avx512 and builtin.zig_backend == .stage2_llvm;
-
-comptime {
-    if (builtin.is_test and use_avx125) {
-        _ = @import("avx512.zig");
-    }
-}
 
 // avx512 implementation relies on llvm specific tricks
 const namespace = if (use_avx125) avx512 else generic;
@@ -607,7 +594,7 @@ test "eddsa test cases" {
         _ = try std.fmt.hexToBytes(&sig_bytes, entry.sig_hex);
 
         const public_key: sig.core.Pubkey = try .fromBytes(public_key_bytes);
-        const signature: sig.core.Signature = .fromBytes(sig_bytes);
+        const signature: sig.core.Signature = sig.core.Signature.fromBytes(&sig_bytes).*;
 
         const result = verifyBatchOverSingleMessage(
             1,
@@ -668,7 +655,7 @@ test "batch verification" {
 }
 
 test "wycheproof" {
-    const groups = @import("wycheproof.zig").groups;
+    const groups = lib.crypto.ed25519.wycheproof.groups;
     for (groups) |group| {
         var public_key_buffer: [32]u8 = undefined;
         const public_key = try std.fmt.hexToBytes(&public_key_buffer, group.pubkey);
@@ -685,7 +672,7 @@ test "wycheproof" {
             if (signature_bytes.len != 64) continue;
 
             const pubkey = sig.core.Pubkey.fromBytes(public_key_buffer) catch continue;
-            const signature: sig.core.Signature = .fromBytes(sig_buffer);
+            const signature: sig.core.Signature = sig.core.Signature.fromBytes(&sig_buffer).*;
 
             // Single verify
             {

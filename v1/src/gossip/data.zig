@@ -133,7 +133,7 @@ pub const SignedGossipData = struct {
         // should always be enough space or is invalid msg
         var buf: [PACKET_DATA_SIZE]u8 = undefined;
         const msg = try bincode.writeToSlice(&buf, self.data, bincode.Params.standard);
-        return try self.signature.verify(pubkey, msg);
+        return try self.signature.verify(&pubkey, msg);
     }
 
     pub fn id(self: *const Self) Pubkey {

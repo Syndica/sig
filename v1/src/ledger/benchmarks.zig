@@ -333,7 +333,7 @@ pub const BenchmarkLedger = struct {
             for (random_bytes[0..]) |*byte| {
                 byte.* = rng.random().int(u8);
             }
-            signatures.appendAssumeCapacity(.fromBytes(random_bytes));
+            signatures.appendAssumeCapacity(Signature.fromBytes(&random_bytes).*);
         }
 
         const slot = 5;

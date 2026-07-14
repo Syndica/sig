@@ -1760,7 +1760,7 @@ pub const VoteStateV3 = struct {
             // a matching slot hash in step 2)
             return VoteError.slots_mismatch;
         }
-        if (!vote_hash.eql(slot_hash_entries[j].hash)) {
+        if (!vote_hash.eql(&slot_hash_entries[j].hash)) {
             // This means the newest slot in the `vote_slots` has a match that
             // doesn't match the expected hash for that slot on this
             // fork
@@ -2209,7 +2209,7 @@ pub const VoteStateV3 = struct {
         // due to assumption 3) above.
         std.debug.assert(last_proposed_slot == slot_hash_entries[slot_hashes_index].slot);
 
-        if (!slot_hash_entries[slot_hashes_index].hash.eql(proposed_hash)) {
+        if (!slot_hash_entries[slot_hashes_index].hash.eql(&proposed_hash)) {
             return VoteError.slot_hash_mismatch;
         }
 

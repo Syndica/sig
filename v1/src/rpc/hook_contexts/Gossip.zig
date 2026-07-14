@@ -68,11 +68,12 @@ fn contactInfoToRpc(
     const gossip_addr = contact_info.getSocket(.gossip);
     if (gossip_addr == null or gossip_addr.?.isUnspecified()) return null;
 
+    var b58_buf: [sig.core.Pubkey.BASE58_MAX_SIZE]u8 = undefined;
     return .{
         .pubkey = try std.fmt.allocPrint(
             arena,
             "{s}",
-            .{contact_info.pubkey.base58String().slice()},
+            .{contact_info.pubkey.base58String(&b58_buf)},
         ),
         .gossip = try formatSocketAddr(
             arena,

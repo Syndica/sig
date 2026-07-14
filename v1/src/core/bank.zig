@@ -41,7 +41,7 @@ const VoteAccount = sig.core.stakes.VoteAccount;
 
 const Epoch = core.time.Epoch;
 const Slot = core.time.Slot;
-const UnixTimestamp = core.time.UnixTimestamp;
+const UnixTimestamp = core.UnixTimestamp;
 
 const FeeRateGovernor = core.genesis_config.FeeRateGovernor;
 const Inflation = core.genesis_config.Inflation;

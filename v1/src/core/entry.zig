@@ -108,7 +108,7 @@ pub fn verifyPoh(entries: []const Entry, seed: Hash) bool {
             const mixin = hashTransactions(entry.transactions);
             current_hash = current_hash.extend(&mixin.data);
         }
-        if (!current_hash.eql(entry.hash)) return false;
+        if (!current_hash.eql(&entry.hash)) return false;
     }
 
     return true;

@@ -26,7 +26,7 @@ pub fn verifyShred(
     metrics.cache_miss_count.inc();
     const leader = leader_schedule.getLeader(slot) catch return error.LeaderUnknown;
 
-    signature.verify(leader, &signed_data.data) catch return error.FailedVerification;
+    signature.verify(&leader, &signed_data.data) catch return error.FailedVerification;
     verified_merkle_roots.insert(signed_data, {}) catch return error.FailedCaching;
 }
 

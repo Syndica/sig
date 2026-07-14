@@ -496,7 +496,7 @@ pub const ReplayTower = struct {
                 };
             } else {
                 const is_switch = if (progress.getHash(last_voted_slot)) |current_slot_hash|
-                    !current_slot_hash.eql(last_voted_hash)
+                    !current_slot_hash.eql(&last_voted_hash)
                 else
                     true;
 

@@ -970,7 +970,7 @@ fn loadTransaction(
     );
 
     for (pb_txn.signatures.items, 0..) |pb_signature, i|
-        signatures[i] = .fromBytes(pb_signature[0..Signature.SIZE].*);
+        signatures[i] = Signature.fromBytes(pb_signature[0..Signature.SIZE]).*;
 
     if (pb_txn.signatures.items.len == 0)
         signatures[0] = Signature.ZEROES;

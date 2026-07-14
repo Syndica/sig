@@ -8,15 +8,15 @@ comptime {
     _ = std.testing.refAllDecls(@This());
 }
 
-const common = @import("common");
+const ed25519 = @import("../ed25519.zig");
 
 const crypto = std.crypto;
 const Ed25519 = crypto.ecc.Edwards25519;
 const Ristretto255 = crypto.ecc.Ristretto255;
 const CompressedScalar = Ed25519.scalar.CompressedScalar;
 
-const ExtendedPoint = common.crypto.ed25519.ExtendedPoint;
-const CachedPoint = common.crypto.ed25519.CachedPoint;
+const ExtendedPoint = ed25519.ExtendedPoint;
+const CachedPoint = ed25519.CachedPoint;
 
 fn ReturnType(encoded: bool, ristretto: bool) type {
     const Base = if (ristretto) Ristretto255 else Ed25519;
@@ -121,7 +121,7 @@ pub fn mulMultiRuntime(
         const digit_index = digits_count - 1 - fwd;
         @memset(&buckets, .identityElement);
 
-        for (scalars.constSlice(), points.constSlice()) |digits, pt| {
+        for (scalars.items, points.items) |digits, pt| {
             const digit: i16 = digits[digit_index]; // avoid issues when w is 8
             switch (std.math.order(digit, 0)) {
                 .gt => {

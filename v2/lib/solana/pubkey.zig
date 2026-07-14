@@ -123,6 +123,42 @@ pub const Pubkey = extern struct {
             if (self.equals(&candidate)) break index;
         } else null;
     }
+
+    pub fn jsonStringify(self: Pubkey, write_stream: anytype) !void {
+        var buf: [BASE58_MAX_SIZE]u8 = undefined;
+        try write_stream.write(self.base58String(&buf));
+    }
+
+    pub fn jsonParse(
+        _: std.mem.Allocator,
+        source: anytype,
+        _: std.json.ParseOptions,
+    ) std.json.ParseError(@TypeOf(source.*))!Pubkey {
+        return switch (try source.next()) {
+            .string => |str| parseRuntime(str) catch error.UnexpectedToken,
+            else => error.UnexpectedToken,
+        };
+    }
+
+    pub fn jsonParseFromValue(
+        _: std.mem.Allocator,
+        source: std.json.Value,
+        _: std.json.ParseOptions,
+    ) std.json.ParseFromValueError!Pubkey {
+        return switch (source) {
+            .string => |str| parseRuntime(str) catch |err| switch (err) {
+                error.InvalidPubkey => error.InvalidCharacter,
+                error.InvalidLength => error.LengthMismatch,
+            },
+            else => error.UnexpectedToken,
+        };
+    }
+
+    /// Returns the 32 bytes as a 64-character lowercase hex string.
+    /// Intended for embedding in SQL literals like `X'<hex>'`.
+    pub fn hexBytesLower(comptime self: Pubkey) [64]u8 {
+        return std.fmt.bytesToHex(&self.data, .lower);
+    }
 };
 
 const Error = error{ InvalidBytesLength, InvalidEncodedLength, InvalidEncodedValue };

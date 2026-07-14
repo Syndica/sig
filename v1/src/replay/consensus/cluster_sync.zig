@@ -577,7 +577,7 @@ fn processDuplicateConfirmedSlots(
             duplicate_confirmed_hash,
         )) |kv| {
             const prev_hash = kv.value;
-            if (!prev_hash.eql(duplicate_confirmed_hash)) {
+            if (!prev_hash.eql(&duplicate_confirmed_hash)) {
                 std.debug.panic(
                     \\Additional duplicate confirmed notification for slot {} with a different hash.
                     \\prev_hash: {f} duplicate_confirmed_hash {f}
@@ -765,7 +765,7 @@ fn getDuplicateConfirmedHash(
     }
 
     if (maybe_duplicate_confirmed_hash) |duplicate_confirmed_hash| {
-        if (!slot_frozen_hash.eql(duplicate_confirmed_hash)) {
+        if (!slot_frozen_hash.eql(&duplicate_confirmed_hash)) {
             logger.err().logf(
                 "For slot {}, the gossip duplicate confirmed hash {f}, is not equal" ++
                     "to the confirmed hash we replayed: {f}",
@@ -822,7 +822,7 @@ pub const check_slot_agrees_with_cluster = struct {
                 // check if our version agrees with the cluster,
                 .duplicate_confirmed => {
                     const duplicate_confirmed_hash = cluster_confirmed_hash.hash;
-                    if (duplicate_confirmed_hash.eql(frozen_hash)) {
+                    if (duplicate_confirmed_hash.eql(&frozen_hash)) {
                         // If the versions match, then add the slot to the candidate
                         // set to account for the case where it was removed earlier
                         // by the `on_duplicate_slot()` handler
@@ -863,7 +863,7 @@ pub const check_slot_agrees_with_cluster = struct {
                 // match arm above.
                 .epoch_slots_frozen => check: {
                     const epoch_slots_frozen_hash = cluster_confirmed_hash.hash;
-                    if (epoch_slots_frozen_hash.eql(frozen_hash)) {
+                    if (epoch_slots_frozen_hash.eql(&frozen_hash)) {
                         // Matches, nothing to do
                         break :check;
                     } else {
@@ -962,7 +962,7 @@ pub const check_slot_agrees_with_cluster = struct {
             },
 
             .frozen => |frozen_hash| {
-                if (duplicate_confirmed_hash.eql(frozen_hash)) {
+                if (duplicate_confirmed_hash.eql(&frozen_hash)) {
                     // If the versions match, then add the slot to the candidate
                     // set to account for the case where it was removed earlier
                     // by the `on_duplicate_slot()` handler
@@ -1149,7 +1149,7 @@ pub const check_slot_agrees_with_cluster = struct {
             epoch_slots_frozen_hash,
         )) |old_epoch_slots_frozen_hash_kv| {
             const old_epoch_slots_frozen_hash = old_epoch_slots_frozen_hash_kv.value;
-            if (old_epoch_slots_frozen_hash.eql(epoch_slots_frozen_hash)) {
+            if (old_epoch_slots_frozen_hash.eql(&epoch_slots_frozen_hash)) {
                 // If EpochSlots has already told us this same hash was frozen, return
                 return;
             }
@@ -1183,7 +1183,7 @@ pub const check_slot_agrees_with_cluster = struct {
         // processing it as `epoch_slots_frozen`.
         if (!is_popular_pruned) {
             if (maybe_duplicate_confirmed_hash) |duplicate_confirmed_hash| {
-                if (!epoch_slots_frozen_hash.eql(duplicate_confirmed_hash)) {
+                if (!epoch_slots_frozen_hash.eql(&duplicate_confirmed_hash)) {
                     logger.err().logf(
                         "EpochSlots sample returned slot {} with hash {f}, " ++
                             "but we already saw duplicate confirmation on hash: {f}",
@@ -1196,7 +1196,7 @@ pub const check_slot_agrees_with_cluster = struct {
 
         switch (slot_status) {
             .frozen => |slot_frozen_hash| {
-                if (slot_frozen_hash.eql(epoch_slots_frozen_hash)) {
+                if (slot_frozen_hash.eql(&epoch_slots_frozen_hash)) {
                     // Matches, nothing to do
                     return;
                 } else {

@@ -983,13 +983,15 @@ test "rpc.account_codec.lib: parse account" {
             .stake => |stake_type| {
                 switch (stake_type) {
                     .initialized => |ui_stake| {
+                        var expected_b58: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
+                        var actual_b58: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
                         try std.testing.expectEqualStrings(
-                            authorized_staker.base58String().constSlice(),
-                            ui_stake.meta.authorized.staker.base58String().constSlice(),
+                            authorized_staker.base58String(&expected_b58),
+                            ui_stake.meta.authorized.staker.base58String(&actual_b58),
                         );
                         try std.testing.expectEqualStrings(
-                            authorized_withdrawer.base58String().constSlice(),
-                            ui_stake.meta.authorized.withdrawer.base58String().constSlice(),
+                            authorized_withdrawer.base58String(&expected_b58),
+                            ui_stake.meta.authorized.withdrawer.base58String(&actual_b58),
                         );
                     },
                     else => return error.UnexpectedStakeState,

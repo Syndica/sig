@@ -53,7 +53,8 @@ fn signatureSubscribeRequest(
     signature: Signature,
     maybe_config_json: ?[]const u8,
 ) ![]u8 {
-    const signature_str = signature.base58String().slice();
+    var b58_buf: [Signature.BASE58_MAX_SIZE]u8 = undefined;
+    const signature_str = signature.base58String(&b58_buf);
     return if (maybe_config_json) |config_json|
         std.fmt.allocPrint(
             allocator,
