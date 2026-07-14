@@ -140,13 +140,13 @@ const PartialConfig = struct {
     corrupt_bytes: ?usize = null,
     dry_run: bool = false,
 
-    fn finalize(self: PartialConfig) ParseArgsError!Config {
+    fn finalize(self: PartialConfig, stdout: *std.Io.Writer) ParseArgsError!Config {
         const ledger = self.ledger orelse {
-            std.debug.print("missing required argument: --ledger <path>\n", .{});
+            try stdout.print("missing required argument: --ledger <path>\n", .{});
             return error.InvalidArguments;
         };
         const target = self.target orelse {
-            std.debug.print("missing required argument: --target <ip:port>\n", .{});
+            try stdout.print("missing required argument: --target <ip:port>\n", .{});
             return error.InvalidArguments;
         };
 
@@ -154,14 +154,14 @@ const PartialConfig = struct {
             self.end_slot != null and
             self.end_slot.? < self.start_slot.?)
         {
-            std.debug.print("--end-slot must be greater than or equal to --start-slot\n", .{});
+            try stdout.print("--end-slot must be greater than or equal to --start-slot\n", .{});
             return error.InvalidArguments;
         }
 
         switch (self.test_mode) {
             .linear, .reverse => {
                 if (self.seed != null) {
-                    std.debug.print(
+                    try stdout.print(
                         "--seed is only valid with --test-mode shuffle-global, " ++
                             "shuffle-slot, drop, late, duplicate, or corrupt\n",
                         .{},
@@ -171,11 +171,11 @@ const PartialConfig = struct {
             },
             .shuffle_global, .shuffle_slot, .drop, .late, .duplicate, .corrupt => {
                 if (self.seed == null) {
-                    std.debug.print("--test-mode {s} requires --seed\n", .{self.test_mode.name()});
+                    try stdout.print("--test-mode {s} requires --seed\n", .{self.test_mode.name()});
                     return error.InvalidArguments;
                 }
                 if (self.start_slot == null or self.end_slot == null) {
-                    std.debug.print(
+                    try stdout.print(
                         "--test-mode {s} requires both --start-slot and --end-slot\n",
                         .{self.test_mode.name()},
                     );
@@ -186,14 +186,14 @@ const PartialConfig = struct {
 
         if (!self.test_mode.usesSelectedShreds()) {
             if (self.selected_count != null) {
-                std.debug.print(
+                try stdout.print(
                     "--count is only valid with --test-mode drop, late, duplicate, or corrupt\n",
                     .{},
                 );
                 return error.InvalidArguments;
             }
             if (self.shred_kind != null) {
-                std.debug.print(
+                try stdout.print(
                     "--shred-kind is only valid with --test-mode drop, late, " ++
                         "duplicate, or corrupt\n",
                     .{},
@@ -201,7 +201,7 @@ const PartialConfig = struct {
                 return error.InvalidArguments;
             }
             if (self.plan_limit != null) {
-                std.debug.print(
+                try stdout.print(
                     "--plan-limit is only valid with --test-mode drop, late, " ++
                         "duplicate, or corrupt\n",
                     .{},
@@ -209,11 +209,11 @@ const PartialConfig = struct {
                 return error.InvalidArguments;
             }
             if (self.corrupt_bytes != null) {
-                std.debug.print("--corrupt-bytes is only valid with --test-mode corrupt\n", .{});
+                try stdout.print("--corrupt-bytes is only valid with --test-mode corrupt\n", .{});
                 return error.InvalidArguments;
             }
         } else if (self.test_mode != .corrupt and self.corrupt_bytes != null) {
-            std.debug.print("--corrupt-bytes is only valid with --test-mode corrupt\n", .{});
+            try stdout.print("--corrupt-bytes is only valid with --test-mode corrupt\n", .{});
             return error.InvalidArguments;
         }
 
@@ -241,6 +241,7 @@ const ParseResult = union(enum) {
 
 const ParseArgsError = error{
     InvalidArguments,
+    WriteFailed,
 };
 
 const Arg = enum {
@@ -302,24 +303,24 @@ pub fn main() !void {
     const argv = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, argv);
 
-    const parse_result = parseArgs(argv[1..]) catch |err| switch (err) {
+    var stdout_buf: [1024]u8 = undefined;
+    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
+    const stdout = &stdout_writer.interface;
+
+    const parse_result = parseArgs(stdout, argv[1..]) catch |err| switch (err) {
         error.InvalidArguments => {
-            printHelp();
+            try printHelp(stdout);
+            try stdout.flush();
             return err;
         },
+        error.WriteFailed => return err,
     };
 
     switch (parse_result) {
-        .help => printHelp(),
-        .config => |config| {
-            var stdout_buf: [1024]u8 = undefined;
-            var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
-            const stdout = &stdout_writer.interface;
-
-            try run(gpa, stdout, config);
-            try stdout.flush();
-        },
+        .help => try printHelp(stdout),
+        .config => |config| try run(gpa, stdout, config),
     }
+    try stdout.flush();
 }
 
 fn run(allocator: Allocator, stdout: *std.Io.Writer, config: Config) !void {
@@ -367,6 +368,7 @@ fn run(allocator: Allocator, stdout: *std.Io.Writer, config: Config) !void {
         var preflight_stop: std.atomic.Value(bool) = .init(false);
         selected_shreds = try buildSelectedShredPlan(
             allocator,
+            stdout,
             &blockstore,
             config,
             &preflight_stop,
@@ -1317,6 +1319,7 @@ fn collectSlotShredRefs(
 
 fn buildSelectedShredPlan(
     allocator: Allocator,
+    stdout: *std.Io.Writer,
     blockstore: *const AgaveBlockstore,
     config: Config,
     stop: *std.atomic.Value(bool),
@@ -1329,6 +1332,7 @@ fn buildSelectedShredPlan(
     plan.eligible_shreds = countEligibleShreds(plan.schedule.refs.items, config.shred_kind);
     plan.selected_ref_indices = try chooseSelectedRefIndices(
         allocator,
+        stdout,
         plan.schedule.refs.items,
         config.shred_kind,
         config.selected_count,
@@ -1471,6 +1475,7 @@ fn countEligibleShreds(refs: []const ShredRef, shred_kind: ShredKindFilter) usiz
 
 fn chooseSelectedRefIndices(
     allocator: Allocator,
+    stdout: *std.Io.Writer,
     refs: []const ShredRef,
     shred_kind: ShredKindFilter,
     count: usize,
@@ -1486,7 +1491,7 @@ fn chooseSelectedRefIndices(
     }
 
     if (count > candidates.items.len) {
-        std.debug.print(
+        try stdout.print(
             "--count {d} exceeds {d} eligible {s} shreds\n",
             .{ count, candidates.items.len, shred_kind.name() },
         );
@@ -2060,7 +2065,7 @@ fn columnFamilyDescriptions(
     return cfs;
 }
 
-fn parseArgs(args: []const []const u8) ParseArgsError!ParseResult {
+fn parseArgs(stdout: *std.Io.Writer, args: []const []const u8) ParseArgsError!ParseResult {
     var config: PartialConfig = .{};
     var seen: std.EnumSet(Arg) = .initEmpty();
 
@@ -2069,9 +2074,9 @@ fn parseArgs(args: []const []const u8) ParseArgsError!ParseResult {
         const arg = args[i];
         const parsed_arg = Arg.parse(arg) orelse {
             if (std.mem.startsWith(u8, arg, "-")) {
-                std.debug.print("unknown flag: {s}\n", .{arg});
+                try stdout.print("unknown flag: {s}\n", .{arg});
             } else {
-                std.debug.print("unexpected argument: {s}\n", .{arg});
+                try stdout.print("unexpected argument: {s}\n", .{arg});
             }
             return error.InvalidArguments;
         };
@@ -2079,52 +2084,68 @@ fn parseArgs(args: []const []const u8) ParseArgsError!ParseResult {
         if (parsed_arg == .help) return .help;
 
         if (seen.contains(parsed_arg)) {
-            std.debug.print("duplicate argument: {s}\n", .{parsed_arg.name()});
+            try stdout.print("duplicate argument: {s}\n", .{parsed_arg.name()});
             return error.InvalidArguments;
         }
         seen.insert(parsed_arg);
 
         switch (parsed_arg) {
             .help => unreachable,
-            .ledger => config.ledger = try nextValue(args, &i, parsed_arg.name()),
-            .target => config.target = try nextValue(args, &i, parsed_arg.name()),
+            .ledger => config.ledger = try nextValue(stdout, args, &i, parsed_arg.name()),
+            .target => config.target = try nextValue(stdout, args, &i, parsed_arg.name()),
             .start_slot => config.start_slot = try parseSlot(
-                try nextValue(args, &i, parsed_arg.name()),
+                stdout,
+                try nextValue(stdout, args, &i, parsed_arg.name()),
                 parsed_arg.name(),
             ),
             .end_slot => config.end_slot = try parseSlot(
-                try nextValue(args, &i, parsed_arg.name()),
+                stdout,
+                try nextValue(stdout, args, &i, parsed_arg.name()),
                 parsed_arg.name(),
             ),
             .rate_hz => config.rate_hz = try parseRateHz(
-                try nextValue(args, &i, parsed_arg.name()),
+                stdout,
+                try nextValue(stdout, args, &i, parsed_arg.name()),
             ),
             .test_mode => config.test_mode = try parseTestMode(
-                try nextValue(args, &i, parsed_arg.name()),
+                stdout,
+                try nextValue(stdout, args, &i, parsed_arg.name()),
             ),
-            .seed => config.seed = try parseSeed(try nextValue(args, &i, parsed_arg.name())),
+            .seed => config.seed = try parseSeed(
+                stdout,
+                try nextValue(stdout, args, &i, parsed_arg.name()),
+            ),
             .count => config.selected_count = try parseSelectedCount(
-                try nextValue(args, &i, parsed_arg.name()),
+                stdout,
+                try nextValue(stdout, args, &i, parsed_arg.name()),
             ),
             .shred_kind => config.shred_kind = try parseShredKind(
-                try nextValue(args, &i, parsed_arg.name()),
+                stdout,
+                try nextValue(stdout, args, &i, parsed_arg.name()),
             ),
             .plan_limit => config.plan_limit = try parsePlanLimit(
-                try nextValue(args, &i, parsed_arg.name()),
+                stdout,
+                try nextValue(stdout, args, &i, parsed_arg.name()),
             ),
             .corrupt_bytes => config.corrupt_bytes = try parseCorruptBytes(
-                try nextValue(args, &i, parsed_arg.name()),
+                stdout,
+                try nextValue(stdout, args, &i, parsed_arg.name()),
             ),
             .dry_run => config.dry_run = true,
         }
     }
 
-    return .{ .config = try config.finalize() };
+    return .{ .config = try config.finalize(stdout) };
 }
 
-fn nextValue(args: []const []const u8, index: *usize, flag: []const u8) ParseArgsError![]const u8 {
+fn nextValue(
+    stdout: *std.Io.Writer,
+    args: []const []const u8,
+    index: *usize,
+    flag: []const u8,
+) ParseArgsError![]const u8 {
     if (index.* + 1 >= args.len) {
-        std.debug.print("missing value for {s}\n", .{flag});
+        try stdout.print("missing value for {s}\n", .{flag});
         return error.InvalidArguments;
     }
 
@@ -2132,31 +2153,31 @@ fn nextValue(args: []const []const u8, index: *usize, flag: []const u8) ParseArg
     return args[index.*];
 }
 
-fn parseSlot(value: []const u8, flag: []const u8) ParseArgsError!Slot {
+fn parseSlot(stdout: *std.Io.Writer, value: []const u8, flag: []const u8) ParseArgsError!Slot {
     return std.fmt.parseUnsigned(Slot, value, 10) catch {
-        std.debug.print("invalid slot for {s}: {s}\n", .{ flag, value });
+        try stdout.print("invalid slot for {s}: {s}\n", .{ flag, value });
         return error.InvalidArguments;
     };
 }
 
-fn parseRateHz(value: []const u8) ParseArgsError!f64 {
+fn parseRateHz(stdout: *std.Io.Writer, value: []const u8) ParseArgsError!f64 {
     const rate_hz = std.fmt.parseFloat(f64, value) catch {
-        std.debug.print("invalid rate for --rate-hz: {s}\n", .{value});
+        try stdout.print("invalid rate for --rate-hz: {s}\n", .{value});
         return error.InvalidArguments;
     };
 
     if (!(rate_hz > 0) or !std.math.isFinite(rate_hz)) {
-        std.debug.print("--rate-hz must be a finite positive value\n", .{});
+        try stdout.print("--rate-hz must be a finite positive value\n", .{});
         return error.InvalidArguments;
     }
 
     return rate_hz;
 }
 
-fn parseTestMode(value: []const u8) ParseArgsError!TestMode {
+fn parseTestMode(stdout: *std.Io.Writer, value: []const u8) ParseArgsError!TestMode {
     return TestMode.parse(value) orelse {
-        std.debug.print("invalid test mode for --test-mode: {s}\n", .{value});
-        std.debug.print(
+        try stdout.print("invalid test mode for --test-mode: {s}\n", .{value});
+        try stdout.print(
             "valid test modes: linear, reverse, shuffle-global, shuffle-slot, drop, late, " ++
                 "duplicate, corrupt\n",
             .{},
@@ -2165,61 +2186,61 @@ fn parseTestMode(value: []const u8) ParseArgsError!TestMode {
     };
 }
 
-fn parseSeed(value: []const u8) ParseArgsError!u64 {
+fn parseSeed(stdout: *std.Io.Writer, value: []const u8) ParseArgsError!u64 {
     if (std.mem.startsWith(u8, value, "0x") or std.mem.startsWith(u8, value, "0X")) {
         return std.fmt.parseUnsigned(u64, value[2..], 16) catch {
-            std.debug.print("invalid seed for --seed: {s}\n", .{value});
+            try stdout.print("invalid seed for --seed: {s}\n", .{value});
             return error.InvalidArguments;
         };
     }
 
     return std.fmt.parseUnsigned(u64, value, 10) catch {
-        std.debug.print("invalid seed for --seed: {s}\n", .{value});
+        try stdout.print("invalid seed for --seed: {s}\n", .{value});
         return error.InvalidArguments;
     };
 }
 
-fn parseSelectedCount(value: []const u8) ParseArgsError!usize {
+fn parseSelectedCount(stdout: *std.Io.Writer, value: []const u8) ParseArgsError!usize {
     const selected_count = std.fmt.parseUnsigned(usize, value, 10) catch {
-        std.debug.print("invalid count for --count: {s}\n", .{value});
+        try stdout.print("invalid count for --count: {s}\n", .{value});
         return error.InvalidArguments;
     };
     if (selected_count == 0) {
-        std.debug.print("--count must be greater than zero\n", .{});
+        try stdout.print("--count must be greater than zero\n", .{});
         return error.InvalidArguments;
     }
     return selected_count;
 }
 
-fn parseShredKind(value: []const u8) ParseArgsError!ShredKindFilter {
+fn parseShredKind(stdout: *std.Io.Writer, value: []const u8) ParseArgsError!ShredKindFilter {
     return ShredKindFilter.parse(value) orelse {
-        std.debug.print("invalid shred kind for --shred-kind: {s}\n", .{value});
-        std.debug.print("valid shred kinds: any, data, code\n", .{});
+        try stdout.print("invalid shred kind for --shred-kind: {s}\n", .{value});
+        try stdout.print("valid shred kinds: any, data, code\n", .{});
         return error.InvalidArguments;
     };
 }
 
-fn parsePlanLimit(value: []const u8) ParseArgsError!usize {
+fn parsePlanLimit(stdout: *std.Io.Writer, value: []const u8) ParseArgsError!usize {
     return std.fmt.parseUnsigned(usize, value, 10) catch {
-        std.debug.print("invalid limit for --plan-limit: {s}\n", .{value});
+        try stdout.print("invalid limit for --plan-limit: {s}\n", .{value});
         return error.InvalidArguments;
     };
 }
 
-fn parseCorruptBytes(value: []const u8) ParseArgsError!usize {
+fn parseCorruptBytes(stdout: *std.Io.Writer, value: []const u8) ParseArgsError!usize {
     const corrupt_bytes = std.fmt.parseUnsigned(usize, value, 10) catch {
-        std.debug.print("invalid byte count for --corrupt-bytes: {s}\n", .{value});
+        try stdout.print("invalid byte count for --corrupt-bytes: {s}\n", .{value});
         return error.InvalidArguments;
     };
     if (corrupt_bytes == 0) {
-        std.debug.print("--corrupt-bytes must be greater than zero\n", .{});
+        try stdout.print("--corrupt-bytes must be greater than zero\n", .{});
         return error.InvalidArguments;
     }
     return corrupt_bytes;
 }
 
-fn printHelp() void {
-    std.debug.print(
+fn printHelp(stdout: *std.Io.Writer) !void {
+    try stdout.print(
         \\usage: shred-stream --ledger <path> --target <ip:port> [options]
         \\
         \\required:
@@ -2242,9 +2263,14 @@ fn printHelp() void {
     , .{});
 }
 
+var discarding: std.Io.Writer.Discarding = .init(&.{});
+
 test "parse arguments" {
     {
-        const result = try parseArgs(&.{ "--ledger", "ledger", "--target", "127.0.0.1:8002" });
+        const result = try parseArgs(
+            &discarding.writer,
+            &.{ "--ledger", "ledger", "--target", "127.0.0.1:8002" },
+        );
         const config = result.config;
         try std.testing.expectEqualStrings("ledger", config.ledger);
         try std.testing.expectEqualStrings("127.0.0.1:8002", config.target);
@@ -2260,7 +2286,7 @@ test "parse arguments" {
     }
 
     {
-        const result = try parseArgs(&.{
+        const result = try parseArgs(&discarding.writer, &.{
             "--ledger",     "ledger",
             "--target",     "127.0.0.1:8002",
             "--start-slot", "10",
@@ -2279,7 +2305,7 @@ test "parse arguments" {
     }
 
     {
-        const result = try parseArgs(&.{
+        const result = try parseArgs(&discarding.writer, &.{
             "--ledger",    "ledger",
             "--target",    "127.0.0.1:8002",
             "--test-mode", "linear",
@@ -2288,7 +2314,7 @@ test "parse arguments" {
     }
 
     {
-        const result = try parseArgs(&.{
+        const result = try parseArgs(&discarding.writer, &.{
             "--ledger",     "ledger",
             "--target",     "127.0.0.1:8002",
             "--start-slot", "10",
@@ -2301,7 +2327,7 @@ test "parse arguments" {
     }
 
     {
-        const result = try parseArgs(&.{
+        const result = try parseArgs(&discarding.writer, &.{
             "--ledger",     "ledger",
             "--target",     "127.0.0.1:8002",
             "--start-slot", "10",
@@ -2313,7 +2339,7 @@ test "parse arguments" {
     }
 
     {
-        const result = try parseArgs(&.{
+        const result = try parseArgs(&discarding.writer, &.{
             "--ledger",     "ledger",
             "--target",     "127.0.0.1:8002",
             "--start-slot", "10",
@@ -2326,7 +2352,7 @@ test "parse arguments" {
     }
 
     {
-        const result = try parseArgs(&.{
+        const result = try parseArgs(&discarding.writer, &.{
             "--ledger",     "ledger",
             "--target",     "127.0.0.1:8002",
             "--start-slot", "10",
@@ -2342,7 +2368,7 @@ test "parse arguments" {
     }
 
     {
-        const result = try parseArgs(&.{
+        const result = try parseArgs(&discarding.writer, &.{
             "--ledger",     "ledger",
             "--target",     "127.0.0.1:8002",
             "--start-slot", "10",
@@ -2360,7 +2386,7 @@ test "parse arguments" {
     }
 
     {
-        const result = try parseArgs(&.{
+        const result = try parseArgs(&discarding.writer, &.{
             "--ledger",     "ledger",
             "--target",     "127.0.0.1:8002",
             "--start-slot", "10",
@@ -2379,7 +2405,7 @@ test "parse arguments" {
     }
 
     {
-        const result = try parseArgs(&.{
+        const result = try parseArgs(&discarding.writer, &.{
             "--ledger",     "ledger",
             "--target",     "127.0.0.1:8002",
             "--start-slot", "10",
@@ -2398,7 +2424,7 @@ test "parse arguments" {
     }
 
     {
-        const result = try parseArgs(&.{
+        const result = try parseArgs(&discarding.writer, &.{
             "--ledger",        "ledger",
             "--target",        "127.0.0.1:8002",
             "--start-slot",    "10",
@@ -2418,85 +2444,85 @@ test "parse arguments" {
         try std.testing.expectEqual(@as(usize, 3), result.config.corrupt_bytes);
     }
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",    "ledger",
         "--target",    "127.0.0.1:8002",
         "--test-mode", "shuffle-global",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",    "ledger",
         "--target",    "127.0.0.1:8002",
         "--test-mode", "shuffle-global",
         "--seed",      "1",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",    "ledger",
         "--target",    "127.0.0.1:8002",
         "--test-mode", "shuffle-slot",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",    "ledger",
         "--target",    "127.0.0.1:8002",
         "--test-mode", "shuffle-slot",
         "--seed",      "1",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",    "ledger",
         "--target",    "127.0.0.1:8002",
         "--test-mode", "drop",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",    "ledger",
         "--target",    "127.0.0.1:8002",
         "--test-mode", "late",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",    "ledger",
         "--target",    "127.0.0.1:8002",
         "--test-mode", "duplicate",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",    "ledger",
         "--target",    "127.0.0.1:8002",
         "--test-mode", "corrupt",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",    "ledger",
         "--target",    "127.0.0.1:8002",
         "--test-mode", "drop",
         "--seed",      "1",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",    "ledger",
         "--target",    "127.0.0.1:8002",
         "--test-mode", "late",
         "--seed",      "1",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",    "ledger",
         "--target",    "127.0.0.1:8002",
         "--test-mode", "duplicate",
         "--seed",      "1",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",    "ledger",
         "--target",    "127.0.0.1:8002",
         "--test-mode", "corrupt",
         "--seed",      "1",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",     "ledger",
         "--target",     "127.0.0.1:8002",
         "--start-slot", "10",
@@ -2504,7 +2530,7 @@ test "parse arguments" {
         "--seed",       "1",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",     "ledger",
         "--target",     "127.0.0.1:8002",
         "--start-slot", "10",
@@ -2512,7 +2538,7 @@ test "parse arguments" {
         "--count",      "1",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",     "ledger",
         "--target",     "127.0.0.1:8002",
         "--start-slot", "10",
@@ -2520,7 +2546,7 @@ test "parse arguments" {
         "--shred-kind", "data",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",     "ledger",
         "--target",     "127.0.0.1:8002",
         "--start-slot", "10",
@@ -2528,7 +2554,7 @@ test "parse arguments" {
         "--plan-limit", "5",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",        "ledger",
         "--target",        "127.0.0.1:8002",
         "--start-slot",    "10",
@@ -2536,14 +2562,14 @@ test "parse arguments" {
         "--corrupt-bytes", "1",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",    "ledger",
         "--target",    "127.0.0.1:8002",
         "--test-mode", "reverse",
         "--seed",      "1",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",     "ledger",
         "--target",     "127.0.0.1:8002",
         "--start-slot", "10",
@@ -2553,7 +2579,7 @@ test "parse arguments" {
         "--count",      "0",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",     "ledger",
         "--target",     "127.0.0.1:8002",
         "--start-slot", "10",
@@ -2563,7 +2589,7 @@ test "parse arguments" {
         "--shred-kind", "bad-kind",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",     "ledger",
         "--target",     "127.0.0.1:8002",
         "--start-slot", "10",
@@ -2573,7 +2599,7 @@ test "parse arguments" {
         "--plan-limit", "not-a-limit",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",        "ledger",
         "--target",        "127.0.0.1:8002",
         "--start-slot",    "10",
@@ -2583,7 +2609,7 @@ test "parse arguments" {
         "--corrupt-bytes", "1",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",        "ledger",
         "--target",        "127.0.0.1:8002",
         "--start-slot",    "10",
@@ -2593,7 +2619,7 @@ test "parse arguments" {
         "--corrupt-bytes", "0",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",        "ledger",
         "--target",        "127.0.0.1:8002",
         "--start-slot",    "10",
@@ -2603,7 +2629,7 @@ test "parse arguments" {
         "--corrupt-bytes", "not-a-count",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",     "ledger",
         "--target",     "127.0.0.1:8002",
         "--start-slot", "10",
@@ -2612,7 +2638,7 @@ test "parse arguments" {
         "--seed",       "not-a-seed",
     }));
 
-    try std.testing.expectError(error.InvalidArguments, parseArgs(&.{
+    try std.testing.expectError(error.InvalidArguments, parseArgs(&discarding.writer, &.{
         "--ledger",     "ledger",
         "--target",     "127.0.0.1:8002",
         "--start-slot", "20",
@@ -2621,6 +2647,7 @@ test "parse arguments" {
 }
 
 test "choose shred target indices" {
+    const allocator = std.testing.allocator;
     const refs = [_]ShredRef{
         .{ .slot = 1, .index = 0, .kind = .data },
         .{ .slot = 1, .index = 1, .kind = .code },
@@ -2629,10 +2656,17 @@ test "choose shred target indices" {
         .{ .slot = 1, .index = 4, .kind = .data },
     };
 
-    var first = try chooseSelectedRefIndices(std.testing.allocator, &refs, .data, 2, 12345);
-    defer first.deinit(std.testing.allocator);
-    var second = try chooseSelectedRefIndices(std.testing.allocator, &refs, .data, 2, 12345);
-    defer second.deinit(std.testing.allocator);
+    var first = try chooseSelectedRefIndices(allocator, &discarding.writer, &refs, .data, 2, 12345);
+    defer first.deinit(allocator);
+    var second = try chooseSelectedRefIndices(
+        allocator,
+        &discarding.writer,
+        &refs,
+        .data,
+        2,
+        12345,
+    );
+    defer second.deinit(allocator);
 
     try std.testing.expectEqual(@as(usize, 2), first.items.len);
     try std.testing.expectEqualSlices(usize, first.items, second.items);
@@ -2640,8 +2674,8 @@ test "choose shred target indices" {
         try std.testing.expect(refs[index].kind == .data);
     }
 
-    var code = try chooseSelectedRefIndices(std.testing.allocator, &refs, .code, 2, 12345);
-    defer code.deinit(std.testing.allocator);
+    var code = try chooseSelectedRefIndices(allocator, &discarding.writer, &refs, .code, 2, 12345);
+    defer code.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 2), code.items.len);
     for (code.items) |index| {
         try std.testing.expect(refs[index].kind == .code);
@@ -2649,7 +2683,7 @@ test "choose shred target indices" {
 
     try std.testing.expectError(
         error.InvalidSelectedShredCount,
-        chooseSelectedRefIndices(std.testing.allocator, &refs, .code, 3, 12345),
+        chooseSelectedRefIndices(allocator, &discarding.writer, &refs, .code, 3, 12345),
     );
 }
 

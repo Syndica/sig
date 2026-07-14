@@ -22,7 +22,6 @@ pub const ReadOnly = services.snapshot.ReadOnly;
 pub const ReadWrite = services.snapshot.ReadWrite;
 
 pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
-    _ = runner;
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     const metrics = rw.tel.metricAppender().appendFields(Metrics, Metrics.fields_config);
     rw.tel.signalReady();
@@ -92,8 +91,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
         defer out.close();
 
         while (true) {
-            const buf: []u8 = while (true) : (std.atomic.spinLoopHint())
-                break out.getBuffer() orelse continue;
+            const buf: []u8 = try out.getBufferBlocking(runner);
             if (buf.len == 0) break; // reader closed their side
 
             // cap decompress size to ensure advance() is called frequently enough to unblock rooted
@@ -107,11 +105,11 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
             if (zst_reader.file_size == 0) completion = 100.0; // guard against 0-len snapshots
             rw.ready_snapshot_out.completion.store(completion, .monotonic);
 
-            if (n == 0) break;
+            if (n == 0) break; // file reader EOF
             out.advance(n);
         }
     }
 
     logger.info().logf("snapshot service finished", .{});
-    while (true) std.atomic.spinLoopHint();
+    while (true) try runner.activity.signalIdleSpinning();
 }

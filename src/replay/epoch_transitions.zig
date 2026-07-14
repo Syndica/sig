@@ -1808,7 +1808,7 @@ test "applyFeatureActivations: Builtin Transitions" {
         const builtin_program_id = sig.runtime.program.address_lookup_table.ID;
         const builtin_migration_config: builtin_programs.CoreBpfMigrationConfig = .{
             .program_id = builtin_program_id,
-            .source_buffer_address = sig.runtime.program.address_lookup_table.SOURCE_ID,
+            .source_buffer_address = .ZEROES,
             .upgrade_authority_address = null,
             // unread, use any feature
             .enable_feature_id = .bls_pubkey_management_in_vote_account,
@@ -1857,7 +1857,7 @@ test "SIMD-0444 relax programdata account check during migration" {
     const builtin_program_id = sig.runtime.program.address_lookup_table.ID;
     const migration_config: builtin_programs.CoreBpfMigrationConfig = .{
         .program_id = sig.runtime.program.address_lookup_table.ID,
-        .source_buffer_address = sig.runtime.program.address_lookup_table.SOURCE_ID,
+        .source_buffer_address = .ZEROES,
         .upgrade_authority_address = null,
         // unread, use any feature
         .enable_feature_id = .bls_pubkey_management_in_vote_account,

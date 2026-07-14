@@ -24,6 +24,7 @@ pub const SigVerifyOption = enum {
 };
 
 const MAX_ACCOUNTS_PER_INSTRUCTION = sig.runtime.transaction_context.MAX_ACCOUNTS_PER_INSTRUCTION;
+const MAX_INSTRUCTION_TRACE_LENGTH = sig.runtime.transaction_context.MAX_INSTRUCTION_TRACE_LENGTH;
 
 /// Checks that a transaction is valid for execution.
 ///     1. Ensure the transaction is valid i.e. signature counts make sense, there are enough accounts, etc.
@@ -42,7 +43,6 @@ pub fn preprocessTransaction(
     var zone = tracy.Zone.init(@src(), .{ .name = "preprocessTransaction" });
     defer zone.deinit();
 
-    const static_instruction_limit = feature_set.active(.static_instruction_limit, slot);
     const instruction_accounts_limit = feature_set.active(.limit_instruction_accounts, slot);
 
     txn.validate() catch return .{ .err = .SanitizeFailure };
@@ -73,9 +73,7 @@ pub fn preprocessTransaction(
     }
 
     if (sig_verify == .run_sig_verify) {
-        if (static_instruction_limit and
-            txn.msg.instructions.len > sig.runtime.transaction_context.MAX_INSTRUCTION_TRACE_LENGTH)
-        {
+        if (txn.msg.instructions.len > MAX_INSTRUCTION_TRACE_LENGTH) {
             return .{ .err = .SanitizeFailure };
         }
 
@@ -109,9 +107,6 @@ test preprocessTransaction {
     const random = prng.random();
 
     const disabled: FeatureSet = .ALL_DISABLED;
-
-    var with_static_instruction_limit: FeatureSet = .ALL_DISABLED;
-    with_static_instruction_limit.setSlot(.static_instruction_limit, 0);
 
     var with_instruction_accounts_limit: FeatureSet = .ALL_DISABLED;
     with_instruction_accounts_limit.setSlot(.limit_instruction_accounts, 0);
@@ -288,7 +283,7 @@ test preprocessTransaction {
         const err = preprocessTransaction(
             txn,
             .run_sig_verify,
-            &with_static_instruction_limit,
+            &disabled,
             0,
         ).err;
         try std.testing.expectEqual(.SanitizeFailure, err);

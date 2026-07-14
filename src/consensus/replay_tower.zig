@@ -16,7 +16,6 @@ const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const SortedSetUnmanaged = sig.utils.collections.SortedSetUnmanaged;
 const TowerSync = sig.runtime.program.vote.state.TowerSync;
 const Vote = sig.runtime.program.vote.state.Vote;
-const VoteStateUpdate = sig.runtime.program.vote.state.VoteStateUpdate;
 const StakeAndVoteAccountsMap = sig.core.stakes.StakeAndVoteAccountsMap;
 const UnixTimestamp = sig.core.UnixTimestamp;
 
@@ -287,8 +286,6 @@ pub const ReplayTower = struct {
         //
         // TODO add block_id to bank fields
         const block_id = Hash.ZEROES;
-        // TODO expose feature set on Bank
-        const is_enable_tower_active = true;
 
         const new_root = self.tower.recordBankVoteAndUpdateLockouts(
             vote_slot,
@@ -303,7 +300,6 @@ pub const ReplayTower = struct {
         try self.updateLastVoteFromVoteState(
             allocator,
             vote_hash,
-            is_enable_tower_active,
             block_id,
         );
 
@@ -319,29 +315,20 @@ pub const ReplayTower = struct {
         self: *ReplayTower,
         allocator: std.mem.Allocator,
         vote_hash: Hash,
-        enable_tower_sync_ix: bool,
         block_id: Hash,
     ) !void {
-        var new_vote = blk: {
+        var new_vote: VoteTransaction = blk: {
             var new_lockouts = try std.ArrayListUnmanaged(Lockout)
                 .initCapacity(allocator, self.tower.votes.len);
             try new_lockouts.appendSlice(allocator, self.tower.votes.constSlice());
 
-            break :blk if (enable_tower_sync_ix)
-                VoteTransaction{ .tower_sync = TowerSync{
-                    .lockouts = new_lockouts,
-                    .root = self.tower.root,
-                    .hash = vote_hash,
-                    .timestamp = null,
-                    .block_id = block_id,
-                } }
-            else
-                VoteTransaction{ .vote_state_update = VoteStateUpdate{
-                    .lockouts = new_lockouts,
-                    .root = self.tower.root,
-                    .hash = vote_hash,
-                    .timestamp = null,
-                } };
+            break :blk .{ .tower_sync = TowerSync{
+                .lockouts = new_lockouts,
+                .root = self.tower.root,
+                .hash = vote_hash,
+                .timestamp = null,
+                .block_id = block_id,
+            } };
         };
 
         const last_voted_slot = self.lastVotedSlot() orelse 0;

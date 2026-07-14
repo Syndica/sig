@@ -11,6 +11,7 @@ comptime {
         _ = @import("solana/signature.zig");
         _ = @import("solana/snapshot.zig");
         _ = @import("solana/transaction.zig");
+        _ = @import("solana/verify_ticks.zig");
     }
 }
 
@@ -20,6 +21,7 @@ pub const ids = @import("solana/ids.zig");
 pub const features = @import("solana/features.zig");
 pub const snapshot = @import("solana/snapshot.zig");
 pub const transaction = @import("solana/transaction.zig");
+pub const verify_ticks = @import("solana/verify_ticks.zig");
 
 pub const Hash = @import("solana/hash.zig").Hash;
 pub const Pubkey = @import("solana/pubkey.zig").Pubkey;

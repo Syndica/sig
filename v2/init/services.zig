@@ -8,6 +8,7 @@ pub const accounts_db: ServiceSpec = .{
     .ReadWrite = struct {
         config: *lib.accounts_db.RootedConfig,
         ready_snapshot_in: *lib.snapshot.SnapshotData,
+        snapshot_metadata_out: *lib.accounts_db.RuntimeMetadata,
         account_pool: *lib.accounts_db.AccountPool,
         replay_lookups: *lib.accounts_db.AccountLookups,
         tel: *lib.telemetry.Region,
@@ -47,6 +48,7 @@ pub const gossip: ServiceSpec = .{
 pub const replay: ServiceSpec = .{
     .ReadOnly = struct {},
     .ReadWrite = struct {
+        snapshot_metadata_in: *lib.accounts_db.RuntimeMetadata,
         deshredded_in: *lib.shred.DeshredRing,
         replay_transaction_pool: *lib.replay.TransactionPool,
         block_pool: *lib.replay.BlockPool,
@@ -60,6 +62,9 @@ pub const shred_receiver: ServiceSpec = .{
         config: *const lib.shred.RecvConfig,
     },
     .ReadWrite = struct {
+        /// Gets slot (& soon leader-schedule info) from replay / runtime init.
+        snapshot_metadata: *lib.accounts_db.RuntimeMetadata,
+
         /// Transaction Validation Unit (TVU) UDP socket, i.e. where we receive
         /// shreds. This is typically port 8002. While we've obtained a net
         /// Pair, we only currently receive on this. I believe once we support

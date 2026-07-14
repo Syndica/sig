@@ -36,10 +36,12 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     const rooted = &Global.rooted;
     try rooted.init(
         .from(logger),
+        runner,
         std.fs.cwd(),
         file_path,
         rw.config.memory[0..].ptr[0..rw.config.memory_len],
         rw.account_pool,
+        rw.snapshot_metadata_out,
     );
     defer rooted.deinit();
 
@@ -78,7 +80,12 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         });
 
         logger.info().logf("reading snapshot accounts", .{});
-        try rooted.loadSnapshot(.from(logger), &snapshot_iter);
+        try rooted.loadSnapshot(
+            .from(logger),
+            runner,
+            &snapshot_iter,
+            rw.snapshot_metadata_out,
+        );
     }
 
     { // Load feature accounts (TODO: use this to then load leader schedule & stake/vote data)
