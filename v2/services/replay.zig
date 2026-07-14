@@ -547,7 +547,7 @@ fn fetchBlocking(
 
     const request_buf = requester.next() orelse @panic("out of space");
     // TODO(Preston): id management
-    request_buf.* = .{ .id = 0, .pubkey = key.* };
+    request_buf.* = .{ .req_user_data = 0, .pubkey = key.* };
     requester.markUsed();
 
     // blocking the thread - do not do this
