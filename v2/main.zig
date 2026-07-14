@@ -18,8 +18,8 @@ comptime {
 const lib = @import("lib");
 const tracy = @import("tracy");
 const services = @import("services");
+const topology = @import("topology");
 const tel = lib.telemetry;
-const topology = lib.topology;
 
 const Region = topology.Region;
 const ServiceRegions = topology.ServiceRegions;

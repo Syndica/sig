@@ -8,7 +8,6 @@ comptime {
         _ = @import("fio.zig");
         _ = @import("gossip.zig");
         _ = @import("ipc.zig");
-        _ = @import("linux.zig");
         _ = @import("net.zig");
         _ = @import("replay.zig");
         _ = @import("runner.zig");
@@ -17,12 +16,10 @@ comptime {
         _ = @import("solana.zig");
         _ = @import("telemetry.zig");
         _ = @import("time.zig");
-        _ = @import("topology.zig");
         _ = @import("util.zig");
     }
 }
 
-pub const topology = @import("topology.zig");
 pub const net = @import("net.zig");
 pub const clock = @import("clock.zig");
 pub const crypto = @import("crypto.zig");
@@ -30,7 +27,6 @@ pub const solana = @import("solana.zig");
 pub const shred = @import("shred.zig");
 pub const gossip = @import("gossip.zig");
 pub const ipc = @import("ipc.zig");
-pub const linux = @import("linux.zig");
 pub const time = @import("time.zig");
 pub const util = @import("util.zig");
 pub const collections = @import("collections.zig");

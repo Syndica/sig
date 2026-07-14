@@ -1,6 +1,8 @@
 //! Defines how the runner creates shared memory regions, spawns services, and waits
 //! for them to exit.
 //!
+//! Used only by main.zig files that set up topologies.
+//!
 //! Flow:
 //!  1. Create + initialize each region.
 //!     - `Region(T).simple()` or `Region(T).sized(n)` allocates the memfd and mmaps it.
@@ -18,15 +20,18 @@
 //!     `children`.
 
 const std = @import("std");
-const lib = @import("lib.zig");
+const lib = @import("lib");
 const tracy = @import("tracy");
+const linux_helpers = @import("linux.zig");
 
 const linux = std.os.linux;
 const E = linux.E;
 const e = E.init;
 const SigactionFn = linux.Sigaction.sigaction_fn;
 
-const Memfd = lib.linux.Memfd;
+const bpf = linux_helpers.bpf;
+const clone3 = linux_helpers.clone3;
+const Memfd = linux_helpers.Memfd;
 
 pub const ServiceFn = lib.ipc.ServiceFn;
 
@@ -444,16 +449,16 @@ fn spawnSandboxed(
     entrypoint: ServiceFn,
     args: Args,
 ) !linux.pid_t {
-    const parent_pid = std.os.linux.getpid();
+    const parent_pid = linux.getpid();
 
-    const maybe_child_pid = lib.linux.clone3.clone3(&.{
+    const maybe_child_pid = clone3.clone3(&.{
         .flags = .{
             // NOTE: all FDs currently open will remain open in the child
             // There is no way around this, except
             // 1) Immediately closing all FDs in the child
             // 2) Making sure all FDs were created with CLOEXEC, and using exec in the child
         },
-        .exit_signal = std.os.linux.SIG.CHLD,
+        .exit_signal = linux.SIG.CHLD,
     });
 
     if (maybe_child_pid) |child_pid| {
@@ -468,21 +473,21 @@ fn spawnSandboxed(
         const fault_handler = @extern(SigactionFn, .{
             .name = "svc_fault_handler_" ++ svc_name,
         });
-        const act: *const std.os.linux.Sigaction = &.{
+        const act: *const linux.Sigaction = &.{
             .handler = .{ .sigaction = fault_handler },
-            .mask = std.os.linux.sigemptyset(),
+            .mask = linux.sigemptyset(),
             .flags = (std.posix.SA.SIGINFO | std.posix.SA.RESTART | std.posix.SA.RESETHAND),
         };
 
         const SIG = linux.SIG;
         // standard signals in std.debug.updateSegfaultHandler
-        if (e(std.os.linux.sigaction(SIG.SEGV, act, null)) != .SUCCESS) @panic("sigaction SEGV");
-        if (e(std.os.linux.sigaction(SIG.ILL, act, null)) != .SUCCESS) @panic("sigaction ILL");
-        if (e(std.os.linux.sigaction(SIG.BUS, act, null)) != .SUCCESS) @panic("sigaction BUS");
-        if (e(std.os.linux.sigaction(SIG.FPE, act, null)) != .SUCCESS) @panic("sigaction FPE");
+        if (e(linux.sigaction(SIG.SEGV, act, null)) != .SUCCESS) @panic("sigaction SEGV");
+        if (e(linux.sigaction(SIG.ILL, act, null)) != .SUCCESS) @panic("sigaction ILL");
+        if (e(linux.sigaction(SIG.BUS, act, null)) != .SUCCESS) @panic("sigaction BUS");
+        if (e(linux.sigaction(SIG.FPE, act, null)) != .SUCCESS) @panic("sigaction FPE");
 
         // catch seccomp too
-        if (e(std.os.linux.sigaction(SIG.SYS, act, null)) != .SUCCESS) @panic("sigaction SYS");
+        if (e(linux.sigaction(SIG.SYS, act, null)) != .SUCCESS) @panic("sigaction SYS");
     }
 
     // die when parent exits
@@ -492,7 +497,7 @@ fn spawnSandboxed(
 
         // NOTE: this check does not work if we spawn each service into a new pid
         // namespace, as getppid will return 0 (including when the parent is dead).
-        const parent_pid_now = std.os.linux.getppid();
+        const parent_pid_now = linux.getppid();
         if (parent_pid != parent_pid_now) {
             // The parent died. In case this happened before we set
             // SET_PDEATHSIG, let's exit ourselves.
@@ -518,8 +523,8 @@ fn spawnSandboxed(
 
     // install seccomp filter for service
     {
-        const bpf_filters = lib.linux.bpf.seccompFilters(resolved.stderr);
-        const program: lib.linux.bpf.sock_fprog = .{
+        const bpf_filters = bpf.seccompFilters(resolved.stderr);
+        const program: bpf.sock_fprog = .{
             .len = bpf_filters.len,
             .sock_filter = &bpf_filters,
         };
@@ -533,11 +538,11 @@ fn spawnSandboxed(
 
 /// Spawn a sandboxed sleeper that exits after `timeout_ns`. Used as a `waitpid` timeout signal.
 fn spawnSandboxedTimeout(timeout_ns: u64) linux.pid_t {
-    const parent_pid = std.os.linux.getpid();
+    const parent_pid = linux.getpid();
 
-    const maybe_child_pid = lib.linux.clone3.clone3(&.{
+    const maybe_child_pid = clone3.clone3(&.{
         .flags = .{},
-        .exit_signal = std.os.linux.SIG.CHLD,
+        .exit_signal = linux.SIG.CHLD,
     });
 
     if (maybe_child_pid) |child_pid| return child_pid;
@@ -549,7 +554,7 @@ fn spawnSandboxedTimeout(timeout_ns: u64) linux.pid_t {
 
         // NOTE: this check does not work if we spawn each service into a new pid
         // namespace, as getppid will return 0 (including when the parent is dead).
-        const parent_pid_now = std.os.linux.getppid();
+        const parent_pid_now = linux.getppid();
         if (parent_pid != parent_pid_now) {
             // The parent died. In case this happened before we set
             // SET_PDEATHSIG, let's exit ourselves.
@@ -573,7 +578,7 @@ fn spawnSandboxedTimeout(timeout_ns: u64) linux.pid_t {
 
 /// Prevents VMAs from being later modified
 fn mseal(address: [*]align(std.heap.page_size_min) const u8, len: usize) void {
-    switch (e(std.os.linux.mseal(address, len, 0))) {
+    switch (e(linux.mseal(address, len, 0))) {
         .SUCCESS => {},
         // syscall unsupported (6.12+). TODO: consider making this required.
         .NOSYS => {},
@@ -583,9 +588,9 @@ fn mseal(address: [*]align(std.heap.page_size_min) const u8, len: usize) void {
 
 fn closeAllFdsExceptStderr(stderr: linux.fd_t) void {
     const max_fd = std.math.maxInt(linux.fd_t);
-    if (std.os.linux.syscall3(.close_range, 0, @intCast(stderr -| 1), 0) != 0)
+    if (linux.syscall3(.close_range, 0, @intCast(stderr -| 1), 0) != 0)
         std.debug.panic("close_range failed", .{});
-    if (std.os.linux.syscall3(.close_range, @intCast(stderr +| 1), max_fd, 0) != 0)
+    if (linux.syscall3(.close_range, @intCast(stderr +| 1), max_fd, 0) != 0)
         std.debug.panic("close_range failed", .{});
 }
 

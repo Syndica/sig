@@ -246,6 +246,7 @@ const Sig = struct {
     service_libs: [services.len]Service,
     sig_init: *Build.Module,
     exe: Executable,
+    topology: *Build.Module,
 
     const Service = struct {
         name: []const u8,
@@ -253,7 +254,7 @@ const Sig = struct {
         lib: *Build.Step.Compile,
     };
 
-    const services = @typeInfo(@import("v2/init/services.zig")).@"struct".decls;
+    const services = @typeInfo(@import("v2/services.zig")).@"struct".decls;
 
     pub fn init(b: *Build, config: Config, deps: Dependencies, unit_tests: *UnitTests) Sig {
         const build_options = b.addOptions();
@@ -313,6 +314,17 @@ const Sig = struct {
 
         _ = addRuntime(b, config, deps, unit_tests, lib, feature_set_id, features_zon);
 
+        const topology = b.createModule(.{
+            .root_source_file = b.path("v2/init/topology.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = &.{
+                .{ .name = "lib", .module = lib },
+                .{ .name = "tracy", .module = deps.tracy },
+            },
+        });
+        unit_tests.add("topology", topology);
+
         const start_service = b.createModule(.{
             .root_source_file = b.path("v2/init/start_service.zig"),
             .target = config.target,
@@ -326,7 +338,7 @@ const Sig = struct {
         unit_tests.add("start_service", start_service);
 
         const services_mod = b.createModule(.{
-            .root_source_file = b.path("v2/init/services.zig"),
+            .root_source_file = b.path("v2/services.zig"),
             .target = config.target,
             .optimize = config.optimize,
             .imports = &.{
@@ -335,13 +347,14 @@ const Sig = struct {
         });
 
         const sig_init = b.createModule(.{
-            .root_source_file = b.path("v2/init/main.zig"),
+            .root_source_file = b.path("v2/main.zig"),
             .target = config.target,
             .optimize = config.optimize,
             .imports = &.{
                 .{ .name = "lib", .module = lib },
                 .{ .name = "tracy", .module = deps.tracy },
                 .{ .name = "services", .module = services_mod },
+                .{ .name = "topology", .module = topology },
             },
         });
         unit_tests.add("sig-init", sig_init);
@@ -390,6 +403,7 @@ const Sig = struct {
                 .root_module = sig_init,
                 .use_llvm = config.use_llvm,
             }, .{}),
+            .topology = topology,
         };
     }
 };
@@ -592,6 +606,7 @@ const Tools = struct {
                         .{ .name = "lib", .module = sig.lib },
                         .{ .name = "tracy", .module = deps.tracy },
                         .{ .name = "services", .module = sig.services_mod },
+                        .{ .name = "topology", .module = sig.topology },
                     },
                 }),
                 .use_llvm = config.use_llvm,

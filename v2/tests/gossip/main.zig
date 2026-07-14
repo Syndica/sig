@@ -1,8 +1,8 @@
 const std = @import("std");
 const lib = @import("lib");
 const services = @import("services");
+const topology = @import("topology");
 const tel = lib.telemetry;
-const topology = lib.topology;
 
 const Region = topology.Region;
 
