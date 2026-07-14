@@ -29,7 +29,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     logger.info().logf("accounts_db started into file: {s}", .{file_path});
 
     const Global = struct {
-        var fba_memory: [32 * 1024 * 1024]u8 = undefined;
+        var fba_memory: [1 * 1024 * 1024 * 1024]u8 = undefined;
         var rooted: Rooted = undefined;
     };
 
