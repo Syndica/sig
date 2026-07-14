@@ -24,7 +24,7 @@ pub fn fmtSlice(slice: anytype) FmtSlice(@TypeOf(slice[0])) {
 
 /// Verifies that a struct, or pointer to struct, has the contract's declarations and fields with
 /// exact types. Methods must use explicit error sets because inferred error sets (`!T`) from
-/// separate declarations do not compare equal.
+/// separate declarations never compare equal even if they have the same inferred set of errors.
 pub fn assertInterface(comptime InterfaceType: type, comptime ContractStruct: type) void {
     const Contract = ContractStruct;
     const Interface = switch (@typeInfo(InterfaceType)) {
