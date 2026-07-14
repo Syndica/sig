@@ -98,7 +98,12 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             pub fn load(self: @This(), pubkey: *const lib.solana.Pubkey) ?AccountRef {
                 errdefer |err| std.debug.panic("AccountReader: {}", .{err});
 
-                if (!(try self.r.queueRead(.from(self.l), pubkey)))
+                const req = lib.accounts_db.AccountLookups.Request{
+                    .id = 0, // TODO(Preston): id management
+                    .pubkey = pubkey.*,
+                };
+
+                if (!(try self.r.queueRead(.from(self.l), &req)))
                     return error.RootedQueueFull;
                 const result: Rooted.LookupResult = while (true) : (std.atomic.spinLoopHint())
                     break (try self.r.pollRead(.from(self.l))) orelse continue;

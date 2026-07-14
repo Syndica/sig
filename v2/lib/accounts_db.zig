@@ -29,8 +29,17 @@ pub const AccountLookups = extern struct {
     in: lib.ipc.Ring(256, Request),
     out: lib.ipc.Ring(256, Result),
 
-    pub const Request = Pubkey;
+    /// Request-supplied id to match responses to requests.
+    /// Opaque to accounts_db service, so it's usage is up to the callers.
+    pub const Id = u32;
+
+    pub const Request = extern struct {
+        id: Id,
+        pubkey: Pubkey,
+    };
     pub const Result = extern struct {
+        /// Matches the request id of the Request that this Result is responding to.
+        id: Id,
         pubkey: Pubkey,
         account_index: AccountPool.AccountRef, // .invalid if not found
     };

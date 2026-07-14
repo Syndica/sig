@@ -546,7 +546,8 @@ fn fetchBlocking(
     var response_queue = rooted_lookups.out.get(.reader);
 
     const request_buf = requester.next() orelse @panic("out of space");
-    request_buf.* = key.*;
+    // TODO(Preston): id management
+    request_buf.* = .{ .id = 0, .pubkey = key.* };
     requester.markUsed();
 
     // blocking the thread - do not do this
