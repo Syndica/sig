@@ -5,7 +5,6 @@ const std14 = @import("std14");
 const builtin = @import("builtin");
 const build_options = @import("build-options");
 
-
 pub const pippenger = lib.crypto.ed25519.pippenger;
 pub const straus = lib.crypto.ed25519.straus;
 

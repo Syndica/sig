@@ -90,7 +90,7 @@ pub fn build(b: *Build) void {
     const sig_mod = sig_dep.module("sig");
 
     const sig_v2_dep = b.dependency("sig_v2", sig_v2_common_options);
-    const sig_v2_mod = sig_v2_dep.module("sig_v2");
+    const sig_v2_mod = sig_v2_dep.module("lib");
 
     const pb_dep = b.dependency("pb", .{
         .target = target,

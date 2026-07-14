@@ -388,4 +388,3 @@ test "hello and world hash correctly" {
     );
     // sig fmt: on
 }
-

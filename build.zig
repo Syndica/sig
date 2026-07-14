@@ -240,7 +240,6 @@ const Dependencies = struct {
 /// All the modules, libraries, and executables that compose the main sig
 /// validator binary. Does not include any tests, developer tools, docs, etc.
 const Sig = struct {
-    runtime: Runtime,
     lib: *Build.Module,
     services_mod: *Build.Module,
     start_service: *Build.Module,
@@ -272,10 +271,32 @@ const Sig = struct {
         );
         const build_options_mod = build_options.createModule();
 
-        const runtime: Runtime = .init(b, config, deps, unit_tests);
+        const solana_dir = "v2/lib/solana";
+        const feature_set_id = b.addModule("feature-set-id", .{
+            .root_source_file = b.addRunArtifact(b.addExecutable(.{
+                .name = "gen_feature_set_id",
+                .root_module = b.createModule(.{
+                    .target = b.graph.host,
+                    .optimize = .Debug,
+                    .root_source_file = b.path(solana_dir ++ "/gen_feature_set_id.zig"),
+                    .imports = &.{ .{
+                        .name = "base58",
+                        .module = b.dependency("base58", .{}).module("base58"),
+                    }, .{
+                        .name = "features",
+                        .module = b.createModule(.{
+                            .root_source_file = b.path(solana_dir ++ "/features.zon"),
+                        }),
+                    } },
+                }),
+                .use_llvm = config.use_llvm,
+            })).addOutputFileArg("feature-set-id.zig"),
+        });
+        const features_zon = b.addModule("features-zon", .{
+            .root_source_file = b.path(solana_dir ++ "/features.zon"),
+        });
 
-        // Exported by name so downstream packages can `dep.module("sig_v2")`.
-        const lib = b.addModule("sig_v2", .{
+        const lib = b.addModule("lib", .{
             .root_source_file = b.path("v2/lib/lib.zig"),
             .target = config.target,
             .optimize = config.optimize,
@@ -284,12 +305,13 @@ const Sig = struct {
                 .{ .name = "tracy", .module = deps.tracy },
                 .{ .name = "build-options", .module = build_options_mod },
                 .{ .name = "zstd", .module = deps.zstd },
-                .{ .name = "features-zon", .module = runtime.features_zon },
-                .{ .name = "feature-set-id", .module = runtime.feature_set_id },
+                .{ .name = "features-zon", .module = features_zon },
+                .{ .name = "feature-set-id", .module = feature_set_id },
             },
         });
         unit_tests.add("lib", lib);
-        runtime.module.addImport("lib", lib);
+
+        _ = addRuntime(b, config, deps, unit_tests, lib, feature_set_id, features_zon);
 
         const start_service = b.createModule(.{
             .root_source_file = b.path("v2/init/start_service.zig"),
@@ -358,7 +380,6 @@ const Sig = struct {
         }
 
         return .{
-            .runtime = runtime,
             .lib = lib,
             .services_mod = services_mod,
             .start_service = start_service,
@@ -373,106 +394,59 @@ const Sig = struct {
     }
 };
 
-const Runtime = struct {
-    /// The runtime library module (root: v2/components/runtime/lib.zig)
-    module: *Build.Module,
-    /// features.zon exposed as a module so runtime/core/features.zig
-    /// can consume the feature list without doubly-rooting the .zon file.
+pub fn addRuntime(
+    b: *Build,
+    config: Config,
+    deps: Dependencies,
+    unit_tests: *UnitTests,
+    lib: *Build.Module,
     features_zon: *Build.Module,
-    /// Generated at build time from features.zon; hashes the feature set into
-    /// a single ID that's baked into the runtime library.
     feature_set_id: *Build.Module,
+) *Build.Module {
+    const runtime_dir = "v2/components/runtime";
 
-    pub fn init(
-        b: *Build,
-        config: Config,
-        deps: Dependencies,
-        unit_tests: *UnitTests,
-    ) Runtime {
-        const runtime_dir = "v2/components/runtime";
-        const solana_dir = "v2/lib/solana";
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "long_tests", config.long_tests);
+    build_options.addOption(bool, "allow_no_sha", config.allow_no_sha);
+    build_options.addOption(bool, "allow_no_avx512", config.allow_no_avx512);
 
-        const build_options = b.addOptions();
-        build_options.addOption(bool, "long_tests", config.long_tests);
-        build_options.addOption(bool, "allow_no_sha", config.allow_no_sha);
-        build_options.addOption(bool, "allow_no_avx512", config.allow_no_avx512);
+    const std14_mod = b.addModule("std14", .{
+        .root_source_file = b.path(runtime_dir ++ "/std14.zig"),
+        .target = config.target,
+        .optimize = config.optimize,
+    });
 
-        const std14_mod = b.addModule("std14", .{
-            .root_source_file = b.path(runtime_dir ++ "/std14.zig"),
-            .target = config.target,
-            .optimize = config.optimize,
-        });
+    const gh_table = b.createModule(.{
+        .root_source_file = generateTable(b, config.use_llvm, runtime_dir),
+        .target = config.target,
+        .optimize = config.optimize,
+    });
 
-        const feature_set_id_exe = b.addExecutable(.{
-            .name = "gen_feature_set_id",
-            .root_module = b.createModule(.{
-                .target = b.graph.host,
-                .optimize = .Debug,
-                .root_source_file = b.path(solana_dir ++ "/gen_feature_set_id.zig"),
-                .imports = &.{
-                    .{
-                        .name = "base58",
-                        .module = b.dependency("base58", .{}).module("base58"),
-                    },
-                    .{
-                        .name = "features",
-                        .module = b.createModule(.{
-                            .root_source_file = b.path(solana_dir ++ "/features.zon"),
-                        }),
-                    },
-                },
-            }),
-            .use_llvm = config.use_llvm,
-        });
-        const feature_set_id_gen = b.addRunArtifact(feature_set_id_exe);
-        // Exposed via addModule so external packages (in particular sig_v2's
-        // lib module and v1 via its dep on this package) can consume the same
-        // Module instance instead of building their own. Without this,
-        // `b.createModule` on the same features.zon / feature-set-id.zig from
-        // two build subgraphs produces two distinct Modules rooted at the
-        // same file, which Zig 0.15 rejects in one compilation.
-        const feature_set_id = b.addModule("feature-set-id", .{
-            .root_source_file = feature_set_id_gen.addOutputFileArg("feature-set-id.zig"),
-        });
-        const features_zon = b.addModule("features-zon", .{
-            .root_source_file = b.path(solana_dir ++ "/features.zon"),
-        });
+    const imports: []const Build.Module.Import = &.{
+        .{ .name = "base58", .module = deps.base58 },
+        .{ .name = "blst", .module = deps.blst },
+        .{ .name = "build-options", .module = build_options.createModule() },
+        .{ .name = "lib", .module = lib },
+        .{ .name = "feature-set-id", .module = feature_set_id },
+        .{ .name = "features-zon", .module = features_zon },
+        .{ .name = "poseidon", .module = deps.poseidon },
+        .{ .name = "secp256k1", .module = deps.secp256k1 },
+        .{ .name = "std14", .module = std14_mod },
+        .{ .name = "table", .module = gh_table },
+        .{ .name = "tracy", .module = deps.tracy },
+    };
 
-        const gh_table = b.createModule(.{
-            .root_source_file = generateTable(b, config.use_llvm, runtime_dir),
-            .target = config.target,
-            .optimize = config.optimize,
-        });
+    const module = b.addModule("runtime", .{
+        .root_source_file = b.path(runtime_dir ++ "/lib.zig"),
+        .target = config.target,
+        .optimize = config.optimize,
+        .imports = imports,
+    });
 
-        const imports: []const Build.Module.Import = &.{
-            .{ .name = "base58", .module = deps.base58 },
-            .{ .name = "blst", .module = deps.blst },
-            .{ .name = "build-options", .module = build_options.createModule() },
-            .{ .name = "feature-set-id", .module = feature_set_id },
-            .{ .name = "features-zon", .module = features_zon },
-            .{ .name = "poseidon", .module = deps.poseidon },
-            .{ .name = "secp256k1", .module = deps.secp256k1 },
-            .{ .name = "std14", .module = std14_mod },
-            .{ .name = "table", .module = gh_table },
-            .{ .name = "tracy", .module = deps.tracy },
-        };
+    unit_tests.add("runtime", module);
 
-        const module = b.addModule("runtime", .{
-            .root_source_file = b.path(runtime_dir ++ "/lib.zig"),
-            .target = config.target,
-            .optimize = config.optimize,
-            .imports = imports,
-        });
-
-        unit_tests.add("runtime", module);
-
-        return .{
-            .module = module,
-            .features_zon = features_zon,
-            .feature_set_id = feature_set_id,
-        };
-    }
-};
+    return module;
+}
 
 fn generateTable(b: *Build, use_llvm: bool, runtime_dir: []const u8) Build.LazyPath {
     const gen = b.addExecutable(.{
