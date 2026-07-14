@@ -21,6 +21,8 @@ pub const std_options = start.options;
 pub const ReadOnly = services.accounts_db.ReadOnly;
 pub const ReadWrite = services.accounts_db.ReadWrite;
 
+pub const max_burst_drain_size = 32;
+
 pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     rw.tel.signalReady();
@@ -145,18 +147,21 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     var replay_in = rw.replay_lookups.in.get(.reader);
     var replay_out = rw.replay_lookups.out.get(.writer);
     while (true) : (std.atomic.spinLoopHint()) {
-        if (replay_in.peek()) |pubkey| {
-            if (try rooted.queueRead(.from(logger), pubkey)) {
-                _ = replay_in.next();
-                replay_in.markUsed();
-            }
+        var queue_count: usize = 0;
+        while (queue_count < max_burst_drain_size) : (queue_count += 1) {
+            const request = replay_in.peek() orelse break;
+            if (!(try rooted.queueRead(.from(logger), request))) break;
+            _ = replay_in.next();
         }
-        if (replay_out.peek()) |result| {
-            if (try rooted.pollRead(.from(logger))) |res| {
-                result.* = res;
-                _ = replay_out.next();
-                replay_out.markUsed();
-            }
+        if (queue_count > 0) replay_in.markUsed();
+
+        var poll_count: usize = 0;
+        while (poll_count < max_burst_drain_size) : (poll_count += 1) {
+            const result = replay_out.peek() orelse break;
+            const res = (try rooted.pollRead(.from(logger))) orelse break;
+            result.* = res;
+            _ = replay_out.next();
         }
+        if (poll_count > 0) replay_out.markUsed();
     }
 }
