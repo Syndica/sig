@@ -176,6 +176,14 @@ pub const RentCollector = struct {
     }
 };
 
+pub const RENT_FEATURE_GATES = [_]struct { sig.core.features.Feature, u64 }{
+    .{ .set_lamports_per_byte_to_6333, 6333 },
+    .{ .set_lamports_per_byte_to_5080, 5080 },
+    .{ .set_lamports_per_byte_to_2575, 2575 },
+    .{ .set_lamports_per_byte_to_1322, 1322 },
+    .{ .set_lamports_per_byte_to_696, 696 },
+};
+
 /// Reconstruct the rent parameters in effect at `slot` from the active feature set, starting from
 /// the genesis defaults (`Rent.INIT`). Snapshots serialize the bank's rent collector with its
 /// `rent` field zeroed (see the `Rent` doc comment in `runtime/sysvar/rent.zig`), which would make
@@ -193,15 +201,9 @@ pub fn rentForFeatureSet(feature_set: *const sig.core.FeatureSet, slot: sig.core
         );
         rent.exemption_threshold = 1.0;
     }
-    const rent_feature_gates = [_]struct { sig.core.features.Feature, u64 }{
-        .{ .set_lamports_per_byte_to_6333, 6333 },
-        .{ .set_lamports_per_byte_to_5080, 5080 },
-        .{ .set_lamports_per_byte_to_2575, 2575 },
-        .{ .set_lamports_per_byte_to_1322, 1322 },
-        .{ .set_lamports_per_byte_to_696, 696 },
-    };
-    for (rent_feature_gates) |gate| {
-        if (feature_set.active(gate[0], slot)) rent.lamports_per_byte_year = gate[1];
+    for (RENT_FEATURE_GATES) |gate| {
+        const feature, const lamports_per_byte = gate;
+        if (feature_set.active(feature, slot)) rent.lamports_per_byte_year = lamports_per_byte;
     }
     return rent;
 }
@@ -267,4 +269,18 @@ test "calculate rent result" {
         RentResult.NoRentCollectionNow,
         collector.calculateRentResult(&Pubkey.ZEROES, account),
     );
+}
+
+test "RENT_FEATURE_GATES matches the SIMD-0437 reduction schedule" {
+    const expected_gates = [_]struct { sig.core.features.Feature, u64 }{
+        .{ .set_lamports_per_byte_to_6333, 6333 },
+        .{ .set_lamports_per_byte_to_5080, 5080 },
+        .{ .set_lamports_per_byte_to_2575, 2575 },
+        .{ .set_lamports_per_byte_to_1322, 1322 },
+        .{ .set_lamports_per_byte_to_696, 696 },
+    };
+    for (expected_gates, RENT_FEATURE_GATES) |expected, actual| {
+        try std.testing.expectEqual(expected[0], actual[0]);
+        try std.testing.expectEqual(expected[1], actual[1]);
+    }
 }
