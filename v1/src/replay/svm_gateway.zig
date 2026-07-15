@@ -20,6 +20,7 @@ const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransact
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 const SysvarCache = sig.runtime.SysvarCache;
+const LAMPORTS_PER_SIGNATURE = sig.runtime.check_transactions.LAMPORTS_PER_SIGNATURE;
 const TransactionExecutionEnvironment =
     sig.runtime.transaction_execution.TransactionExecutionEnvironment;
 const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
