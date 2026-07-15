@@ -140,7 +140,17 @@ pub const SlotConstants = struct {
             .feature_set = feature_set,
             .reserved_accounts = reserved_accounts,
             .inflation = bank_fields.inflation,
-            .rent_collector = bank_fields.rent_collector,
+            // Snapshots serialize the rent collector's `rent` as zeros, which would make
+            // `Rent.minimumBalance` return 0 and treat every account as rent-exempt, disabling
+            // the rent-state transition check (Sig would commit transactions that leave
+            // an account below the rent-exempt minimum, which the cluster rejects with
+            // `InsufficientFundsForRent`, diverging the bank hash). Rebuild the rent from the
+            // feature set instead. See `rent_collector.rentForFeatureSet`.
+            .rent_collector = rent_collector: {
+                var rc = bank_fields.rent_collector;
+                rc.rent = sig.core.rent_collector.rentForFeatureSet(&feature_set, bank_fields.slot);
+                break :rent_collector rc;
+            },
         };
     }
 
