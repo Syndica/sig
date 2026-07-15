@@ -110,6 +110,7 @@ const Rent = sig.runtime.sysvar.Rent;
 const SysvarCache = sig.runtime.SysvarCache;
 const RuntimeTransaction = transaction_execution.RuntimeTransaction;
 const TransactionExecutionEnvironment = transaction_execution.TransactionExecutionEnvironment;
+const LAMPORTS_PER_SIGNATURE = sig.runtime.check_transactions.LAMPORTS_PER_SIGNATURE;
 const ProcessedTransaction = transaction_execution.ProcessedTransaction;
 const TransactionResult = transaction_execution.TransactionResult;
 
