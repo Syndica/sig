@@ -36,7 +36,6 @@ pub fn calculateStakeWeightedTimestamp(
     ns_per_slot: u64,
     epoch_start_timstamp: ?EpochStartTimestamp,
     max_allowable_drift: MaxAllowableDrift,
-    fix_estimate_into_u64: bool,
 ) Allocator.Error!?i64 {
     var stakes_per_timestamp = SortedMap(i64, u128).empty;
     defer stakes_per_timestamp.deinit(allocator);
@@ -74,11 +73,8 @@ pub fn calculateStakeWeightedTimestamp(
 
     if (epoch_start_timstamp) |epoch_timestamp| {
         const poh_estimate_offset_ns = (ns_per_slot *| (slot -| epoch_timestamp.slot));
-        const estimate_offset_ns = 1_000_000_000 *| if (fix_estimate_into_u64)
-            @as(u64, @intCast(estimate_s)) -| @as(u64, @intCast(epoch_timestamp.timestamp))
-        else
-            // Executed if WARP_TIMESTAMP_AGAIN feature is not active.
-            @as(u64, @bitCast(estimate_s -| epoch_timestamp.timestamp));
+        const estimate_offset_ns = 1_000_000_000 *|
+            (@as(u64, @intCast(estimate_s)) -| @as(u64, @intCast(epoch_timestamp.timestamp)));
 
         const max_allowable_drift_fast_ns = poh_estimate_offset_ns *| max_allowable_drift.fast / 100;
         const max_allowable_drift_slow_ns = poh_estimate_offset_ns *| max_allowable_drift.slow / 100;
@@ -161,7 +157,6 @@ test "uses median: low-staked outliers" {
             ns_per_slot,
             null,
             max_allowable_drift,
-            true,
         );
 
         try std.testing.expectEqual(recent_timestamp, actual);
@@ -184,7 +179,6 @@ test "uses median: low-staked outliers" {
             ns_per_slot,
             null,
             max_allowable_drift,
-            true,
         );
 
         try std.testing.expectEqual(recent_timestamp, actual);
@@ -207,7 +201,6 @@ test "uses median: low-staked outliers" {
             ns_per_slot,
             null,
             max_allowable_drift,
-            true,
         );
 
         try std.testing.expectEqual(recent_timestamp, actual);
@@ -230,7 +223,6 @@ test "uses median: low-staked outliers" {
             ns_per_slot,
             null,
             max_allowable_drift,
-            true,
         );
 
         try std.testing.expectEqual(recent_timestamp, actual);
@@ -285,7 +277,6 @@ test "uses median: high-staked outliers" {
             ns_per_slot,
             null,
             max_allowable_drift,
-            true,
         );
 
         try std.testing.expectEqual(recent_timestamp, actual);
@@ -317,7 +308,6 @@ test "uses median: high-staked outliers" {
             ns_per_slot,
             null,
             max_allowable_drift,
-            true,
         );
 
         try std.testing.expectEqual(recent_timestamp - actual.?, 1_578_909_061);
@@ -379,7 +369,6 @@ test "poh" {
             ns_per_slot,
             .{ .slot = 0, .timestamp = epoch_start_timestamp },
             max_allowable_drift,
-            true,
         );
 
         try std.testing.expectEqual(poh_estimate + acceptable_delta, actual.?);
@@ -400,7 +389,6 @@ test "poh" {
             ns_per_slot,
             .{ .slot = 0, .timestamp = epoch_start_timestamp },
             max_allowable_drift,
-            true,
         );
 
         try std.testing.expectEqual(poh_estimate - acceptable_delta, actual.?);
@@ -421,7 +409,6 @@ test "poh" {
             ns_per_slot,
             .{ .slot = 0, .timestamp = epoch_start_timestamp },
             max_allowable_drift,
-            true,
         );
 
         try std.testing.expectEqual(poh_estimate + acceptable_delta, actual.?);
@@ -442,7 +429,6 @@ test "poh" {
             ns_per_slot,
             .{ .slot = 0, .timestamp = epoch_start_timestamp },
             max_allowable_drift,
-            true,
         );
 
         try std.testing.expectEqual(poh_estimate - acceptable_delta, actual.?);
@@ -513,7 +499,6 @@ test "levels" {
             ns_per_slot,
             .{ .slot = 0, .timestamp = epoch_start_timestamp },
             max_allowable_drift_25,
-            true,
         );
 
         try std.testing.expectEqual(poh_estimate + acceptable_delta_25, actual_25.?);
@@ -526,7 +511,6 @@ test "levels" {
             ns_per_slot,
             .{ .slot = 0, .timestamp = epoch_start_timestamp },
             max_allowable_drift_50,
-            true,
         );
 
         try std.testing.expectEqual(poh_estimate + acceptable_delta_25 + 1, actual_50.?);
@@ -547,7 +531,6 @@ test "levels" {
             ns_per_slot,
             .{ .slot = 0, .timestamp = epoch_start_timestamp },
             max_allowable_drift_25,
-            true,
         );
 
         try std.testing.expectEqual(poh_estimate + acceptable_delta_25, actual_25.?);
@@ -560,7 +543,6 @@ test "levels" {
             ns_per_slot,
             .{ .slot = 0, .timestamp = epoch_start_timestamp },
             max_allowable_drift_50,
-            true,
         );
 
         try std.testing.expectEqual(poh_estimate + acceptable_delta_50, actual_50.?);
@@ -626,7 +608,6 @@ test "fast slow" {
             ns_per_slot,
             .{ .slot = 0, .timestamp = epoch_start_timestamp },
             max_allowable_drift,
-            true,
         );
 
         try std.testing.expectEqual(poh_estimate - acceptable_delta_fast, actual.?);
@@ -647,7 +628,6 @@ test "fast slow" {
             ns_per_slot,
             .{ .slot = 0, .timestamp = epoch_start_timestamp },
             max_allowable_drift,
-            true,
         );
 
         try std.testing.expectEqual(poh_estimate + acceptable_delta_fast + 1, actual.?);
@@ -668,7 +648,6 @@ test "fast slow" {
             ns_per_slot,
             .{ .slot = 0, .timestamp = epoch_start_timestamp },
             max_allowable_drift,
-            true,
         );
 
         try std.testing.expectEqual(poh_estimate + acceptable_delta_slow, actual.?);
@@ -732,22 +711,6 @@ test "early" {
             ns_per_slot,
             .{ .slot = 0, .timestamp = epoch_start_timestamp },
             max_allowable_drift,
-            false,
-        );
-
-        try std.testing.expectEqual(poh_estimate + acceptable_delta, actual.?);
-    }
-
-    {
-        const actual = try calculateStakeWeightedTimestamp(
-            allocator,
-            &recent_timestamps,
-            &vote_accounts,
-            slot,
-            ns_per_slot,
-            .{ .slot = 0, .timestamp = epoch_start_timestamp },
-            max_allowable_drift,
-            true,
         );
 
         try std.testing.expectEqual(poh_estimate - acceptable_delta, actual.?);
