@@ -261,6 +261,7 @@ fn loadTransactionAccountsInner(
                 runtime.program.bpf_loader.v1.ID,
                 runtime.program.bpf_loader.v2.ID,
                 runtime.program.bpf_loader.v3.ID,
+                runtime.program.bpf_loader.v4.ID,
             }) |id| {
                 if (owner_id.equals(&id)) break; // found it
             } else {
