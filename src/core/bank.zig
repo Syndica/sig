@@ -116,6 +116,7 @@ pub const SlotConstants = struct {
         allocator: Allocator,
         bank_fields: *const BankFields,
         feature_set: FeatureSet,
+        account_reader: SlotAccountReader,
     ) Allocator.Error!SlotConstants {
         var ancestors = try bank_fields.ancestors.clone(allocator);
         errdefer ancestors.deinit(allocator);
@@ -145,13 +146,38 @@ pub const SlotConstants = struct {
             // the rent-state transition check (Sig would commit transactions that leave
             // an account below the rent-exempt minimum, which the cluster rejects with
             // `InsufficientFundsForRent`, diverging the bank hash). Rebuild the rent from the
-            // feature set instead. See `rent_collector.rentForFeatureSet`.
+            // on-chain rent sysvar account instead. See `loadRentForSnapshot`.
             .rent_collector = rent_collector: {
                 var rc = bank_fields.rent_collector;
-                rc.rent = sig.core.rent_collector.rentForFeatureSet(&feature_set, bank_fields.slot);
+                rc.rent = loadRentForSnapshot(
+                    allocator,
+                    account_reader,
+                );
                 break :rent_collector rc;
             },
         };
+    }
+
+    /// Returns the rent in effect at snapshot load. Snapshots serialize the bank's rent collector
+    /// with `rent` zeroed (see the `Rent` doc comment in `runtime/sysvar/rent.zig`), so
+    /// `bank_fields.rent_collector.rent` cannot be used. Agave reads the rent from the on-chain
+    /// rent sysvar account, which holds the value written by past feature activations. If that
+    /// account is missing or fails to decode, recompute the rent from the feature set instead.
+    /// [agave] https://github.com/anza-xyz/agave/blob/v4.2.0-beta.1/runtime/src/bank.rs#L1923
+    fn loadRentForSnapshot(
+        allocator: Allocator,
+        account_reader: SlotAccountReader,
+    ) sig.runtime.sysvar.Rent {
+        const Rent = sig.runtime.sysvar.Rent;
+        const account = (account_reader.get(allocator, Rent.ID) catch null) orelse @panic(
+            "snapshot must contain rent sysvar account",
+        );
+        defer account.deinit(allocator);
+
+        var data = account.data.iterator();
+        return sig.bincode.read(allocator, Rent, data.reader(), .{}) catch @panic(
+            "snapshot must contain well-formed rent sysvar account",
+        );
     }
 
     pub fn genesis(

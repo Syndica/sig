@@ -184,30 +184,6 @@ pub const RENT_FEATURE_GATES = [_]struct { sig.core.features.Feature, u64 }{
     .{ .set_lamports_per_byte_to_696, 696 },
 };
 
-/// Reconstruct the rent parameters in effect at `slot` from the active feature set, starting from
-/// the genesis defaults (`Rent.INIT`). Snapshots serialize the bank's rent collector with its
-/// `rent` field zeroed (see the `Rent` doc comment in `runtime/sysvar/rent.zig`), which would make
-/// `Rent.minimumBalance` return 0 and treat every account as rent-exempt, disabling the rent-state
-/// transition check in fee-payer validation / transaction execution. Rebuild the rent from the
-/// feature set rather than trusting the snapshot value. Mirrors the rent feature-gate handling in
-/// `replay/epoch_transitions.zig`:
-/// SIMD-0194 (`deprecate_rent_exemption_threshold`) folds the exemption threshold into
-/// `lamports_per_byte_year`; SIMD-0437 then steps that rate down (last active gate wins).
-pub fn rentForFeatureSet(feature_set: *const sig.core.FeatureSet, slot: sig.core.Slot) Rent {
-    var rent = Rent.INIT;
-    if (feature_set.active(.deprecate_rent_exemption_threshold, slot)) {
-        rent.lamports_per_byte_year = @intFromFloat(
-            @as(f64, @floatFromInt(rent.lamports_per_byte_year)) * rent.exemption_threshold,
-        );
-        rent.exemption_threshold = 1.0;
-    }
-    for (RENT_FEATURE_GATES) |gate| {
-        const feature, const lamports_per_byte = gate;
-        if (feature_set.active(feature, slot)) rent.lamports_per_byte_year = lamports_per_byte;
-    }
-    return rent;
-}
-
 pub fn defaultCollector(epoch: Epoch) RentCollector {
     return .testDefault(epoch);
 }

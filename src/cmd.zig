@@ -3442,13 +3442,14 @@ const ReplayAndConsensusServiceState = struct {
                 bank_fields.slot,
             );
 
+            const account_reader = account_store.reader().forSlot(&bank_fields.ancestors);
+
             const root_slot_constants: sig.core.SlotConstants =
-                try .fromBankFields(allocator, bank_fields, feature_set);
+                try .fromBankFields(allocator, bank_fields, feature_set, account_reader);
             errdefer root_slot_constants.deinit(allocator);
 
             const lt_hash = manifest.bank_extra.accounts_lt_hash;
 
-            const account_reader = account_store.reader().forSlot(&bank_fields.ancestors);
             var root_slot_state: sig.core.SlotState =
                 try .fromBankFields(allocator, bank_fields, lt_hash, account_reader);
             errdefer root_slot_state.deinit(allocator);
