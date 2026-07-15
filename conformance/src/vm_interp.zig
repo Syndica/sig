@@ -68,12 +68,13 @@ fn executeVmTest(
 
     var feature_set = try utils.loadFeatureSet(instr_context);
     var tc: sig.runtime.TransactionContext = undefined;
-    try utils.createTransactionContext(
+    const compiled_message = try utils.createTransactionContext(
         allocator,
         instr_context,
         .{ .feature_set = &feature_set },
         &tc,
     );
+    defer compiled_message.deinit(allocator);
     defer utils.deinitTransactionContext(allocator, tc);
 
     const sbpf_version: Version = switch (vm_context.sbpf_version) {
@@ -100,6 +101,7 @@ fn executeVmTest(
         .{ .data = instr_context.program_id[0..Pubkey.SIZE].* },
         instr_context.data,
         instr_context.instr_accounts.items,
+        compiled_message,
     );
     defer instr_info.deinit(allocator);
 

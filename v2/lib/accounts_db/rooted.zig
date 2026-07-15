@@ -10,10 +10,12 @@ const FileReader = lib.fio.FileReader;
 const Table = lib.accounts_db.Table;
 const AccountPool = lib.accounts_db.AccountPool;
 const AccountLookups = lib.accounts_db.AccountLookups;
+const RuntimeMetadata = lib.accounts_db.RuntimeMetadata;
 
 const Pubkey = lib.solana.Pubkey;
 const Slot = lib.solana.Slot;
 const Epoch = lib.solana.Epoch;
+const Hash = lib.solana.Hash;
 
 /// The rooted database stores data on disk in the form of [journal][ring of sector data].
 /// TODO: The ring aspect is not implemented, so for now it grows indefinitely.
@@ -62,6 +64,7 @@ pub const Rooted = struct {
         writing_slot: u32 align(1),
         committed_slot: u32 align(1),
         committed_offset: u64 align(1),
+        blockhash_max_age: u32 align(1),
 
         const empty: Journal = .{
             .magic = .valid,
@@ -69,6 +72,7 @@ pub const Rooted = struct {
             .writing_slot = 0,
             .committed_slot = 0,
             .committed_offset = 0,
+            .blockhash_max_age = 300,
         };
     };
     comptime {
@@ -79,10 +83,12 @@ pub const Rooted = struct {
     pub fn init(
         self: *Rooted,
         logger: tel.Logger("Rooted.init"),
+        runner: lib.runner.Connection,
         dir: std.fs.Dir,
         path: []const u8,
         table_memory: []u8,
         account_pool: *AccountPool,
+        runtime_metadata: *RuntimeMetadata,
     ) !void {
         const seed: u64 = 0; // TODO: maybe in RootedConfig?
         self.put_batch = .empty;
@@ -97,7 +103,12 @@ pub const Rooted = struct {
             defer read_file.close();
 
             logger.info().logf("loading from existing rooted db", .{});
-            self.loadExisting(.from(logger), read_file) catch |err| switch (err) {
+            self.loadExisting(
+                .from(logger),
+                runner,
+                read_file,
+                runtime_metadata,
+            ) catch |err| switch (err) {
                 error.InvalidJournal => {
                     self.journal = .empty; // reset any modifications from loadExisting()
                     break :open_existing;
@@ -152,14 +163,15 @@ pub const Rooted = struct {
     }
 
     const SectorHeader = packed struct(u64) {
-        type: enum(u2) {
+        type: enum(u3) {
             padding, // padding data to get file aligned to block_size for writing
             account, // holds an actual account
+            blockhashes, // holds a serialized addition to the blockhash queue
             _, // TODO: add other types of sections
         },
         info: packed union {
-            padding: u62,
-            account: packed struct(u62) {
+            count: u61,
+            account: packed struct(u61) {
                 data_len: u24,
                 executable: bool,
                 // epoch never goes this high deliberately. convert max(Epoch) = max(u37)
@@ -167,7 +179,7 @@ pub const Rooted = struct {
             },
         },
 
-        const SmallEpoch = u37;
+        const SmallEpoch = u36;
     };
 
     const AccountMeta = extern struct {
@@ -181,7 +193,9 @@ pub const Rooted = struct {
     fn loadExisting(
         self: *Rooted,
         logger: tel.Logger("Rooted.loadExisting"),
+        runner: lib.runner.Connection,
         file: std.fs.File,
+        runtime_metadata: *RuntimeMetadata,
     ) !void {
         const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.loadExisting" });
         defer zone.deinit();
@@ -235,6 +249,12 @@ pub const Rooted = struct {
             logger.info().logf("read journal: {any}", .{self.journal});
         }
 
+        var blockhash_writer = runtime_metadata.blockhash_queue.hashes.getView(.writer);
+        defer {
+            runtime_metadata.blockhash_queue.max_age = self.journal.blockhash_max_age;
+            blockhash_writer.close(); // close when done.
+        }
+
         var timer = try std.time.Timer.start();
         var n_puts: usize = 0;
         var n_bytes_read: usize = 0;
@@ -249,7 +269,7 @@ pub const Rooted = struct {
             try self.readExisting(.from(logger), @ptrCast(&header), @sizeOf(SectorHeader));
             switch (header.type) {
                 .padding => {
-                    const pad_len = header.info.padding;
+                    const pad_len = header.info.count;
                     if (pad_len > self.journal.committed_offset) return error.InvalidPadding;
 
                     // skip padding bytes
@@ -280,6 +300,32 @@ pub const Rooted = struct {
                     });
                     n_puts += 1;
                 },
+                .blockhashes => {
+                    var num_hashes = header.info.count;
+                    while (num_hashes > 0) {
+                        // get a buffer to write hashes into
+                        const hash_buf: []Hash = try blockhash_writer.getBufferBlocking(runner);
+                        if (hash_buf.len == 0) {
+                            // blockhash_reader closed their end. just skip the hashes then.
+                            try self.readExisting(
+                                .from(logger),
+                                null,
+                                @sizeOf(Hash) * num_hashes,
+                            );
+                            break;
+                        }
+
+                        // read hashes into blockhash_writer to send over
+                        const take = @min(num_hashes, hash_buf.len);
+                        try self.readExisting(
+                            .from(logger),
+                            @ptrCast(hash_buf.ptr),
+                            @sizeOf(Hash) * take,
+                        );
+                        blockhash_writer.advance(take);
+                        num_hashes -= take;
+                    }
+                },
                 _ => return error.InvalidSector,
             }
 
@@ -302,6 +348,10 @@ pub const Rooted = struct {
                 self.io.reader.io_stalled = 0;
             }
         }
+
+        // write the slot to commit the RuntimeMetadata stuff
+        const slot = self.journal.committed_slot;
+        runtime_metadata.populateSlot(slot);
 
         self.table.flushPuts(&self.put_batch);
         logger.info().logf("loaded rooted db: {} accounts", .{self.table.count()});
@@ -329,9 +379,12 @@ pub const Rooted = struct {
     pub fn loadSnapshot(
         self: *Rooted,
         logger: tel.Logger("Rooted.loadSnapshot"),
+        runner: lib.runner.Connection,
         snapshot_iter: anytype, // lib.solana.snapshot.SnapshotIter(anytype),
+        runtime_metadata: *RuntimeMetadata,
     ) !void {
-        try self.beginTransaction(.from(logger), snapshot_iter.manifest.bank_fields.slot);
+        const slot = snapshot_iter.manifest.bank_fields.slot;
+        try self.beginTransaction(.from(logger), slot);
 
         var timer = try std.time.Timer.start();
         var n_puts: usize = 0;
@@ -357,12 +410,12 @@ pub const Rooted = struct {
             if (elapsed_ns >= std.time.ns_per_s) {
                 timer.reset();
                 logger.info().logf(
-                    "wrote {} accounts (queued:{B:.4}, flushed:{B:.4}) in {D:.0} (io-stall:{D:.0})",
+                    "({:.2}%) wrote {} accounts (queued:{B:.4}, flushed:{B:.4}) (io-stall:{D:.0})",
                     .{
+                        snapshot_iter.tar_iter.buf_reader.percentCompleted(),
                         n_puts,
                         n_transfer,
                         self.io.writer.io_transferred,
-                        elapsed_ns,
                         self.io.writer.io_stalled,
                     },
                 );
@@ -372,6 +425,47 @@ pub const Rooted = struct {
                 self.io.writer.io_stalled = 0;
             }
         }
+
+        { // write the current blockhash queue
+            const blockhash_queue = &snapshot_iter.manifest.bank_fields.blockhash_queue;
+            self.journal.blockhash_max_age = std.math.lossyCast(u32, blockhash_queue.max_age);
+
+            const num_hashes = blockhash_queue.hashes.count;
+            const hashes = blockhash_queue.hashes.array[0..num_hashes];
+
+            // write blockhashes header
+            const header: SectorHeader = .{
+                .type = .blockhashes,
+                .info = .{ .count = @intCast(num_hashes) },
+            };
+
+            var r = std.Io.Reader.fixed(std.mem.asBytes(&header));
+            try self.queueWrite(.from(logger), @sizeOf(SectorHeader), &r);
+
+            r = std.Io.Reader.fixed(std.mem.sliceAsBytes(hashes));
+            try self.queueWrite(.from(logger), num_hashes * @sizeOf(Hash), &r);
+
+            // send over as metadata
+            var blockhash_writer = runtime_metadata.blockhash_queue.hashes.getView(.writer);
+            defer {
+                runtime_metadata.blockhash_queue.max_age = self.journal.blockhash_max_age;
+                blockhash_writer.close(); // close when done.
+            }
+
+            var i: usize = 0;
+            while (i < hashes.len) {
+                const buf = try blockhash_writer.getBufferBlocking(runner);
+                if (buf.len == 0) break; // reader closed somehow
+
+                const take = @min(buf.len, hashes.len - i);
+                @memcpy(buf[0..take], hashes[i..][0..take]);
+                blockhash_writer.advance(take);
+                i += take;
+            }
+        }
+
+        // write the slot to commit the RuntimeMetadata stuff
+        runtime_metadata.populateSlot(slot);
 
         try self.commitTransaction(.from(logger));
         logger.info().logf("populated from snapshot: {} accounts", .{self.table.count()});
@@ -541,9 +635,9 @@ pub const Rooted = struct {
 
             var header: SectorHeader = .{
                 .type = .padding,
-                .info = .{ .padding = @intCast(pad_len - @sizeOf(SectorHeader)) },
+                .info = .{ .count = @intCast(pad_len - @sizeOf(SectorHeader)) },
             };
-            logger.info().logf("writing pad sector: {B:.2}", .{header.info.padding});
+            logger.info().logf("writing pad sector: {B:.2}", .{header.info.count});
 
             // write padding header
             {
@@ -552,7 +646,7 @@ pub const Rooted = struct {
             }
 
             // write padding data
-            try self.queueWrite(.from(logger), header.info.padding, struct {
+            try self.queueWrite(.from(logger), header.info.count, struct {
                 pub fn readSliceAll(_: @This(), buf: []u8) !void {
                     @memset(buf, 0);
                 }

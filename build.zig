@@ -24,6 +24,7 @@ pub const Config = struct {
     has_side_effects: bool,
     enable_tracy: bool,
     tracy_on_demand: bool,
+    tracy_no_exit: bool,
     use_llvm: bool,
     error_tracing: ?bool,
     long_tests: bool,
@@ -113,6 +114,11 @@ pub const Config = struct {
                 bool,
                 "tracy-on-demand",
                 "Enables tracy on-demand mode (allows reconnecting). Only has an effect if tracy is enabled via enable-tracy.",
+            ) orelse false,
+            .tracy_no_exit = b.option(
+                bool,
+                "tracy-no-exit",
+                "Delays process exit until Tracy has received data. Only has an effect if tracy is enabled via enable-tracy.",
             ) orelse false,
             .use_llvm = b.option(
                 bool,
@@ -286,11 +292,16 @@ pub fn build(b: *Build) !void {
     // reproducable via: zig build test -Dfilter="ledger"
     rocksdb_dep.artifact("rocksdb").root_module.sanitize_c = .off;
 
+    // Options must match the `b.dependency("tracy", ...)` calls in
+    // shared/build.zig and v2/build.zig exactly. Any drift produces two
+    // `tracy` Module instances rooted at the same source file, which Zig 0.15
+    // rejects when both sig and sig_v2 live in one compilation.
     const tracy_mod = b.dependency("tracy", .{
         .target = config.target,
         .optimize = config.optimize,
         .tracy_enable = config.enable_tracy,
         .tracy_on_demand = config.tracy_on_demand,
+        .tracy_no_exit = config.tracy_no_exit,
         .tracy_no_system_tracing = false,
         .tracy_callstack = 6,
     }).module("tracy");
@@ -305,6 +316,7 @@ pub fn build(b: *Build) !void {
         .@"use-llvm" = config.use_llvm,
         .@"enable-tracy" = config.enable_tracy,
         .@"tracy-on-demand" = config.tracy_on_demand,
+        .@"tracy-no-exit" = config.tracy_no_exit,
     });
     const std14_mod = shared_dep.module("std14");
 

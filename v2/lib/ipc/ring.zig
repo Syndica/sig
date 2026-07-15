@@ -1,8 +1,5 @@
 const std = @import("std");
-
-comptime {
-    _ = std.testing.refAllDecls(@This());
-}
+const lib = @import("../lib.zig");
 
 const Atomic = std.atomic.Value;
 
@@ -47,6 +44,12 @@ pub fn Ring(N: comptime_int, T: type) type {
                 const Self = @This();
                 const Slice = if (side == .reader) []const T else []T;
 
+                /// Get a slice of "available" items (populated for .reader, writable for .writer).
+                /// If there's no avaiable items, returns null.
+                /// If the other side closed their end, returns an empty slice.
+                ///
+                /// After observing the items, they can be marked as used/consumed with `advance(n)`
+                /// where n <= the slice.len returned here
                 pub fn getBuffer(self: *Self) ?Slice {
                     std.debug.assert(!self.closed);
                     switch (side) {
@@ -81,6 +84,22 @@ pub fn Ring(N: comptime_int, T: type) type {
                             return self.ring.array[idx..@min(idx + (N - size), N)];
                         },
                     }
+                }
+
+                /// Same as getBuffer(), but blocks until the other side either makes a slice
+                /// available or closes their end.
+                pub fn getBufferBlocking(self: *Self, runner: lib.runner.Connection) !Slice {
+                    return self.getBuffer() orelse {
+                        @branchHint(.unlikely);
+
+                        const buf = while (true) {
+                            try runner.activity.signalIdleSpinning();
+                            break self.getBuffer() orelse continue;
+                        };
+
+                        try runner.activity.signalActive();
+                        return buf;
+                    };
                 }
 
                 pub fn close(self: *Self) void {

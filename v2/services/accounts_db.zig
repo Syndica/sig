@@ -22,7 +22,6 @@ pub const ReadOnly = services.accounts_db.ReadOnly;
 pub const ReadWrite = services.accounts_db.ReadWrite;
 
 pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
-    _ = runner;
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     rw.tel.signalReady();
 
@@ -37,24 +36,56 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     const rooted = &Global.rooted;
     try rooted.init(
         .from(logger),
+        runner,
         std.fs.cwd(),
         file_path,
         rw.config.memory[0..].ptr[0..rw.config.memory_len],
         rw.account_pool,
+        rw.snapshot_metadata_out,
     );
     defer rooted.deinit();
 
-    var in = rw.ready_snapshot_in.getView(.reader);
+    var in = rw.ready_snapshot_in.ring.getView(.reader);
     defer in.close();
 
     if (rooted.table.count() == 0) {
         logger.info().logf("no existing rooted db. reading from snapshot", .{});
 
+        const SnapshotDataRingReader = @TypeOf(in);
+        const SnapshotBufReader = struct {
+            in_: *SnapshotDataRingReader,
+            runner_: lib.runner.Connection,
+            completion_: *std.atomic.Value(f64),
+
+            pub fn percentCompleted(self: @This()) f64 {
+                return self.completion_.load(.monotonic);
+            }
+
+            pub fn getBuffer(self: @This()) []const u8 {
+                return self.in_.getBufferBlocking(self.runner_) catch |err| switch (err) {
+                    error.Canceled => return &.{}, // cancel -> EOF
+                };
+            }
+
+            pub fn advance(self: @This(), n: usize) void {
+                self.in_.advance(n);
+            }
+        };
+
         var fba = std.heap.FixedBufferAllocator.init(&Global.fba_memory);
-        var snapshot_iter = try SnapshotIter(*@TypeOf(in)).init(&fba, &in);
+        var snapshot_iter = try SnapshotIter(SnapshotBufReader).init(&fba, .{
+            .in_ = &in,
+            .runner_ = runner,
+            .completion_ = &rw.ready_snapshot_in.completion,
+        });
 
         logger.info().logf("reading snapshot accounts", .{});
-        try rooted.loadSnapshot(.from(logger), &snapshot_iter);
+        try rooted.loadSnapshot(
+            .from(logger),
+            runner,
+            &snapshot_iter,
+            rw.snapshot_metadata_out,
+        );
     }
 
     { // Load feature accounts (TODO: use this to then load leader schedule & stake/vote data)

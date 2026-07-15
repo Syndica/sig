@@ -2312,11 +2312,14 @@ test "updateCalleeAccount: data readonly" {
         );
 
         // growing resize
+        // Agave v4.2's can_data_be_resized no longer returns AccountDataSizeChanged;
+        // the writability/ownership check delegates to can_data_be_changed, which
+        // returns ExternalAccountDataModified for a foreign-owned account.
         var resize_data = "foobarbaz".*;
         (try caller_account.ref_to_len_in_vm.get(.mutable)).* = resize_data.len;
         caller_account.serialized_data = &resize_data;
         try std.testing.expectError(
-            InstructionError.AccountDataSizeChanged,
+            InstructionError.ExternalAccountDataModified,
             updateCalleeAccount(
                 allocator,
                 &ctx.ic,
@@ -2334,7 +2337,7 @@ test "updateCalleeAccount: data readonly" {
         (try caller_account.ref_to_len_in_vm.get(.mutable)).* = truncate_data.len;
         caller_account.serialized_data = &truncate_data;
         try std.testing.expectError(
-            InstructionError.AccountDataSizeChanged,
+            InstructionError.ExternalAccountDataModified,
             updateCalleeAccount(
                 allocator,
                 &ctx.ic,

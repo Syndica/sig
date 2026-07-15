@@ -8,7 +8,7 @@ const sector_size = lib.fio.sector_size;
 pub fn FileReader(
     comptime config: struct {
         buffer_size: usize, // max inflight data being read from disk
-        block_size: usize, // data chunk  size submitted to disk to be read
+        block_size: usize, // data chunk size submitted to disk to be read
     },
 ) type {
     return struct {
@@ -82,7 +82,8 @@ pub fn FileReader(
             return self.offset + block_used;
         }
 
-        /// Get a writable slice .len <= block_size
+        /// Get (reading as needed) buffer of bytes at current offset
+        /// .len <= block_size with .len < block_size if EOF is reached
         pub fn getBuffer(self: *Self, logger: tel.Logger("FileReader.getBuffer")) ![]const u8 {
             const pos = self.read_pos % buffer_size;
             const block_idx = pos / block_size;

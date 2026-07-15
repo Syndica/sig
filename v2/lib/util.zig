@@ -22,6 +22,9 @@ pub fn fmtSlice(slice: anytype) FmtSlice(@TypeOf(slice[0])) {
     return .{ .slice = slice };
 }
 
+/// Verifies that a struct, or pointer to struct, has the contract's declarations and fields with
+/// exact types. Methods must use explicit error sets because inferred error sets (`!T`) from
+/// separate declarations never compare equal even if they have the same inferred set of errors.
 pub fn assertInterface(comptime InterfaceType: type, comptime ContractStruct: type) void {
     const Contract = ContractStruct;
     const Interface = switch (@typeInfo(InterfaceType)) {
@@ -39,23 +42,22 @@ pub fn assertInterface(comptime InterfaceType: type, comptime ContractStruct: ty
 
     // Check interface has matching decls/functions.
     inline for (info.decls) |decl| {
-        const Decl = @TypeOf(@field(Contract, decl.name));
+        const ContractDeclType = @TypeOf(@field(Contract, decl.name));
         if (!@hasDecl(Interface, decl.name)) {
             @compileError(std.fmt.comptimePrint("{s} missing decl {s}:{s}", .{
                 @typeName(Interface),
                 decl.name,
-                @typeName(Decl),
+                @typeName(ContractDeclType),
             }));
         }
 
-        // TODO: support function types with error union returns.
-        const IDecl = @TypeOf(@field(Interface, decl.name));
-        if (@TypeOf(Decl) != @TypeOf(IDecl)) {
+        const InterfaceDeclType = @TypeOf(@field(Interface, decl.name));
+        if (ContractDeclType != InterfaceDeclType) {
             @compileError(std.fmt.comptimePrint("{s}.{s} expected decl {s}, found {s}", .{
                 @typeName(Interface),
                 decl.name,
-                @typeName(Decl),
-                @typeName(IDecl),
+                @typeName(ContractDeclType),
+                @typeName(InterfaceDeclType),
             }));
         }
     }

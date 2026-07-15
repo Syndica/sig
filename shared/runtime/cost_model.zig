@@ -157,17 +157,12 @@ pub fn calculateCostForExecutedTransaction(
 /// See: https://github.com/anza-xyz/agave/blob/eb30856ca804831f30d96f034a1cabd65c96184a/cost-model/src/cost_model.rs#L148
 fn getSignatureCost(
     transaction: *const RuntimeTransaction,
-    feature_set: *const FeatureSet,
-    slot: Slot,
 ) u64 {
     const precompiles = sig.runtime.program.precompiles;
 
     const ed25519_verify_cost = precompiles.ED25519_VERIFY_STRICT_COST;
 
-    const secp256r1_verify_cost = if (feature_set.active(.enable_secp256r1_precompile, slot))
-        precompiles.SECP256R1_VERIFY_COST
-    else
-        0;
+    const secp256r1_verify_cost = precompiles.SECP256R1_VERIFY_COST;
 
     var n_secp256k1_instruction_signatures: u64 = 0;
     var n_ed25519_instruction_signatures: u64 = 0;
@@ -211,7 +206,7 @@ fn calculateTransactionCostInternal(
 
     // Dynamic calculation
     // 1. Signature cost: includes transaction sigs + precompile sigs (ed25519, secp256k1, secp256r1)
-    const signature_cost = getSignatureCost(transaction, feature_set, slot);
+    const signature_cost = getSignatureCost(transaction);
 
     // 2. Write lock cost: 300 CU per writable account
     var write_lock_count: u64 = 0;
