@@ -26,7 +26,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     var request_reader = rw.exec_req_response.request_ring.get(.reader);
     var response_writer = rw.exec_req_response.response_ring.get(.writer);
 
-    var deserialised_buf: [4096]u8 = undefined;
+    var deserialised_buf: [16 * 1024]u8 = undefined;
     var deserial_fba: std.heap.FixedBufferAllocator = .init(&deserialised_buf);
 
     while (true) {
@@ -75,9 +75,15 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
                             .result = .{ .success = true },
                             .block_idx = data.block_idx,
                             .tx_idx = data.tx_idx,
+                            .n_account_refs = data.n_account_refs,
+                            .account_ref_buf = undefined,
                         },
                     },
                 };
+                @memcpy(
+                    response.data.txn_exec.account_ref_buf[0..data.n_account_refs],
+                    data.account_ref_buf[0..data.n_account_refs],
+                );
                 response_writer.markUsed();
             },
             .txn_sig_verify => return error.SigVerifyExecUnimpl,
