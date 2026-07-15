@@ -478,17 +478,13 @@ pub const ExtraFields = struct {
             if (is_some) try r.discardAll(2048); // LtHash = [1024]u16
         }
 
-        // we have an offset wrong somewhere, and this discard of a single byte
-        // is necessary to read block_id corectly.
-        // TODO(#1729): figure this out and come up with a proper solution or explanation
-        try r.discardAll(1);
-
         // block_id: NullOnEof(Hash)
         //
         // in agave, this field is optional on the deserialize side, but it's
         // actually always populated. we do not need to handle the null case,
         // and it's actually not even possible for replay to work if this is
         // null. so we treat this as a required field.
+        if (!try readBool(r)) return error.MissingBlockId; // optional discriminant
         var block_id: Hash = undefined;
         r.readSliceAll(&block_id.data) catch |err| switch (err) {
             error.EndOfStream => return error.MissingBlockId,
