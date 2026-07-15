@@ -42,7 +42,7 @@ pub const PRECOMPILES = [_]Precompile{
     .{
         .program_id = secp256r1.ID,
         .function = secp256r1.verify,
-        .required_feature = .enable_secp256r1_precompile,
+        .required_feature = null,
     },
 };
 

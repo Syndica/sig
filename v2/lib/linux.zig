@@ -351,7 +351,7 @@ pub const bpf = struct {
     /// io_uring operations, accounts DB fsync, and writes to stderr.
     ///
     /// TODO(1378): Per-service filter config to restrict syscalls to only what is needed for that service.
-    pub fn seccompFilters(maybe_stderr: ?std.os.linux.fd_t) [66]sock_filter {
+    pub fn seccompFilters(maybe_stderr: ?std.os.linux.fd_t) [68]sock_filter {
         // load syscall number
         const preamble = .{stmt(LD + W + ABS, @offsetOf(SECCOMP.data, "nr"))};
 
@@ -397,6 +397,7 @@ pub const bpf = struct {
             allowSyscall(@intFromEnum(syscalls.pipe2)) ++
             allowSyscall(@intFromEnum(syscalls.renameat)) ++
             allowSyscall(@intFromEnum(syscalls.unlinkat)) ++
+            allowSyscall(@intFromEnum(syscalls.statx)) ++
             // accounts_db
             allowSyscall(@intFromEnum(syscalls.fsync)) ++
             //

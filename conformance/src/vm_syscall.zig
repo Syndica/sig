@@ -118,12 +118,13 @@ fn executeSyscall(
 
     // Create execution contexts
     var tc: TransactionContext = undefined;
-    try utils.createTransactionContext(
+    const compiled_message = try utils.createTransactionContext(
         allocator,
         pb_instr,
         .{ .vm_environment = vm_environment },
         &tc,
     );
+    defer compiled_message.deinit(allocator);
     defer utils.deinitTransactionContext(allocator, tc);
 
     // Will be deinit by utils.deinitTransactionContext
@@ -157,13 +158,13 @@ fn executeSyscall(
 
     // Program Cache Load Builtins
     // https://github.com/firedancer-io/solfuzz-agave/blob/0b8a7971055d822df3f602c287c368400a784c15/src/vm_syscalls.rs#L128-L130
+    //
+    // Loader input must be ALL fixture accounts (not just `tc.accounts`), so
+    // BPF-loader programs and their programdata accounts — normally absent
+    // from the compiled message — are still visible to the program loader.
     {
-        var accounts: sig.utils.collections.PubkeyMap(sig.runtime.AccountSharedData) = .{};
+        var accounts = try utils.createProgramCacheAccountsMap(allocator, pb_instr);
         defer accounts.deinit(allocator);
-
-        for (tc.accounts) |acc| {
-            try accounts.put(allocator, acc.pubkey, acc.account.*);
-        }
 
         const clock = try tc.sysvar_cache.get(sig.runtime.sysvar.Clock);
         tc.program_map.* = try sig.runtime.program_loader.testLoad(
@@ -182,6 +183,7 @@ fn executeSyscall(
         .{ .data = pb_instr.program_id[0..Pubkey.SIZE].* },
         pb_instr.data,
         pb_instr.instr_accounts.items,
+        compiled_message,
     );
     defer instr_info.deinit(allocator);
 

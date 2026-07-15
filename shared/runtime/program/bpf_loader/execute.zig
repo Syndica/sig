@@ -1129,6 +1129,15 @@ pub fn executeV3DeployWithMaxDataLen(
         );
         defer buffer_account.release();
 
+        if (!buffer_account.context.is_writable) {
+            try ic.tc.log("Buffer account not writeable", .{});
+            return InstructionError.InvalidArgument;
+        }
+        if (!buffer_account.isOwnedByCurrentProgram()) {
+            try ic.tc.log("Buffer account not owned by loader", .{});
+            return InstructionError.IncorrectProgramId;
+        }
+
         switch (try buffer_account.deserializeFromAccountData(
             allocator,
             V3State,

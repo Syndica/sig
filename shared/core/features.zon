@@ -69,7 +69,7 @@
         .name = "warp_timestamp_again",
         .pubkey = "GvDsGDkH5gyzwpDhxNixx8vtx1kwYHH13RiNAPw27zXb",
         .description = "warp timestamp again, adjust bounding to 25% fast 80% slow #15204",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "check_init_vote_data",
@@ -1255,7 +1255,7 @@
         .name = "enable_secp256r1_precompile",
         .pubkey = "srremy31J5Y25FrAApwVb9kZcfXbusYMMsvTK9aWv5q",
         .description = "SIMD-0075: Enable secp256r1 precompile",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "get_sysvar_syscall_enabled",
@@ -1530,7 +1530,11 @@
         .name = "raise_account_cu_limit",
         .pubkey = "htsptAwi2yRoZH83SKaUXykeZGtZHgxkS2QwW1pssR8",
         .description = "SIMD-0306: Raise account CU limit to 40% max",
-        .status = .supported,
+        .status = .hardcoded,
+        .note =
+        \\ .supported would be compatible, we can't use .unsupported or we would have incompatible feature sets.
+        \\ hardcoded is better than supported because when we do implement the logic, it will not be conditional on a gate.
+        ,
     },
     .{
         .name = "syscall_parameter_address_restrictions",

@@ -422,12 +422,12 @@ pub const Rooted = struct {
             if (elapsed_ns >= std.time.ns_per_s) {
                 timer.reset();
                 logger.info().logf(
-                    "wrote {} accounts (queued:{B:.4}, flushed:{B:.4}) in {D:.0} (io-stall:{D:.0})",
+                    "({:.2}%) wrote {} accounts (queued:{B:.4}, flushed:{B:.4}) (io-stall:{D:.0})",
                     .{
+                        snapshot_iter.tar_iter.buf_reader.percentCompleted(),
                         n_puts,
                         n_transfer,
                         self.io.writer.io_transferred,
-                        elapsed_ns,
                         self.io.writer.io_stalled,
                     },
                 );

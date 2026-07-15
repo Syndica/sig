@@ -84,7 +84,6 @@ pub fn updateSysvarsForNewSlot(
     const clock = try updateClock(
         allocator,
         .{
-            .feature_set = &constants.feature_set,
             .epoch_schedule = &epoch_tracker.epoch_schedule,
             .epoch_stakes = &epoch_info.stakes,
             .stakes_cache = &state.stakes_cache,
@@ -168,7 +167,6 @@ pub fn fillMissingSysvarCacheEntries(
 }
 
 pub const UpdateClockDeps = struct {
-    feature_set: *const FeatureSet,
     epoch_schedule: *const EpochSchedule,
     epoch_stakes: ?*const EpochStakes,
     stakes_cache: *StakesCache,
@@ -184,7 +182,6 @@ pub const UpdateClockDeps = struct {
 pub fn updateClock(allocator: Allocator, deps: UpdateClockDeps) !Clock {
     const clock = try nextClock(
         allocator,
-        deps.feature_set,
         deps.epoch_schedule,
         deps.stakes_cache,
         deps.epoch_stakes,
@@ -432,7 +429,6 @@ pub fn getSysvarFromAccount(
 
 fn nextClock(
     allocator: Allocator,
-    feature_set: *const FeatureSet,
     epoch_schedule: *const EpochSchedule,
     stakes_cache: *StakesCache,
     maybe_epoch_stakes: ?*const EpochStakes,
@@ -458,7 +454,6 @@ fn nextClock(
     if (maybe_epoch_stakes) |epoch_stakes| {
         if (try getTimestampEstimate(
             allocator,
-            feature_set,
             stakes_cache,
             epoch_stakes,
             slot,
@@ -490,7 +485,6 @@ fn nextClock(
 
 fn getTimestampEstimate(
     allocator: Allocator,
-    feature_set: *const FeatureSet,
     stakes_cache: *StakesCache,
     epoch_stakes: *const EpochStakes,
     slot: Slot,
@@ -533,7 +527,6 @@ fn getTimestampEstimate(
         ns_per_slot,
         epoch_start_timestamp,
         max_allowable_drift,
-        feature_set.active(.warp_timestamp_again, slot),
     );
 }
 
@@ -870,7 +863,6 @@ test "update all sysvars" {
             (try getSysvarAndAccount(Clock, allocator, account_reader)).?;
         defer allocator.free(old_account.data);
 
-        const feature_set = FeatureSet.ALL_DISABLED;
         const epoch_schedule = EpochSchedule.INIT;
         const epoch_stakes: EpochStakes = .EMPTY;
         defer epoch_stakes.deinit(allocator);
@@ -880,7 +872,6 @@ test "update all sysvars" {
         _ = try updateClock(
             allocator,
             .{
-                .feature_set = &feature_set,
                 .epoch_schedule = &epoch_schedule,
                 .epoch_stakes = &epoch_stakes,
                 .stakes_cache = &stakes_cache,
