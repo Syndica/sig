@@ -539,6 +539,11 @@ pub const ExtraFields = struct {
             if (is_some) try r.discardAll(2048); // LtHash = [1024]u16
         }
 
+        // we have an offset wrong somewhere, and this discard of a single byte
+        // is necessary to read block_id corectly.
+        // TODO(#1729): figure this out and come up with a proper solution or explanation
+        try r.discardAll(1);
+
         // block_id: NullOnEof(Hash)
         //
         // in agave, this field is optional on the deserialize side, but it's
