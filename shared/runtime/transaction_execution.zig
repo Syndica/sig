@@ -217,12 +217,12 @@ pub fn loadAndExecuteTransaction(
     // verify the transaction is not in another block, first by checking
     // in recent blocks, then checking if it's a durable nonce.
     // [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/runtime/src/bank/check_transactions.rs#L105
-    const maybe_nonce_info: ?LoadedAccount = switch (env.status_checker.check(
+    const maybe_nonce_info, const lamports_per_signature = switch (env.status_checker.check(
         &transaction.msg_hash,
         &transaction.recent_blockhash,
         env.max_age,
     )) {
-        .recent_and_unprocessed => null,
+        .recent_and_unprocessed => .{ @as(?LoadedAccount, null), env.lamports_per_signature },
         .already_processed => return .{ .err = .AlreadyProcessed },
         .unknown_blockhash => if (try checkLoadAndAdvanceMessageNonceAccount(
             tmp_allocator,
@@ -230,7 +230,10 @@ pub fn loadAndExecuteTransaction(
             &env.next_durable_nonce,
             env.next_lamports_per_signature,
             account_reader,
-        )) |nonce| nonce[0] else return .{ .err = .BlockhashNotFound },
+        )) |nonce| .{
+            nonce[0],
+            nonce[1],
+        } else return .{ .err = .BlockhashNotFound },
     };
 
     const fees, var rollbacks, const fee_payer =
@@ -241,7 +244,7 @@ pub fn loadAndExecuteTransaction(
             &compute_budget_limits,
             maybe_nonce_info,
             env.rent_collector,
-            env.lamports_per_signature,
+            lamports_per_signature,
         )) {
             .ok => |x| x,
             .err => |e| return .{ .err = e },
