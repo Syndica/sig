@@ -1390,6 +1390,15 @@ pub fn executeV3Upgrade(
         const buffer = try ic.borrowInstructionAccount(@intFromEnum(AccountIndex.buffer));
         defer buffer.release();
 
+        if (!buffer.context.is_writable) {
+            try ic.tc.log("Buffer account not writeable", .{});
+            return InstructionError.InvalidArgument;
+        }
+        if (!buffer.isOwnedByCurrentProgram()) {
+            try ic.tc.log("Buffer account not owned by loader", .{});
+            return InstructionError.IncorrectProgramId;
+        }
+
         switch (try buffer.deserializeFromAccountData(allocator, V3State)) {
             .buffer => |data| {
                 if (data.authority_address == null or
@@ -1814,7 +1823,7 @@ pub fn executeV3Close(
                 return InstructionError.InvalidArgument;
             }
             if (!program_account.isOwnedByCurrentProgram()) {
-                try ic.tc.log("Program account is not owned by the loader", .{});
+                try ic.tc.log("Program account not owned by loader", .{});
                 return InstructionError.IncorrectProgramId;
             }
 
@@ -1965,7 +1974,7 @@ fn commonExtendProgram(
         defer program_account.release();
 
         if (!program_account.context.is_writable) {
-            try ic.tc.log("Program account is not writeable", .{});
+            try ic.tc.log("Program account is not writable", .{});
             return InstructionError.InvalidArgument;
         }
         if (!program_account.isOwnedByCurrentProgram()) {
