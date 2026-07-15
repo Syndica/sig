@@ -88,7 +88,6 @@ const tel = lib.telemetry;
 const replay = lib.replay;
 
 const Hash = lib.solana.Hash;
-const Slot = lib.solana.Slot;
 
 const Shred = lib.shred.Shred;
 const FecSetId = lib.shred.FecSetId;
@@ -140,26 +139,15 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     var exec_request_sender = rw.exec_req_response.request_ring.get(.writer);
     var exec_response_receiver = rw.exec_req_response.response_ring.get(.reader);
 
-    { // wait for snapshot metadata from accounts_db
-        var blockhashes_in = rw.snapshot_metadata_in.blockhash_queue.hashes.getView(.reader);
-        defer blockhashes_in.close();
-
-        var latest_block: ?lib.replay.BlockPool.ItemId = null;
-        while (true) {
-            const hashes = try blockhashes_in.getBufferBlocking(runner);
-            if (hashes.len == 0) break; // blockhashes_out closed their end
-
-            for (hashes) |*hash| {
-                // TODO: initialize the block tree nodes and descend new blocks off these
-                latest_block = try rw.block_pool.createId();
-                blockhash_states[latest_block.?.index()] = hash.*;
-            }
-            blockhashes_in.advance(hashes.len);
-        }
-    }
-
-    // TODO: get this from snapshot metadata
-    var first_slot: ?Slot = null; // this is a hack, remove it!
+    try bootstrap(
+        logger,
+        runner,
+        rw.snapshot_metadata_in,
+        &forest,
+        rw.block_pool,
+        exec_states,
+        blockhash_states,
+    );
 
     // After the slot is supposedly populated, start shred recv (eventually Repair service) on it.
 
@@ -211,7 +199,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 
             if (exec_state.finished()) {
                 logger.info().logf(
-                    "Slot {} ({}) complete! ({}/{})",
+                    "Slot {f} ({}) complete! ({}/{})",
                     .{
                         rw.block_pool.indexToPtr(block_ref).slot,
                         block_ref,
@@ -244,42 +232,6 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                 zone.text("already found");
                 continue :task .idle;
             };
-
-            // This is an awful hack, we are treating the first received fec set as our root.
-            // We should instead insert the last fec set of the rooted slot, similarly allocate it
-            // a BlockRef, and call setChildTreeBlockRefs directly after.
-            if (first_slot == null) {
-                logger.info().logf("inserting first {f}", .{inserted});
-                std.debug.assert(first_slot == null);
-                first_slot = inserted.id.slot;
-
-                const rooted_slot = first_slot.? - 1;
-
-                std.debug.assert(inserted.block_ref == .null);
-
-                const rooted_block_ref = try rw.block_pool.createId();
-                const first_block_ref = try rw.block_pool.createId();
-
-                rooted_block_ref.ptr(rw.block_pool).* = .{
-                    .slot = rooted_slot,
-                    .child = .init(first_block_ref),
-                };
-                first_block_ref.ptr(rw.block_pool).* = .{
-                    .slot = first_slot.?,
-                    .parent = .init(rooted_block_ref),
-                };
-
-                exec_states[rooted_block_ref.index()] = .{
-                    .n_transactions_requested = 0,
-                    .n_transactions_completed = 0,
-                    .all_transactions_requested = true,
-                };
-                std.debug.assert(exec_states[rooted_block_ref.index()].?.finished());
-
-                inserted.block_ref = .init(first_block_ref);
-
-                logger.info().logf("inserted first {f}", .{inserted});
-            }
 
             if (inserted.id.fec_set_idx == 0) {
                 logger.info().logf(
@@ -320,6 +272,105 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             continue :task .idle;
         },
     }
+}
+
+/// Reads all the RuntimeMetadata provided by accountsdb from the snapshot or
+/// its internal state. This bootstraps replay with information about its
+/// starting root slot, and some older info like the history of blockhashes.
+/// This data populates the block tree, some other structures indexed by
+/// BlockRef, and seeds the merkle forest with some minimal info about the last
+/// fec set in the rooted slot.
+///
+/// Currently some placeholder data is used, which is not accurate because it is
+/// impossible to derive from the snapshot. We must be very careful about how we
+/// use this:
+/// - slot number in the block tree for slots older than the starting root
+/// - fields in the final fec set of the starting root:
+///     - chained_merkle_root
+///     - fec_set_idx
+///     - payload_len
+fn bootstrap(
+    logger: tel.Logger("main"),
+    runner: lib.runner.Connection,
+    snapshot_metadata: *lib.accounts_db.RuntimeMetadata,
+    forest: *MerkleForest,
+    block_pool: *lib.replay.BlockPool,
+    exec_states: *BlockExecStates,
+    blockhash_states: *BlockHashStates,
+) !void {
+    var num_hashes: usize = 0;
+    // Drain the blockhash queue into the block tree. accountsdb writes into
+    // this ring blocks waiting for the reader (us).
+    var root_block = bhq: {
+        var blockhashes_in = snapshot_metadata.blockhash_queue.hashes.getView(.reader);
+        defer blockhashes_in.close();
+        var last_block: ?lib.replay.BlockRef = null;
+        while (true) {
+            const hashes = try blockhashes_in.getBufferBlocking(runner);
+            if (hashes.len == 0) break; // blockhashes_out closed their end
+            for (hashes) |*hash| {
+                const block = try block_pool.createId();
+                block.ptr(block_pool).* = .{
+                    .slot = .null, // cannot be determined from the snapshot
+                    .child = .null,
+                    .parent = .init(last_block),
+                };
+                if (last_block) |p| p.ptr(block_pool).child = .init(block);
+                blockhash_states[block.index()] = hash.*;
+                last_block = block;
+                num_hashes += 1;
+            }
+            blockhashes_in.advance(hashes.len);
+        }
+
+        const root_block = last_block orelse return error.NoBlockhashesInSnapshot;
+
+        break :bhq root_block;
+    };
+    logger.info().logf("loaded {} blockhashes from accountsdb snapshot data", .{num_hashes});
+
+    const root_slot = try snapshot_metadata.getSlotBlocking(runner);
+    root_block.ptr(block_pool).slot = .init(root_slot);
+    logger.info().logf("got the root slot from the snapshot: {}", .{root_slot});
+
+    // create a synthetic fec-set node that doesn't have all information about
+    // the fec set, but it is enough to get started processing the first block
+    // after the root
+    const root_node = try insertFecSet(logger, &.{
+        .merkle_root = snapshot_metadata.block_id,
+        .chained_merkle_root = .ZEROES, // cannot be determined from the snapshot
+        .id = .{
+            .slot = root_slot,
+            .fec_set_idx = 0, // cannot be determined from the snapshot
+        },
+        .data_complete = true,
+        .slot_complete = true,
+        .payload_len = 0, // cannot be determined from the snapshot
+        .payload_buf = undefined,
+    }, forest, block_pool) orelse unreachable;
+
+    root_node.block_ref = .init(root_block);
+
+    // Prevent the synthetic node from being interpreted as an orphan child of some future node
+    // whose `merkle_root` happens to equal `Hash.ZEROES`.
+    std.debug.assert(forest.orphan_map.swapRemoveAdapted(
+        &root_node.chained_merkle_root,
+        MerkleForest.OrphanContext{ .map = &forest.orphan_map },
+    ));
+
+    // Mark the root block as fully executed so `maybeContinueBlockExec` will immediately
+    // dispatch transactions for its first child.
+    exec_states[root_block.index()] = .{
+        .n_transactions_requested = 0,
+        .n_transactions_completed = 0,
+        .all_transactions_requested = true,
+    };
+    std.debug.assert(exec_states[root_block.index()].?.finished());
+
+    logger.info().logf(
+        "finished bootstrapping replay at slot {} (block_id={f})",
+        .{ root_slot, snapshot_metadata.block_id },
+    );
 }
 
 /// Holds the accounts mutated for each tracked Block.
@@ -439,7 +490,7 @@ const Unrooted = extern struct {
         defer zone.deinit();
 
         var current: ?*replay.Node = block.ptr(block_pool);
-        while (current) |ancestor_block| : (current = ancestor_block.parent.ptr(block_pool)) {
+        while (current) |ancestor_block| {
             const current_map: *const Map =
                 &self.maps[block_pool.ptrToIndex(ancestor_block).index()];
 
@@ -452,6 +503,7 @@ const Unrooted = extern struct {
 
                 return account_ref;
             }
+            current = if (ancestor_block.parent.opt()) |p| p.ptr(block_pool) else null;
         }
 
         return .invalid;
@@ -702,7 +754,7 @@ fn setChildBlockRef(
         const new_block = try block_pool.create();
         new_block.* = .{
             .parent = .init(parent_block_ref),
-            .slot = child.id.slot,
+            .slot = .init(child.id.slot),
         };
 
         break :ref .init(block_pool.ptrToIndex(new_block)); // b)
@@ -716,7 +768,7 @@ fn setChildBlockRef(
         const new_block = try block_pool.create();
         new_block.* = .{
             .parent = .init(parent_block_ref),
-            .slot = child.id.slot,
+            .slot = .init(child.id.slot),
         };
 
         break :ref .init(block_pool.ptrToIndex(new_block)); // c)
@@ -1057,13 +1109,13 @@ fn maybeContinueBlockExec(
     exec_state.all_transactions_requested = true;
 
     logger.info().logf(
-        "requested all transactions for slot {} ({})",
+        "requested all transactions for slot {f} ({})",
         .{ block_ref.ptr(block_pool).slot, block_ref },
     );
 
     if (exec_state.finished()) {
         logger.info().logf(
-            "Slot {} ({}) (already) complete! ({}/{})",
+            "Slot {f} ({}) (already) complete! ({}/{})",
             .{
                 block_ref.ptr(block_pool).slot,
                 block_ref,
@@ -1616,4 +1668,89 @@ test "MerkleForest tree put" {
     try std.testing.expectEqual(null, try insertFecSet(logger, &c, &tree, pool));
     try std.testing.expectEqual(null, try insertFecSet(logger, &d, &tree, pool));
     try std.testing.expectEqual(null, try insertFecSet(logger, &e, &tree, pool));
+}
+
+test "bootstrap creates root block and chains blockhashes" {
+    const allocator = std.testing.allocator;
+
+    var activity: lib.runner.Activity = .{};
+    var service_view = activity.serviceView();
+    const runner: lib.runner.Connection = .{ .activity = &service_view };
+
+    var metadata: lib.accounts_db.RuntimeMetadata = undefined;
+    metadata.init();
+    metadata.block_id = .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");
+
+    // Prefill the blockhash ring with N > 1 hashes as a single writer batch,
+    // then close the writer end so bootstrap's drain loop terminates.
+    const test_hashes = [_]Hash{
+        .parse("BMHr4knWhDp8JhqCYhA2K5DUYQsYUVXdy2zWahzt5jLd"),
+        .parse("2GyMeUytf6fcsfNP2QQ6F5e5qwAUoMtKUbnH6QU6bTNm"),
+        .parse("4UahX8LzYC7xnubvP9QzRHmPPYovtcNYo7rBXKpp3ADM"),
+        .parse("Hh8DjJdpQRGeZ6bUxYyt1PBktnFtNAwZoQuwZqGWLPfB"),
+    };
+    {
+        var writer = metadata.blockhash_queue.hashes.getView(.writer);
+        const buf = writer.getBuffer().?;
+        try std.testing.expect(buf.len >= test_hashes.len);
+        @memcpy(buf[0..test_hashes.len], &test_hashes);
+        writer.advance(test_hashes.len);
+        writer.close();
+    }
+
+    const root_slot: lib.solana.Slot = 100;
+    metadata.populateSlot(root_slot);
+
+    var pool_buf: [lib.replay.BlockPool.size()]u8 align(@alignOf(lib.replay.BlockPool)) = undefined;
+    const pool: *lib.replay.BlockPool = @ptrCast(&pool_buf);
+    pool.init();
+
+    var forest: MerkleForest = try .init(allocator);
+    defer forest.deinit(allocator);
+
+    const exec_states = try allocator.create(BlockExecStates);
+    defer allocator.destroy(exec_states);
+    @memset(exec_states, null);
+
+    const blockhash_states = try allocator.create(BlockHashStates);
+    defer allocator.destroy(blockhash_states);
+    @memset(blockhash_states, null);
+
+    const logger = tel.Logger("main").noop;
+
+    try bootstrap(logger, runner, &metadata, &forest, pool, exec_states, blockhash_states);
+
+    // find root in pool
+    var root_opt: ?lib.replay.BlockRef = null;
+    for (pool.buf(), 0..) |block, i| {
+        if (block.item.slot.opt()) |slot| if (slot == root_slot) {
+            try std.testing.expectEqual(null, root_opt);
+            root_opt = lib.replay.BlockRef.fromInt(@intCast(i));
+        };
+    }
+    const root = root_opt orelse return error.NoRoot;
+
+    try std.testing.expectEqual(root_slot, root.ptr(pool).slot.opt().?);
+    try std.testing.expect(exec_states[root.index()].?.finished());
+
+    // walk backwards from root, checking each block's hash, slot, and that the
+    // parent and child link properly.
+    var current: ?lib.replay.BlockRef = root;
+    var expected_child: ?lib.replay.BlockRef = null;
+    for (0..test_hashes.len) |i| {
+        const block_ref = current orelse return error.ParentNotSpecified;
+        const block = block_ref.ptr(pool);
+        try std.testing.expectEqual(
+            test_hashes[test_hashes.len - 1 - i],
+            blockhash_states[block_ref.index()].?,
+        );
+        try std.testing.expectEqual(
+            if (i == 0) root_slot else null,
+            block.slot.opt(),
+        );
+        try std.testing.expectEqual(expected_child, block.child.opt());
+        expected_child = block_ref;
+        current = block.parent.opt();
+    }
+    try std.testing.expectEqual(null, current);
 }

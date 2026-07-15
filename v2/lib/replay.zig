@@ -1,6 +1,8 @@
+const std = @import("std");
 const solana = @import("solana.zig");
 const collections = @import("collections.zig");
 const ipc = @import("ipc.zig");
+const util = @import("util.zig");
 const accounts_db = @import("accounts_db.zig");
 
 // This is a bit large currently because of the unrooted store
@@ -22,7 +24,9 @@ pub const Node = extern struct {
     parent: BlockRef.Optional = .null,
     child: BlockRef.Optional = .null,
     sibling: BlockRef.Optional = .null,
-    slot: solana.Slot,
+    /// this is null for blocks older than the bootstrap root. do not unwrap
+    /// unless you are certain the block is not older than the bootstrap root
+    slot: util.PackedOptional(solana.Slot, std.math.maxInt(solana.Slot)),
 };
 
 pub const ExecReqResponse = extern struct {

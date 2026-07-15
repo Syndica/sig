@@ -1,4 +1,5 @@
 const std = @import("std");
+const util = @import("../util.zig");
 
 /// Fixed capacity pool whose header and item storage are laid out in one contiguous buffer.
 /// Intended for shared memory because every stored reference is an ItemId index. No process
@@ -87,31 +88,7 @@ pub fn SharedPool(Item: type, cap: usize) type {
                 return pool.indexToConstPtr(self);
             }
 
-            pub const Optional = enum(IdInt) {
-                null = std.math.maxInt(IdInt),
-                _,
-
-                pub fn init(non_optional: ItemId) Optional {
-                    return @enumFromInt(@intFromEnum(non_optional));
-                }
-
-                pub fn opt(self: Optional) ?ItemId {
-                    if (self == .null) return null;
-                    return @enumFromInt(@intFromEnum(self));
-                }
-
-                pub fn ptr(self: Optional, pool: *PoolSelf) ?*Item {
-                    if (self == .null) return null;
-                    const id: ItemId = @enumFromInt(@intFromEnum(self));
-                    return id.ptr(pool);
-                }
-
-                pub fn constPtr(self: Optional, pool: *const PoolSelf) ?*const Item {
-                    if (self == .null) return null;
-                    const id: ItemId = @enumFromInt(@intFromEnum(self));
-                    return id.constPtr(pool);
-                }
-            };
+            pub const Optional = util.PackedOptional(ItemId, std.math.maxInt(IdInt));
         };
 
         pub fn size() usize {
@@ -268,19 +245,7 @@ pub fn Pool(Item: type, IdInt: type) type {
                 return pool.indexToPtr(self);
             }
 
-            pub const Optional = enum(IdInt) {
-                null = std.math.maxInt(IdInt),
-                _,
-
-                pub fn init(non_optional: ItemId) Optional {
-                    return @enumFromInt(@intFromEnum(non_optional));
-                }
-
-                pub fn opt(self: Optional) ?ItemId {
-                    if (self == .null) return null;
-                    return @enumFromInt(@intFromEnum(self));
-                }
-            };
+            pub const Optional = util.PackedOptional(ItemId, std.math.maxInt(IdInt));
         };
 
         pub fn init(item_buf: []Item) PoolSelf {

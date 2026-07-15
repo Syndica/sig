@@ -48,7 +48,8 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
             .txn_exec => {
                 const data = &request.data.txn_exec;
 
-                const slot = data.block_idx.constPtr(ro.block_pool).slot;
+                // null unwrap is safe because we never execute blocks older than the bootstrap root
+                const slot = data.block_idx.constPtr(ro.block_pool).slot.opt().?;
                 zone.value(slot);
                 tracy.plot(u48, "exec slot", @intCast(slot));
 
