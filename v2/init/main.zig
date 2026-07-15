@@ -182,13 +182,17 @@ pub fn main() !void {
         const cfg_file = try std.fs.cwd().openFile(cfg_path, .{});
         defer cfg_file.close();
 
-        const cfg_str = try cfg_file.readToEndAllocOptions(allocator, 1024 * 1024, null, .@"1", 0);
+        var read_buf: [4096]u8 = undefined;
+        var file_reader = cfg_file.reader(&read_buf);
+        const cfg_str = try file_reader.interface.allocRemaining(allocator, .limited(1024 * 1024));
         defer allocator.free(cfg_str);
+        const cfg_str_z = try allocator.dupeZ(u8, cfg_str);
+        defer allocator.free(cfg_str_z);
 
         var diag: std.zon.parse.Diagnostics = .{};
         defer diag.deinit(allocator);
 
-        const config = std.zon.parse.fromSlice(Config, allocator, cfg_str, &diag, .{}) catch |err| {
+        const config = std.zon.parse.fromSlice(Config, allocator, cfg_str_z, &diag, .{}) catch |err| {
             std.log.err("{f}", .{diag});
             return err;
         };
