@@ -84,7 +84,7 @@ jobs:
             v2/zig-out/kcov/kcov-merged/cobertura.xml \
             --compare-branch="$BASE_REF" \
             --format markdown:diff-coverage.md \
-            --fail-under 0 || true
+            --fail-under 0
 
           # Output to GitHub step summary
           if [ -f diff-coverage.md ]; then
