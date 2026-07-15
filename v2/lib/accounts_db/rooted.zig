@@ -383,6 +383,9 @@ pub const Rooted = struct {
         snapshot_iter: anytype, // lib.solana.snapshot.SnapshotIter(anytype),
         runtime_metadata: *RuntimeMetadata,
     ) !void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "loadSnapshot" });
+        defer zone.deinit();
+
         const slot = snapshot_iter.manifest.bank_fields.slot;
         try self.beginTransaction(.from(logger), slot);
 
@@ -683,7 +686,7 @@ pub const Rooted = struct {
 
         const entry = self.table.get(pubkey);
         if (entry.isEmpty()) { // not found. complete immediately.
-            node.result = .{ .pubkey = pubkey.*, .account_index = AccountPool.invalid_index };
+            node.result = .{ .pubkey = pubkey.*, .account_index = .invalid };
             node.next = self.ready_lookups;
             self.ready_lookups = lookup_idx;
             return true;
@@ -855,7 +858,7 @@ pub const Rooted = struct {
                 const acc_info = header.info.account;
                 if (acc_info.data_len != account.data.len) {
                     logger.err().logf(
-                        "account lookup {f} read mismatch sector size: expected {} foudn {}",
+                        "account lookup {f} read mismatch sector size: expected {} found {}",
                         .{ node.result.pubkey, account.data.len, acc_info.data_len },
                     );
                     return error.InvalidRead;

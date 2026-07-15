@@ -93,7 +93,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             r: *Rooted,
             l: @TypeOf(logger),
 
-            pub const AccountRef = AccountPool.Index;
+            pub const AccountRef = AccountPool.AccountRef;
 
             pub fn load(self: @This(), pubkey: *const lib.solana.Pubkey) ?AccountRef {
                 errdefer |err| std.debug.panic("AccountReader: {}", .{err});
@@ -103,7 +103,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                 const result: Rooted.LookupResult = while (true) : (std.atomic.spinLoopHint())
                     break (try self.r.pollRead(.from(self.l))) orelse continue;
 
-                if (result.account_index == AccountPool.invalid_index) return null;
+                if (result.account_index == .invalid) return null;
                 return result.account_index;
             }
 
