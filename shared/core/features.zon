@@ -1530,7 +1530,11 @@
         .name = "raise_account_cu_limit",
         .pubkey = "htsptAwi2yRoZH83SKaUXykeZGtZHgxkS2QwW1pssR8",
         .description = "SIMD-0306: Raise account CU limit to 40% max",
-        .status = .supported,
+        .status = .hardcoded,
+        .note =
+        \\ .supported would be compatible, we can't use .unsupported or we would have incompatible feature sets.
+        \\ hardcoded is better than supported because when we do implement the logic, it will not be conditional on a gate.
+        ,
     },
     .{
         .name = "syscall_parameter_address_restrictions",
