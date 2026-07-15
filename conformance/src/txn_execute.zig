@@ -703,7 +703,7 @@ fn executeTxnContext(
         // juggles the many different versions of lamports_per_signature.
         .next_lamports_per_signature = last_lamports_per_signature,
         .last_lamports_per_signature = last_lamports_per_signature,
-        .lamports_per_signature = sig.runtime.check_transactions.LAMPORTS_PER_SIGNATURE,
+        .lamports_per_signature = LAMPORTS_PER_SIGNATURE,
     };
 
     var failed_accounts = sig.runtime.account_loader.LoadedTransactionAccounts.Accounts{};
