@@ -11,3 +11,4 @@
 # Top-level categories not implemented by the sig runner.
 block
 cost
+gossip

@@ -71,6 +71,6 @@ pub const NATIVE = sig.utils.pht(Program, &.{
 pub const PRECOMPILE = sig.utils.pht(Program, &.{
     .{ precompiles.ed25519.ID,      .{ .func = precompiles.ed25519.execute } },
     .{ precompiles.secp256k1.ID,    .{ .func = precompiles.secp256k1.execute } },
-    .{ precompiles.secp256r1.ID,    .{ .func = precompiles.secp256r1.execute, .gate = .enable_secp256r1_precompile } },
+    .{ precompiles.secp256r1.ID,    .{ .func = precompiles.secp256r1.execute } },
 });
 // zig fmt: on
