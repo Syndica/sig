@@ -5,6 +5,12 @@ const ipc = @import("ipc.zig");
 const util = @import("util.zig");
 const accounts_db = @import("accounts_db.zig");
 
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("replay/account_resolve.zig");
+    }
+}
+
 const VersionedTransaction = solana.transaction.VersionedTransaction;
 
 // This is a bit large currently because of the unrooted store
