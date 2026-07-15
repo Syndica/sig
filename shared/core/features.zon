@@ -556,12 +556,7 @@
         .name = "stake_minimum_delegation_for_rewards",
         .pubkey = "G6ANXD6ptCSyNd9znZm7j4dEczAJCfx7Cy43oBx3rKHJ",
         .description = "Stakes must be at least the minimum delegation to earn rewards",
-        .status = .supported,
-        .note =
-        \\ TODO: Low Priority
-        \\ This feature has never been activated and there is not plan for activation.
-        \\ Why not remove tor mark reverted?
-        ,
+        .status = .reverted,
     },
     .{
         .name = "add_set_compute_unit_price_ix",
