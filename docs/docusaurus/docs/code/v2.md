@@ -30,6 +30,30 @@ zig build run -- config/example.zon
 
 2. Use `.sandboxing_mode = .threaded` in your runtime config.
 
+# Testing
+
+Run tests from this directory:
+
+```sh
+zig build unit-test
+zig build bb-test
+zig build test
+```
+
+`unit-test` runs unit tests, deterministic in-process component scenarios, and fuzz tests. `bb-test` runs complete services through shared-memory topologies. `test` runs both categories.
+
+Filter unit and component tests with:
+
+```sh
+zig build unit-test -Dfilter=ping
+```
+
+Run the built-in Zig fuzz targets with:
+
+```sh
+zig build unit-test --fuzz -Dfilter=fuzz
+```
+
 # Linting
 
 Run v2 lint checks from this directory:
