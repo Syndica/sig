@@ -14,7 +14,7 @@ pub const accounts_db = struct {
 
     pub const ReadWrite = struct {
         config: *lib.accounts_db.RootedConfig,
-        ready_snapshot_in: *lib.snapshot.SnapshotDataRing,
+        ready_snapshot_in: *lib.snapshot.SnapshotData,
         snapshot_metadata_out: *lib.accounts_db.RuntimeMetadata,
         account_pool: *lib.accounts_db.AccountPool,
         replay_lookups: *lib.accounts_db.AccountLookups,
@@ -101,7 +101,7 @@ pub const snapshot = struct {
 
     pub const ReadWrite = struct {
         source_from_gossip: *lib.snapshot.SnapshotSourceRing,
-        ready_snapshot_out: *lib.snapshot.SnapshotDataRing,
+        ready_snapshot_out: *lib.snapshot.SnapshotData,
         tel: *lib.telemetry.Region,
     };
 };

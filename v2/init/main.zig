@@ -255,7 +255,7 @@ pub fn main() !void {
     var gossip_source_to_snapshot: Region(lib.snapshot.SnapshotSourceRing) = try .simple();
     gossip_source_to_snapshot.ptr().init();
 
-    var snapshot_ready_to_accounts_db: Region(lib.snapshot.SnapshotDataRing) = try .simple();
+    var snapshot_ready_to_accounts_db: Region(lib.snapshot.SnapshotData) = try .simple();
     snapshot_ready_to_accounts_db.ptr().init();
 
     var snapshot_metadata: Region(lib.accounts_db.RuntimeMetadata) = try .simple();

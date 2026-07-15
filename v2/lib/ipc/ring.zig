@@ -45,7 +45,7 @@ pub fn Ring(N: comptime_int, T: type) type {
                 const Slice = if (side == .reader) []const T else []T;
 
                 /// Get a slice of "available" items (populated for .reader, writable for .writer).
-                /// If theres no avaiable items, returns null.
+                /// If there's no avaiable items, returns null.
                 /// If the other side closed their end, returns an empty slice.
                 ///
                 /// After observing the items, they can be marked as used/consumed with `advance(n)`
