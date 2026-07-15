@@ -73,7 +73,7 @@ jobs:
       - name: Generate local coverage report
         if: github.event_name == 'pull_request'
         run: |
-          pip install --quiet diff-cover
+          pip install --quiet diff-cover==10.3.0
           # Determine the base branch to diff against
           BASE_REF="origin/${{ github.base_ref }}"
           echo "Comparing coverage against $BASE_REF"
