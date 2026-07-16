@@ -243,6 +243,16 @@ pub const Appender = struct {
         return .fromRaw(raw);
     }
 
+    pub fn appendLatencyHistogram(
+        self: Appender,
+        comptime id: Id,
+        comptime layout: tel.LatencyHistogram.Layout,
+    ) tel.LatencyHistogram {
+        const raw = self.appendLatencyHistogramRaw(id, layout);
+        raw.init();
+        return .fromRaw(layout, raw);
+    }
+
     pub fn appendFields(
         self: Appender,
         comptime S: type,
@@ -320,11 +330,11 @@ pub const Appender = struct {
         return .{ .elements = self.histogram_data[elem_offs + 1 ..][0..elem_count] };
     }
 
-    pub fn appendLatencyHistogram(
+    pub fn appendLatencyHistogramRaw(
         self: Appender,
         comptime id: Id,
         comptime layout: tel.LatencyHistogram.Layout,
-    ) tel.LatencyHistogram {
+    ) tel.LatencyHistogram.Raw {
         const header_words = tel.LatencyHistogram.Layout.header_words;
         const element_count = layout.elementsFromBucketCount();
         const elem_offs = self.histogram_data_end.fetchAdd(header_words + element_count, .acq_rel);
@@ -334,11 +344,9 @@ pub const Appender = struct {
             .index = elem_offs,
         });
         layout.writeHeader(self.histogram_data[elem_offs..][0..header_words]);
-        const raw: tel.LatencyHistogram.Raw = .{
+        return .{
             .elements = self.histogram_data[elem_offs + header_words ..][0..element_count],
         };
-        raw.init();
-        return .fromRaw(layout, raw);
     }
 
     fn appendId(self: Appender, detail: Detail) void {
