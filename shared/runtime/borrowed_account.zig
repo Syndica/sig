@@ -69,7 +69,7 @@ pub const BorrowedAccount = struct {
         return null;
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1095
+    /// [agave] https://github.com/anza-xyz/agave/blob/v4.2/transaction-context/src/instruction_accounts.rs#L351
     pub fn checkCanSetDataLength(
         self: *const BorrowedAccount,
         resize_delta: i64,
@@ -77,11 +77,10 @@ pub const BorrowedAccount = struct {
     ) ?InstructionError {
         const old_length = self.constAccountData().len;
 
-        if (length != old_length and !self.account.owner.equals(&self.context.program_id))
-            return InstructionError.AccountDataSizeChanged;
-
-        if (length > MAX_PERMITTED_DATA_LENGTH)
-            return InstructionError.InvalidRealloc;
+        // NOTE: agave no longer returns AccountDataSizeChanged here. Ownership/writability
+        // is enforced solely by checkDataIsMutable() below (ReadonlyDataModified /
+        // ExternalAccountDataModified); can_data_be_resized only checks the size limits.
+        if (length > MAX_PERMITTED_DATA_LENGTH) return InstructionError.InvalidRealloc;
 
         const length_signed: i64 = @intCast(length);
         const old_length_signed: i64 = @intCast(old_length);

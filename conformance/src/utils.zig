@@ -20,6 +20,96 @@ const intFromInstructionError = sig.core.instruction.intFromInstructionError;
 
 const Pubkey = sig.core.Pubkey;
 
+/// Mirrors Agave's `mock_compile_message` + `LegacyMessage::new`: the
+/// transaction context is populated with **only** the accounts referenced by
+/// the top-level instruction (its `AccountMeta`s plus the program). All other
+/// fixture accounts are excluded from `tc.accounts`, so a CPI callee that names
+/// an unreferenced pubkey correctly fails with `MissingAccount` (matching agave
+/// and firedancer) rather than escalating perms against a stale meta.
+///
+/// Fixture indices in `InstrAcct.index` are relative to the input protobuf
+/// `accounts` list, so callers must translate them to the compact
+/// `tc.accounts` layout via `input_to_tx_idx` before handing them to the
+/// runtime.
+///
+/// [agave] https://github.com/anza-xyz/agave/blob/master/program-runtime/src/invoke_context.rs — `mock_compile_message`
+/// [firedancer] https://github.com/firedancer-io/firedancer/blob/main/src/flamenco/runtime/tests/fd_instr_harness.c — `account_in_message` / `input_txn_idx`
+pub const CompiledMessage = struct {
+    /// Fixture-index → `tc.accounts` index. `NOT_IN_MESSAGE` when the account
+    /// is not part of the compiled message.
+    input_to_tx_idx: []u16,
+    /// Number of accounts in the compiled message (== `tc.accounts.len`).
+    message_account_cnt: u16,
+    /// Fixture index of the program account, or `null` when the program id is
+    /// not present in the fixture's `accounts` list.
+    program_input_idx: ?u16,
+
+    pub const NOT_IN_MESSAGE: u16 = std.math.maxInt(u16);
+
+    pub fn deinit(self: CompiledMessage, allocator: std.mem.Allocator) void {
+        allocator.free(self.input_to_tx_idx);
+    }
+
+    /// Translate a fixture-relative account index to a `tc.accounts` index,
+    /// or `null` if the account is not in the compiled message.
+    pub fn toTxIdx(self: CompiledMessage, input_idx: u32) ?u16 {
+        if (input_idx >= self.input_to_tx_idx.len) return null;
+        const tx_idx = self.input_to_tx_idx[input_idx];
+        return if (tx_idx == NOT_IN_MESSAGE) null else tx_idx;
+    }
+};
+
+/// Build a [`CompiledMessage`] for a top-level instruction. Marks the program
+/// account and every account named by `instr_accounts` as in-message; assigns
+/// them compact tc-indices in fixture order (matches firedancer's
+/// `fd_instr_harness.c`, which uses fixture order and pushes unreferenced
+/// accounts past `accounts.cnt`). All other fixture accounts are excluded.
+pub fn compileMessage(
+    allocator: std.mem.Allocator,
+    pb_instr_ctx: pb.InstrContext,
+) !CompiledMessage {
+    if (pb_instr_ctx.program_id.len != Pubkey.SIZE) return error.OutOfBounds;
+
+    const pb_accounts = pb_instr_ctx.accounts.items;
+    var input_to_tx_idx = try allocator.alloc(u16, pb_accounts.len);
+    errdefer allocator.free(input_to_tx_idx);
+    @memset(input_to_tx_idx, CompiledMessage.NOT_IN_MESSAGE);
+
+    // Mark accounts named by instr_accounts. Duplicate references collapse to
+    // one tc slot in the second pass below.
+    for (pb_instr_ctx.instr_accounts.items) |ia| {
+        if (ia.index >= pb_accounts.len) return error.InstructionAccountIndexOutOfRange;
+        input_to_tx_idx[ia.index] = 0; // sentinel meaning "in message"
+    }
+
+    // Mark the program account. `program_input_idx` is null when the fixture
+    // omits the program from its account list; sig historically errors out in
+    // `createInstructionInfo` in that case, which we preserve.
+    var program_input_idx: ?u16 = null;
+    for (pb_accounts, 0..) |a, i| {
+        if (std.mem.eql(u8, a.address, pb_instr_ctx.program_id)) {
+            program_input_idx = @intCast(i);
+            input_to_tx_idx[i] = 0; // sentinel meaning "in message"
+            break;
+        }
+    }
+
+    // Second pass: assign compact tc-indices in fixture order.
+    var cnt: u16 = 0;
+    for (input_to_tx_idx) |*slot| {
+        if (slot.* != CompiledMessage.NOT_IN_MESSAGE) {
+            slot.* = cnt;
+            cnt += 1;
+        }
+    }
+
+    return .{
+        .input_to_tx_idx = input_to_tx_idx,
+        .message_account_cnt = cnt,
+        .program_input_idx = program_input_idx,
+    };
+}
+
 pub const ConvertedErrorCodes = struct {
     err: u32,
     instruction_error: u32,
@@ -68,7 +158,10 @@ pub fn createTransactionContext(
         program_map: ?*ProgramMap = null,
     },
     tc: *TransactionContext,
-) !void {
+) !CompiledMessage {
+    const compiled_message = try compileMessage(allocator, instr_ctx);
+    errdefer compiled_message.deinit(allocator);
+
     const feature_set = if (environment.feature_set) |ptr|
         ptr
     else
@@ -122,6 +215,7 @@ pub fn createTransactionContext(
         .accounts = try createTransactionContextAccounts(
             allocator,
             instr_ctx.accounts.items,
+            compiled_message,
         ),
         .serialized_accounts = .{},
         .instruction_stack = .{},
@@ -146,6 +240,8 @@ pub fn createTransactionContext(
             tc.prev_lamports_per_signature = prev_entry.lamports_per_signature;
         }
     }
+
+    return compiled_message;
 }
 
 pub fn deinitTransactionContext(
@@ -215,6 +311,7 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 pub fn createTransactionContextAccounts(
     allocator: std.mem.Allocator,
     pb_accounts: []const pb.AcctState,
+    compiled_message: CompiledMessage,
 ) ![]TransactionContextAccount {
     errdefer |err| {
         std.debug.print("createTransactionContextAccounts: error={}\n", .{err});
@@ -229,7 +326,13 @@ pub fn createTransactionContextAccounts(
         accounts.deinit(allocator);
     }
 
-    for (pb_accounts) |pb_account| {
+    try accounts.ensureTotalCapacityPrecise(allocator, compiled_message.message_account_cnt);
+
+    for (pb_accounts, 0..) |pb_account, i| {
+        // Skip accounts that aren't in the compiled message so the runtime
+        // sees only what agave / firedancer see.
+        if (compiled_message.input_to_tx_idx[i] == CompiledMessage.NOT_IN_MESSAGE) continue;
+
         const account_data = try allocator.dupe(u8, pb_account.data);
         errdefer allocator.free(account_data);
 
@@ -245,15 +348,13 @@ pub fn createTransactionContextAccounts(
             .rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH,
         };
 
-        try accounts.append(
-            allocator,
-            TransactionContextAccount.init(
-                .{ .data = pb_account.address[0..Pubkey.SIZE].* },
-                account_ptr,
-            ),
-        );
+        accounts.appendAssumeCapacity(TransactionContextAccount.init(
+            .{ .data = pb_account.address[0..Pubkey.SIZE].* },
+            account_ptr,
+        ));
     }
 
+    std.debug.assert(accounts.items.len == compiled_message.message_account_cnt);
     return accounts.toOwnedSlice(allocator);
 }
 
@@ -263,6 +364,7 @@ pub fn createInstructionInfo(
     program_id: Pubkey,
     instruction: []const u8,
     pb_instruction_accounts: []const pb.InstrAcct,
+    compiled_message: CompiledMessage,
 ) !InstructionInfo {
     errdefer |err| {
         std.debug.print("createInstructionInfo: error={}\n", .{err});
@@ -271,23 +373,49 @@ pub fn createInstructionInfo(
     const program_index_in_transaction =
         tc.getAccountIndex(program_id) orelse return error.CouldNotFindProgram;
 
+    // Dedupe map is keyed by tc-index (the runtime's index_in_transaction),
+    // not the fixture-relative index in `pb_instruction_accounts`.
     var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
     for (pb_instruction_accounts, 0..) |acc, idx| {
-        if (dedupe_map[acc.index] == 0xffff)
-            dedupe_map[acc.index] = @intCast(idx);
+        const tx_idx = compiled_message.toTxIdx(acc.index) orelse
+            return error.InstructionAccountIndexOutOfRange;
+        if (dedupe_map[tx_idx] == 0xffff)
+            dedupe_map[tx_idx] = @intCast(idx);
     }
+
+    // An account called as a program is write-demoted to read-only during
+    // message sanitization (unless an upgradeable loader is present). The
+    // instruction harness bypasses message compilation, so replicate the
+    // demotion here to match agave's `mock_compile_message` writability.
+    // agave sanitizes with an empty reserved-accounts set, so only the
+    // program-id demotion applies here (no sysvar/native-program demotion).
+    // [agave] https://github.com/anza-xyz/agave/blob/6dcc39fcba90fbb5c924c71a1ef287c234f56c17/accounts-db/src/accounts.rs#L105
+    const v3_id = sig.runtime.program.bpf_loader.v3.ID;
+    const is_upgradeable_loader_present = blk: {
+        if (program_id.equals(&v3_id)) break :blk true;
+        for (pb_instruction_accounts) |acc| {
+            const tx_idx = compiled_message.toTxIdx(acc.index) orelse continue;
+            const tc_acc = tc.getAccountAtIndex(tx_idx) orelse continue;
+            if (tc_acc.pubkey.equals(&v3_id)) break :blk true;
+        }
+        break :blk false;
+    };
 
     var instruction_accounts = InstructionInfo.AccountMetas{};
     errdefer instruction_accounts.deinit(allocator);
 
     for (pb_instruction_accounts) |account| {
-        const tc_acc = tc.getAccountAtIndex(@intCast(account.index)) orelse
+        const tx_idx = compiled_message.toTxIdx(account.index) orelse
+            return error.InstructionAccountIndexOutOfRange;
+        const tc_acc = tc.getAccountAtIndex(tx_idx) orelse
             return error.AccountNotInTransaction;
+        const demote_program_id = tc_acc.pubkey.equals(&program_id) and
+            !is_upgradeable_loader_present;
         try instruction_accounts.append(allocator, .{
             .pubkey = tc_acc.pubkey,
-            .index_in_transaction = @intCast(account.index),
+            .index_in_transaction = tx_idx,
             .is_signer = account.is_signer,
-            .is_writable = account.is_writable,
+            .is_writable = account.is_writable and !demote_program_id,
         });
     }
 
@@ -302,6 +430,44 @@ pub fn createInstructionInfo(
         .owned_instruction_data = true,
         .initial_account_lamports = 0,
     };
+}
+
+/// Build a [`PubkeyMap`] of every fixture account for use by the program
+/// loader. Programs and their programdata accounts are typically **not** in
+/// the top-level instruction's compiled message (so they aren't in
+/// `tc.accounts`), but the loader still needs to see them to build the
+/// [`ProgramMap`]. Agave and firedancer both load executables from the raw
+/// fixture accounts list independently of the compiled message; this helper
+/// mirrors that.
+///
+/// The map borrows the pb-owned byte buffers via `@constCast` — the loader
+/// only reads through the [`AccountReader`], so this is safe as long as the
+/// pb `InstrContext` outlives the returned map (which the callers guarantee).
+/// [agave] `fill_program_cache_from_accounts(&instr_context.accounts, ...)` in
+/// `svm/src/conformance/syscall.rs`.
+/// [firedancer] `fd_instr_harness.c` "Load in executable accounts" loop, which
+/// iterates the raw `test_ctx->accounts` list.
+pub fn createProgramCacheAccountsMap(
+    allocator: std.mem.Allocator,
+    pb_instr_ctx: pb.InstrContext,
+) !sig.utils.collections.PubkeyMap(AccountSharedData) {
+    var map: sig.utils.collections.PubkeyMap(AccountSharedData) = .{};
+    errdefer map.deinit(allocator);
+
+    for (pb_instr_ctx.accounts.items) |pb_account| {
+        if (pb_account.address.len != Pubkey.SIZE) return error.OutOfBounds;
+        if (pb_account.owner.len != Pubkey.SIZE) return error.OutOfBounds;
+
+        try map.put(allocator, .{ .data = pb_account.address[0..Pubkey.SIZE].* }, .{
+            .lamports = pb_account.lamports,
+            .data = @constCast(pb_account.data),
+            .owner = .{ .data = pb_account.owner[0..Pubkey.SIZE].* },
+            .executable = pb_account.executable,
+            .rent_epoch = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH,
+        });
+    }
+
+    return map;
 }
 
 pub fn createSysvarCache(
@@ -441,8 +607,10 @@ pub fn createInstrEffects(
     allocator: std.mem.Allocator,
     tc: *const TransactionContext,
     result: ?InstructionError,
+    pb_instr_ctx: pb.InstrContext,
+    compiled_message: CompiledMessage,
 ) !pb.InstrEffects {
-    const modified_accounts = try modifiedAccounts(allocator, tc);
+    const modified_accounts = try modifiedAccounts(allocator, tc, pb_instr_ctx, compiled_message);
 
     // Match Agave's direct_mapping_handle_cu_exhaustion behavior:
     // When virtual_address_space_adjustments is active and execution failed
@@ -473,18 +641,46 @@ pub fn createInstrEffects(
 fn modifiedAccounts(
     allocator: std.mem.Allocator,
     tc: *const TransactionContext,
+    pb_instr_ctx: pb.InstrContext,
+    compiled_message: CompiledMessage,
 ) !std.ArrayList(pb.AcctState) {
+    // Agave's InstrHarness only loads the "compiled message" accounts — the
+    // program account plus the accounts referenced by `instr_accounts` — into
+    // the transaction context, and its `resulting_accounts` overlay reports
+    // any fixture account absent from the compiled message at its INPUT state
+    // (unchanged), never a post-execution state. Sig's `tc.accounts` is
+    // likewise compacted to just the compiled-message accounts, so for every
+    // fixture account we either read the compact `tc` slot (in-message) or
+    // echo the input (unreferenced).
+    //
+    // [agave] `resulting_accounts` overlay in the InstrHarness:
+    // https://github.com/firedancer-io/agave/blob/agave-v4.2-90f63cbb-patches/svm/src/conformance/instr/harness.rs#L136-L146
     var accounts: std.ArrayList(pb.AcctState) = .{};
     errdefer accounts.deinit(allocator);
 
-    for (tc.accounts) |acc| {
-        try accounts.append(allocator, .{
-            .address = try allocator.dupe(u8, &acc.pubkey.data),
-            .lamports = acc.account.lamports,
-            .data = try allocator.dupe(u8, acc.account.data),
-            .executable = acc.account.executable,
-            .owner = try allocator.dupe(u8, &acc.account.owner.data),
-        });
+    try accounts.ensureTotalCapacityPrecise(allocator, pb_instr_ctx.accounts.items.len);
+
+    for (pb_instr_ctx.accounts.items, 0..) |in, i| {
+        if (compiled_message.input_to_tx_idx[i] != CompiledMessage.NOT_IN_MESSAGE) {
+            const tx_idx = compiled_message.input_to_tx_idx[i];
+            const acc = tc.accounts[tx_idx];
+            accounts.appendAssumeCapacity(.{
+                .address = try allocator.dupe(u8, &acc.pubkey.data),
+                .lamports = acc.account.lamports,
+                .data = try allocator.dupe(u8, acc.account.data),
+                .executable = acc.account.executable,
+                .owner = try allocator.dupe(u8, &acc.account.owner.data),
+            });
+        } else {
+            // Not in the compiled message: report the input state, unchanged.
+            accounts.appendAssumeCapacity(.{
+                .address = try allocator.dupe(u8, in.address),
+                .lamports = in.lamports,
+                .data = try allocator.dupe(u8, in.data),
+                .executable = in.executable,
+                .owner = try allocator.dupe(u8, in.owner),
+            });
+        }
     }
 
     return accounts;

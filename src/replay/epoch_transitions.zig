@@ -462,11 +462,6 @@ pub fn applyFeatureActivations(
         // https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=149549898
         return error.RaiseBlockLimitsTo100MActivationNotImplemented;
     }
-    if (new_activations.active(.raise_account_cu_limit, slot)) {
-        // TODO: Implement once cost tracker is added
-        // https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=149549898
-        return error.RaiseAccountCuLimitActivationNotImplemented;
-    }
 }
 
 /// Apply built-in program feature transitions
@@ -1637,29 +1632,6 @@ test "applyFeatureActivations: basic activations" {
             err,
         );
     }
-
-    { // Error on raise account CU limit
-        const slot: Slot = 0;
-
-        var env = try TestEnvironment.init(allocator);
-        defer env.deinit(allocator);
-        try env.ancestors.addSlot(allocator, slot);
-
-        // Test full inflation activation - feature slot 1
-        try env.insertFeatureAccount(allocator, slot, 1, .raise_account_cu_limit, null);
-        const err = applyFeatureActivations(
-            allocator,
-            slot,
-            &env.slot_constants,
-            &env.slot_state,
-            env.slotAccountStore(slot),
-            .noop,
-        );
-        try std.testing.expectError(
-            error.RaiseAccountCuLimitActivationNotImplemented,
-            err,
-        );
-    }
 }
 
 test "applyFeatureActivations: SIMD-0437 incremental rent reduction" {
@@ -1808,7 +1780,7 @@ test "applyFeatureActivations: Builtin Transitions" {
         const builtin_program_id = sig.runtime.program.address_lookup_table.ID;
         const builtin_migration_config: builtin_programs.CoreBpfMigrationConfig = .{
             .program_id = builtin_program_id,
-            .source_buffer_address = sig.runtime.program.address_lookup_table.SOURCE_ID,
+            .source_buffer_address = .ZEROES,
             .upgrade_authority_address = null,
             // unread, use any feature
             .enable_feature_id = .bls_pubkey_management_in_vote_account,
@@ -1857,7 +1829,7 @@ test "SIMD-0444 relax programdata account check during migration" {
     const builtin_program_id = sig.runtime.program.address_lookup_table.ID;
     const migration_config: builtin_programs.CoreBpfMigrationConfig = .{
         .program_id = sig.runtime.program.address_lookup_table.ID,
-        .source_buffer_address = sig.runtime.program.address_lookup_table.SOURCE_ID,
+        .source_buffer_address = .ZEROES,
         .upgrade_authority_address = null,
         // unread, use any feature
         .enable_feature_id = .bls_pubkey_management_in_vote_account,

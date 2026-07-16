@@ -22,6 +22,9 @@ pub fn fmtSlice(slice: anytype) FmtSlice(@TypeOf(slice[0])) {
     return .{ .slice = slice };
 }
 
+/// Verifies that a struct, or pointer to struct, has the contract's declarations and fields with
+/// exact types. Methods must use explicit error sets because inferred error sets (`!T`) from
+/// separate declarations never compare equal even if they have the same inferred set of errors.
 pub fn assertInterface(comptime InterfaceType: type, comptime ContractStruct: type) void {
     const Contract = ContractStruct;
     const Interface = switch (@typeInfo(InterfaceType)) {
@@ -39,23 +42,22 @@ pub fn assertInterface(comptime InterfaceType: type, comptime ContractStruct: ty
 
     // Check interface has matching decls/functions.
     inline for (info.decls) |decl| {
-        const Decl = @TypeOf(@field(Contract, decl.name));
+        const ContractDeclType = @TypeOf(@field(Contract, decl.name));
         if (!@hasDecl(Interface, decl.name)) {
             @compileError(std.fmt.comptimePrint("{s} missing decl {s}:{s}", .{
                 @typeName(Interface),
                 decl.name,
-                @typeName(Decl),
+                @typeName(ContractDeclType),
             }));
         }
 
-        // TODO: support function types with error union returns.
-        const IDecl = @TypeOf(@field(Interface, decl.name));
-        if (@TypeOf(Decl) != @TypeOf(IDecl)) {
+        const InterfaceDeclType = @TypeOf(@field(Interface, decl.name));
+        if (ContractDeclType != InterfaceDeclType) {
             @compileError(std.fmt.comptimePrint("{s}.{s} expected decl {s}, found {s}", .{
                 @typeName(Interface),
                 decl.name,
-                @typeName(Decl),
-                @typeName(IDecl),
+                @typeName(ContractDeclType),
+                @typeName(InterfaceDeclType),
             }));
         }
     }
@@ -79,6 +81,92 @@ pub fn assertInterface(comptime InterfaceType: type, comptime ContractStruct: ty
                 @typeName(field.type),
             }));
         }
+    }
+}
+
+/// A tightly packed optional value for data that can be represented in memory
+/// as an integer.
+///
+/// This is only safe to use if you can be certain that it will never need to
+/// represent the sentinel value.
+pub fn PackedOptional(T: type, sentinel: backingInt(T)) type {
+    return enum(backingInt(T)) {
+        null = sentinel,
+        _,
+
+        pub fn init(zig_optional: ?T) PackedOptional(T, sentinel) {
+            if (zig_optional) |x| {
+                const int = switch (@typeInfo(T)) {
+                    .int => x,
+                    .@"enum" => @intFromEnum(x),
+                    else => unreachable,
+                };
+                std.debug.assert(int != sentinel);
+                return @enumFromInt(int);
+            } else return .null;
+        }
+
+        pub fn opt(self: PackedOptional(T, sentinel)) ?T {
+            if (self == .null) return null;
+            return switch (@typeInfo(T)) {
+                .int => @intFromEnum(self),
+                .@"enum" => @enumFromInt(@intFromEnum(self)),
+                else => unreachable,
+            };
+        }
+
+        pub fn format(self: PackedOptional(T, sentinel), writer: *std.Io.Writer) !void {
+            const value = self.opt() orelse return writer.writeAll("null");
+            if (comptime std.meta.hasMethod(T, "format")) {
+                try writer.print("{f}", .{value});
+            } else {
+                try writer.print("{any}", .{value});
+            }
+        }
+    };
+}
+
+fn backingInt(T: type) type {
+    return @as(?type, switch (@typeInfo(T)) {
+        .int => T,
+        .@"enum" => |info| info.tag_type,
+        else => null,
+    }) orelse @compileError("type not backed by an integer: " ++ @typeName(T));
+}
+
+test PackedOptional {
+    const o1: PackedOptional(u32, std.math.maxInt(u32)) = .init(null);
+    const o2: PackedOptional(u32, std.math.maxInt(u32)) = .init(1234);
+    try std.testing.expect(o1.opt() == null);
+    try std.testing.expect(o2.opt().? == 1234);
+}
+
+test "PackedOptional format matches ?T" {
+    const E = enum(u8) { a, b, c };
+    const F = enum(u8) {
+        x,
+        y,
+        pub fn format(self: @This(), writer: *std.Io.Writer) !void {
+            try writer.print("F({t})", .{self});
+        }
+    };
+
+    inline for (.{
+        .{ "{?any}", @as(?u32, null) },
+        .{ "{?any}", @as(?u32, 12345) },
+        .{ "{?any}", @as(?E, null) },
+        .{ "{?any}", @as(?E, .b) },
+        .{ "{?f}", @as(?F, null) },
+        .{ "{?f}", @as(?F, .x) },
+    }) |case| {
+        const fmt, const value = case;
+        const T = @typeInfo(@TypeOf(value)).optional.child;
+        const po: PackedOptional(T, std.math.maxInt(backingInt(T))) = .init(value);
+        var expect_buf: [32]u8 = undefined;
+        var actual_buf: [32]u8 = undefined;
+        const actual = try std.fmt.bufPrint(&actual_buf, "{f}", .{po});
+        const expect = try std.fmt.bufPrint(&expect_buf, fmt, .{value});
+        try std.testing.expectEqualStrings(expect, actual);
     }
 }
 
