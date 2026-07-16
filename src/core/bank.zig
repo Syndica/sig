@@ -892,6 +892,85 @@ pub const UnusedAccounts = struct {
     }
 };
 
+test "SlotConstants.fromBankFields takes rent from the rent sysvar account" {
+    const Rent = sig.runtime.sysvar.Rent;
+
+    const allocator = std.testing.allocator;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    var bank_fields: BankFields = try .initRandom(allocator, random, 8);
+    defer bank_fields.deinit(allocator);
+
+    // A real snapshot's rent collector carries a zeroed rent.
+    bank_fields.rent_collector.rent = .FREE;
+
+    // Distinct from `Rent.FREE`, from `Rent.INIT` (3480), and from every value in
+    // `RENT_FEATURE_GATES`, so the assertion below can only pass if the rent was read out of the
+    // sysvar account.
+    const sysvar_rent: Rent = .{
+        .lamports_per_byte_year = 4242,
+        .exemption_threshold = 2.0,
+        .burn_percent = 50,
+    };
+
+    var data: [Rent.STORAGE_SIZE]u8 = undefined;
+    _ = try sig.bincode.writeToSlice(&data, sysvar_rent, .{});
+
+    var accounts: sig.utils.collections.PubkeyMap(sig.core.Account) = .{};
+    defer accounts.deinit(allocator);
+    try accounts.put(allocator, Rent.ID, .{
+        .lamports = 1_000_000,
+        .data = .initAllocated(&data),
+        .owner = sig.runtime.sysvar.OWNER_ID,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    // Every rent feature gate is active, so a rent derived from the feature set would have
+    // `lamports_per_byte_year = 696` (the last gate wins) rather than the sysvar's value. The
+    // sysvar account is the source of truth even when the feature set disagrees with it.
+    var feature_set: FeatureSet = .ALL_DISABLED;
+    feature_set.setSlot(.deprecate_rent_exemption_threshold, 0);
+    for (sig.core.rent_collector.RENT_FEATURE_GATES) |gate| {
+        feature_set.setSlot(gate[0], 0);
+    }
+
+    const constants: SlotConstants = try .fromBankFields(
+        allocator,
+        &bank_fields,
+        feature_set,
+        .{ .account_map = &accounts },
+    );
+    defer constants.deinit(allocator);
+
+    if (constants.rent_collector.rent.lamports_per_byte_year == 0 or
+        constants.rent_collector.rent.exemption_threshold == 0.0 or
+        constants.rent_collector.rent.burn_percent == 0) @panic(
+        "rent may be pulling its value from the snapshot, not the sysvar account",
+    );
+
+    try std.testing.expectEqual(sysvar_rent, constants.rent_collector.rent);
+
+    // A zeroed rent would make every account look rent-exempt.
+    try std.testing.expect(constants.rent_collector.rent.minimumBalance(0) > 0);
+
+    // Only `rent` is replaced, the remaining rent collector fields come from the snapshot.
+    try std.testing.expectEqual(
+        bank_fields.rent_collector.epoch,
+        constants.rent_collector.epoch,
+    );
+    try std.testing.expectEqual(
+        bank_fields.rent_collector.epoch_schedule,
+        constants.rent_collector.epoch_schedule,
+    );
+    try std.testing.expectEqual(
+        bank_fields.rent_collector.slots_per_year,
+        constants.rent_collector.slots_per_year,
+    );
+}
+
 test parseStakes {
     const allocator = std.testing.allocator;
 
