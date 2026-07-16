@@ -395,16 +395,11 @@ pub fn getFeeForMessage(
     };
 
     const bq_lps = maybe_bq_lps orelse {
-        const require_static_nonce_account = slot_ref.constants().feature_set.active(
-            .require_static_nonce_account,
-            slot,
-        );
         const account_reader_adapter = sig.runtime.SlotAccountReaderAdapter{ .reader = slot_reader };
         const nonce_result = check_transactions.loadMessageNonceAccount(
             arena,
             &runtime_txn,
             account_reader_adapter.accountReader(),
-            require_static_nonce_account,
         ) catch return empty_result;
         if (nonce_result) |r| return .{
             .context = .{ .slot = slot },
@@ -416,7 +411,6 @@ pub fn getFeeForMessage(
     var fee_details: FeeDetails = FeeDetails.DEFAULT;
     if (bq_lps != 0) {
         const feature_set = &slot_ref.constants().feature_set;
-        const enable_secp256r1 = feature_set.active(.enable_secp256r1_precompile, slot);
 
         // [agave] process_compute_budget_instructions(message.program_instructions_iter(), &self.feature_set).unwrap_or_default()
         // In Agave, execute+sanitize is a single call; on ANY error, ComputeBudgetLimits::default() is used.
@@ -430,7 +424,6 @@ pub fn getFeeForMessage(
         fee_details = FeeDetails.init(
             SignatureCounts.fromTransaction(&runtime_txn),
             5_000,
-            enable_secp256r1,
             fee_budget_limits.prioritization_fee,
             budget_limits.compute_unit_price,
         );

@@ -69,7 +69,7 @@
         .name = "warp_timestamp_again",
         .pubkey = "GvDsGDkH5gyzwpDhxNixx8vtx1kwYHH13RiNAPw27zXb",
         .description = "warp timestamp again, adjust bounding to 25% fast 80% slow #15204",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "check_init_vote_data",
@@ -556,12 +556,7 @@
         .name = "stake_minimum_delegation_for_rewards",
         .pubkey = "G6ANXD6ptCSyNd9znZm7j4dEczAJCfx7Cy43oBx3rKHJ",
         .description = "Stakes must be at least the minimum delegation to earn rewards",
-        .status = .supported,
-        .note =
-        \\ TODO: Low Priority
-        \\ This feature has never been activated and there is not plan for activation.
-        \\ Why not remove tor mark reverted?
-        ,
+        .status = .reverted,
     },
     .{
         .name = "add_set_compute_unit_price_ix",
@@ -1255,7 +1250,7 @@
         .name = "enable_secp256r1_precompile",
         .pubkey = "srremy31J5Y25FrAApwVb9kZcfXbusYMMsvTK9aWv5q",
         .description = "SIMD-0075: Enable secp256r1 precompile",
-        .status = .hardcoded_for_fuzzing,
+        .status = .hardcoded,
     },
     .{
         .name = "get_sysvar_syscall_enabled",
@@ -1493,6 +1488,12 @@
         .status = .hardcoded,
     },
     .{
+        .name = "define_ltds_fee_only_semantics",
+        .pubkey = "LTDSzjZKFJMKHYpNycG1FrWwGGTaFFwqEFjB5GGLNVD",
+        .description = "SIMD-0186 Amendment: Define fee-only semantics",
+        .status = .supported,
+    },
+    .{
         .name = "enable_extend_program_checked",
         .pubkey = "2oMRZEDWT2tqtYMofhmmfQ8SsjqUFzT6sYXppQDavxwz",
         .description = "Enable ExtendProgramChecked instruction",
@@ -1502,7 +1503,7 @@
         .name = "require_static_nonce_account",
         .pubkey = "7VVhpg5oAjAmnmz1zCcSHb2Z9ecZB2FQqpnEwReka9Zm",
         .description = "SIMD-0242: Static Nonce Account Only",
-        .status = .supported,
+        .status = .hardcoded,
     },
     .{
         .name = "enable_vote_address_leader_schedule",
@@ -1524,7 +1525,11 @@
         .name = "raise_account_cu_limit",
         .pubkey = "htsptAwi2yRoZH83SKaUXykeZGtZHgxkS2QwW1pssR8",
         .description = "SIMD-0306: Raise account CU limit to 40% max",
-        .status = .supported,
+        .status = .hardcoded,
+        .note =
+        \\ .supported would be compatible, we can't use .unsupported or we would have incompatible feature sets.
+        \\ hardcoded is better than supported because when we do implement the logic, it will not be conditional on a gate.
+        ,
     },
     .{
         .name = "syscall_parameter_address_restrictions",

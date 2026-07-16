@@ -399,7 +399,7 @@ test resolveLookupTableAccounts {
     const random = prng.random();
 
     const table: AddressLookupTable = .{
-        .meta = .new(.initRandom(random)),
+        .meta = .{ .authority = .initRandom(random) },
         .addresses = &.{.initRandom(random)},
     };
 

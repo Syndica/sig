@@ -533,18 +533,19 @@ fn verifyTicksFromDataShreds(
         if (s.slot_idx != expected_idx) break;
         batch_buf.appendSlice(fba.allocator(), s.payload) catch return .rejected;
         if (s.data_complete) {
-            // Zero-byte batch -> zero entries. Bincode would fail to decode
-            // the u64 length prefix and incorrectly reject.
-            if (batch_buf.items.len != 0) {
-                var reader: std.Io.Reader = .fixed(batch_buf.items);
-                const entries = sig_v2.solana.bincode.read(
-                    &fba,
-                    &reader,
-                    sig_v2.solana.bincode.Vec(sig_v2.solana.transaction.Entry),
-                ) catch return .rejected;
-                for (entries.items) |e| {
-                    all_entries.append(fba.allocator(), e) catch return .rejected;
-                }
+            // A data-complete batch is one shredder batch, encoded as a single
+            // bincode `Vec<Entry>` record. `get_slot_entries_with_shred_info`
+            // deserializes each completed set and surfaces any decode failure as
+            // a rejected block. A zero-byte batch is not valid bincode (the u64
+            // length prefix needs 8 bytes) and rejects here too.
+            var reader: std.Io.Reader = .fixed(batch_buf.items);
+            const entries = sig_v2.solana.bincode.read(
+                &fba,
+                &reader,
+                sig_v2.solana.bincode.Vec(sig_v2.solana.transaction.Entry),
+            ) catch return .rejected;
+            for (entries.items) |e| {
+                all_entries.append(fba.allocator(), e) catch return .rejected;
             }
             batch_buf = .empty;
         }

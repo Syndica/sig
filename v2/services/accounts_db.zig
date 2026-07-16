@@ -45,16 +45,21 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     );
     defer rooted.deinit();
 
-    var in = rw.ready_snapshot_in.getView(.reader);
+    var in = rw.ready_snapshot_in.ring.getView(.reader);
     defer in.close();
 
     if (rooted.table.count() == 0) {
         logger.info().logf("no existing rooted db. reading from snapshot", .{});
 
-        const ReadySnapshotReader = @TypeOf(in);
+        const SnapshotDataRingReader = @TypeOf(in);
         const SnapshotBufReader = struct {
-            in_: *ReadySnapshotReader,
+            in_: *SnapshotDataRingReader,
             runner_: lib.runner.Connection,
+            completion_: *std.atomic.Value(f64),
+
+            pub fn percentCompleted(self: @This()) f64 {
+                return self.completion_.load(.monotonic);
+            }
 
             pub fn getBuffer(self: @This()) []const u8 {
                 return self.in_.getBufferBlocking(self.runner_) catch |err| switch (err) {
@@ -71,6 +76,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         var snapshot_iter = try SnapshotIter(SnapshotBufReader).init(&fba, .{
             .in_ = &in,
             .runner_ = runner,
+            .completion_ = &rw.ready_snapshot_in.completion,
         });
 
         logger.info().logf("reading snapshot accounts", .{});
@@ -87,7 +93,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             r: *Rooted,
             l: @TypeOf(logger),
 
-            pub const AccountRef = AccountPool.Index;
+            pub const AccountRef = AccountPool.AccountRef;
 
             pub fn load(self: @This(), pubkey: *const lib.solana.Pubkey) ?AccountRef {
                 errdefer |err| std.debug.panic("AccountReader: {}", .{err});
@@ -97,7 +103,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                 const result: Rooted.LookupResult = while (true) : (std.atomic.spinLoopHint())
                     break (try self.r.pollRead(.from(self.l))) orelse continue;
 
-                if (result.account_index == AccountPool.invalid_index) return null;
+                if (result.account_index == .invalid) return null;
                 return result.account_index;
             }
 

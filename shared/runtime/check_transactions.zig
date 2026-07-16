@@ -17,7 +17,6 @@ const AccountSharedData = sig.runtime.AccountSharedData;
 const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
 const PreparedAccount = sig.runtime.account_loader.PreparedAccount;
 const ComputeBudgetLimits = sig.runtime.program.compute_budget.ComputeBudgetLimits;
-const FeatureSet = sig.core.FeatureSet;
 const NonceData = sig.runtime.nonce.Data;
 const NonceState = sig.runtime.nonce.State;
 const NonceVersions = sig.runtime.nonce.Versions;
@@ -49,23 +48,17 @@ pub fn checkFeePayer(
     /// Takes ownership of this
     maybe_nonce: ?LoadedAccount,
     rent_collector: *const RentCollector,
-    feature_set: *const FeatureSet,
-    slot: sig.core.Slot,
-    lamports_per_signature: u64,
 ) AccountLoadError!TransactionResult(struct {
     FeeDetails,
     std14.BoundedArray(LoadedAccount, 2),
     PreparedAccount,
 }) {
-    _ = lamports_per_signature; // ignored here - see comment below
-
     var zone = tracy.Zone.init(@src(), .{ .name = "checkFeePayer" });
     defer zone.deinit();
 
     var maybe_nonce_to_free = maybe_nonce;
     defer if (maybe_nonce_to_free) |na| na.deinit(allocator);
 
-    const enable_secp256r1 = feature_set.active(.enable_secp256r1_precompile, slot);
     const fee_payer_key = transaction.accounts.items(.pubkey)[0];
     var payer_account = try accounts.get(allocator, fee_payer_key) orelse
         return .{ .err = .AccountNotFound };
@@ -102,7 +95,6 @@ pub fn checkFeePayer(
     const fee_details = FeeDetails.init(
         SignatureCounts.fromTransaction(transaction),
         5_000,
-        enable_secp256r1,
         fee_budget_limits.prioritization_fee,
         compute_budget_limits.compute_unit_price,
     );
@@ -202,7 +194,6 @@ pub const FeeDetails = struct {
     pub fn init(
         sig_counts: SignatureCounts,
         lamports_per_signature: u64,
-        enable_secp256r1: bool,
         prioritization_fee: u64,
         compute_unit_price: u64,
     ) FeeDetails {
@@ -210,7 +201,6 @@ pub const FeeDetails = struct {
             .transaction_fee = calculateSignatureFee(
                 sig_counts,
                 lamports_per_signature,
-                enable_secp256r1,
             ),
             .prioritization_fee = prioritization_fee,
             .compute_unit_price = compute_unit_price,
@@ -221,12 +211,11 @@ pub const FeeDetails = struct {
     fn calculateSignatureFee(
         sig_counts: SignatureCounts,
         lamports_per_signature: u64,
-        enable_secp256r1: bool,
     ) u64 {
         const sig_count = sig_counts.num_transaction_signatures +|
             sig_counts.num_ed25519_signatures +|
             sig_counts.num_secp256k1_signatures +|
-            if (enable_secp256r1) sig_counts.num_secp256r1_signatures else 0;
+            sig_counts.num_secp256r1_signatures;
 
         return sig_count *| lamports_per_signature;
     }
@@ -348,7 +337,6 @@ pub fn checkLoadAndAdvanceMessageNonceAccount(
     next_durable_nonce: *const Hash,
     next_lamports_per_signature: u64,
     account_reader: AccountReader,
-    require_static_nonce_account: bool,
 ) AccountLoadError!?struct { LoadedAccount, u64 } {
     if (transaction.recent_blockhash.eql(next_durable_nonce.*)) return null;
 
@@ -357,7 +345,6 @@ pub fn checkLoadAndAdvanceMessageNonceAccount(
             allocator,
             transaction,
             account_reader,
-            require_static_nonce_account,
         ) orelse return null;
 
     const previous_lamports_per_signature = nonce_data.lamports_per_signature;
@@ -400,9 +387,8 @@ pub fn loadMessageNonceAccount(
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
     account_reader: AccountReader,
-    require_static_nonce_account: bool,
 ) AccountLoadError!?struct { Pubkey, AccountSharedData, NonceData } {
-    const nonce_address = getDurableNonce(transaction, require_static_nonce_account) orelse
+    const nonce_address = getDurableNonce(transaction) orelse
         return null;
     // TODO(accounts_interface): we don't need an owned account data here
     const nonce_account = try account_reader.get(allocator, nonce_address) orelse
@@ -457,13 +443,11 @@ pub fn verifyNonceAccount(
 // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/svm-transaction/src/svm_message.rs#L99-L131
 /// If the message uses a durable nonce, return the pubkey of the nonce account.
 ///
-/// SIMD-0242: when `require_static_nonce_account` is true, the nonce account
-/// index must reference a statically-included key (i.e. be below
-/// `transaction.num_static_account_keys`); otherwise we treat the message as
-/// not having a durable nonce, mirroring Agave's `get_durable_nonce`.
+/// SIMD-0242: the nonce account index must reference a statically-included key
+/// (i.e. be below `transaction.num_static_account_keys`); otherwise we treat
+/// the message as not having a durable nonce, mirroring Agave's `get_durable_nonce`.
 pub fn getDurableNonce(
     transaction: *const RuntimeTransaction,
-    require_static_nonce_account: bool,
 ) ?Pubkey {
     if (transaction.instructions.len <= 0) return null;
     const instruction = transaction.instructions[NONCED_TX_MARKER_IX_INDEX];
@@ -491,8 +475,7 @@ pub fn getDurableNonce(
     const nonce_meta = instruction.account_metas.items[0];
     if (!nonce_meta.is_writable) return null;
     if (nonce_meta.index_in_transaction >= account_keys.len) return null;
-    if (require_static_nonce_account and
-        nonce_meta.index_in_transaction >= transaction.num_static_account_keys)
+    if (nonce_meta.index_in_transaction >= transaction.num_static_account_keys)
         return null;
     return account_keys[nonce_meta.index_in_transaction];
 }
@@ -599,7 +582,6 @@ test "checkLoadAndAdvanceMessageNonceAccount: advances valid nonce" {
         &next_durable_nonce,
         5001,
         AccountReader.fromMap(&account_map),
-        false,
     );
 
     const loaded_nonce, const previous_lamports_per_signature =
@@ -631,10 +613,10 @@ test "checkLoadAndAdvanceMessageNonceAccount: advances valid nonce" {
     );
 }
 
-// SIMD-0242: when the gate is on and the nonce account is not in the static
-// account keys, getDurableNonce must return null so the message-nonce
-// resolution falls through and the caller surfaces BlockhashNotFound,
-// matching Agave's get_durable_nonce behavior.
+// SIMD-0242: when the nonce account is not in the static account keys,
+// getDurableNonce must return null so the message-nonce resolution falls
+// through and the caller surfaces BlockhashNotFound, matching Agave's
+// get_durable_nonce behavior.
 test "checkLoadAndAdvanceMessageNonceAccount: SIMD-0242 ALT-resolved nonce" {
     const allocator = std.testing.allocator;
 
@@ -734,34 +716,16 @@ test "checkLoadAndAdvanceMessageNonceAccount: SIMD-0242 ALT-resolved nonce" {
         .is_simple_vote_transaction = false,
     };
 
-    // Gate on: ALT-resolved nonce is not recognized, so nonce loading returns
+    // ALT-resolved nonce is not recognized, so nonce loading returns
     // null. (The transaction_execution caller then surfaces BlockhashNotFound.)
-    {
-        const result = try checkLoadAndAdvanceMessageNonceAccount(
-            allocator,
-            &transaction,
-            &next_durable_nonce,
-            5001,
-            AccountReader.fromMap(&account_map),
-            true,
-        );
-        try std.testing.expectEqual(null, result);
-    }
-
-    // Gate off: the nonce is recognized and loading succeeds.
-    {
-        const result = try checkLoadAndAdvanceMessageNonceAccount(
-            allocator,
-            &transaction,
-            &next_durable_nonce,
-            5001,
-            AccountReader.fromMap(&account_map),
-            false,
-        );
-        const loaded_nonce, _ = result orelse return error.ExpectedNonceLoaded;
-        defer loaded_nonce.deinit(allocator);
-        try std.testing.expectEqualSlices(u8, &nonce_key.data, &loaded_nonce.pubkey.data);
-    }
+    const result = try checkLoadAndAdvanceMessageNonceAccount(
+        allocator,
+        &transaction,
+        &next_durable_nonce,
+        5001,
+        AccountReader.fromMap(&account_map),
+    );
+    try std.testing.expectEqual(null, result);
 }
 
 test "checkFeePayer: happy path fee payer only" {
@@ -806,9 +770,6 @@ test "checkFeePayer: happy path fee payer only" {
         &ComputeBudgetLimits.DEFAULT,
         null,
         &sig.core.rent_collector.defaultCollector(10),
-        &sig.core.FeatureSet.ALL_DISABLED,
-        0,
-        5000,
     );
 
     const fee_details, const rollbacks, const prepared_fee_payer = result.ok;
@@ -876,9 +837,6 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
             .account = nonce_account,
         },
         &sig.core.rent_collector.defaultCollector(10),
-        &sig.core.FeatureSet.ALL_DISABLED,
-        0,
-        5000,
     );
 
     const fee_details, const rollbacks, const prepared_fee_payer = result.ok;
@@ -947,9 +905,6 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
             .account = nonce_account,
         },
         &sig.core.rent_collector.defaultCollector(10),
-        &sig.core.FeatureSet.ALL_DISABLED,
-        0,
-        5000,
     );
 
     const fee_details, const rollbacks, const prepared_fee_payer = result.ok;

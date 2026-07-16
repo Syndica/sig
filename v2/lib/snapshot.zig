@@ -54,7 +54,15 @@ pub const SnapshotConfig = extern struct {
 };
 
 // Holds decompressed snapshot data given to accounts_db service
-pub const SnapshotDataRing = lib.ipc.Ring(16 * 1024 * 1024, u8);
+pub const SnapshotData = extern struct {
+    ring: lib.ipc.Ring(16 * 1024 * 1024, u8),
+    completion: std.atomic.Value(f64),
+
+    pub fn init(self: *SnapshotData) void {
+        self.ring.init();
+        self.completion = .init(0);
+    }
+};
 
 pub const ReadySnapshot = extern struct {
     slot: Slot,
