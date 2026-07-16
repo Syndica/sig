@@ -816,208 +816,74 @@ pub const LatencyHistogram = struct {
     /// One hot shard for writing, one cold shard for reading.
     shards: [2]Shard,
 
-    pub const Layout = union(enum) {
-        power_of_two: struct {
-            base_ns: u64,
-            octaves: u64,
-        },
-        linear: struct {
-            base_ns: u64,
-            step_ns: u64,
-            octaves: u64,
-        },
-        log_linear: struct {
-            base_ns: u64,
-            sub_bucket_bits: u6,
-            octaves: u64,
-        },
-        /// Geometric (log-exponential) buckets aligned 1:1 with a Prometheus native-histogram
-        /// `schema`: bucket `i`'s upper bound is `2^((base_index + i) / 2^schema)` ns, where
-        /// `base_index = nativeBucketIndex(schema, min_ns)`. There are `2^schema` buckets per
-        /// power-of-two octave. This is the only layout that renders as a native histogram in the
-        /// protobuf exposition; the others render as classic buckets.
-        exponential: struct {
-            /// Native histogram schema `n`; buckets per octave = `2^n`. Valid range 0..8.
-            schema: u4,
-            /// Lower window edge in ns. Storage starts at `nativeBucketIndex(schema, min_ns)`;
-            /// observations below it clamp into bucket 0 (like the other layouts).
-            min_ns: u64,
-            /// Number of power-of-two octaves of range; `bucketCount = octaves << schema`.
-            octaves: u64,
-        },
+    /// A windowed Prometheus native histogram: geometric (log-exponential) buckets aligned 1:1 with a
+    /// native-histogram `schema`. Bucket `i`'s upper bound is `2^((base_index + i) / 2^schema)` ns,
+    /// where `base_index = baseIndex()`; there are `2^schema` buckets per power-of-two octave.
+    ///
+    /// `min_ns`/`octaves` bound the fixed storage window — native histograms are unbounded/sparse,
+    /// but the IPC region is dense/fixed. Observations below the window clamp into bucket 0; those
+    /// above it land in the implicit `+Inf` bucket (counted, but in no explicit bucket).
+    pub const Layout = struct {
+        /// Native histogram schema `n`; buckets per octave = `2^n`. Valid range 0..8.
+        schema: u4,
+        /// Lower window edge in ns; storage bucket 0 has global native index `baseIndex()`.
+        min_ns: u64,
+        /// Number of power-of-two octaves of range; `bucketCount = octaves << schema`.
+        octaves: u64,
 
-        /// Fixed number of leading `u64` words (at `Detail.index`) encoding `layout` +
-        /// before the `Raw` shard elements. Sized for the largest variant (`linear`, two `u64` params).
-        pub const header_words: u32 = blk: {
-            var max_params: usize = 0;
-            for (@typeInfo(Layout).@"union".fields) |variant| {
-                max_params = @max(max_params, @typeInfo(variant.type).@"struct".fields.len);
-            }
-            break :blk @intCast(1 + max_params); // 1 tag + params
-        };
+        /// Number of leading `u64` words (at `Detail.index`) encoding `layout` — `[schema, min_ns,
+        /// octaves]` — before the `Raw` shard elements.
+        pub const header_words: u32 = 3;
 
         pub fn initFromHeader(src: []const u64) Layout {
             std.debug.assert(src.len == header_words);
-            const kind = @as(std.meta.Tag(Layout), @enumFromInt(src[0]));
-            const base = src[1];
-            const step = src[2];
-            const octaves = src[3];
-            return switch (kind) {
-                .power_of_two => .{ .power_of_two = .{
-                    .base_ns = base,
-                    .octaves = octaves,
-                } },
-                .linear => .{ .linear = .{
-                    .base_ns = base,
-                    .step_ns = step,
-                    .octaves = octaves,
-                } },
-                .log_linear => .{ .log_linear = .{
-                    .base_ns = base,
-                    .sub_bucket_bits = @intCast(step),
-                    .octaves = octaves,
-                } },
-                .exponential => .{ .exponential = .{
-                    .min_ns = base,
-                    .schema = @intCast(step),
-                    .octaves = octaves,
-                } },
+            return .{
+                .schema = @intCast(src[0]),
+                .min_ns = src[1],
+                .octaves = src[2],
             };
+        }
+
+        /// Serialize `layout` into a `header_words`-length region header.
+        pub fn writeHeader(self: Layout, dst: []u64) void {
+            std.debug.assert(dst.len == header_words);
+            dst[0] = self.schema;
+            dst[1] = self.min_ns;
+            dst[2] = self.octaves;
         }
 
         pub fn comptimeValidate(comptime self: Layout) void {
-            switch (self) {
-                .power_of_two => |p| {
-                    if (p.octaves == 0) @compileError("power_of_two requires at least one octave");
-                    if (p.base_ns == 0) @compileError("power_of_two requires base_ns > 0");
-                    // Bucket `i`'s upper bound is `base_ns << i`; the top one is `base_ns << (octaves - 1)`.
-                    // Keep the shift in range and the bound within u64.
-                    if (p.octaves - 1 >= 64 or p.base_ns > std.math.maxInt(u64) >> (p.octaves - 1)) @compileError(
-                        "bucket bounds overflow u64: reduce octaves or base_ns",
-                    );
-                },
-                .linear => |l| {
-                    if (l.octaves == 0) @compileError("linear requires at least one octave");
-                    if (l.step_ns == 0) @compileError("linear requires step_ns > 0");
-                    // The top octave's upper bound is `base_ns + octaves * step_ns`; keep it within u64.
-                    if (l.base_ns + l.octaves * l.step_ns > 0xFFFF_FFFF_FFFF_FFFF) @compileError(
-                        "bucket bounds overflow u64: reduce octaves, base_ns, or step_ns",
-                    );
-                },
-                .log_linear => |ll| {
-                    if (ll.octaves == 0) @compileError("log_linear requires at least one octave");
-                    // `base_ns` must be a positive multiple of `2^sub_bucket_bits` so octave 0's
-                    // sub-buckets have an integer width `base_ns >> sub_bucket_bits >= 1`. (This
-                    // generalizes the old `base_exp >= sub_bucket_bits` rule and keeps `bucketIndex`'s
-                    // divide-by-`unit` well defined.)
-                    if (ll.base_ns == 0 or (ll.base_ns & ((@as(u64, 1) << ll.sub_bucket_bits) - 1)) != 0) @compileError(
-                        "log_linear requires base_ns to be a positive multiple of 2^sub_bucket_bits",
-                    );
-                    // The top octave ends at `base_ns << octaves`; keep the shift in range and within u64.
-                    if (ll.octaves >= 64 or ll.base_ns > std.math.maxInt(u64) >> ll.octaves) @compileError(
-                        "bucket bounds overflow u64: reduce octaves or base_ns",
-                    );
-                },
-                .exponential => |e| {
-                    if (e.octaves == 0) @compileError("exponential requires at least one octave");
-                    if (e.schema > 8) @compileError("exponential schema must be in 0..8");
-                    if (e.min_ns == 0) @compileError("exponential requires min_ns > 0");
-                    // The top bucket's bound is ~`min_ns << octaves` (one native octave == one
-                    // power-of-two octave); keep the shift in range and the bound within u64.
-                    if (e.octaves >= 64 or e.min_ns > std.math.maxInt(u64) >> e.octaves)
-                        @compileError("bucket bounds overflow u64: reduce octaves or min_ns");
-                },
-            }
+            if (self.octaves == 0) @compileError("Layout requires at least one octave");
+            if (self.schema > 8) @compileError("Layout schema must be in 0..8");
+            if (self.min_ns == 0) @compileError("Layout requires min_ns > 0");
+            // The top bucket's bound is ~`min_ns << octaves` (one native octave == one power-of-two
+            // octave); keep the shift in range and the bound within u64.
+            if (self.octaves >= 64 or self.min_ns > std.math.maxInt(u64) >> self.octaves)
+                @compileError("bucket bounds overflow u64: reduce octaves or min_ns");
         }
 
         pub fn bucketCount(self: Layout) u64 {
-            return switch (self) {
-                .power_of_two => |p| p.octaves,
-                .linear => |l| l.octaves,
-                .log_linear => |ll| @intCast(ll.octaves << ll.sub_bucket_bits),
-                .exponential => |e| @intCast(e.octaves << @as(u6, e.schema)),
-            };
+            return @intCast(self.octaves << @as(u6, self.schema));
         }
 
         pub fn elementsFromBucketCount(self: Layout) u32 {
             return @intCast(1 + 2 * (2 + self.bucketCount()));
         }
 
-        /// Serialize `layout` into a `header_words`-length region header.
-        pub fn writeHeader(comptime self: Layout, dst: []u64) void {
-            std.debug.assert(dst.len == header_words);
-            dst[0] = @intFromEnum(std.meta.activeTag(self));
-            switch (self) {
-                .power_of_two => |p| {
-                    dst[1] = p.base_ns;
-                    dst[2] = 0;
-                    dst[3] = p.octaves;
-                },
-                .linear => |l| {
-                    dst[1] = l.base_ns;
-                    dst[2] = l.step_ns;
-                    dst[3] = l.octaves;
-                },
-                .log_linear => |ll| {
-                    dst[1] = ll.base_ns;
-                    dst[2] = ll.sub_bucket_bits;
-                    dst[3] = ll.octaves;
-                },
-                .exponential => |e| {
-                    dst[1] = e.min_ns;
-                    dst[2] = e.schema;
-                    dst[3] = e.octaves;
-                },
-            }
+        /// Global native bucket index of storage bucket 0; storage bucket `i` has global index
+        /// `baseIndex() + i`. This is the `sint32` `positive_span` offset in the native histogram.
+        pub fn baseIndex(self: Layout) i64 {
+            return nativeBucketIndex(self.schema, self.min_ns);
         }
 
-        /// The inclusive `le` upper bound (in ns) for bucket `index`: buckets are `(lo, hi]`, so a
-        /// value equal to `hi` lands in this bucket (matching Prometheus `le` semantics and the float
-        /// `Histogram`). This is the inverse companion to `bucketIndex`; the two are cross-checked in
-        /// tests.
+        /// The inclusive `le` upper bound (in ns) for bucket `index`, rounded to an integer:
+        /// `2^((base_index + index) / 2^schema)`. Used only by the classic (text) render path; the
+        /// native protobuf path uses bucket indices directly via `baseIndex`.
         pub fn upperBoundNs(self: Layout, index: usize) u64 {
-            const i: u64 = @intCast(index);
-            return switch (self) {
-                .power_of_two => |p| p.base_ns << @intCast(i),
-                .linear => |l| l.base_ns + (i + 1) * l.step_ns,
-                .log_linear => |ll| blk: {
-                    const m = ll.sub_bucket_bits;
-                    const k: u6 = @intCast(i >> m); // octave
-                    const j = i & ((@as(u64, 1) << m) - 1); // sub-bucket within octave
-                    const sub_width = (ll.base_ns >> m) << k; // octave 0's sub-bucket width, scaled by 2^k
-                    break :blk sub_width * ((@as(u64, 1) << m) + j + 1);
-                },
-                .exponential => |e| blk: {
-                    // Native bound `2^((base_index + i) / 2^schema)` ns, rounded to an integer. Used
-                    // only by the classic (text / non-native) render path; the native protobuf path
-                    // uses `nativeExponential` bucket indices directly.
-                    const gi = nativeBucketIndex(e.schema, e.min_ns) + @as(i64, @intCast(i));
-                    const per_octave: f64 = @floatFromInt(@as(u64, 1) << @as(u6, e.schema));
-                    const bound = std.math.exp2(@as(f64, @floatFromInt(gi)) / per_octave);
-                    break :blk @intFromFloat(@round(bound));
-                },
-            };
-        }
-
-        pub const NativeExponential = struct {
-            /// Prometheus native-histogram schema (`sint32` on the wire), `2^schema` buckets/octave.
-            schema: u4,
-            /// Global native bucket index of storage bucket 0 (i.e. `nativeBucketIndex(schema,
-            /// min_ns)`); storage bucket `i` has global index `base_index + i`.
-            base_index: i64,
-        };
-
-        /// If this layout renders as a Prometheus native histogram, returns its `schema` and the
-        /// global native bucket index of storage bucket 0; otherwise `null` (render as classic
-        /// buckets).
-        pub fn nativeExponential(self: Layout) ?NativeExponential {
-            return switch (self) {
-                .exponential => |e| .{
-                    .schema = e.schema,
-                    .base_index = nativeBucketIndex(e.schema, e.min_ns),
-                },
-                else => null,
-            };
+            const gi = self.baseIndex() + @as(i64, @intCast(index));
+            const per_octave: f64 = @floatFromInt(@as(u64, 1) << @as(u6, self.schema));
+            const bound = std.math.exp2(@as(f64, @floatFromInt(gi)) / per_octave);
+            return @intFromFloat(@round(bound));
         }
     };
 
@@ -1085,31 +951,12 @@ pub const LatencyHistogram = struct {
     }
 
     fn bucketIndex(self: *const LatencyHistogram, ns: u64) usize {
-        return switch (self.layout) {
-            .power_of_two => |p| if (ns <= p.base_ns) 0 else 64 - @clz((ns - 1) / p.base_ns),
-            .linear => |l| (ns -| l.base_ns -| 1) / l.step_ns,
-            .log_linear => |ll| blk: {
-                const m = ll.sub_bucket_bits;
-                const unit = ll.base_ns >> m; // octave 0's sub-bucket width (>= 1 by comptimeValidate)
-                // Rescale `ns` into "unit" space, where the bounds form a power-of-two log-linear layout
-                // anchored at `2^m`, then bin with the exponent-space trick. `ns -| 1` makes the upper
-                // bound inclusive (`le` semantics); `@max` floors sub-octave values into octave 0.
-                const anchored = @max((ns -| 1) / unit, @as(u64, 1) << m);
-                const e: u6 = @intCast(63 - @clz(anchored)); // index of highest set bit, 0..63
-                const mask = (@as(u64, 1) << m) - 1;
-                const sub = (anchored >> (e - m)) & mask;
-                break :blk (@as(u64, e - m) << m) + sub;
-            },
-            .exponential => |e| blk: {
-                // Global native index minus the window base; values below the window floor into
-                // bucket 0, values above the top land in the implicit `+Inf` bucket via `observe`'s
-                // `index < buckets.len` guard.
-                if (ns == 0) break :blk 0;
-                const base = nativeBucketIndex(e.schema, e.min_ns);
-                const local = nativeBucketIndex(e.schema, ns) - base;
-                break :blk if (local < 0) 0 else @intCast(local);
-            },
-        };
+        // Global native index minus the window base; values below the window floor into bucket 0,
+        // values above the top land in the implicit `+Inf` bucket via `observe`'s `index <
+        // buckets.len` guard.
+        if (ns == 0) return 0;
+        const local = nativeBucketIndex(self.layout.schema, ns) - self.layout.baseIndex();
+        return if (local < 0) 0 else @intCast(local);
     }
 
     /// Writes an observed latency (in nanoseconds) into the histogram.
@@ -1401,265 +1248,48 @@ test "histogram: totals add up after concurrent reads and writes" {
     ));
 }
 
-/// Asserts that `bucketIndex` is the inverse of `Layout.upperBoundNs` at every bucket boundary.
-/// All variants use inclusive-upper `(lo, hi]` (`le` semantics): `hi` is the last value in bucket
-/// `i`, and `hi + 1` starts the next.
-fn expectBucketBoundaries(hist: LatencyHistogram) !void {
-    const count: usize = @intCast(hist.layout.bucketCount());
-    for (0..count) |i| {
-        const upper_bound = hist.layout.upperBoundNs(i);
-        try std.testing.expectEqual(i, hist.bucketIndex(upper_bound));
-        try std.testing.expectEqual(i + 1, hist.bucketIndex(upper_bound + 1));
-    }
-}
-
 test "latency histogram: layout header round-trips" {
     const Layout = LatencyHistogram.Layout;
-    const cases = .{
-        Layout{ .power_of_two = .{ .base_ns = 64, .octaves = 10 } },
-        Layout{ .linear = .{ .base_ns = 100, .step_ns = 50, .octaves = 8 } },
-        Layout{ .log_linear = .{ .base_ns = 256, .sub_bucket_bits = 3, .octaves = 5 } },
+    const cases = [_]Layout{
+        .{ .schema = 2, .min_ns = 512, .octaves = 12 },
+        .{ .schema = 0, .min_ns = 64, .octaves = 10 },
+        .{ .schema = 8, .min_ns = 1_000, .octaves = 4 },
     };
-    inline for (cases) |layout| {
+    for (cases) |layout| {
         var header: [Layout.header_words]u64 = undefined;
         layout.writeHeader(&header);
         try std.testing.expectEqual(layout, Layout.initFromHeader(&header));
     }
 }
 
-test "latency histogram: bucketIndex inverts upperBoundNs" {
-    const gpa = std.testing.allocator;
-    const Layout = LatencyHistogram.Layout;
-
-    {
-        const hist: LatencyHistogram =
-            try .initForTest(gpa, Layout{ .power_of_two = .{ .base_ns = 1, .octaves = 8 } });
-        defer hist.deinitForTest(gpa);
-        try expectBucketBoundaries(hist);
-    }
-    {
-        const hist: LatencyHistogram =
-            try .initForTest(gpa, Layout{ .linear = .{ .base_ns = 0, .step_ns = 10, .octaves = 6 } });
-        defer hist.deinitForTest(gpa);
-        try expectBucketBoundaries(hist);
-    }
-    {
-        const hist: LatencyHistogram =
-            try .initForTest(gpa, Layout{ .log_linear = .{ .base_ns = 16, .sub_bucket_bits = 2, .octaves = 2 } });
-        defer hist.deinitForTest(gpa);
-        try expectBucketBoundaries(hist);
-    }
-}
-
-test "latency histogram: observations land in the correct buckets" {
-    const gpa = std.testing.allocator;
-    const Layout = LatencyHistogram.Layout;
-
-    {
-        // linear: inclusive-upper le-bounds 10, 20, 30, 40, 50; then implicit `+Inf`.
-        const hist: LatencyHistogram =
-            try .initForTest(gpa, Layout{ .linear = .{ .base_ns = 0, .step_ns = 10, .octaves = 5 } });
-        defer hist.deinitForTest(gpa);
-
-        hist.observe(5); // bucket 0
-        hist.observe(15); // bucket 1
-        hist.observe(15); // bucket 1
-        hist.observe(25); // bucket 2
-        hist.observe(999); // +Inf
-
-        try hist.testExpectBuckets(5, &.{
-            .{ .upper_bound = 10, .cumulative_count = 1 },
-            .{ .upper_bound = 20, .cumulative_count = 3 },
-            .{ .upper_bound = 30, .cumulative_count = 4 },
-            .{ .upper_bound = 40, .cumulative_count = 4 },
-            .{ .upper_bound = 50, .cumulative_count = 4 },
-        });
-    }
-
-    {
-        // log_linear: 2 octaves x 4 sub-buckets, inclusive-upper `(lo, hi]` bounds; then `+Inf`.
-        const hist: LatencyHistogram =
-            try .initForTest(gpa, Layout{ .log_linear = .{ .base_ns = 16, .sub_bucket_bits = 2, .octaves = 2 } });
-        defer hist.deinitForTest(gpa);
-
-        hist.observe(16); // bucket 0 (le=20)
-        hist.observe(18); // bucket 0 (le=20)
-        hist.observe(22); // bucket 1 (le=24)
-        hist.observe(40); // bucket 4: 40 == le(4), inclusive
-        hist.observe(200); // +Inf
-
-        try hist.testExpectBuckets(5, &.{
-            .{ .upper_bound = 20, .cumulative_count = 2 },
-            .{ .upper_bound = 24, .cumulative_count = 3 },
-            .{ .upper_bound = 28, .cumulative_count = 3 },
-            .{ .upper_bound = 32, .cumulative_count = 3 },
-            .{ .upper_bound = 40, .cumulative_count = 4 },
-            .{ .upper_bound = 48, .cumulative_count = 4 },
-            .{ .upper_bound = 56, .cumulative_count = 4 },
-            .{ .upper_bound = 64, .cumulative_count = 4 },
-        });
-    }
-}
-
-test "latency histogram: values accumulate across snapshots" {
-    const gpa = std.testing.allocator;
-    const Layout = LatencyHistogram.Layout;
-
-    const hist: LatencyHistogram =
-        try .initForTest(gpa, Layout{ .linear = .{ .base_ns = 0, .step_ns = 10, .octaves = 3 } });
-    defer hist.deinitForTest(gpa);
-
-    hist.observe(5); // bucket 0
-    hist.observe(15); // bucket 1
-    try hist.testExpectBuckets(2, &.{
-        .{ .upper_bound = 10, .cumulative_count = 1 },
-        .{ .upper_bound = 20, .cumulative_count = 2 },
-        .{ .upper_bound = 30, .cumulative_count = 2 },
-    });
-
-    // The prior snapshot folds its counts back into the hot shard, so totals accumulate.
-    hist.observe(5); // bucket 0
-    try hist.testExpectBuckets(3, &.{
-        .{ .upper_bound = 10, .cumulative_count = 2 },
-        .{ .upper_bound = 20, .cumulative_count = 3 },
-        .{ .upper_bound = 30, .cumulative_count = 3 },
-    });
-}
-
-// The `Layout` math has unchecked preconditions (there is no `Layout.validate()`): crossing any
-// of the boundaries below triggers a Zig safety panic on the first `observe`/render. Those panics
-// are illegal behavior and abort the test runner, so they cannot be asserted in-process; instead,
-// each test below pins the *tightest still-valid* config, proving the math is correct right at the
-// edge and documenting exactly where the cliff is.
-
-test "latency histogram: linear binning is correct at the smallest valid step (issue #2)" {
-    // `step_ns == 0` divides by zero in `bucketIndex` (`(ns -| base_ns -| 1) / step_ns`).
-    // `step_ns == 1` is the tightest valid divisor.
-    const gpa = std.testing.allocator;
-    const Layout = LatencyHistogram.Layout;
-
-    const hist: LatencyHistogram =
-        try .initForTest(gpa, Layout{ .linear = .{ .base_ns = 0, .step_ns = 1, .octaves = 4 } });
-    defer hist.deinitForTest(gpa);
-
-    hist.observe(0); // bucket 0 (le=1)
-    hist.observe(2); // bucket 1 (le=2, inclusive)
-    hist.observe(3); // bucket 2 (le=3, inclusive)
-    hist.observe(9); // +Inf
-
-    try hist.testExpectBuckets(4, &.{
-        .{ .upper_bound = 1, .cumulative_count = 1 },
-        .{ .upper_bound = 2, .cumulative_count = 2 },
-        .{ .upper_bound = 3, .cumulative_count = 3 },
-        .{ .upper_bound = 4, .cumulative_count = 3 },
-    });
-}
-
-test "latency histogram: log_linear binning is correct at the smallest octave unit (issue #2)" {
-    // `base_ns < 2^sub_bucket_bits` makes `unit = base_ns >> sub_bucket_bits == 0`, a divide-by-zero
-    // in `bucketIndex`. `base_ns == 2^sub_bucket_bits` (here 4 == 2^2) is the tightest valid config:
-    // octave 0's sub-bucket width `unit` is exactly 1.
-    const gpa = std.testing.allocator;
-    const Layout = LatencyHistogram.Layout;
-
-    const hist: LatencyHistogram =
-        try .initForTest(gpa, Layout{ .log_linear = .{ .base_ns = 4, .sub_bucket_bits = 2, .octaves = 2 } });
-    defer hist.deinitForTest(gpa);
-
-    hist.observe(4); // bucket 0 (le=5)
-    hist.observe(6); // bucket 1 (le=6, inclusive)
-    hist.observe(8); // bucket 3 (le=8, inclusive)
-    hist.observe(11); // bucket 5 (le=12)
-    hist.observe(100); // +Inf
-
-    try hist.testExpectBuckets(5, &.{
-        .{ .upper_bound = 5, .cumulative_count = 1 },
-        .{ .upper_bound = 6, .cumulative_count = 2 },
-        .{ .upper_bound = 7, .cumulative_count = 2 },
-        .{ .upper_bound = 8, .cumulative_count = 3 },
-        .{ .upper_bound = 10, .cumulative_count = 3 },
-        .{ .upper_bound = 12, .cumulative_count = 4 },
-        .{ .upper_bound = 14, .cumulative_count = 4 },
-        .{ .upper_bound = 16, .cumulative_count = 4 },
-    });
-}
-
-test "latency histogram: power_of_two bounds are correct at the 2^63 ceiling (issue #2)" {
-    // `upperBoundNs` computes `base_ns << i`; `base_ns << (octaves - 1)` must stay within u64.
-    // base_ns=2^60, octaves=4 → the top bucket's bound is exactly 2^63, the largest valid bound.
-    const gpa = std.testing.allocator;
-    const Layout = LatencyHistogram.Layout;
-    const layout = Layout{ .power_of_two = .{ .base_ns = 1 << 60, .octaves = 4 } };
-
-    try std.testing.expectEqual(@as(u64, 1) << 60, layout.upperBoundNs(0));
-    try std.testing.expectEqual(@as(u64, 1) << 63, layout.upperBoundNs(3));
-
-    // Exercise the same shift through the real render path (`nextBucket` -> `upperBoundNs`).
-    const hist: LatencyHistogram = try .initForTest(gpa, layout);
-    defer hist.deinitForTest(gpa);
-
-    hist.observe(1 << 60); // bucket 0: (2^59, 2^60]
-    hist.observe(1 << 63); // bucket 3: (2^62, 2^63]
-
-    try hist.testExpectBuckets(2, &.{
-        .{ .upper_bound = 1 << 60, .cumulative_count = 1 },
-        .{ .upper_bound = 1 << 61, .cumulative_count = 1 },
-        .{ .upper_bound = 1 << 62, .cumulative_count = 1 },
-        .{ .upper_bound = 1 << 63, .cumulative_count = 2 },
-    });
-}
-
 test "latency histogram: comptimeValidate accepts well-formed layouts" {
     const Layout = LatencyHistogram.Layout;
-    Layout.comptimeValidate(.{ .power_of_two = .{ .base_ns = 16, .octaves = 8 } });
-    Layout.comptimeValidate(.{ .power_of_two = .{ .base_ns = 100, .octaves = 5 } }); // arbitrary base_ns
-    Layout.comptimeValidate(.{ .linear = .{ .base_ns = 0, .step_ns = 10, .octaves = 6 } });
-    Layout.comptimeValidate(.{ .log_linear = .{ .base_ns = 16, .sub_bucket_bits = 2, .octaves = 2 } });
-    Layout.comptimeValidate(.{ .log_linear = .{ .base_ns = 100, .sub_bucket_bits = 2, .octaves = 2 } }); // arbitrary base_ns
-    Layout.comptimeValidate(.{ .exponential = .{ .schema = 2, .min_ns = 512, .octaves = 12 } });
-    Layout.comptimeValidate(.{ .exponential = .{ .schema = 0, .min_ns = 1, .octaves = 8 } });
+    Layout.comptimeValidate(.{ .schema = 2, .min_ns = 512, .octaves = 12 });
+    Layout.comptimeValidate(.{ .schema = 0, .min_ns = 1, .octaves = 8 });
+    Layout.comptimeValidate(.{ .schema = 8, .min_ns = 1_000, .octaves = 4 });
 }
 
-test "latency histogram: arbitrary (non-power-of-two) base_ns bucket bounds" {
-    const Layout = LatencyHistogram.Layout;
-    // power_of_two anchored at 100ns doubles each octave: 100, 200, 400, 800, 1600.
-    const po2 = Layout{ .power_of_two = .{ .base_ns = 100, .octaves = 5 } };
-    try std.testing.expectEqual(@as(u64, 100), po2.upperBoundNs(0));
-    try std.testing.expectEqual(@as(u64, 200), po2.upperBoundNs(1));
-    try std.testing.expectEqual(@as(u64, 400), po2.upperBoundNs(2));
-    try std.testing.expectEqual(@as(u64, 1600), po2.upperBoundNs(4));
-    // log_linear anchored at 100ns with 4 sub-buckets/octave: 125,150,175,200 then 250,300,350,400.
-    const ll = Layout{ .log_linear = .{ .base_ns = 100, .sub_bucket_bits = 2, .octaves = 2 } };
-    const want = [_]u64{ 125, 150, 175, 200, 250, 300, 350, 400 };
-    for (want, 0..) |bound, i| try std.testing.expectEqual(bound, ll.upperBoundNs(i));
-}
-
-test "latency histogram: exponential native layout has geometric bounds" {
+test "latency histogram: geometric bounds and base index" {
     const Layout = LatencyHistogram.Layout;
     // schema 2 (4 buckets/octave), window anchored at 512ns == native index 36. Bounds are
     // `2^((36 + i) / 4)` rounded: 512, 609, 724, 861, 1024, 1218, 1448, 1722.
-    const exp = Layout{ .exponential = .{ .schema = 2, .min_ns = 512, .octaves = 2 } };
+    const layout: Layout = .{ .schema = 2, .min_ns = 512, .octaves = 2 };
     const want = [_]u64{ 512, 609, 724, 861, 1024, 1218, 1448, 1722 };
-    for (want, 0..) |bound, i| try std.testing.expectEqual(bound, exp.upperBoundNs(i));
+    for (want, 0..) |bound, i| try std.testing.expectEqual(bound, layout.upperBoundNs(i));
 
-    // Storage bucket 0 is native index 36 (== 2^schema * log2(512), exact since 512 is a power of 2).
-    const ne = exp.nativeExponential().?;
-    try std.testing.expectEqual(@as(u4, 2), ne.schema);
-    try std.testing.expectEqual(@as(i64, 36), ne.base_index);
-    // The classic layouts are not native.
-    try std.testing.expectEqual(
-        @as(?Layout.NativeExponential, null),
-        (Layout{ .power_of_two = .{ .base_ns = 512, .octaves = 4 } }).nativeExponential(),
-    );
+    // Storage bucket 0 is native index 36 (== 2^schema * log2(512), exact since 512 is a power of 2);
+    // this is the `positive_span` offset the protobuf encoder emits.
+    try std.testing.expectEqual(@as(i64, 36), layout.baseIndex());
+    try std.testing.expectEqual(@as(u64, 8), layout.bucketCount());
 }
 
-test "latency histogram: exponential native layout bins geometrically" {
+test "latency histogram: bins geometrically" {
     const gpa = std.testing.allocator;
     const Layout = LatencyHistogram.Layout;
 
     // schema 2, min_ns 512, 2 octaves -> 8 buckets. Octave boundaries (512, 1024) exercise the
     // fp-safe `frexp` binning; 513/700 are mid-octave; 2000 overflows into the implicit `+Inf`.
-    const layout: Layout = .{ .exponential = .{ .schema = 2, .min_ns = 512, .octaves = 2 } };
+    const layout: Layout = .{ .schema = 2, .min_ns = 512, .octaves = 2 };
     const hist: LatencyHistogram = try .initForTest(gpa, layout);
     defer hist.deinitForTest(gpa);
 
@@ -1681,11 +1311,46 @@ test "latency histogram: exponential native layout bins geometrically" {
     });
 }
 
-test "latency histogram: exponential values below the window floor into bucket 0" {
+test "latency histogram: values accumulate across snapshots" {
     const gpa = std.testing.allocator;
     const Layout = LatencyHistogram.Layout;
 
-    const layout: Layout = .{ .exponential = .{ .schema = 2, .min_ns = 512, .octaves = 2 } };
+    const layout: Layout = .{ .schema = 2, .min_ns = 512, .octaves = 2 };
+    const hist: LatencyHistogram = try .initForTest(gpa, layout);
+    defer hist.deinitForTest(gpa);
+
+    hist.observe(512); // bucket 0
+    hist.observe(513); // bucket 1
+    try hist.testExpectBuckets(2, &.{
+        .{ .upper_bound = 512, .cumulative_count = 1 },
+        .{ .upper_bound = 609, .cumulative_count = 2 },
+        .{ .upper_bound = 724, .cumulative_count = 2 },
+        .{ .upper_bound = 861, .cumulative_count = 2 },
+        .{ .upper_bound = 1024, .cumulative_count = 2 },
+        .{ .upper_bound = 1218, .cumulative_count = 2 },
+        .{ .upper_bound = 1448, .cumulative_count = 2 },
+        .{ .upper_bound = 1722, .cumulative_count = 2 },
+    });
+
+    // The prior snapshot folds its counts back into the hot shard, so totals accumulate.
+    hist.observe(512); // bucket 0
+    try hist.testExpectBuckets(3, &.{
+        .{ .upper_bound = 512, .cumulative_count = 2 },
+        .{ .upper_bound = 609, .cumulative_count = 3 },
+        .{ .upper_bound = 724, .cumulative_count = 3 },
+        .{ .upper_bound = 861, .cumulative_count = 3 },
+        .{ .upper_bound = 1024, .cumulative_count = 3 },
+        .{ .upper_bound = 1218, .cumulative_count = 3 },
+        .{ .upper_bound = 1448, .cumulative_count = 3 },
+        .{ .upper_bound = 1722, .cumulative_count = 3 },
+    });
+}
+
+test "latency histogram: values below the window floor into bucket 0" {
+    const gpa = std.testing.allocator;
+    const Layout = LatencyHistogram.Layout;
+
+    const layout: Layout = .{ .schema = 2, .min_ns = 512, .octaves = 2 };
     const hist: LatencyHistogram = try .initForTest(gpa, layout);
     defer hist.deinitForTest(gpa);
 

@@ -176,7 +176,6 @@ fn writeInfBucket(
     try w.print("{d}\n", .{count});
 }
 
-
 test "prometheus: histogram labels are valid" {
     const gpa = std.testing.allocator;
     const histogram = try tel.Histogram.initForTest(gpa, &.{ 1.0, 2.5 });
@@ -205,19 +204,19 @@ test "prometheus: latency histogram emits ns-suffixed raw nanoseconds" {
     const gpa = std.testing.allocator;
     const Layout = tel.LatencyHistogram.Layout;
 
-    // linear: inclusive-upper le-bounds 10, 20, 30, 40, 50; then implicit `+Inf`.
-    const histogram: tel.LatencyHistogram = try .initForTest(gpa, Layout{ .linear = .{
-        .base_ns = 0,
-        .step_ns = 10,
-        .octaves = 5,
-    } });
+    // schema 2, window at 512ns: rounded geometric le-bounds 512, 609, 724, 861, 1024, ...; +Inf.
+    const histogram: tel.LatencyHistogram = try .initForTest(gpa, Layout{
+        .schema = 2,
+        .min_ns = 512,
+        .octaves = 2,
+    });
     defer histogram.deinitForTest(gpa);
 
-    histogram.observe(5); // bucket 0
-    histogram.observe(15); // bucket 1
-    histogram.observe(15); // bucket 1
-    histogram.observe(25); // bucket 2
-    histogram.observe(999); // +Inf
+    histogram.observe(512); // bucket 0
+    histogram.observe(513); // bucket 1
+    histogram.observe(700); // bucket 2
+    histogram.observe(1024); // bucket 4
+    histogram.observe(2000); // +Inf
 
     var output: std.Io.Writer.Allocating = .init(gpa);
     defer output.deinit();
@@ -226,13 +225,16 @@ test "prometheus: latency histogram emits ns-suffixed raw nanoseconds" {
 
     // Bounds and `_sum` are raw nanoseconds; names carry the `_ns` suffix flagging the unit.
     try std.testing.expectEqualStrings(
-        \\test_latency_ns_bucket{le="10"} 1
-        \\test_latency_ns_bucket{le="20"} 3
-        \\test_latency_ns_bucket{le="30"} 4
-        \\test_latency_ns_bucket{le="40"} 4
-        \\test_latency_ns_bucket{le="50"} 4
+        \\test_latency_ns_bucket{le="512"} 1
+        \\test_latency_ns_bucket{le="609"} 2
+        \\test_latency_ns_bucket{le="724"} 3
+        \\test_latency_ns_bucket{le="861"} 3
+        \\test_latency_ns_bucket{le="1024"} 4
+        \\test_latency_ns_bucket{le="1218"} 4
+        \\test_latency_ns_bucket{le="1448"} 4
+        \\test_latency_ns_bucket{le="1722"} 4
         \\test_latency_ns_bucket{le="+Inf"} 5
-        \\test_latency_ns_sum 1059
+        \\test_latency_ns_sum 4749
         \\test_latency_ns_count 5
         \\
     , output.written());

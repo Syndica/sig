@@ -218,16 +218,10 @@ fn writeLatencyHistogramMetric(
     id: Id,
     lh: tel.LatencyHistogram,
 ) Error!void {
-    if (lh.layout.nativeExponential()) |ne| {
-        var snap = lh.swapOutSnapshot();
-        defer snap.release();
-        try writeHistogramMetric(gpa, fw, id, nativeHistogramWriter(gpa, &snap, lh.layout, ne));
-    } else {
-        // Non-exponential latency layouts have no native schema; emit classic buckets.
-        var snap = lh.swapOutSnapshot();
-        defer snap.release();
-        try writeHistogramMetric(gpa, fw, id, classicHistogramWriter(gpa, &snap));
-    }
+    // A `LatencyHistogram`'s layout is always native-schema-aligned, so it always renders native.
+    var snap = lh.swapOutSnapshot();
+    defer snap.release();
+    try writeHistogramMetric(gpa, fw, id, nativeHistogramWriter(gpa, &snap, lh.layout));
 }
 
 /// Wraps `id`'s labels and a `Histogram` submessage (produced by `hist_writer.write`) into a
@@ -284,9 +278,9 @@ fn classicHistogramWriter(
     return .{ .gpa = gpa, .snap = snap };
 }
 
-/// Renders a snapshot (float `Histogram` or non-native `LatencyHistogram`) as a classic protobuf
-/// `Histogram`: explicit finite `bucket` list plus `sample_sum`/`sample_count`. There is no explicit
-/// `+Inf` bucket — Prometheus derives it from `sample_count`.
+/// Renders a float `Histogram` snapshot as a classic protobuf `Histogram`: explicit finite `bucket`
+/// list plus `sample_sum`/`sample_count`. There is no explicit `+Inf` bucket — Prometheus derives it
+/// from `sample_count`. (`LatencyHistogram`s always render native; see `NativeHistogramWriter`.)
 fn ClassicHistogramWriter(comptime SnapPtr: type) type {
     return struct {
         gpa: std.mem.Allocator,
@@ -309,19 +303,17 @@ fn nativeHistogramWriter(
     gpa: std.mem.Allocator,
     snap: *tel.LatencyHistogram.SnapshotReader,
     layout: tel.LatencyHistogram.Layout,
-    ne: tel.LatencyHistogram.Layout.NativeExponential,
 ) NativeHistogramWriter {
-    return .{ .gpa = gpa, .snap = snap, .layout = layout, .ne = ne };
+    return .{ .gpa = gpa, .snap = snap, .layout = layout };
 }
 
-/// Renders an `exponential` `LatencyHistogram` snapshot as a standard exponential native histogram:
-/// `schema`, one `positive_span`, and delta-encoded `positive_delta` (or a single no-op span when
-/// empty, so the message is still recognized as native rather than an empty classic histogram).
+/// Renders a `LatencyHistogram` snapshot as a standard exponential native histogram: `schema`, one
+/// `positive_span`, and delta-encoded `positive_delta` (or a single no-op span when empty, so the
+/// message is still recognized as native rather than an empty classic histogram).
 const NativeHistogramWriter = struct {
     gpa: std.mem.Allocator,
     snap: *tel.LatencyHistogram.SnapshotReader,
     layout: tel.LatencyHistogram.Layout,
-    ne: tel.LatencyHistogram.Layout.NativeExponential,
 
     fn write(self: NativeHistogramWriter, hw: *std.Io.Writer) Error!void {
         const bucket_count: usize = @intCast(self.layout.bucketCount());
@@ -339,7 +331,7 @@ const NativeHistogramWriter = struct {
             prev_cumulative = b.cumulative_count;
         }
 
-        try writeSint32Field(hw, Histogram.schema, @intCast(self.ne.schema));
+        try writeSint32Field(hw, Histogram.schema, @intCast(self.layout.schema));
         try writeDoubleField(hw, Histogram.zero_threshold, 0.0);
         try writeVarintField(hw, Histogram.zero_count, 0);
         try writeVarintField(hw, Histogram.sample_count, total_count);
@@ -359,7 +351,7 @@ const NativeHistogramWriter = struct {
         var span: std.Io.Writer.Allocating = .init(self.gpa);
         defer span.deinit();
         if (first) |f| {
-            const offset: i32 = @intCast(self.ne.base_index + @as(i64, @intCast(f)));
+            const offset: i32 = @intCast(self.layout.baseIndex() + @as(i64, @intCast(f)));
             try writeSint32Field(&span.writer, BucketSpan.offset, offset);
             try writeVarintField(&span.writer, BucketSpan.length, last - f + 1);
             try writeBytesField(hw, Histogram.positive_span, span.written());
@@ -461,7 +453,7 @@ test "prometheus_proto: native histogram round-trips through the wire" {
     const gpa = testing.allocator;
     const Layout = tel.LatencyHistogram.Layout;
 
-    const layout: Layout = .{ .exponential = .{ .schema = 2, .min_ns = 512, .octaves = 2 } };
+    const layout: Layout = .{ .schema = 2, .min_ns = 512, .octaves = 2 };
     const hist: tel.LatencyHistogram = try .initForTest(gpa, layout);
     defer hist.deinitForTest(gpa);
 

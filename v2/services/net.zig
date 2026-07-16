@@ -30,16 +30,16 @@ pub fn serviceMain(
     const metrics = metric_appender.appendFields(Metrics, .{
         .prefix = @tagName(name),
         .fields = .{
-            .recv_packet_latency = .{ .layout = .{ .exponential = .{
+            .recv_packet_latency = .{ .layout = .{
                 .schema = 2,
                 .min_ns = 512,
                 .octaves = 12,
-            } } },
-            .send_packet_latency = .{ .layout = .{ .exponential = .{
+            } },
+            .send_packet_latency = .{ .layout = .{
                 .schema = 2,
                 .min_ns = 512,
                 .octaves = 12,
-            } } },
+            } },
         },
     });
     rw.tel.signalReady();
