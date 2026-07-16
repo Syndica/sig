@@ -1684,11 +1684,10 @@
         .name = "discard_unexpected_data_complete_shreds",
         .pubkey = "disCA4efguFL6Wqa4pGdG7jpjC7C5uiKzKnhEBqchBe",
         .description = "SIMD-0337: Markers for Alpenglow Fast Leader Handover, DATA_COMPLETE_SHRED placement rules",
-        .status = .unsupported,
+        .status = .supported,
         .note =
-        \\ TODO: Low Priority.
-        \\ Scheduled for activation in agave v4.1 release cycle.
-        \\ Implement as part of alpenglow in v2.
+        \\Not gated by the feature set, but supported and configurable in the v2 shred receiver.
+        \\Feature set is used to configure the shred receiver in conformance tests.
         ,
     },
     .{
@@ -1718,11 +1717,13 @@
         .name = "validate_chained_block_id",
         .pubkey = "vcmrbYbiMVKaq1snKP6eCacNDcr6qZvpCNUjmk6gxvZ",
         .description = "SIMD-0340: Validate chained block ID",
-        .status = .unsupported,
-        .note =
-        \\ TODO: High Priority.
-        \\ Pending mainnet activation.
-        ,
+        .status = .hardcoded,
+    },
+    .{
+        .name = "validate_chained_block_id_2",
+        .pubkey = "vcmrw431aNM8ngQ46derkZXipoTGQdbHkEygBDh12dA",
+        .description = "SIMD-0340: Validate chained block ID",
+        .status = .hardcoded,
     },
     .{
         .name = "upgrade_bpf_stake_program_to_v5",
