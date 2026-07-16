@@ -153,6 +153,12 @@ pub const Receiver = struct {
             }
         }
 
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/blockstore.rs#L6065
+        if (shred.variant.isData()) {
+            const parent_slot = shred.slot - shred.code_or_data.data.parent_offset;
+            if (parent_slot < state.root_slot) return error.ShredParentBeforeRoot;
+        }
+
         const fec_set_id: FecSetId = .{ .fec_set_idx = shred.fec_set_idx, .slot = shred.slot };
 
         var buf: [128]u8 = undefined;
