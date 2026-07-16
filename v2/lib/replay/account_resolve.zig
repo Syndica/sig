@@ -284,6 +284,105 @@ pub const AccountResolver = struct {
 
         unreachable; // target_index is guaranteed to be valid by the caller
     }
+
+    pub fn poll(self: *AccountResolver) bool {
+        var made_progress: bool = false;
+        made_progress |= self.drainRootedResults();
+        made_progress |= self.drivePendingLookups();
+        return made_progress;
+    }
+
+    fn drainRootedResults(self: *AccountResolver) bool {
+        var reader = self.account_lookups.out.get(.reader);
+        var consumed: usize = 0;
+
+        while (reader.next()) |result| {
+            consumed += 1;
+            self.processRootedResult(result.*);
+        }
+
+        if (consumed != 0) {
+            reader.markUsed();
+            return true;
+        }
+
+        return false;
+    }
+
+    fn drivePendingLookups(self: *AccountResolver) bool;
+
+    fn processRootedResult(
+        self: *AccountResolver,
+        result: AccountLookups.Result,
+    ) void {
+        const ticket: LookupTicket = @bitCast(result.req_user_data);
+        const pending_index: usize = ticket.pending_index;
+
+        if (pending_index >= self.pending_queue.len) {
+            self.releaseAccount(result.account_index);
+            return;
+        }
+
+        const pending = &self.pending_queue[pending_index];
+        if (pending.gen != ticket.generation or
+            pending.status == .free or
+            pending.status == .complete)
+        {
+            self.releaseAccount(result.account_index);
+            return;
+        }
+
+        std.debug.assert(pending.in_flight_lookups > 0);
+        pending.in_flight_lookups -= 1;
+
+        defer self.releaseAccount(result.account_index);
+        defer self.maybeCompletePending(pending);
+
+        if (pending.status == .draining_after_failure) {
+            return;
+        }
+
+        if (result.account_index == .invalid) {
+            failPending(pending, .LookupTableNotFound);
+            return;
+        }
+
+        self.resolveLookupAccount(
+            pending,
+            ticket.lookup_index,
+            result.account_index,
+        ) catch |err| {
+            @branchHint(.unlikely);
+            failPending(pending, err);
+        };
+    }
+
+    fn resolveLookupAccount(
+        self: *AccountResolver,
+        pending: *PendingTransaction,
+        lookup_index: u8,
+        account_ref: AccountPool.AccountRef,
+    ) ResolveError!void;
+
+    fn failPending(
+        pending: *PendingTransaction,
+        err: ResolveError,
+    ) void;
+
+    fn maybeCompletePending(
+        self: *AccountResolver,
+        pending: *PendingTransaction,
+    ) void;
+
+    fn validateNoDuplicateAccounts(
+        transaction: VersionedTransaction.View,
+        resolved: *const ResolvedTransaction,
+    ) ResolveError!void;
+
+    fn releaseAccount(
+        self: *AccountResolver,
+        account_ref: AccountPool.AccountRef,
+    ) void;
 };
 
 pub const ResolveError = error{
