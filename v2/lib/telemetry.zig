@@ -284,8 +284,9 @@ pub fn Logger(comptime scope_str: []const u8) type {
                 entries: [entry_count]log_zig.EntryField,
                 const EntrySelf = @This();
 
-                /// Formats using the default formatter for the type, if it exists. To
-                /// customize the format, use `fromValue` or `fromFmt`.
+                /// Add a field to the log message using the default formatter
+                /// for the type, if it exists. To customize the format, use
+                /// `fieldFmt`.
                 pub fn field(
                     self: *const EntrySelf,
                     name: []const u8,
@@ -333,6 +334,7 @@ pub fn Logger(comptime scope_str: []const u8) type {
                     };
                 }
 
+                /// Add a field to the log message with a custom formatter.
                 pub fn fieldFmt(
                     self: *const EntrySelf,
                     name: []const u8,
