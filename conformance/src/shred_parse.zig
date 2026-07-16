@@ -36,6 +36,10 @@ const Hash = sig_v2.solana.Hash;
 const Slot = sig_v2.solana.Slot;
 const LeaderSchedule = sig_v2.solana.LeaderSchedule;
 
+const MerkleForest = sig_v2.replay.MerkleForest;
+const MerkleNode = sig_v2.replay.MerkleNode;
+const BlockPool = sig_v2.replay.BlockPool;
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -172,6 +176,20 @@ const HarnessState = struct {
     deshred_reader: DeshredRing.Iterator(.reader),
     leader_schedule: *LeaderSchedule,
 
+    /// Replay-layer view of the completed FEC sets. Every
+    /// `DeshreddedFecSet` the Receiver writes to the ring is inserted
+    /// here so the harness can walk cross-set invariants
+    /// (equivocation, parent-offset consistency, SIMD-0340 chain,
+    /// missing-set-with-sufficient-input) in
+    /// `deriveBlockParseResult`. Reset between fixtures alongside the
+    /// Receiver.
+    forest: MerkleForest,
+    /// Backs the block pool that `insertFecSet` may allocate from when
+    /// it walks the newly attached subtree. Inline so the pool
+    /// pointer stays valid for the lifetime of `HarnessState`.
+    block_pool_buf: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined,
+    block_pool: *BlockPool,
+
     // Per-input accumulators. Reset in executeShredParse; storage capacity
     // is retained.
     shred_parse_results: std.ArrayListUnmanaged(bool) = .empty,
@@ -196,6 +214,10 @@ const HarnessState = struct {
         @memset(&ls.leaders, .ZEROES);
 
         const receiver = try Receiver.init(allocator, IN_PROGRESS_CAPACITY, DONE_CAPACITY);
+        errdefer @constCast(&receiver).deinit(allocator);
+
+        var forest = try MerkleForest.init(allocator);
+        errdefer forest.deinit(allocator);
 
         self.* = .{
             .allocator = allocator,
@@ -204,7 +226,10 @@ const HarnessState = struct {
             .deshred_writer = ring.get(.writer),
             .deshred_reader = ring.get(.reader),
             .leader_schedule = ls,
+            .forest = forest,
+            .block_pool = @ptrCast(&self.block_pool_buf),
         };
+        self.block_pool.init();
         return self;
     }
 
@@ -213,6 +238,8 @@ const HarnessState = struct {
         self.receiver.reset();
         self.deshred_writer = self.deshred_ring.get(.writer);
         self.deshred_reader = self.deshred_ring.get(.reader);
+        self.forest.reset();
+        self.block_pool.init();
 
         for (self.fec_set_results.items) |it| self.allocator.free(it.payload);
         self.fec_set_results.clearRetainingCapacity();
@@ -247,9 +274,16 @@ const HarnessState = struct {
 
     /// Drain any completions the Receiver just wrote to the deshred ring
     /// and turn each into a scratch `FECSetParseResult`. The ring provides
-    /// merkle roots, FEC-set id and the batch/slot flags; per-shred data
-    /// (payload concat, parent_offset) is filled in later from
-    /// `data_shreds` because RS-recovered shreds aren't in our capture map.
+    /// merkle roots, FEC-set id, `parent_offset` and the batch/slot flags;
+    /// per-shred `payload` is filled in later from `data_shreds` because
+    /// RS-recovered shreds aren't in our capture map.
+    ///
+    /// Each completion is also inserted into the MerkleForest so
+    /// `deriveBlockParseResult` can walk cross-set invariants later.
+    /// Pool-full and block-pool-full are treated as harness capacity
+    /// exhaustion (both are fixed-size and sized for typical fixtures);
+    /// dropped fixtures would surface via the existing verify_ticks /
+    /// chain-validation checks in `buildProtoEffects`.
     fn drainCompletions(self: *HarnessState) void {
         while (self.deshred_reader.next()) |completed| {
             self.fec_set_results.append(self.allocator, .{
@@ -258,12 +292,19 @@ const HarnessState = struct {
                 .payload = &.{}, // filled at proto-encode
                 .slot = completed.id.slot,
                 .fec_set_index = completed.id.fec_set_idx,
-                .parent_offset = 0, // filled at proto-encode
+                .parent_offset = completed.parent_offset,
                 .num_data_shreds = FEC_DATA_SHREDS,
                 .num_coding_shreds = FEC_CODING_SHREDS,
                 .data_complete = completed.data_complete,
                 .slot_complete = completed.slot_complete,
             }) catch @panic("OutOfMemory");
+
+            _ = sig_v2.replay.insertFecSet(
+                sig_v2.telemetry.Logger("main").noop,
+                completed,
+                &self.forest,
+                self.block_pool,
+            ) catch {};
         }
         self.deshred_reader.markUsed();
     }
@@ -400,10 +441,46 @@ fn buildProtoEffects(
     );
     out.shred_results.appendSliceAssumeCapacity(st.shred_parse_results.items);
 
-    // Fill in per-FEC-set payload + parent_offset from the data-shred
-    // captures. Every captured shred sits in exactly one FEC set; iterate
-    // captures once per FEC set (bounded to 32 shreds per set, ~64
-    // in-progress sets, so linear scan is fine).
+    // Block-parse verdict is derived post-hoc from replay state
+    // (MerkleForest) plus receiver-internal admission-time state
+    // (in_progress ctxs). The runtime keeps no per-slot dead flag; the
+    // harness reconstructs one from receiver+forest for the block-level
+    // verdict.
+    var dead_slots: DeadSlots = .empty;
+    defer dead_slots.deinit(allocator);
+    try deriveBlockParseResult(&st.receiver, &st.forest, allocator, &dead_slots);
+    if (dead_slots.count() > 0) out.block_parse_result = .REJECTED_INVALID_HEADER;
+
+    // Per-slot first-seen `parent_offset`, mirroring agave's
+    // first-writer-wins pin in `check_insert_data_shred` /
+    // `slot_meta.parent_slot`. Any FEC set whose declared
+    // `parent_offset` disagrees with the pin never has 32 data shreds
+    // in agave's `data_shred_cf` (the mismatched ones are rejected as
+    // `InsertDataShredError::InvalidShred`), so its harness emits no
+    // `fec_set_result` for it. Compute the pin from insertion order
+    // (`st.data_shreds` is appended in feed order via `captureShredIfNew`
+    // and hasn't been sorted yet). Also mark any slot with a
+    // parent-offset conflict as dead so the block verdict flips to
+    // REJECTED — receiver-only walks in `deriveBlockParseResult` miss
+    // this when the first-seen and mismatching FEC sets are split
+    // across a completed set (ctx destroyed) and an in-progress set.
+    var first_seen_parent: std.AutoHashMapUnmanaged(Slot, u16) = .empty;
+    defer first_seen_parent.deinit(allocator);
+    for (st.data_shreds.items) |ds| {
+        const gop = try first_seen_parent.getOrPut(allocator, ds.slot);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = ds.parent_offset;
+        } else if (gop.value_ptr.* != ds.parent_offset) {
+            try dead_slots.put(allocator, ds.slot, {});
+        }
+    }
+    if (dead_slots.count() > 0) out.block_parse_result = .REJECTED_INVALID_HEADER;
+
+    // Fill in per-FEC-set payload from the data-shred captures. Every
+    // captured shred sits in exactly one FEC set; iterate captures once
+    // per FEC set (bounded to 32 shreds per set, ~64 in-progress sets,
+    // so linear scan is fine). `parent_offset` is already populated from
+    // the deshred ring.
     std.sort.heap(DataShredCapture, st.data_shreds.items, {}, dataShredOrder);
     for (st.fec_set_results.items) |*fec_res| {
         var payload: std.ArrayListUnmanaged(u8) = .empty;
@@ -411,7 +488,6 @@ fn buildProtoEffects(
         for (st.data_shreds.items) |*ds| {
             if (ds.slot != fec_res.slot or ds.fec_set_idx != fec_res.fec_set_index) continue;
             payload.appendSlice(st.allocator, ds.payload) catch @panic("OutOfMemory");
-            fec_res.parent_offset = ds.parent_offset;
         }
         fec_res.payload = payload.toOwnedSlice(st.allocator) catch @panic("OutOfMemory");
     }
@@ -419,7 +495,9 @@ fn buildProtoEffects(
     // Sort by (slot, fec_set_index) and chain-validate.
     std.sort.heap(FECSetParseResult, st.fec_set_results.items, {}, fecOrder);
 
-    // Cross-FEC chained_merkle_root check (not enforced by the Receiver).
+    // Cross-FEC chained_merkle_root check on completed sets. Redundant with
+    // the Receiver's per-shred check (see `lookupFecSetRoots`) but kept as a
+    // belt-and-braces invariant assertion on the emitted output.
     var i: usize = 0;
     while (i < st.fec_set_results.items.len) {
         // Contiguous run of FEC sets for one slot.
@@ -441,6 +519,21 @@ fn buildProtoEffects(
                 if (!pm.eql(&r.chained_merkle_root)) {
                     out.block_parse_result = .REJECTED_INVALID_HEADER;
                     break;
+                }
+            }
+
+            // Per-slot parent pin: a FEC set whose declared parent_offset
+            // disagrees with the first-seen `parent_offset` at this slot
+            // was rejected shred-by-shred at agave's `insert_shreds`
+            // (`should_insert_data_shred` → `expected_shred_parent` !=
+            // shred_parent → `InsertDataShredError::InvalidShred`), so
+            // its 32 data shreds never reach `data_shred_cf` and the
+            // agave harness emits no fec_set_result. Suppress here.
+            if (first_seen_parent.get(r.slot)) |pinned| {
+                if (pinned != r.parent_offset) {
+                    prev_merkle = r.merkle_root;
+                    expected_idx += FEC_DATA_SHREDS;
+                    continue;
                 }
             }
 
@@ -639,6 +732,141 @@ fn verifyTicksFromDataShreds(
     }
 
     return .ok;
+}
+
+// ---------------------------------------------------------------------------
+// deriveBlockParseResult: block-parse verdict from replay + receiver state
+// ---------------------------------------------------------------------------
+
+const DeadSlots = std.AutoHashMapUnmanaged(Slot, void);
+
+/// Folds cross-FEC-set invariants into a per-slot dead map, mirroring
+/// agave's `mark_slot_dead_if_not_full` calls inside
+/// `check_insert_data_shred` / `handle_shred_recovery` /
+/// `check_backwards_chained_merkle_root_consistency`. Reads a mix of
+/// replay state (`MerkleForest`) and receiver-internal admission-time
+/// state (`in_progress` ctxs) so that failures triggered on incomplete
+/// FEC sets are still visible even though the receiver keeps no
+/// per-slot dead flag.
+///
+/// The invariants checked (agave-parity):
+///
+/// - **Equivocation** (`hasSiblingsWithSameId`): two `MerkleNode`s at
+///   the same `(slot, fec_set_idx)` in `forest.map`. Under
+///   `-Ddebug-signature-disambiguation` the two variants route through
+///   distinct ctxs and both complete; `MerkleForest` keys by
+///   `merkle_root` so both survive as distinct entries. Agave's
+///   `check_merkle_root_consistency` handles the same via
+///   `mark_slot_dead_if_not_full`.
+/// - **Per-slot parent-offset divergence**: every admitted data shred
+///   in `receiver.in_progress` must declare the same `parent_offset`
+///   for its slot. Agave's `should_insert_data_shred` rejects the
+///   mismatched shreds via `expected_shred_parent != shred_parent` and
+///   marks the slot dead.
+/// - **RS-malformed suppression**: a ctx with `data_shreds_received.count()
+///   == fec_shred_count` whose `merkle_root` is absent from `forest.map`
+///   was suppressed by the receiver's post-recovery re-validation. Agave
+///   marks the slot dead in `handle_shred_recovery`.
+/// - **SIMD-0340 cross-FEC chain**: reconstruct a
+///   `(slot, fec_set_idx) -> (merkle_root, chained_merkle_root)` map
+///   from `in_progress` ctxs and `forest.map`, then check consecutive
+///   `(slot, k) / (slot, k + fec_shred_count)` neighbours.
+///
+/// Any per-slot violation marks that slot dead; a non-empty dead set
+/// is the block-level REJECT signal *and* the filter applied to
+/// `fec_set_results` (agave never emits a set for a slot whose shreds
+/// were rejected at insertion).
+fn deriveBlockParseResult(
+    receiver: *const Receiver,
+    forest: *const MerkleForest,
+    scratch_allocator: Allocator,
+    dead_slots: *DeadSlots,
+) !void {
+    // Equivocation: any two nodes in `forest.map` sharing a `FecSetId`.
+    var seen_ids: std.AutoHashMapUnmanaged(sig_v2.shred.FecSetId, void) = .empty;
+    defer seen_ids.deinit(scratch_allocator);
+    // Also keep the merkle-root set for RS-malformed detection below.
+    var forest_roots: std.AutoHashMapUnmanaged(Hash, void) = .empty;
+    defer forest_roots.deinit(scratch_allocator);
+    for (forest.map.values()) |node| {
+        const gop_id = try seen_ids.getOrPut(scratch_allocator, node.id);
+        if (gop_id.found_existing)
+            try dead_slots.put(scratch_allocator, node.id.slot, {});
+        try forest_roots.put(scratch_allocator, node.merkle_root, {});
+    }
+
+    // Per-slot parent-offset consistency + RS-malformed suppression check,
+    // walking `receiver.in_progress`. Data shreds are admitted regardless
+    // of parent conflict (the receiver's `slot_parents` pin is
+    // first-writer-wins and does not gate insertion), so divergent
+    // parent_offset values are visible in `data_shreds_buf` here.
+    var slot_parents: std.AutoHashMapUnmanaged(Slot, u16) = .empty;
+    defer slot_parents.deinit(scratch_allocator);
+    for (receiver.in_progress.signature_map.values()) |ctx| {
+        if (ctx.data_variant.isData()) {
+            var i: u32 = 0;
+            while (i < FEC_DATA_SHREDS) : (i += 1) {
+                if (!ctx.data_shreds_received.isSet(i)) continue;
+                const shred: *const Shred =
+                    .fromBufferUnchecked(&ctx.data_shreds_buf[i]);
+                const gop = try slot_parents.getOrPut(scratch_allocator, shred.slot);
+                if (gop.found_existing) {
+                    if (gop.value_ptr.* != shred.code_or_data.data.parent_offset)
+                        try dead_slots.put(scratch_allocator, shred.slot, {});
+                } else {
+                    gop.value_ptr.* = shred.code_or_data.data.parent_offset;
+                }
+            }
+        }
+
+        if (ctx.data_shreds_received.count() == FecSetCtx.fec_shred_count and
+            !forest_roots.contains(ctx.merkle_root))
+        {
+            const id = receiver.in_progress.fecSetIdOf(ctx);
+            try dead_slots.put(scratch_allocator, id.slot, {});
+        }
+    }
+
+    // SIMD-0340 cross-FEC chain check. The receiver keeps no dedicated
+    // pin map; reconstruct one from replay + receiver state. Every
+    // structurally-parseable shred admitted under
+    // `-Ddebug-signature-disambiguation` creates or updates a ctx whose
+    // `merkle_root` / `chained_merkle_root` fields hold the shred's
+    // declared roots, so `in_progress` + `forest.map` together cover
+    // every FEC set that saw a shred.
+    var pins: std.AutoHashMapUnmanaged(sig_v2.shred.FecSetId, struct {
+        merkle_root: Hash,
+        chained_merkle_root: Hash,
+    }) = .empty;
+    defer pins.deinit(scratch_allocator);
+    for (receiver.in_progress.signature_map.values()) |ctx| {
+        const id = receiver.in_progress.fecSetIdOf(ctx);
+        const gop = try pins.getOrPut(scratch_allocator, id);
+        if (!gop.found_existing) gop.value_ptr.* = .{
+            .merkle_root = ctx.merkle_root,
+            .chained_merkle_root = ctx.chained_merkle_root,
+        };
+    }
+    for (forest.map.values()) |node| {
+        const gop = try pins.getOrPut(scratch_allocator, node.id);
+        if (!gop.found_existing) gop.value_ptr.* = .{
+            .merkle_root = node.merkle_root,
+            .chained_merkle_root = node.chained_merkle_root,
+        };
+    }
+    var pin_it = pins.iterator();
+    while (pin_it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const roots = entry.value_ptr.*;
+        const next_id: sig_v2.shred.FecSetId = .{
+            .slot = key.slot,
+            .fec_set_idx = key.fec_set_idx + FEC_DATA_SHREDS,
+        };
+        if (pins.get(next_id)) |next_roots| {
+            if (!next_roots.chained_merkle_root.eql(&roots.merkle_root))
+                try dead_slots.put(scratch_allocator, key.slot, {});
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

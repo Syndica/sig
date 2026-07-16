@@ -68,6 +68,7 @@ pub fn build(b: *Build) void {
         .@"allow-no-sha" = allow_no_sha,
         .@"allow-no-avx512" = allow_no_avx512,
         .@"debug-skip-shred-sig-verify" = true,
+        .@"debug-signature-disambiguation" = true,
     });
     const sig_v2_mod = sig_v2_dep.module("sig_v2");
 
