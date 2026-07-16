@@ -1249,7 +1249,7 @@ test "ForkProgress.init" {
     const slot = bank_data.slot;
     var slot_element: replay.trackers.SlotTracker.Element = blk: {
         const consts: sig.core.SlotConstants =
-            try .fromBankFields(allocator, &bank_data, .ALL_DISABLED, .noop);
+            try .fromBankFieldsForTest(allocator, &bank_data, .ALL_DISABLED);
         errdefer consts.deinit(allocator);
         const state: sig.core.SlotState =
             try .fromBankFieldsForTest(allocator, &bank_data, null);
