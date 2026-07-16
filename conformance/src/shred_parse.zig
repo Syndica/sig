@@ -492,6 +492,30 @@ fn buildProtoEffects(
 
 const TickVerifyOutcome = enum { ok, rejected };
 
+/// Validates the fixed-shape header of an agave `VersionedBlockMarker`.
+/// Consumes 5 or 6 bytes on success:
+///
+///   - `VersionedBlockMarker`: u16 tag, only `1` (V1) is valid.
+///   - `BlockMarkerV1`: u8 tag in
+///     `{0: BlockFooter, 1: BlockHeader, 2: UpdateParent, 3: GenesisCert}`.
+///   - `LengthPrefixed<Inner>`: u16 length prefix (not enforced by agave).
+///   - For markers 0..2: inner `Versioned<Footer|Header|UpdateParent>`
+///     u8 tag, only `1` (V1) is valid. Marker 3 has no version tag byte.
+///
+/// Shape-only; deeper inner fields (BLS sigs, certs) are unmodelled.
+fn validateBlockMarkerHeader(reader: *std.Io.Reader) bool {
+    const outer_tag = reader.takeInt(u16, .little) catch return false;
+    if (outer_tag != 1) return false;
+    const inner_tag = reader.takeByte() catch return false;
+    if (inner_tag > 3) return false;
+    _ = reader.takeInt(u16, .little) catch return false;
+    if (inner_tag <= 2) {
+        const versioned_tag = reader.takeByte() catch return false;
+        if (versioned_tag != 1) return false;
+    }
+    return true;
+}
+
 /// Per-slot tick verification driven by accepted data shreds. Walks the
 /// contiguous prefix `slot_idx = 0, 1, 2, ...`; each DATA_COMPLETE-bounded
 /// run concatenates to one bincode `Vec<Entry>` record (one shredder
@@ -529,17 +553,18 @@ fn verifyTicksFromDataShreds(
         if (s.slot_idx != expected_idx) break;
         batch_buf.appendSlice(fba.allocator(), s.payload) catch return .rejected;
         if (s.data_complete) {
-            // A data-complete batch is one shredder batch, encoded as a single
-            // bincode `Vec<Entry>` record. `get_slot_entries_with_shred_info`
-            // deserializes each completed set and surfaces any decode failure as
-            // a rejected block. A zero-byte batch is not valid bincode (the u64
-            // length prefix needs 8 bytes) and rejects here too.
+            // Each data-complete batch is one wincode `BlockComponent`:
+            // `Vec<Entry>` with a u64 length prefix, followed by a
+            // `VersionedBlockMarker` when the length is 0.
             var reader: std.Io.Reader = .fixed(batch_buf.items);
             const entries = sig_v2.solana.bincode.read(
                 &fba,
                 &reader,
                 sig_v2.solana.bincode.Vec(sig_v2.solana.transaction.Entry),
             ) catch return .rejected;
+            if (entries.items.len == 0) {
+                if (!validateBlockMarkerHeader(&reader)) return .rejected;
+            }
             for (entries.items) |e| {
                 all_entries.append(fba.allocator(), e) catch return .rejected;
             }
