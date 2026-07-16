@@ -866,12 +866,8 @@ test "deserialized snapshot matches generated snapshot json" {
     const json_hashes = blockhash_queue_json.get("hashes").?.array.items;
     const bhq_hashes = snapshot_iter.manifest.bank_fields.blockhash_queue.hashes;
     try expectEqual(json_hashes.len, bhq_hashes.count);
-    outer: for (bhq_hashes.array[0..json_hashes.len]) |hash| {
-        const actual = hash.base58String(&hash_buf);
-        for (json_hashes) |json_hash| {
-            if (std.mem.eql(u8, json_hash.object.get("hash").?.string, actual)) continue :outer;
-        }
-        return error.MissingHash;
+    for (bhq_hashes.array, json_hashes) |hash, json_hash| {
+        try expectEqualStrings(json_hash.object.get("hash").?.string, hash.base58String(&hash_buf));
     }
 
     const account_entries = accounts.get("entries").?.array.items;
