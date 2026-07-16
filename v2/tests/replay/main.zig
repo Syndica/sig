@@ -91,29 +91,17 @@ pub fn main() !void {
     var telemetry_region: Region(tel.Region) = try .sized(telemetry_params.info().regionSize());
     telemetry_region.ptr().init(telemetry_params);
 
-    const shred_recv_config_init = shred_recv_config.finish();
-    const net_to_shred_init = net_to_shred.finish();
-    const shreds_to_replay_init = shreds_to_replay.finish();
-    const transaction_pool_init = transaction_pool.finish();
-    const block_pool_init = block_pool.finish();
-    const exec_req_response_init = exec_req_response_region.finish();
-    const snapshot_metadata_init = snapshot_metadata.finish();
-    const replay_scratch_init = replay_scratch.finish();
-    const account_pool_init = account_pool.finish();
-    const account_lookups_init = account_lookups.finish();
-    const telemetry_init = telemetry_region.finish();
-
-    const net_pair = try net_to_shred_init.memfd.mmapStaticSize(.rw, lib.net.Pair, .{});
+    const net_pair = try net_to_shred.finish().memfd.mmapStaticSize(.rw, lib.net.Pair, .{});
     defer std.posix.munmap(@ptrCast(net_pair));
 
-    const exec_req_response = try exec_req_response_init.memfd.mmapStaticSize(
+    const exec_req_response = try exec_req_response_region.finish().memfd.mmapStaticSize(
         .rw,
         lib.replay.ExecReqResponse,
         .{},
     );
     defer std.posix.munmap(@ptrCast(exec_req_response));
 
-    const account_lookup_pair = try account_lookups_init.memfd.mmapStaticSize(
+    const account_lookup_pair = try account_lookups.finish().memfd.mmapStaticSize(
         .rw,
         lib.accounts_db.AccountLookups,
         .{},
@@ -123,31 +111,31 @@ pub fn main() !void {
     var spawned: topology.Children(Topology) = undefined;
     try spawned.spawn(.sandboxed, .{
         .shred_receiver = .{
-            .ro = .{ .config = shred_recv_config_init },
+            .ro = .{ .config = shred_recv_config.finish() },
             .rw = .{
-                .snapshot_metadata = snapshot_metadata_init,
-                .tvu_socket = net_to_shred_init,
-                .deshredded_out = shreds_to_replay_init,
-                .tel = telemetry_init,
+                .snapshot_metadata = snapshot_metadata.finish(),
+                .tvu_socket = net_to_shred.finish(),
+                .deshredded_out = shreds_to_replay.finish(),
+                .tel = telemetry_region.finish(),
             },
         },
         .replay = .{
             .ro = .{},
             .rw = .{
-                .scratch_memory = replay_scratch_init,
-                .snapshot_metadata_in = snapshot_metadata_init,
-                .deshredded_in = shreds_to_replay_init,
-                .replay_transaction_pool = transaction_pool_init,
-                .block_pool = block_pool_init,
-                .exec_req_response = exec_req_response_init,
-                .account_pool = account_pool_init,
-                .account_lookups = account_lookups_init,
-                .tel = telemetry_init,
+                .scratch_memory = replay_scratch.finish(),
+                .snapshot_metadata_in = snapshot_metadata.finish(),
+                .deshredded_in = shreds_to_replay.finish(),
+                .replay_transaction_pool = transaction_pool.finish(),
+                .block_pool = block_pool.finish(),
+                .exec_req_response = exec_req_response_region.finish(),
+                .account_pool = account_pool.finish(),
+                .account_lookups = account_lookups.finish(),
+                .tel = telemetry_region.finish(),
             },
         },
         .telemetry = .{
             .ro = .{},
-            .rw = .{ .region = telemetry_init },
+            .rw = .{ .region = telemetry_region.finish() },
         },
     });
 

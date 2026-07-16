@@ -159,7 +159,7 @@ fn loadFecSetPackets(
             manifest.shreds.data_indices
         else
             manifest.shreds.coding_indices;
-        try std.testing.expect(containsIndex(expected_indices, shred_index));
+        try std.testing.expect(std.mem.indexOfScalar(u32, expected_indices, shred_index) != null);
 
         const seen = if (shred.variant.isData()) &seen_data else &seen_coding;
         const bit_index: usize = @intCast(shred_index);
@@ -174,21 +174,12 @@ fn loadFecSetPackets(
     return error.FecSetNotFound;
 }
 
-inline fn containsIndex(indices: []const u32, index: u32) bool {
-    for (indices) |candidate| {
-        if (candidate == index) return true;
-    }
-    return false;
-}
-
 // NOTE: Transplanted from v1's src/ledger/tests.zig shred fixture loader.
 inline fn readChunk(allocator: std.mem.Allocator, reader: *std.Io.Reader) !?[]const u8 {
-    var size_bytes: [8]u8 = undefined;
-    reader.readSliceAll(&size_bytes) catch |err| switch (err) {
+    const size = reader.takeInt(u64, .little) catch |err| switch (err) {
         error.EndOfStream => return null,
         else => return err,
     };
-    const size = std.mem.readInt(u64, &size_bytes, .little);
 
     const chunk = try allocator.alloc(u8, @intCast(size));
     errdefer allocator.free(chunk);
