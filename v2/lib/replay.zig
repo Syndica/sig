@@ -4,6 +4,7 @@ const collections = @import("collections.zig");
 const ipc = @import("ipc.zig");
 const util = @import("util.zig");
 const accounts_db = @import("accounts_db.zig");
+const account_resolve = @import("replay/account_resolve.zig");
 
 comptime {
     if (@import("builtin").is_test) {
@@ -19,6 +20,8 @@ pub const scratch_buffer_size = 3 * 1024 * 1024 * 1024;
 pub const TransactionPool = collections.SharedPool(TransactionRecord, 10_000);
 
 pub const BlockPool = collections.SharedPool(Node, 1024);
+
+pub const AccountResolver = account_resolve.AccountResolver;
 
 /// Transaction bytes plus their validated wire layout.
 ///

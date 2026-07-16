@@ -25,7 +25,7 @@ const AccountLookups = lib.accounts_db.AccountLookups;
 ///
 /// This is also the range encoded by the pending index in future Rooted lookup
 /// request user-data.
-pub const MAX_PENDING_TRANSACTIONS: usize = 256;
+pub const MAX_PENDING_TRANSACTIONS: usize = AccountLookups.capacity;
 
 pub const AccountResolver = struct {
     account_pool: *lib.accounts_db.AccountPool,
@@ -39,7 +39,7 @@ pub const AccountResolver = struct {
     // even if they are not in submission order. This would be useful for a scheduler that wants
     // to execute non-conflicting transactions in parallel.
 
-    pending_queue: [lib.accounts_db.AccountLookups.capacity]PendingTransaction,
+    pending_queue: [MAX_PENDING_TRANSACTIONS]PendingTransaction,
 
     /// Index of the oldest submitted, unconsumed transaction in `pending`.
     pending_head: usize,
@@ -65,7 +65,7 @@ pub const AccountResolver = struct {
             .transaction_pool = params.transaction_pool,
             .unrooted = params.unrooted,
 
-            .pending_queue = @splat(.{}),
+            .pending_queue = @splat(.empty()),
             .pending_head = 0,
             .pending_count = 0,
         };
@@ -82,7 +82,9 @@ pub const AccountResolver = struct {
         self: *AccountResolver,
         block_ref: lib.replay.BlockRef,
         tx_ref: lib.replay.TransactionPool.ItemId,
-        // TODO: find a way to remove this.
+        /// The storage backing `bank_context.slot_hashes` must remain valid until
+        /// the corresponding completion is consumed with `popCompleted()`.
+        /// TODO: find a way to remove this.
         bank_context: BankContext,
     ) SubmitError!void {
         if (self.pending_count == self.pending_queue.len) {
@@ -105,11 +107,12 @@ pub const AccountResolver = struct {
         // TODO: if the transaction has no lookups we should skip the resolver entirely.
         if (!has_lookups) {
             std.debug.assert(transaction.loadedAddressCount() == 0);
+            pending.completion.result = .{ .resolved = {} };
         }
 
         pending.* = .{
             .gen = gen,
-            .state = if (has_lookups) .resolving else .complete,
+            .status = if (has_lookups) .resolving else .complete,
             .bank_context = bank_context,
             .next_lookup_index = 0,
             .in_flight_lookups = 0,
@@ -123,6 +126,8 @@ pub const AccountResolver = struct {
                     // TODO: do we want a safer way to represent this in the future?
                     .dynamic_addresses = undefined,
                 },
+                // TODO: need a pending result variant.
+                .result = undefined,
             },
         };
 
@@ -137,7 +142,7 @@ pub const AccountResolver = struct {
     /// The returned pointer remains valid until popCompleted() is called.
     ///
     /// TODO: we should return a batch of completions instead of one at a time.
-    pub fn peekCompleted(self: *AccountResolver) ?*const Completion {
+    pub fn peekCompleted(self: *const AccountResolver) ?*const Completion {
         if (self.pending_count == 0) return null;
 
         const pending = &self.pending_queue[self.pending_head];
@@ -166,6 +171,7 @@ pub const AccountResolver = struct {
     }
 
     const LookupTicket = packed struct(u32) {
+        // Note: we use u8 here, but this must be larger if `MAX_PENDING_TRANSACTIONS` is increased beyond 256.
         pending_index: u8,
         lookup_index: u8,
         generation: u16,
@@ -204,8 +210,6 @@ pub const AccountResolver = struct {
         /// Holds both the working output buffer and eventual public completion.
         completion: Completion = undefined,
 
-        resolved: ResolvedTransaction = undefined,
-
         pub const Status = enum(u2) {
             free,
             /// More lookup descrriptors to submit.
@@ -216,11 +220,25 @@ pub const AccountResolver = struct {
             complete,
         };
 
-        pub fn reset(self: *PendingTransaction) void {
+        pub inline fn reset(self: *PendingTransaction) void {
             // Preserve the generation across re-use.
             const gen = self.gen;
-            self.* = .{
-                .gen = gen,
+            self.* = PendingTransaction.empty();
+            self.gen = gen;
+        }
+
+        pub fn empty() PendingTransaction {
+            return PendingTransaction{
+                .gen = 0,
+                .status = .free,
+                .bank_context = BankContext{
+                    .current_slot = 0,
+                    .slot_hashes = &.{},
+                },
+                .next_lookup_index = 0,
+                .in_flight_lookups = 0,
+                .completion = undefined,
+                .resolved = undefined,
             };
         }
     };
@@ -242,12 +260,16 @@ pub const AccountResolver = struct {
         transaction: VersionedTransaction.View,
         target_index: u8,
     ) LookupPosition {
+        std.debug.assert(
+            target_index < transaction.layout.address_table_lookup_count,
+        );
+
         var writable_offset: usize = 0;
         var readonly_offset: usize = 0;
         var iter = transaction.addressTableLookups();
 
         for (0..target_index + 1) |i| {
-            const lookup = iter.next() orelse unreachable;
+            const lookup = iter.next() catch unreachable orelse unreachable;
 
             if (i == target_index) {
                 return LookupPosition{
