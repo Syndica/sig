@@ -159,7 +159,7 @@ pub fn main() !void {
         account_lookup_pair,
         account_pool_ptr,
         fixture.manifest.entries.transaction_count,
-        5 * std.time.ns_per_s,
+        30 * std.time.ns_per_s,
         30 * std.time.ns_per_s,
     );
     std.log.info(
