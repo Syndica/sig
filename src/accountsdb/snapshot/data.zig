@@ -539,9 +539,10 @@ pub const Manifest = struct {
         allocator: std.mem.Allocator,
         file: std.fs.File,
     ) !Manifest {
-        const stat = try file.stat();
-        const size = stat.size;
-        const contents = try file.readToEndAllocOptions(allocator, size, size, .@"1", null);
+        const size = (try file.stat()).size;
+        var read_buf: [4096]u8 = undefined;
+        var file_reader = file.reader(&read_buf);
+        const contents = try file_reader.interface.allocRemaining(allocator, .limited64(size));
         defer allocator.free(contents);
 
         var fbs = std.io.fixedBufferStream(contents);
