@@ -136,6 +136,19 @@ pub const Receiver = struct {
                 {
                     return error.UnexpectedDataCompleteShred;
                 }
+                // LAST_SHRED_IN_SLOT terminates the slot, so the shred must
+                // sit at the end of a fixed 32-shred FEC set: its
+                // `slot_idx + 1` must be a multiple of `fec_shred_count`.
+                // Rejecting a misaligned last-in-slot at parse prevents the
+                // fuzzer from smuggling a short trailing FEC set past the
+                // fixed-shape (SIMD-0317) assumption every downstream check
+                // relies on. Unlike the DATA_COMPLETE check above, agave
+                // applies this unconditionally (`misaligned_last_data_index`).
+                if (shred.code_or_data.data.flags.last_shred_in_slot and
+                    (shred.slot_idx + 1) % FecSetCtx.fec_shred_count != 0)
+                {
+                    return error.MisalignedLastDataIndex;
+                }
             }
 
             if (shred.fec_set_idx % FecSetCtx.fec_shred_count != 0) return error.InvalidFecSetIdx;
