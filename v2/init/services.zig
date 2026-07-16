@@ -67,6 +67,8 @@ pub const replay = struct {
         exec_req_response: *lib.replay.ExecReqResponse,
         account_pool: *lib.accounts_db.AccountPool,
         account_lookups: *lib.accounts_db.AccountLookups,
+        block_exec_results: *lib.replay.BlockExecResultsRing,
+        block_finality: *lib.replay.BlockFinalityRing,
         tel: *lib.telemetry.Region,
     };
 };
@@ -77,11 +79,9 @@ pub const simple_consensus = struct {
     };
 
     pub const ReadWrite = struct {
-        block_exec_results: *lib.ipc.Ring(1024, extern struct {
-            block_ref: lib.replay.BlockRef,
-            passed: bool,
-        }),
-        block_finality: *lib.ipc.Ring(1024, lib.replay.BlockRef),
+        block_exec_results: *lib.replay.BlockExecResultsRing,
+        block_finality: *lib.replay.BlockFinalityRing,
+        snapshot_metadata: *lib.accounts_db.RuntimeMetadata,
         tel: *lib.telemetry.Region,
     };
 };

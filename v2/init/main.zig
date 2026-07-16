@@ -156,6 +156,7 @@ const Topology = struct {
     gossip: ServiceRegions(.from(services.gossip)),
     shred_receiver: ServiceRegions(.from(services.shred_receiver)),
     replay: ServiceRegions(.from(services.replay)),
+    simple_consensus: ServiceRegions(.from(services.simple_consensus)),
     snapshot: ServiceRegions(.from(services.snapshot)),
     accounts_db: ServiceRegions(.from(services.accounts_db)),
     telemetry: ServiceRegions(.from(services.telemetry)),
@@ -284,6 +285,12 @@ pub fn main() !void {
     var exec_req_response: Region(lib.replay.ExecReqResponse) = try .simple();
     exec_req_response.ptr().init();
 
+    var block_exec_results: Region(lib.replay.BlockExecResultsRing) = try .simple();
+    block_exec_results.ptr().init();
+
+    var block_finality: Region(lib.replay.BlockFinalityRing) = try .simple();
+    block_finality.ptr().init();
+
     // The telemetry service owns one share; every other telemetry share belongs to a service
     // that will call signalReady once it has registered its metrics/log stream.
     const telemetry_params: tel.Region.InitParams = .{
@@ -342,6 +349,17 @@ pub fn main() !void {
                 .exec_req_response = exec_req_response.finish(),
                 .account_pool = account_pool.finish(),
                 .account_lookups = replay_account_lookups.finish(),
+                .block_exec_results = block_exec_results.finish(),
+                .block_finality = block_finality.finish(),
+                .tel = telemetry_region.finish(),
+            },
+        },
+        .simple_consensus = .{
+            .ro = .{ .block_pool = block_pool.finish() },
+            .rw = .{
+                .block_exec_results = block_exec_results.finish(),
+                .block_finality = block_finality.finish(),
+                .snapshot_metadata = snapshot_metadata.finish(),
                 .tel = telemetry_region.finish(),
             },
         },

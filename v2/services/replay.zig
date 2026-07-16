@@ -138,6 +138,8 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     var deshredded_iter = rw.deshredded_in.get(.reader);
     var exec_request_sender = rw.exec_req_response.request_ring.get(.writer);
     var exec_response_receiver = rw.exec_req_response.response_ring.get(.reader);
+    var exec_results_writer = rw.block_exec_results.get(.writer);
+    var finality_reader = rw.block_finality.get(.reader);
 
     try bootstrap(
         logger,
@@ -151,9 +153,10 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 
     // After the slot is supposedly populated, start shred recv (eventually Repair service) on it.
 
-    task: switch (@as(enum { exec_response, fec_set, idle }, .idle)) {
+    task: switch (@as(enum { exec_response, fec_set, finality, idle }, .idle)) {
         .idle => {
             if (exec_response_receiver.peek() != null) continue :task .exec_response;
+            if (finality_reader.peek() != null) continue :task .finality;
             if (deshredded_iter.peek() != null) continue :task .fec_set;
 
             const zone = tracy.Zone.init(@src(), .{ .name = "idle" });
@@ -161,6 +164,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 
             while (true) : (std.atomic.spinLoopHint()) {
                 if (exec_response_receiver.peek() != null) continue :task .exec_response;
+                if (finality_reader.peek() != null) continue :task .finality;
                 if (deshredded_iter.peek() != null) continue :task .fec_set;
                 try runner.activity.signalIdleSpinning();
             }
@@ -207,7 +211,36 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                         exec_state.n_transactions_completed,
                     },
                 );
+
+                // Notify consensus that this block has finished execution
+                if (exec_results_writer.next()) |result_slot| {
+                    result_slot.* = .{ .block_ref = block_ref, .passed = true };
+                    exec_results_writer.markUsed();
+                } else {
+                    logger.err().logf(
+                        "block_exec_results ring full, cannot notify consensus for slot {f}",
+                        .{rw.block_pool.indexToPtr(block_ref).slot},
+                    );
+                }
             }
+
+            continue :task .idle;
+        },
+        .finality => {
+            const zone = tracy.Zone.init(@src(), .{ .name = "finality" });
+            defer zone.deinit();
+            try runner.activity.signalActive();
+
+            const finalized_ref: *const lib.replay.BlockRef = finality_reader.next() orelse
+                unreachable;
+            defer finality_reader.markUsed();
+
+            logger.info().logf("block finalized: slot {f} ({})", .{
+                finalized_ref.constPtr(rw.block_pool).slot,
+                finalized_ref.*,
+            });
+
+            // TODO: prune unrooted store, free old block pool entries
 
             continue :task .idle;
         },
@@ -263,6 +296,8 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                 exec_states,
                 deserial_states,
                 &exec_request_sender,
+
+                &exec_results_writer,
 
                 unrooted,
                 rw.account_pool,
@@ -875,6 +910,9 @@ fn maybeContinueBlockExec(
     // NOTE: we should instead be sending to the transaction scheduler (when it is implemented)
     exec_request_sender: *replay.ExecReqResponse.RequestRing.Iterator(.writer),
 
+    // for notifying consensus of completed blocks
+    exec_results_writer: *lib.replay.BlockExecResultsRing.Iterator(.writer),
+
     // for fetching accounts
     unrooted: *Unrooted,
     account_pool: *lib.accounts_db.AccountPool,
@@ -926,6 +964,8 @@ fn maybeContinueBlockExec(
                     block_exec_states,
                     block_deserial_states,
                     exec_request_sender,
+
+                    exec_results_writer,
 
                     unrooted,
                     account_pool,
@@ -1123,6 +1163,17 @@ fn maybeContinueBlockExec(
                 exec_state.n_transactions_completed,
             },
         );
+
+        // Notify consensus that this block has finished execution
+        if (exec_results_writer.next()) |result_slot| {
+            result_slot.* = .{ .block_ref = block_ref, .passed = true };
+            exec_results_writer.markUsed();
+        } else {
+            logger.err().logf(
+                "block_exec_results ring full, cannot notify consensus for slot {f}",
+                .{block_ref.ptr(block_pool).slot},
+            );
+        }
     }
 
     // try to exec children
@@ -1141,6 +1192,8 @@ fn maybeContinueBlockExec(
             block_exec_states,
             block_deserial_states,
             exec_request_sender,
+
+            exec_results_writer,
 
             unrooted,
             account_pool,

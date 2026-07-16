@@ -6,6 +6,12 @@ const BlockPool = replay.BlockPool;
 const BlockRef = replay.BlockRef;
 const Slot = solana.Slot;
 
+/// Extracts the raw slot value from a block ref. Blocks tracked by consensus
+/// must always have valid (non-null) slots; panics otherwise.
+fn slotOf(pool: *const BlockPool, ref: BlockRef) Slot {
+    return ref.constPtr(pool).slot.opt().?;
+}
+
 pub const SimpleConsensus = struct {
     pool: *const BlockPool,
     root: BlockRef,
@@ -59,6 +65,7 @@ pub const SimpleConsensus = struct {
         if (!passed) return false; // TODO: log
 
         const executed = block_ref.constPtr(self.pool);
+        const executed_slot = slotOf(self.pool, block_ref);
 
         var ancestor = executed.parent.opt() orelse return error.MissingUnrootedAncestor;
 
@@ -70,7 +77,7 @@ pub const SimpleConsensus = struct {
                 // keep it sorted descending. move leaf up if necessary
                 var j = i;
                 while (j > 0 and
-                    self.leaves[j - 1].constPtr(self.pool).slot < executed.slot) : (j -= 1)
+                    slotOf(self.pool, self.leaves[j - 1]) < executed_slot) : (j -= 1)
                     std.mem.swap(BlockRef, &self.leaves[j - 1], &self.leaves[j]);
 
                 return true;
@@ -78,7 +85,8 @@ pub const SimpleConsensus = struct {
         }
 
         // this is a new fork, it doesn't descend from a leaf.
-        while (ancestor.constPtr(self.pool).slot > self.root.constPtr(self.pool).slot) {
+        const root_slot = slotOf(self.pool, self.root);
+        while (slotOf(self.pool, ancestor) > root_slot) {
             ancestor = ancestor.constPtr(self.pool).parent.opt() orelse
                 return error.MissingUnrootedAncestor;
         }
@@ -102,7 +110,7 @@ pub const SimpleConsensus = struct {
         // is bounded (<= max_forks), so a linear scan is fine.
         var index: usize = 0;
         while (index < self.num_leaves and
-            self.leaves[index].constPtr(self.pool).slot > executed.slot)
+            slotOf(self.pool, self.leaves[index]) > executed_slot)
             index += 1;
 
         @memmove(
@@ -127,11 +135,11 @@ pub const SimpleConsensus = struct {
         // must all sit at slots strictly greater than the most recent block
         // on any competing branch. The finalize candidate is the 33rd-most-
         // recent block (one hop past the last-32 window).
-        const must_exceed_slot = if (self.num_leaves > 1)
-            self.leaves[1].constPtr(self.pool).slot
+        const must_exceed_slot: Slot = if (self.num_leaves > 1)
+            slotOf(self.pool, self.leaves[1])
         else
-            self.root.constPtr(self.pool).slot;
-        std.debug.assert(must_exceed_slot >= self.root.constPtr(self.pool).slot);
+            slotOf(self.pool, self.root);
+        std.debug.assert(must_exceed_slot >= slotOf(self.pool, self.root));
 
         // Walk back `finalization_depth - 1` hops from the tip: the 32nd-
         // most-recent block (oldest of the last 32 confirmations). Chains
@@ -141,7 +149,7 @@ pub const SimpleConsensus = struct {
         for (0..finalization_depth - 1) |_| {
             node_ref = node_ref.constPtr(self.pool).parent.opt() orelse return null;
         }
-        if (node_ref.constPtr(self.pool).slot <= must_exceed_slot) return null;
+        if (slotOf(self.pool, node_ref) <= must_exceed_slot) return null;
 
         // One more hop back: the finalize candidate (32 confirmations back).
         const candidate = node_ref.constPtr(self.pool).parent.opt() orelse return null;
@@ -169,7 +177,7 @@ fn setupPool(buf: []align(@alignOf(BlockPool)) u8) *BlockPool {
 
 fn addBlock(pool: *BlockPool, slot: Slot, parent: BlockRef.Optional) !BlockRef {
     const ref = try pool.createId();
-    ref.ptr(pool).* = .{ .slot = slot, .parent = parent };
+    ref.ptr(pool).* = .{ .slot = .init(slot), .parent = parent };
     return ref;
 }
 

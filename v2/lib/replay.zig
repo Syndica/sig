@@ -86,3 +86,12 @@ pub const ExecResponse = extern struct {
 pub const TxExecResult = extern struct {
     success: bool,
 };
+
+/// Result sent from replay to consensus when a block finishes execution.
+pub const BlockExecResult = extern struct {
+    block_ref: BlockRef,
+    passed: bool,
+};
+
+pub const BlockExecResultsRing = ipc.Ring(1024, BlockExecResult);
+pub const BlockFinalityRing = ipc.Ring(1024, BlockRef);

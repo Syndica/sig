@@ -8,6 +8,12 @@ const BlockRef = lib.replay.BlockRef;
 
 const finalization_depth: Slot = 32;
 
+/// Extracts the raw slot value from a block ref. Blocks tracked by consensus
+/// must always have valid (non-null) slots; panics otherwise.
+fn slotOf(pool: *const BlockPool, ref: BlockRef) Slot {
+    return ref.constPtr(pool).slot.opt().?;
+}
+
 const BlockInfo = struct {
     /// Slot of the block this entry was recorded for. Used to detect stale
     /// entries left behind when a pool index is recycled by a new block.
@@ -34,7 +40,7 @@ pub const SimpleConsensus = struct {
     pub fn init(pool: *const BlockPool, root: BlockRef) SimpleConsensus {
         var state: [BlockPool.capacity]?BlockInfo = @splat(null);
         state[root.index()] = .{
-            .slot = root.constPtr(pool).slot,
+            .slot = slotOf(pool, root),
             .passed = true,
             .finalized = true,
         };
@@ -75,23 +81,24 @@ pub const SimpleConsensus = struct {
     /// null pointer before reaching a slot at or below the local root).
     fn record(self: *SimpleConsensus, block_ref: BlockRef, passed: bool) Error!bool {
         const block = block_ref.constPtr(self.pool);
-        const root_slot = self.root.constPtr(self.pool).slot;
+        const root_slot = slotOf(self.pool, self.root);
+        const block_slot = slotOf(self.pool, block_ref);
 
         // Every non-root update block must have a linked parent, and its
         // parent chain must reach a slot at or below the local root without
         // terminating at a null pointer. This mirrors leaf.zig's validation.
         var ancestor = block.parent.opt() orelse return error.MissingUnrootedAncestor;
-        while (ancestor.constPtr(self.pool).slot > root_slot) {
+        while (slotOf(self.pool, ancestor) > root_slot) {
             ancestor = ancestor.constPtr(self.pool).parent.opt() orelse
                 return error.MissingUnrootedAncestor;
         }
 
         // Silently drop stale/off-tree well-formed blocks.
-        if (block.slot <= root_slot) return false;
+        if (block_slot <= root_slot) return false;
         if (ancestor != self.root) return false;
 
         self.state[block_ref.index()] = .{
-            .slot = block.slot,
+            .slot = block_slot,
             .passed = passed,
             .finalized = false,
         };
@@ -143,7 +150,7 @@ pub const SimpleConsensus = struct {
         for (0..finalization_depth - 1) |_| {
             node_ref = node_ref.constPtr(self.pool).parent.opt() orelse return null;
         }
-        if (node_ref.constPtr(self.pool).slot <= other_max_slot) return null;
+        if (slotOf(self.pool, node_ref) <= other_max_slot) return null;
 
         // One more hop back: the finalize candidate (32 confirmations back).
         const candidate = node_ref.constPtr(self.pool).parent.opt() orelse return null;
@@ -158,7 +165,7 @@ pub const SimpleConsensus = struct {
     fn maxPassedSlot(self: *const SimpleConsensus, node_ref: BlockRef) Slot {
         if (!self.blockIsPassed(node_ref)) return 0;
         const node = node_ref.constPtr(self.pool);
-        var result: Slot = node.slot;
+        var result: Slot = slotOf(self.pool, node_ref);
         var child_ref_opt = node.child;
         while (child_ref_opt.opt()) |child_ref| {
             result = @max(result, self.maxPassedSlot(child_ref));
@@ -172,7 +179,7 @@ pub const SimpleConsensus = struct {
     /// stale entry from a recycled pool index is detected by a slot mismatch.
     fn blockIsPassed(self: *const SimpleConsensus, block_ref: BlockRef) bool {
         const info = self.state[block_ref.index()] orelse return false;
-        const slot = block_ref.constPtr(self.pool).slot;
+        const slot = slotOf(self.pool, block_ref);
         if (info.slot != slot) return false; // TODO: this should be an error or panic
         return info.passed or info.finalized;
     }
@@ -188,7 +195,7 @@ comptime {
 
 fn createTestBlock(block_pool: *BlockPool, slot: Slot, parent_ref: BlockRef.Optional) !BlockRef {
     const block_ref = try block_pool.createId();
-    block_ref.ptr(block_pool).* = .{ .slot = slot, .parent = parent_ref };
+    block_ref.ptr(block_pool).* = .{ .slot = .init(slot), .parent = parent_ref };
 
     if (parent_ref.opt()) |parent_id| {
         const parent = parent_id.ptr(block_pool);

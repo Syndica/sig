@@ -524,7 +524,7 @@ fn setupPool(buf: []align(@alignOf(BlockPool)) u8) *BlockPool {
 /// walkers read `child`/`sibling`.
 fn createBlock(pool: *BlockPool, slot: Slot, parent: BlockRef.Optional) !BlockRef {
     const ref = try pool.createId();
-    ref.ptr(pool).* = .{ .slot = slot, .parent = parent };
+    ref.ptr(pool).* = .{ .slot = .init(slot), .parent = parent };
     if (parent.opt()) |parent_id| {
         const p = parent_id.ptr(pool);
         if (p.child.opt()) |first_child_id| {
