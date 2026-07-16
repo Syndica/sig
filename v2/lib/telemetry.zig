@@ -974,7 +974,10 @@ pub const LatencyHistogram = struct {
     }
 
     /// Makes the hot shard cold and vice versa, returning the pre-swap `shard_sync`.
-    fn flipShard(self: *const LatencyHistogram, comptime ordering: std.builtin.AtomicOrder) ShardSync {
+    fn flipShard(
+        self: *const LatencyHistogram,
+        comptime ordering: std.builtin.AtomicOrder,
+    ) ShardSync {
         const shard_sync: ShardSync = .{ .shard = 1 };
         const data = self.shard_sync.fetchAdd(@bitCast(shard_sync), ordering);
         return @bitCast(data);
@@ -1089,7 +1092,10 @@ pub const LatencyHistogram = struct {
     /// Only valid if `self` was initialized using `initForTest`.
     pub fn deinitForTest(self: LatencyHistogram, gpa: std.mem.Allocator) void {
         const element_count = self.layout.elementsFromBucketCount();
-        const elements: []const u64 = @as([*]const u64, @ptrCast(self.shard_sync))[0..element_count];
+        const elements: []const u64 = @as(
+            [*]const u64,
+            @ptrCast(self.shard_sync),
+        )[0..element_count];
         gpa.free(elements);
     }
 

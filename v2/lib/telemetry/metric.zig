@@ -493,8 +493,9 @@ pub fn collect(
                     params.histogram_data[detail.index..][0..header_words],
                 );
                 const element_count = layout.elementsFromBucketCount();
+                const offset = detail.index + header_words;
                 const raw: tel.LatencyHistogram.Raw = .{
-                    .elements = params.histogram_data[detail.index + header_words ..][0..element_count],
+                    .elements = params.histogram_data[offset..][0..element_count],
                 };
                 break :lat .fromRaw(layout, raw);
             } },
