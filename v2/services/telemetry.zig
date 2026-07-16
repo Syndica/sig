@@ -18,6 +18,10 @@ pub const std_options = start.options;
 pub const ReadOnly = services.telemetry.ReadOnly;
 pub const ReadWrite = services.telemetry.ReadWrite;
 
+/// `Content-Type` for the Prometheus protobuf exposition (the format that carries native histograms).
+const proto_content_type =
+    "application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=delimited";
+
 pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
     _ = ro;
 
@@ -91,6 +95,14 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     // they may continue to log messages, causing telemetry to appear active, even if it
     // should soon be shut down along with all the other services.
     try runner.activity.signalIdleImmediate();
+
+    // Scratch for encoding a protobuf response; reset after each request. Backed by a fixed
+    // buffer rather than `page_allocator`: the latter grows allocations with `mremap`, which the
+    // service seccomp sandbox forbids (see `lib.linux.SeccompProg.seccompFilters`), and a fixed
+    // buffer keeps encoding syscall-free besides.
+    var proto_fba: std.heap.FixedBufferAllocator = .init(&struct {
+        var buffer: [4096 * 4096]u8 = undefined; // 16 MiB
+    }.buffer);
 
     while (true) : (try runner.activity.checkCanceled()) {
         {
@@ -169,6 +181,12 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
             continue;
         }
 
+        // Serve protobuf when the client negotiates it (a Prometheus server does when
+        // `scrape_native_histograms` is enabled); otherwise the text format, so `curl` still works.
+        // Native histograms can only be carried by the protobuf format.
+        const want_proto = acceptsProtobuf(&http_request);
+        const content_type = if (want_proto) proto_content_type else "text/plain; charset=UTF-8";
+
         var response_body_writer_buf: [4096 * 16]u8 = undefined;
         var response_body_writer_state =
             try http_request.respondStreaming(&response_body_writer_buf, .{
@@ -180,14 +198,39 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
                     .status = .ok,
                     .transfer_encoding = .chunked,
                     .extra_headers = &.{
-                        .{ .name = "Content-Type", .value = "text/plain; charset=UTF-8" },
+                        .{ .name = "Content-Type", .value = content_type },
                     },
                 },
             });
         const response_body_writer = &response_body_writer_state.writer;
-        try api.prometheus.writeBody(response_body_writer, &metrics);
+        if (want_proto) {
+            defer proto_fba.reset();
+            try api.prometheus_proto.writeBody(
+                proto_fba.allocator(),
+                response_body_writer,
+                &metrics,
+            );
+        } else {
+            try api.prometheus.writeBody(response_body_writer, &metrics);
+        }
         try response_body_writer_state.end();
     }
+}
+
+/// Whether the request's `Accept` header negotiates the Prometheus protobuf exposition format.
+/// A Prometheus server sends `application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;
+/// encoding=delimited` when `scrape_native_histograms` (or a protobuf `scrape_protocols`) is enabled.
+fn acceptsProtobuf(request: *std.http.Server.Request) bool {
+    var it = request.iterateHeaders();
+    while (it.next()) |header| {
+        if (!std.ascii.eqlIgnoreCase(header.name, "accept")) continue;
+        if (std.mem.indexOf(u8, header.value, "application/vnd.google.protobuf") != null and
+            std.mem.indexOf(u8, header.value, "encoding=delimited") != null)
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 fn setRecvTimeOut(

@@ -30,14 +30,14 @@ pub fn serviceMain(
     const metrics = metric_appender.appendFields(Metrics, .{
         .prefix = @tagName(name),
         .fields = .{
-            .recv_packet_latency = .{ .layout = .{ .log_linear = .{
-                .base_ns = 512,
-                .sub_bucket_bits = 2,
+            .recv_packet_latency = .{ .layout = .{ .exponential = .{
+                .schema = 2,
+                .min_ns = 512,
                 .octaves = 12,
             } } },
-            .send_packet_latency = .{ .layout = .{ .log_linear = .{
-                .base_ns = 512,
-                .sub_bucket_bits = 2,
+            .send_packet_latency = .{ .layout = .{ .exponential = .{
+                .schema = 2,
+                .min_ns = 512,
                 .octaves = 12,
             } } },
         },

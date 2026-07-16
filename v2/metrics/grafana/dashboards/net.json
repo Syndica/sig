@@ -110,7 +110,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(net_recv_packet_latency_ns_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.50, sum(rate(net_recv_packet_latency_ns[$__rate_interval])))",
           "legendFormat": "p50",
           "range": true,
           "refId": "A"
@@ -121,7 +121,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.90, sum by (le) (rate(net_recv_packet_latency_ns_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.90, sum(rate(net_recv_packet_latency_ns[$__rate_interval])))",
           "hide": false,
           "legendFormat": "p90",
           "range": true,
@@ -133,7 +133,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(net_recv_packet_latency_ns_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.99, sum(rate(net_recv_packet_latency_ns[$__rate_interval])))",
           "hide": false,
           "legendFormat": "p99",
           "range": true,
@@ -232,7 +232,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(net_send_packet_latency_ns_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.50, sum(rate(net_send_packet_latency_ns[$__rate_interval])))",
           "legendFormat": "p50",
           "range": true,
           "refId": "A"
@@ -243,7 +243,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.90, sum by (le) (rate(net_send_packet_latency_ns_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.90, sum(rate(net_send_packet_latency_ns[$__rate_interval])))",
           "hide": false,
           "legendFormat": "p90",
           "range": true,
@@ -255,7 +255,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(net_send_packet_latency_ns_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.99, sum(rate(net_send_packet_latency_ns[$__rate_interval])))",
           "hide": false,
           "legendFormat": "p99",
           "range": true,
@@ -354,7 +354,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "rate(net_recv_packet_latency_ns_count[$__rate_interval])",
+          "expr": "histogram_count(rate(net_recv_packet_latency_ns[$__rate_interval]))",
           "legendFormat": "receive",
           "range": true,
           "refId": "A"
@@ -365,7 +365,7 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "rate(net_send_packet_latency_ns_count[$__rate_interval])",
+          "expr": "histogram_count(rate(net_send_packet_latency_ns[$__rate_interval]))",
           "hide": false,
           "legendFormat": "send",
           "range": true,
@@ -450,7 +450,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(rate(net_recv_packet_latency_ns_bucket[$__rate_interval])) by (le)",
+          "expr": "sum(rate(net_recv_packet_latency_ns[$__rate_interval]))",
           "format": "heatmap",
           "legendFormat": "{{le}}",
           "range": true,
@@ -535,7 +535,7 @@
           },
           "editorMode": "code",
           "exemplar": false,
-          "expr": "sum(rate(net_send_packet_latency_ns_bucket[$__rate_interval])) by (le)",
+          "expr": "sum(rate(net_send_packet_latency_ns[$__rate_interval]))",
           "format": "heatmap",
           "legendFormat": "{{le}}",
           "range": true,
