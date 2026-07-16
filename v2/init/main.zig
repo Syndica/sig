@@ -184,10 +184,11 @@ pub fn main() !void {
 
         var read_buf: [4096]u8 = undefined;
         var file_reader = cfg_file.reader(&read_buf);
-        const cfg_str = try file_reader.interface.allocRemaining(allocator, .limited(1024 * 1024));
-        defer allocator.free(cfg_str);
-        const cfg_str_z = try allocator.dupeZ(u8, cfg_str);
-        defer allocator.free(cfg_str_z);
+        var cfg_bytes = try file_reader.interface.allocRemaining(allocator, .limited(1024 * 1024));
+        cfg_bytes = try allocator.realloc(cfg_bytes, cfg_bytes.len + 1);
+        cfg_bytes[cfg_bytes.len - 1] = 0;
+        const cfg_str_z: [:0]u8 = cfg_bytes[0 .. cfg_bytes.len - 1 :0];
+        defer allocator.free(cfg_bytes);
 
         var diag: std.zon.parse.Diagnostics = .{};
         defer diag.deinit(allocator);
