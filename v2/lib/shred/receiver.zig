@@ -160,6 +160,21 @@ pub const Receiver = struct {
             }
         }
 
+        // Layout-level filter: drop data shreds whose declared parent is
+        // older than the current root. Agave's
+        // `ShredFilterContext::should_discard_shred` rejects the same at
+        // the layout level via `verify_shred_slots` (in
+        // `ledger/src/shred/filter.rs`) before the shred reaches
+        // `insert_shreds`. Per-slot parent-slot *consistency* (any two
+        // data shreds in a slot must declare the same parent) is
+        // reconstructed by the conformance harness from admitted
+        // in_progress ctxs' data shreds — the receiver keeps no per-slot
+        // parent pin.
+        if (shred.variant.isData()) {
+            const parent_slot = shred.slot - shred.code_or_data.data.parent_offset;
+            if (parent_slot < state.root_slot) return error.ShredParentBeforeRoot;
+        }
+
         const fec_set_id: FecSetId = .{ .fec_set_idx = shred.fec_set_idx, .slot = shred.slot };
 
         var buf: [128]u8 = undefined;
