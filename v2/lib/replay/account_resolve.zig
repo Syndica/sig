@@ -104,12 +104,6 @@ pub const AccountResolver = struct {
         const transaction = transaction_record.view();
         const has_lookups = transaction.hasAddressTableLookups();
 
-        // TODO: if the transaction has no lookups we should skip the resolver entirely.
-        if (!has_lookups) {
-            std.debug.assert(transaction.loadedAddressCount() == 0);
-            pending.completion.result = .{ .resolved = {} };
-        }
-
         pending.* = .{
             .gen = gen,
             .status = if (has_lookups) .resolving else .complete,
@@ -130,6 +124,12 @@ pub const AccountResolver = struct {
                 .result = undefined,
             },
         };
+
+        // TODO: if the transaction has no lookups we should skip the resolver entirely.
+        if (!has_lookups) {
+            std.debug.assert(transaction.loadedAddressCount() == 0);
+            pending.completion.result = .{ .resolved = {} };
+        }
 
         self.pending_count += 1;
     }
@@ -238,7 +238,6 @@ pub const AccountResolver = struct {
                 .next_lookup_index = 0,
                 .in_flight_lookups = 0,
                 .completion = undefined,
-                .resolved = undefined,
             };
         }
     };
