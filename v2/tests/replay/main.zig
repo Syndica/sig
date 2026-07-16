@@ -160,6 +160,7 @@ pub fn main() !void {
         account_pool_ptr,
         fixture.manifest.entries.transaction_count,
         5 * std.time.ns_per_s,
+        30 * std.time.ns_per_s,
     );
     std.log.info(
         "replay emitted expected transaction requests: {}",
@@ -190,21 +191,39 @@ fn waitForReplayOutput(
     account_lookups: *lib.accounts_db.AccountLookups,
     account_pool: *lib.accounts_db.AccountPool,
     expected_transaction_count: u32,
-    timeout_ns: u64,
+    output_timeout_ns: u64,
+    idle_timeout_ns: u64,
 ) !void {
-    const start = lib.clock.monotonic(.ns);
     var request_reader = exec_req_response.request_ring.get(.reader);
     var lookup_reader = account_lookups.in.get(.reader);
     var lookup_writer = account_lookups.out.get(.writer);
 
     var count: u32 = 0;
-    while (spawned.isActive() and lib.clock.monotonic(.ns) - start < timeout_ns) {
+
+    // Phase 1: wait for replay to emit the expected number of exec requests.
+    const output_start = lib.clock.monotonic(.ns);
+    while (count < expected_transaction_count) {
+        if (lib.clock.monotonic(.ns) - output_start >= output_timeout_ns) {
+            try std.testing.expectEqual(expected_transaction_count, count);
+            return error.ReplayOutputTimeout;
+        }
         try serviceAccountLookups(account_pool, &lookup_reader, &lookup_writer);
         try drainReplayRequests(&request_reader, &count, expected_transaction_count);
         std.atomic.spinLoopHint();
     }
-    if (spawned.isActive()) return error.ServicesDidNotBecomeIdle;
 
+    // Phase 2: wait for services to go idle.
+    const idle_start = lib.clock.monotonic(.ns);
+    while (spawned.isActive()) {
+        if (lib.clock.monotonic(.ns) - idle_start >= idle_timeout_ns) {
+            return error.ServicesDidNotBecomeIdle;
+        }
+        try serviceAccountLookups(account_pool, &lookup_reader, &lookup_writer);
+        try drainReplayRequests(&request_reader, &count, expected_transaction_count);
+        std.atomic.spinLoopHint();
+    }
+
+    // Final drain after idle, then exact assert.
     try serviceAccountLookups(account_pool, &lookup_reader, &lookup_writer);
     try drainReplayRequests(&request_reader, &count, expected_transaction_count);
     try std.testing.expectEqual(expected_transaction_count, count);
