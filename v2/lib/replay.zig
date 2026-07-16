@@ -14,14 +14,13 @@ pub const TransactionPool = collections.SharedPool(TransactionRecord, 10_000);
 
 pub const BlockPool = collections.SharedPool(Node, 1024);
 
-/// Transction bytes plus their validatoes wire layout.
+/// Transaction bytes plus their validated wire layout.
 ///
-/// This struct itself is safe to share between processe. Consumers can construct transient
-/// `TransactionView`s locally, avoidng needing to re-parse the transaction bytes.
+/// This struct itself is safe to share between processes. Consumers can construct transient
+/// `VersionedTransaction.View`s locally, avoiding a re-parse of the transaction bytes.
 ///
-/// The `Layout` struct is just a collection of offsets and lengths into the `payload` array.
-/// The `payload` array is a copy of the transaction bytes, which are expected to be in wire format
-/// (i.e., as they would be sent over the network).
+/// The `Layout` struct is a collection of offsets and lengths into the `payload` array.
+/// The `payload` array is a copy of the transaction bytes in wire format.
 pub const TransactionRecord = extern struct {
     layout: VersionedTransaction.Layout,
     payload: [VersionedTransaction.MAX_BYTES]u8,
