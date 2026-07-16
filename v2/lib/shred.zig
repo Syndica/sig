@@ -258,7 +258,9 @@ pub const Shred = extern struct {
             const payload_size = shred.code_or_data.data.size - header_size;
 
             const effective_size = min_size;
-            if (effective_size < header_size + payload_size + trailer_size)
+            const total_size =
+                @as(u32, header_size) + @as(u32, payload_size) + @as(u32, trailer_size);
+            if (total_size > effective_size)
                 return error.DataEffectiveSizeTooSmall;
 
             break :sizes .{
