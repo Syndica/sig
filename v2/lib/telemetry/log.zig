@@ -618,17 +618,17 @@ pub const EntryValueFmt = struct {
         value_ptr: anytype,
     ) EntryValueFmt {
         const is_comptime_known = isComptimeKnown(value_ptr.*);
+        comptime var ptr_info = @typeInfo(@TypeOf(value_ptr));
+        ptr_info.pointer.is_const = true;
         const erased = struct {
             fn formatImpl(
                 ptr: *const anyopaque,
                 w: *std.Io.Writer,
             ) std.Io.Writer.Error!void {
-                const value: @TypeOf(value_ptr) = if (is_comptime_known)
+                const value: @Type(ptr_info) = if (is_comptime_known)
                     value_ptr
                 else
-                    // constCast is safe because it's just being converted back
-                    // to its original type
-                    @ptrCast(@alignCast(@constCast(ptr)));
+                    @ptrCast(@alignCast(ptr));
                 const has_whitespace = WhitespaceDetector.detect(fmt_str, .{value.*});
                 if (has_whitespace) try w.writeAll("\"");
                 try w.print(fmt_str, .{value.*});

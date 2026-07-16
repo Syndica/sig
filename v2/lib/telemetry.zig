@@ -303,9 +303,13 @@ pub fn Logger(comptime scope_str: []const u8) type {
                 }
 
                 /// Returns the field format string for common types: strings,
-                /// numbers, and types with `format` functions. Other types are
-                /// not supported, to force callers to think about whether they
-                /// actually want {any} formatting.
+                /// numbers, and types with `format` functions.
+                ///
+                /// For other types, rather than falling back to `{any}`, they
+                /// are simply not supported. `{any}` formatting is still
+                /// achievable, but it must be done explicitly using `fieldFmt`.
+                /// This makes it so `{any}` formatting is never used by
+                /// accident, which may lead to unsatisfying output.
                 fn fieldFmtString(comptime Value: type) []const u8 {
                     return switch (@typeInfo(Value)) {
                         .int, .comptime_int, .float, .comptime_float => "{}",
@@ -315,17 +319,17 @@ pub fn Logger(comptime scope_str: []const u8) type {
                         else if (ptr.child == u8)
                             "{s}"
                         else
-                            @compileError("usefieldFmt"),
+                            @compileError("use fieldFmt"),
 
                         .array => |arr| if (arr.child == u8)
                             "{s}"
                         else
-                            @compileError("usefieldFmt"),
+                            @compileError("use fieldFmt"),
 
                         else => if (@hasDecl(Value, "format"))
                             "{f}"
                         else
-                            @compileError("usefieldFmt"),
+                            @compileError("use fieldFmt"),
                     };
                 }
 
