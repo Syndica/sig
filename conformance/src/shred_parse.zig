@@ -497,6 +497,37 @@ fn buildProtoEffects(
 
 const TickVerifyOutcome = enum { ok, rejected };
 
+/// Validates the fixed-shape header of an agave `VersionedBlockMarker`
+/// (`BlockComponent::BlockMarker` branch, entered when `Vec<Entry>` decodes
+/// to zero entries). Consumes at least `2 + 1 + 2 + {0,1} = 5 or 6` bytes on
+/// success:
+///
+///   - `VersionedBlockMarker`: u16 tag, only `1` (V1) is valid.
+///   - `BlockMarkerV1`: u8 tag, one of
+///     `{0: BlockFooter, 1: BlockHeader, 2: UpdateParent, 3: GenesisCert}`.
+///   - `LengthPrefixed<Inner>`: u16 length prefix (agave stores it but
+///     does not enforce it during decode).
+///   - For markers 0..2, `Inner` is `Versioned<Footer|Header|UpdateParent>`,
+///     a u8-tag enum whose only valid tag is `1` (V1). Marker 3
+///     (GenesisCertificate) is a bare struct with no version tag byte.
+///
+/// The deeper inner struct fields (BLS signatures, certs, timestamps) are
+/// variable-shape and not modelled — sig's runtime doesn't yet implement
+/// Alpenglow block markers, so this stays a shallow envelope check that
+/// mirrors agave's wincode failure surface for random-byte payloads.
+fn validateBlockMarkerHeader(reader: *std.Io.Reader) bool {
+    const outer_tag = reader.takeInt(u16, .little) catch return false;
+    if (outer_tag != 1) return false;
+    const inner_tag = reader.takeByte() catch return false;
+    if (inner_tag > 3) return false;
+    _ = reader.takeInt(u16, .little) catch return false;
+    if (inner_tag <= 2) {
+        const versioned_tag = reader.takeByte() catch return false;
+        if (versioned_tag != 1) return false;
+    }
+    return true;
+}
+
 /// Per-slot tick verification driven by accepted data shreds. Walks the
 /// contiguous prefix `slot_idx = 0, 1, 2, ...`; each DATA_COMPLETE-bounded
 /// run concatenates to one bincode `Vec<Entry>` record (one shredder
@@ -535,16 +566,33 @@ fn verifyTicksFromDataShreds(
         batch_buf.appendSlice(fba.allocator(), s.payload) catch return .rejected;
         if (s.data_complete) {
             // A data-complete batch is one shredder batch, encoded as a single
-            // bincode `Vec<Entry>` record. `get_slot_entries_with_shred_info`
-            // deserializes each completed set and surfaces any decode failure as
-            // a rejected block. A zero-byte batch is not valid bincode (the u64
-            // length prefix needs 8 bytes) and rejects here too.
+            // `BlockComponent` — wincode enum:
+            //   Vec<Entry> with u64 len prefix; if len == 0, followed by a
+            //   `VersionedBlockMarker` (u16 tag == 1, then `BlockMarkerV1`).
+            // Agave's `get_slot_entries_with_shred_info` deserializes each
+            // completed set via `wincode::deserialize::<BlockComponent>` and
+            // surfaces any decode failure as a rejected block. Non-empty
+            // batches decode to `EntryBatch(entries)` and skip the marker
+            // branch; empty batches must present a valid marker or the read
+            // fails and the block is rejected. Sig doesn't yet implement
+            // `BlockComponent` in its runtime; the marker validation lives
+            // here as a harness parity check for the Alpenglow-era format.
             var reader: std.Io.Reader = .fixed(batch_buf.items);
             const entries = sig_v2.solana.bincode.read(
                 &fba,
                 &reader,
                 sig_v2.solana.bincode.Vec(sig_v2.solana.transaction.Entry),
             ) catch return .rejected;
+            if (entries.items.len == 0) {
+                // Empty EntryBatch: agave falls into the `BlockMarker` branch.
+                // Validate the marker header (outer u16 tag, inner u8 tag,
+                // and the LengthPrefixed u16 size prefix). The deep inner
+                // fields (BLS signatures, certs) are variable-shape and not
+                // modelled here; the outer tag chain catches the fuzz
+                // corpus's random-bytes case that produced `Invalid tag
+                // encoding: N` in agave.
+                if (!validateBlockMarkerHeader(&reader)) return .rejected;
+            }
             for (entries.items) |e| {
                 all_entries.append(fba.allocator(), e) catch return .rejected;
             }
