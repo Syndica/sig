@@ -76,19 +76,26 @@ pub fn writeHistogramBody(
 
     while (snapshot_reader.nextBucket()) |bucket| { // write the buckets
         try w.print("{s}_bucket", .{metric_id.name});
-
         try w.writeByte('{');
         if (metric_id.label_count != 0) {
             try w.writeAll(metric_id.labels);
             try w.writeByte(',');
         }
-        try w.print("le={f}", .{numberFmt(bucket.upper_bound)});
+        try w.print("le=\"{f}\"", .{numberFmt(bucket.upper_bound)});
         try w.writeByte('}');
-
         try w.writeByte(' ');
-
         try w.print("{d}\n", .{bucket.cumulative_count});
     }
+
+    try w.print("{s}_bucket", .{metric_id.name});
+    try w.writeByte('{');
+    if (metric_id.label_count != 0) {
+        try w.writeAll(metric_id.labels);
+        try w.writeByte(',');
+    }
+    try w.writeAll("le=\"+Inf\"}");
+    try w.writeByte(' ');
+    try w.print("{d}\n", .{snapshot_reader.count});
 
     // write the sum
     try w.print("{s}_sum", .{metric_id.name});
@@ -109,4 +116,28 @@ pub fn writeHistogramBody(
     }
     try w.writeByte(' ');
     try w.print("{d}\n", .{snapshot_reader.count});
+}
+
+test "prometheus: histogram labels are valid" {
+    const gpa = std.testing.allocator;
+    const histogram = try tel.Histogram.initForTest(gpa, &.{ 1.0, 2.5 });
+    defer histogram.deinitForTest(gpa);
+
+    histogram.observe(0.5);
+    histogram.observe(2.0);
+    histogram.observe(3.0);
+
+    var output: std.Io.Writer.Allocating = .init(gpa);
+    defer output.deinit();
+
+    try writeHistogramBody(&histogram, .initNameOnly("test_histogram"), &output.writer);
+
+    try std.testing.expectEqualStrings(
+        \\test_histogram_bucket{le="1.000000"} 1
+        \\test_histogram_bucket{le="2.500000"} 2
+        \\test_histogram_bucket{le="+Inf"} 3
+        \\test_histogram_sum 5.500000
+        \\test_histogram_count 3
+        \\
+    , output.written());
 }

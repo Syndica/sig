@@ -4,7 +4,9 @@ const sig = @import("sig");
 comptime {
     _ = @import("elf_loader.zig");
     _ = @import("instruction_execute.zig");
+    _ = @import("shred_parse.zig");
     _ = @import("vm_interp.zig");
+    _ = @import("vm_serialize.zig");
     _ = @import("vm_syscall.zig");
     _ = @import("txn_execute.zig");
 }
@@ -67,7 +69,9 @@ pub const entrypoints: std.StaticStringMap(*const fn (
     .{ "sol_compat_vm_interp_v1", @import("vm_interp.zig").sol_compat_vm_interp_v1 },
     .{ "sol_compat_vm_cpi_syscall_v1", @import("vm_syscall.zig").sol_compat_vm_cpi_syscall_v1 },
     .{ "sol_compat_vm_syscall_execute_v1", @import("vm_syscall.zig").sol_compat_vm_syscall_execute_v1 },
+    .{ "sol_compat_vm_serialize_execute_v1", @import("vm_serialize.zig").sol_compat_vm_serialize_execute_v1 },
     .{ "sol_compat_elf_loader_v1", @import("elf_loader.zig").sol_compat_elf_loader_v1 },
     .{ "sol_compat_txn_execute_v1", @import("txn_execute.zig").sol_compat_txn_execute_v1 },
+    .{ "sol_compat_shred_parse_v1", @import("shred_parse.zig").sol_compat_shred_parse_v1 },
 });
 // sig fmt: on

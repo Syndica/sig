@@ -1,7 +1,34 @@
 const std = @import("std");
+const util = @import("../util.zig");
 
-/// A mem pool of []Item, intended to be shared across processes.
-/// NOTE: this is not an atomic pool - the same thread is expected create and destroy all nodes.
+/// Fixed capacity pool whose header and item storage are laid out in one contiguous buffer.
+/// Intended for shared memory because every stored reference is an ItemId index. No process
+/// address is stored in the pool. Pointers returned by create() are computed from the current
+/// process mapping and are only valid in that process.
+///
+/// NOTE: this is not an atomic pool. The same thread is expected to create and destroy all nodes.
+///
+/// Free slots store item ids in the same memory as items, so Item must be large and aligned
+/// enough to hold an optional item id.
+///
+/// create() allocates one Item and returns *Item. createId() returns the slot index, which can
+/// be stored in shared memory and converted to a pointer in each process.
+///
+/// ```zig
+/// const IntPool = SharedPool(u64, 4);
+///
+/// // This storage would typically be a shared memory mapping. Stack storage used here
+/// // for simplicity.
+/// var storage: [IntPool.size()]u8 align(@alignOf(IntPool)) = undefined;
+/// const pool: *IntPool = @ptrCast(&storage);
+/// pool.init();
+///
+/// const item_id = try pool.createId();
+/// item_id.ptr(pool).* = 42;
+///
+/// pool.destroyId(item_id);
+/// ```
+///
 pub fn SharedPool(Item: type, cap: usize) type {
     // bits required for the power-of-two integer needed to store capacity+1 items
     const int_bits = @max(
@@ -14,7 +41,7 @@ pub fn SharedPool(Item: type, cap: usize) type {
     const IdInt: type = @Type(.{ .int = .{ .bits = int_bits, .signedness = .unsigned } });
 
     return extern struct {
-        free_list: ItemId,
+        free_list: ItemId.Optional,
 
         // This is effectively a [capacity]Node, however Zig doesn't let us make structs over 4GiB,
         // which some pools may be.
@@ -27,7 +54,10 @@ pub fn SharedPool(Item: type, cap: usize) type {
         pub const capacity = cap;
 
         // We know when next_free is active when we walk the free_list
-        const Node = extern union { next_free: ItemId align(@alignOf(Item)), item: Item };
+        const Node = extern union {
+            next_free: ItemId.Optional align(@alignOf(Item)),
+            item: Item,
+        };
 
         comptime {
             if (@sizeOf(Node) != @sizeOf(Item)) unreachable;
@@ -35,7 +65,6 @@ pub fn SharedPool(Item: type, cap: usize) type {
         }
 
         pub const ItemId = enum(IdInt) {
-            null = std.math.maxInt(IdInt),
             _,
 
             comptime {
@@ -43,8 +72,7 @@ pub fn SharedPool(Item: type, cap: usize) type {
                 _ = PoolSelf;
             }
 
-            pub fn index(self: ItemId) ?IdInt {
-                if (self == .null) return null;
+            pub fn index(self: ItemId) IdInt {
                 return @intFromEnum(self);
             }
 
@@ -52,15 +80,15 @@ pub fn SharedPool(Item: type, cap: usize) type {
                 return @enumFromInt(int);
             }
 
-            pub fn ptr(self: ItemId, pool: *PoolSelf) ?*Item {
-                if (self == .null) return null;
+            pub fn ptr(self: ItemId, pool: *PoolSelf) *Item {
                 return pool.indexToPtr(self);
             }
 
-            pub fn constPtr(self: ItemId, pool: *const PoolSelf) ?*const Item {
-                if (self == .null) return null;
+            pub fn constPtr(self: ItemId, pool: *const PoolSelf) *const Item {
                 return pool.indexToConstPtr(self);
             }
+
+            pub const Optional = util.PackedOptional(ItemId, std.math.maxInt(IdInt));
         };
 
         pub fn size() usize {
@@ -93,10 +121,9 @@ pub fn SharedPool(Item: type, cap: usize) type {
 
         // take head off free_list
         pub fn create(self: *PoolSelf) !*Item {
-            const head = self.free_list;
-            if (head == .null) return error.OutOfSpace;
+            const head = self.free_list.opt() orelse return error.OutOfSpace;
 
-            const new_node: *Node = &self.buf()[head.index().?];
+            const new_node: *Node = &self.buf()[head.index()];
             self.free_list = new_node.next_free;
             return @ptrCast(new_node);
         }
@@ -112,25 +139,21 @@ pub fn SharedPool(Item: type, cap: usize) type {
             const node: *Node = @ptrCast(item);
             const id = self.ptrToIndex(item);
 
-            const head = self.free_list;
-            node.* = .{ .next_free = head };
-            self.free_list = id;
+            node.* = .{ .next_free = self.free_list };
+            self.free_list = .init(id);
         }
 
         pub fn destroyId(self: *PoolSelf, item_id: ItemId) void {
-            std.debug.assert(item_id != .null);
-            const item: *Item = @ptrCast(&self.buf()[item_id.index().?]);
+            const item: *Item = @ptrCast(&self.buf()[item_id.index()]);
             self.destroy(item);
         }
 
         pub fn indexToPtr(self: *PoolSelf, item_id: ItemId) *Item {
-            std.debug.assert(item_id != .null);
-            return @ptrCast(&self.buf()[item_id.index().?]);
+            return @ptrCast(&self.buf()[item_id.index()]);
         }
 
         pub fn indexToConstPtr(self: *const PoolSelf, item_id: ItemId) *const Item {
-            std.debug.assert(item_id != .null);
-            return @ptrCast(&self.constBuf()[item_id.index().?]);
+            return @ptrCast(&self.constBuf()[item_id.index()]);
         }
 
         pub fn ptrToIndex(self: *PoolSelf, item: *Item) ItemId {
@@ -149,9 +172,33 @@ pub fn SharedPool(Item: type, cap: usize) type {
     };
 }
 
-/// A mem pool of []Item
-/// Asserts Item to have an alignment and size >= IdInt
-/// NOTE: this pool is not atomic, but is designed such that it could be made atomic easily
+/// Runtime sized in process pool backed by a caller provided Item buffer.
+/// Unlike SharedPool, this struct stores a pointer to the backing buffer. That pointer is valid
+/// only in the process that created the pool, so this type should not be embedded in shared memory.
+///
+/// NOTE: this pool is not atomic, but is designed such that it could be made atomic easily.
+///
+/// Free slots store item ids in the same memory as items, so Item must be large and aligned
+/// enough to hold an optional item id.
+///
+/// create() allocates one Item and returns *Item. createId() returns the slot index, which can be
+/// converted back to a pointer while using the same Pool value.
+///
+/// ```zig
+/// const U64Pool = Pool(u64, u16);
+///
+/// var items: [4]u64 = undefined;
+/// var pool = U64Pool.init(items[0..]);
+///
+/// const item = try pool.create();
+/// item.* = 42;
+///
+/// const item_id = pool.ptrToIndex(item);
+/// item_id.ptr(&pool).* = 43;
+///
+/// pool.destroyId(item_id);
+/// ```
+///
 pub fn Pool(Item: type, IdInt: type) type {
     switch (IdInt) {
         u8, u16, u32, u64 => {},
@@ -159,14 +206,14 @@ pub fn Pool(Item: type, IdInt: type) type {
     }
 
     return extern struct {
-        free_list: ItemId,
+        free_list: ItemId.Optional,
         len: IdInt,
         buf: [*]Node,
 
         const PoolSelf = @This();
 
         // We know when next_free is active when we walk the free_list
-        const Node = extern union { next_free: ItemId, item: Item };
+        const Node = extern union { next_free: ItemId.Optional, item: Item };
 
         comptime {
             if (@sizeOf(Item) < @sizeOf(ItemId)) unreachable;
@@ -176,15 +223,13 @@ pub fn Pool(Item: type, IdInt: type) type {
         }
 
         pub const ItemId = enum(IdInt) {
-            null = std.math.maxInt(IdInt),
             _,
 
             comptime {
                 _ = PoolSelf;
             }
 
-            pub fn index(self: ItemId) ?IdInt {
-                if (self == .null) return null;
+            pub fn index(self: ItemId) IdInt {
                 return @intFromEnum(self);
             }
 
@@ -192,15 +237,15 @@ pub fn Pool(Item: type, IdInt: type) type {
                 return @enumFromInt(int);
             }
 
-            pub fn ptr(self: ItemId, pool: *PoolSelf) ?*Item {
-                if (self == .null) return null;
+            pub fn ptr(self: ItemId, pool: *PoolSelf) *Item {
                 return pool.indexToPtr(self);
             }
 
-            pub fn constPtr(self: ItemId, pool: *const PoolSelf) ?*const Item {
-                if (self == .null) return null;
+            pub fn constPtr(self: ItemId, pool: *const PoolSelf) *const Item {
                 return pool.indexToPtr(self);
             }
+
+            pub const Optional = util.PackedOptional(ItemId, std.math.maxInt(IdInt));
         };
 
         pub fn init(item_buf: []Item) PoolSelf {
@@ -222,11 +267,19 @@ pub fn Pool(Item: type, IdInt: type) type {
             };
         }
 
+        /// Rebuilds the free list in place, returning every item to the pool
+        /// without freeing or reallocating the backing buffer. The buffer
+        /// contents are clobbered.
+        pub fn reset(self: *PoolSelf) void {
+            const item_buf: []Item = @ptrCast(self.buf[0..self.len]);
+            self.* = init(item_buf);
+        }
+
         // take head off free_list
         pub fn create(self: *PoolSelf) !*Item {
-            if (self.free_list == .null) return error.OutOfSpace;
+            const head = self.free_list.opt() orelse return error.OutOfSpace;
 
-            const new_node: *Node = &self.buf[self.free_list.index().?];
+            const new_node: *Node = &self.buf[head.index()];
             self.free_list = new_node.next_free;
 
             return @ptrCast(new_node);
@@ -243,23 +296,16 @@ pub fn Pool(Item: type, IdInt: type) type {
 
             const node: *Node = @ptrCast(item);
             node.* = .{ .next_free = self.free_list };
-            self.free_list = self.ptrToIndex(item);
+            self.free_list = .init(self.ptrToIndex(item));
         }
 
         pub fn destroyId(self: *PoolSelf, item_id: ItemId) void {
-            std.debug.assert(item_id != .null);
-            const item: *Item = @ptrCast(&self.buf[item_id.index().?]);
+            const item: *Item = @ptrCast(&self.buf[item_id.index()]);
             self.destroy(item);
         }
 
         pub fn indexToPtr(self: *const PoolSelf, item_id: ItemId) *Item {
-            std.debug.assert(item_id != .null);
-            return @ptrCast(&self.buf[item_id.index().?]);
-        }
-
-        pub fn indexToOptPtr(self: *const PoolSelf, item_id: ItemId) ?*Item {
-            if (item_id == .null) return null;
-            return @ptrCast(&self.buf[item_id.index().?]);
+            return @ptrCast(&self.buf[item_id.index()]);
         }
 
         pub fn ptrToIndex(self: *const PoolSelf, item: *Item) ItemId {

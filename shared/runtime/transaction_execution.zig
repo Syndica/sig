@@ -10,7 +10,6 @@ const compute_budget_program = sig.runtime.program.compute_budget;
 const cost_model = sig.runtime.cost_model;
 const vm = sig.vm;
 
-const BlockhashQueue = sig.core.BlockhashQueue;
 const Hash = sig.core.Hash;
 const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
 const Pubkey = sig.core.Pubkey;
@@ -41,6 +40,9 @@ const ComputeBudgetInstructionDetails = compute_budget_program.ComputeBudgetInst
 const InstructionTrace = TransactionContext.InstructionTrace;
 
 const AccountLoadError = sig.runtime.account_loader.AccountLoadError;
+
+const checkLoadAndAdvanceMessageNonceAccount =
+    sig.runtime.check_transactions.checkLoadAndAdvanceMessageNonceAccount;
 
 // Transaction execution involves logic and validation which occurs in replay
 // and the svm. The location of key processes in Agave are outlined below:
@@ -80,7 +82,6 @@ pub const TransactionExecutionEnvironment = struct {
     status_checker: StatusChecker,
     sysvar_cache: *const SysvarCache,
     rent_collector: *const RentCollector,
-    blockhash_queue: *const BlockhashQueue,
     epoch_stake_reader: EpochStakeReader,
     vm_environment: *const vm.Environment,
     next_vm_environment: ?*const vm.Environment,
@@ -212,28 +213,25 @@ pub fn loadAndExecuteTransaction(
         .err => |e| return .{ .err = e },
     };
 
-    const maybe_nonce_info = switch (try sig.runtime.check_transactions.checkAge(
-        tmp_allocator,
-        transaction,
-        account_reader,
-        env.blockhash_queue,
-        env.max_age,
-        &env.next_durable_nonce,
-        env.next_lamports_per_signature,
-        env.feature_set.active(.require_static_nonce_account, env.slot),
-    )) {
-        .ok => |x| x,
-        .err => |e| return .{ .err = e },
-    };
-    var nonce_account_is_owned = true;
-    defer if (nonce_account_is_owned) if (maybe_nonce_info) |n| tmp_allocator.free(n.account.data);
-
-    if (env.status_checker.check(
+    // verify the transaction is not in another block, first by checking
+    // in recent blocks, then checking if it's a durable nonce.
+    // [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/runtime/src/bank/check_transactions.rs#L105
+    const maybe_nonce_info: ?LoadedAccount = switch (env.status_checker.check(
         &transaction.msg_hash,
         &transaction.recent_blockhash,
-    )) |err| return .{ .err = err };
+        env.max_age,
+    )) {
+        .recent_and_unprocessed => null,
+        .already_processed => return .{ .err = .AlreadyProcessed },
+        .unknown_blockhash => if (try checkLoadAndAdvanceMessageNonceAccount(
+            tmp_allocator,
+            transaction,
+            &env.next_durable_nonce,
+            env.next_lamports_per_signature,
+            account_reader,
+        )) |nonce| nonce[0] else return .{ .err = .BlockhashNotFound },
+    };
 
-    nonce_account_is_owned = false;
     const fees, var rollbacks, const fee_payer =
         switch (try sig.runtime.check_transactions.checkFeePayer(
             tmp_allocator,
@@ -242,9 +240,6 @@ pub fn loadAndExecuteTransaction(
             &compute_budget_limits,
             maybe_nonce_info,
             env.rent_collector,
-            env.feature_set,
-            env.slot,
-            env.lamports_per_signature,
         )) {
             .ok => |x| x,
             .err => |e| return .{ .err = e },
@@ -252,25 +247,43 @@ pub fn loadAndExecuteTransaction(
     // Fee payer ownership is transferred to loadTransactionAccounts.
     errdefer for (rollbacks.slice()) |r| r.deinit(tmp_allocator);
 
+    // Partial loaded data size at point of failure; consumed by the
+    // `define_ltds_fee_only_semantics` branch below.
+    var running_data_size: u32 = 0;
+
     var loaded_accounts = switch (try account_loader.loadTransactionAccounts(
         account_reader,
         tmp_allocator,
         transaction,
         env.rent_collector,
-        env.feature_set,
-        env.slot,
         &compute_budget_limits,
         fee_payer,
+        &running_data_size,
     )) {
         .ok => |x| x,
         .err => |err| {
             var writes = ProcessedTransaction.Writes{};
             errdefer while (writes.pop()) |item| item.account.deinit(tmp_allocator);
-            var loaded_accounts_data_size: u32 = 0;
+
+            // SIMD-186 amendment: report the partial loaded size clamped to
+            // the limit. Pre-feature: raw sum of rollback account data lengths.
+            // [agave] https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/svm/src/account_loader.rs#L438-L450
+            const loaded_accounts_data_size: u32 = if (env.feature_set.active(
+                .define_ltds_fee_only_semantics,
+                env.slot,
+            )) @min(running_data_size, compute_budget_limits.loaded_accounts_bytes) else size: {
+                var sum: u32 = 0;
+                for (rollbacks.slice()) |r| {
+                    const len_u32 = std.math.cast(u32, r.account.data.len) orelse
+                        std.math.maxInt(u32);
+                    sum +|= len_u32;
+                }
+                break :size sum;
+            };
+
             while (rollbacks.pop()) |rollback| {
                 const item = writes.addOne() catch unreachable;
                 item.* = rollback;
-                loaded_accounts_data_size += @intCast(rollback.account.data.len);
             }
             // Calculate cost units even for failed transactions
             const tx_cost = cost_model.calculateTransactionCost(
@@ -820,8 +833,9 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
             _: *const anyopaque,
             _: *const Hash,
             _: *const Hash,
-        ) ?TransactionError {
-            return null;
+            _: u64,
+        ) StatusChecker.Result {
+            return .recent_and_unprocessed;
         }
     };
     const status_checker_context = PassingStatusChecker{};
@@ -835,13 +849,6 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
 
     const rent_collector = sig.core.rent_collector.defaultCollector(10);
 
-    var blockhash_queue = try BlockhashQueue.initWithSingleEntry(
-        allocator,
-        recent_blockhash,
-        5000,
-    );
-    defer blockhash_queue.deinit(allocator);
-
     const epoch_stake_reader_context: TestEpochStakeReaderContext = .{};
 
     const environment = TransactionExecutionEnvironment{
@@ -849,7 +856,6 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         .status_checker = status_checker,
         .sysvar_cache = &sysvar_cache,
         .rent_collector = &rent_collector,
-        .blockhash_queue = &blockhash_queue,
         .epoch_stake_reader = .{
             .ctx = &epoch_stake_reader_context,
             .totalStakeFn = TestEpochStakeReaderContext.totalStake,

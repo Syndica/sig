@@ -431,16 +431,19 @@ pub fn applyFeatureActivations(
         }
     }
 
+    // On pico/full inflation activation, Agave resets the fee burn percent to
+    // its default (see Agave `Bank::apply_feature_activations`). We keep this
+    // assignment for snapshot-parity with Agave's `SlotConstants`, even though
+    // sig's tx-fee burn no longer reads `fee_rate_governor.burn_percent` (it
+    // uses the hard-coded `DEFAULT_BURN_PERCENT` in `distributeTransactionFees`).
     if (new_activations.active(.pico_inflation, slot)) {
         slot_constants.inflation = .PICO;
-        slot_constants.fee_rate_governor.burn_percent = 50; // DEFAULT_BURN_PERCENT: 50% fee burn.
-        slot_constants.rent_collector.rent.burn_percent = 50; // 50% rent bur.
+        slot_constants.fee_rate_governor.burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT;
     }
 
     if (feature_set.fullInflationFeaturesEnabled(slot, &new_activations)) {
         slot_constants.inflation = .FULL;
-        slot_constants.fee_rate_governor.burn_percent = 50; // DEFAULT_BURN_PERCENT: 50% fee burn.
-        slot_constants.rent_collector.rent.burn_percent = 50; // 50% rent bur.
+        slot_constants.fee_rate_governor.burn_percent = sig.runtime.sysvar.DEFAULT_BURN_PERCENT;
     }
 
     try applyBuiltinProgramFeatureTransitions(
@@ -458,11 +461,6 @@ pub fn applyFeatureActivations(
         // TODO: Implement once cost tracker is added
         // https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=149549898
         return error.RaiseBlockLimitsTo100MActivationNotImplemented;
-    }
-    if (new_activations.active(.raise_account_cu_limit, slot)) {
-        // TODO: Implement once cost tracker is added
-        // https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=149549898
-        return error.RaiseAccountCuLimitActivationNotImplemented;
     }
 }
 
@@ -1527,9 +1525,12 @@ test "applyFeatureActivations: basic activations" {
             sig.core.genesis_config.Inflation.PICO,
             env.slot_constants.inflation,
         );
-        try std.testing.expectEqual(50, env.slot_constants.fee_rate_governor.burn_percent);
         try std.testing.expectEqual(
-            50,
+            sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
+            env.slot_constants.fee_rate_governor.burn_percent,
+        );
+        try std.testing.expectEqual(
+            sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
             env.slot_constants.rent_collector.rent.burn_percent,
         );
     }
@@ -1599,9 +1600,12 @@ test "applyFeatureActivations: basic activations" {
             sig.core.genesis_config.Inflation.FULL,
             env.slot_constants.inflation,
         );
-        try std.testing.expectEqual(50, env.slot_constants.fee_rate_governor.burn_percent);
         try std.testing.expectEqual(
-            50,
+            sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
+            env.slot_constants.fee_rate_governor.burn_percent,
+        );
+        try std.testing.expectEqual(
+            sig.runtime.sysvar.DEFAULT_BURN_PERCENT,
             env.slot_constants.rent_collector.rent.burn_percent,
         );
     }
@@ -1625,29 +1629,6 @@ test "applyFeatureActivations: basic activations" {
         );
         try std.testing.expectError(
             error.RaiseBlockLimitsTo100MActivationNotImplemented,
-            err,
-        );
-    }
-
-    { // Error on raise account CU limit
-        const slot: Slot = 0;
-
-        var env = try TestEnvironment.init(allocator);
-        defer env.deinit(allocator);
-        try env.ancestors.addSlot(allocator, slot);
-
-        // Test full inflation activation - feature slot 1
-        try env.insertFeatureAccount(allocator, slot, 1, .raise_account_cu_limit, null);
-        const err = applyFeatureActivations(
-            allocator,
-            slot,
-            &env.slot_constants,
-            &env.slot_state,
-            env.slotAccountStore(slot),
-            .noop,
-        );
-        try std.testing.expectError(
-            error.RaiseAccountCuLimitActivationNotImplemented,
             err,
         );
     }
@@ -1755,12 +1736,16 @@ test "applyFeatureActivations: Builtin Transitions" {
     defer env.deinit(allocator);
     try env.ancestors.addSlot(allocator, slot);
 
-    // Set address lookup table migration feature
+    // Use the feature_gate stateless builtin for testing migration
+    const stateless_builtin = builtin_programs.STATELESS_BUILTINS[0];
+    const migration_config = stateless_builtin.core_bpf_migration_config.?;
+
+    // Set feature gate migration feature
     try env.insertFeatureAccount(
         allocator,
         slot,
         1,
-        .migrate_address_lookup_table_program_to_core_bpf,
+        .migrate_feature_gate_program_to_core_bpf,
         null,
     );
 
@@ -1774,12 +1759,8 @@ test "applyFeatureActivations: Builtin Transitions" {
         .noop,
     );
 
-    // Get the builtin program info
-    const builtin_program = for (builtin_programs.BUILTINS) |bp| {
-        if (bp.program_id.equals(&sig.runtime.program.address_lookup_table.ID)) break bp;
-    } else unreachable;
-
-    // Attempt migration - should fail since account doesn't exist
+    // Attempt migration - should fail since account doesn't exist (stateless builtins
+    // expect no existing account, so this tests the source buffer path)
     try std.testing.expectError(error.AccountNotFound, migrateBuiltinProgramToCoreBpf(
         allocator,
         slot,
@@ -1787,35 +1768,49 @@ test "applyFeatureActivations: Builtin Transitions" {
         &env.slot_state.capitalization,
         &env.slot_constants.rent_collector.rent,
         &env.slot_constants.feature_set,
-        builtin_program.program_id,
-        builtin_program.core_bpf_migration_config.?,
-        .builtin,
+        stateless_builtin.program_id,
+        migration_config,
+        .stateless_builtin,
         false,
     ));
 
-    // Store invalid account - Incorrect Owner
-    try env.slotAccountStore(0).put(
-        builtin_program.program_id,
-        AccountSharedData{
-            .lamports = 1,
-            .data = &.{},
-            .executable = false,
-            .owner = .ZEROES,
-            .rent_epoch = 0,
-        },
-    );
-    try std.testing.expectError(error.IncorrectOwner, migrateBuiltinProgramToCoreBpf(
-        allocator,
-        slot,
-        env.slotAccountStore(slot),
-        &env.slot_state.capitalization,
-        &env.slot_constants.rent_collector.rent,
-        &env.slot_constants.feature_set,
-        builtin_program.program_id,
-        builtin_program.core_bpf_migration_config.?,
-        .builtin,
-        false,
-    ));
+    // Test IncorrectOwner path for .builtin kind migration.
+    // Use an inline migration config to exercise the owner validation code path.
+    {
+        const builtin_program_id = sig.runtime.program.address_lookup_table.ID;
+        const builtin_migration_config: builtin_programs.CoreBpfMigrationConfig = .{
+            .program_id = builtin_program_id,
+            .source_buffer_address = .ZEROES,
+            .upgrade_authority_address = null,
+            // unread, use any feature
+            .enable_feature_id = .bls_pubkey_management_in_vote_account,
+        };
+
+        // Store account with incorrect owner (not native loader)
+        try env.slotAccountStore(slot).put(
+            builtin_program_id,
+            AccountSharedData{
+                .lamports = 1,
+                .data = &.{},
+                .executable = false,
+                .owner = .ZEROES,
+                .rent_epoch = 0,
+            },
+        );
+
+        try std.testing.expectError(error.IncorrectOwner, migrateBuiltinProgramToCoreBpf(
+            allocator,
+            slot,
+            env.slotAccountStore(slot),
+            &env.slot_state.capitalization,
+            &env.slot_constants.rent_collector.rent,
+            &env.slot_constants.feature_set,
+            builtin_program_id,
+            builtin_migration_config,
+            .builtin,
+            false,
+        ));
+    }
 
     // TODO: Full migration tests
     // Store program data account, store buffer account, perform migration, verify results.
@@ -1830,15 +1825,19 @@ test "SIMD-0444 relax programdata account check during migration" {
     defer env.deinit(allocator);
     try env.ancestors.addSlot(allocator, slot);
 
-    const builtin_program = for (builtin_programs.BUILTINS) |bp| {
-        if (bp.program_id.equals(&sig.runtime.program.address_lookup_table.ID)) break bp;
-    } else unreachable;
-
-    const migration_config = builtin_program.core_bpf_migration_config.?;
+    // Use inline migration config for address_lookup_table (now hardcoded, removed from BUILTINS)
+    const builtin_program_id = sig.runtime.program.address_lookup_table.ID;
+    const migration_config: builtin_programs.CoreBpfMigrationConfig = .{
+        .program_id = sig.runtime.program.address_lookup_table.ID,
+        .source_buffer_address = .ZEROES,
+        .upgrade_authority_address = null,
+        // unread, use any feature
+        .enable_feature_id = .bls_pubkey_management_in_vote_account,
+    };
 
     // Store valid builtin program account (native loader owned) so we get past that check.
     try env.slotAccountStore(slot).put(
-        builtin_program.program_id,
+        builtin_program_id,
         AccountSharedData{
             .lamports = 1,
             .data = &.{},
@@ -1850,7 +1849,7 @@ test "SIMD-0444 relax programdata account check during migration" {
 
     // Derive the programdata PDA.
     const program_data_address, _ = sig.runtime.pubkey_utils.findProgramAddress(
-        &.{&builtin_program.program_id.data},
+        &.{&builtin_program_id.data},
         program.bpf_loader.v3.ID,
     ) orelse unreachable;
 
@@ -1875,7 +1874,7 @@ test "SIMD-0444 relax programdata account check during migration" {
             &env.slot_state.capitalization,
             &env.slot_constants.rent_collector.rent,
             &env.slot_constants.feature_set,
-            builtin_program.program_id,
+            builtin_program_id,
             migration_config,
             .builtin,
             true,
@@ -1889,7 +1888,7 @@ test "SIMD-0444 relax programdata account check during migration" {
             &env.slot_state.capitalization,
             &env.slot_constants.rent_collector.rent,
             &env.slot_constants.feature_set,
-            builtin_program.program_id,
+            builtin_program_id,
             migration_config,
             .builtin,
             false,
@@ -1916,7 +1915,7 @@ test "SIMD-0444 relax programdata account check during migration" {
             &env.slot_state.capitalization,
             &env.slot_constants.rent_collector.rent,
             &env.slot_constants.feature_set,
-            builtin_program.program_id,
+            builtin_program_id,
             migration_config,
             .builtin,
             false,
@@ -1945,7 +1944,7 @@ test "SIMD-0444 relax programdata account check during migration" {
             &env.slot_state.capitalization,
             &env.slot_constants.rent_collector.rent,
             &env.slot_constants.feature_set,
-            builtin_program.program_id,
+            builtin_program_id,
             migration_config,
             .builtin,
             true,
@@ -1965,7 +1964,7 @@ test "SIMD-0444 relax programdata account check during migration" {
             &env.slot_state.capitalization,
             &env.slot_constants.rent_collector.rent,
             &env.slot_constants.feature_set,
-            builtin_program.program_id,
+            builtin_program_id,
             migration_config,
             .builtin,
             false,

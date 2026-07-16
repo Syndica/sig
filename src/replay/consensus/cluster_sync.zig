@@ -502,7 +502,7 @@ fn processAncestorHashesDuplicateSlots(
         const request_type = ancestor_dupe_slot_to_repair.request_type;
         const slot_to_repair = ancestor_dupe_slot_to_repair.slot_to_repair;
         const epoch_slots_frozen_slot, const epoch_slots_frozen_hash = slot_to_repair.tuple();
-        logger.warn().logf(
+        logger.err().logf(
             "{f} ReplayStage notified of duplicate slot from ancestor hashes service but we " ++
                 "observed as {s}: {f}",
             .{
@@ -953,7 +953,7 @@ pub const check_slot_agrees_with_cluster = struct {
 
                 // If the cluster duplicate confirmed some version of this slot, then
                 // there's another version of our dead slot
-                logger.warn().logf(
+                logger.err().logf(
                     "Cluster duplicate confirmed slot {} with hash {f}, but we marked slot dead",
                     .{ slot, duplicate_confirmed_hash },
                 );
@@ -980,7 +980,7 @@ pub const check_slot_agrees_with_cluster = struct {
                     // The duplicate confirmed slot hash does not match our frozen hash.
                     // Modify fork choice rule to exclude our version from being voted
                     // on and also repair the correct version
-                    logger.warn().logf(
+                    logger.err().logf(
                         "Cluster duplicate confirmed slot {} with hash {f}," ++
                             " but our version has hash {f}",
                         .{ slot, duplicate_confirmed_hash, frozen_hash },
@@ -1029,7 +1029,7 @@ pub const check_slot_agrees_with_cluster = struct {
 
                     // If the cluster duplicate confirmed some version of this slot, then
                     // there's another version of our dead slot
-                    logger.warn().logf(
+                    logger.err().logf(
                         "Cluster duplicate confirmed slot {} with hash {}, " ++
                             "but we marked slot dead",
                         .{ slot, duplicate_confirmed_hash },
@@ -1041,7 +1041,7 @@ pub const check_slot_agrees_with_cluster = struct {
                 // match arm above.
                 .epoch_slots_frozen => |epoch_slots_frozen_hash| {
                     // Cluster sample found a hash for our dead slot, we must have the wrong version
-                    logger.warn().logf(
+                    logger.err().logf(
                         "EpochSlots sample returned slot {} with hash {}, " ++
                             "but we marked slot dead",
                         .{ slot, epoch_slots_frozen_hash },
@@ -1184,7 +1184,7 @@ pub const check_slot_agrees_with_cluster = struct {
         if (!is_popular_pruned) {
             if (maybe_duplicate_confirmed_hash) |duplicate_confirmed_hash| {
                 if (!epoch_slots_frozen_hash.eql(duplicate_confirmed_hash)) {
-                    logger.warn().logf(
+                    logger.err().logf(
                         "EpochSlots sample returned slot {} with hash {f}, " ++
                             "but we already saw duplicate confirmation on hash: {f}",
                         .{ slot, epoch_slots_frozen_hash, duplicate_confirmed_hash },
@@ -1201,7 +1201,7 @@ pub const check_slot_agrees_with_cluster = struct {
                     return;
                 } else {
                     // The epoch slots hash does not match our frozen hash.
-                    logger.warn().logf(
+                    logger.err().logf(
                         "EpochSlots sample returned slot {} with hash {f}, " ++
                             "but our version has hash {f}",
                         .{ slot, epoch_slots_frozen_hash, slot_frozen_hash },
@@ -1218,7 +1218,7 @@ pub const check_slot_agrees_with_cluster = struct {
             },
             .dead => {
                 // Cluster sample found a hash for our dead slot, we must have the wrong version
-                logger.warn().logf(
+                logger.err().logf(
                     "EpochSlots sample returned slot {} with hash {f}, " ++
                         "but we marked slot dead",
                     .{ slot, epoch_slots_frozen_hash },
@@ -1229,7 +1229,7 @@ pub const check_slot_agrees_with_cluster = struct {
                 // yet to be replayed
                 std.debug.assert(is_popular_pruned);
                 // The cluster sample found the troublesome slot which caused this fork to be pruned
-                logger.warn().logf(
+                logger.err().logf(
                     "EpochSlots sample returned slot {} with hash {f}, " ++
                         "but we have pruned it due to incorrect ancestry",
                     .{ slot, epoch_slots_frozen_hash },

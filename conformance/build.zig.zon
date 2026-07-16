@@ -6,14 +6,15 @@
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .sig = .{ .path = "../" },
+        .sig_v2 = .{ .path = "../v2" },
         .pb = .{
             .url = "git+https://github.com/yewman/zig-protobuf#1da1301ca9a00d2bc6ee1e8988ded9a93b80a7b8",
             .hash = "protobuf-3.0.0-0e82au3YKAAhdxzX7URyHNW4cjLtUovf4vfCOM8ZI4gx",
         },
         // Keep in sync with SOLFUZZ_AGAVE_PROTOSOL_COMMIT in commits.env (used by flake.nix).
         .protosol = .{
-            .url = "git+https://github.com/firedancer-io/protosol#f02b26681aa9427ada58b6c06ea1e7e599a4121e",
-            .hash = "N-V-__8AAAv-AgDJSqjkV7Rl51wUu4WncDnL4LtWyPmep-3g",
+            .url = "git+https://github.com/firedancer-io/protosol#e3f561fbfcfd8f3f8983aff813aa27a53d4b1eaf",
+            .hash = "N-V-__8AALD8AgAAK5lZWvyRvINdjnSIuvfgQhsCraXnVuUR",
         },
     },
 }

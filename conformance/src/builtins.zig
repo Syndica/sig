@@ -72,39 +72,6 @@ pub const BUILTINS = [_]BuiltinProgram{
         .core_bpf_migration_config = null,
     },
     .{
-        .program_id = program.stake.ID,
-        .data = "stake_program",
-        .enable_feature_id = null,
-        .core_bpf_migration_config = .{
-            .program_id = program.stake.ID,
-            .source_buffer_address = program.stake.SOURCE_ID,
-            .upgrade_authority_address = null,
-            .enable_feature_id = .migrate_stake_program_to_core_bpf,
-        },
-    },
-    .{
-        .program_id = program.config.ID,
-        .data = "config_program",
-        .enable_feature_id = null,
-        .core_bpf_migration_config = .{
-            .program_id = program.config.ID,
-            .source_buffer_address = program.config.SOURCE_ID,
-            .upgrade_authority_address = null,
-            .enable_feature_id = .migrate_config_program_to_core_bpf,
-        },
-    },
-    .{
-        .program_id = program.address_lookup_table.ID,
-        .data = "address_lookup_table_program",
-        .enable_feature_id = null,
-        .core_bpf_migration_config = .{
-            .program_id = program.address_lookup_table.ID,
-            .source_buffer_address = program.address_lookup_table.SOURCE_ID,
-            .upgrade_authority_address = null,
-            .enable_feature_id = .migrate_address_lookup_table_program_to_core_bpf,
-        },
-    },
-    .{
         .program_id = program.bpf_loader.v1.ID,
         .data = "solana_bpf_loader_deprecated_program",
         .enable_feature_id = null,
