@@ -280,9 +280,6 @@ pub const Receiver = struct {
             break :new_set fec_set_ctx;
         };
 
-        // in the case that we just acquired a fec set, it is critical that we do not leak it
-        errdefer comptime unreachable;
-
         zone.value(fec_set_ctx.totalShredsReceived());
 
         tracy.plot(u8, "totalShredsReceived", fec_set_ctx.totalShredsReceived());
@@ -321,6 +318,18 @@ pub const Receiver = struct {
 
         // starting fec set reconstruction now
         // NOTE: as an optimisation we should reconstruct directly into the out buffer
+        //
+        // RS decode sets `data_shreds_received = .initFull()`; a bare error
+        // return past this point would leak a ctx whose bitset would trip
+        // `total <= fec_shred_count` on the next code shred at an unseen
+        // index. Retire on error so subsequent shreds take the `new_set`
+        // path against `done`.
+        errdefer state.in_progress.removeFinishedSet(fec_set_ctx);
+
+        // Snapshot before RS decode overwrites `data_shreds_received`; the
+        // re-validation loop below iterates only over RS-recovered indices.
+        const wire_received = fec_set_ctx.data_shreds_received;
+
         {
             const shreds_bitset, const shreds_reedsol_bufs = fec_set_ctx.erasureEncoded();
 
@@ -339,6 +348,46 @@ pub const Receiver = struct {
         }
 
         std.debug.assert(fec_set_ctx.data_shreds_received.count() == FecSetCtx.data_shreds_max);
+
+        // Structural + ctx-field re-validation over the RS-recovered region
+        // only. Signature and merkle proof live in the trailer, outside RS
+        // protection; the ctx's pinned merkle root already fixes them.
+        // [agave] https://github.com/anza-xyz/agave/blob/5efbb99925939a740cf6ff06647257d100e3e286/ledger/src/blockstore.rs#L1628
+        for (0..FecSetCtx.data_shreds_max) |idx| {
+            if (wire_received.isSet(idx)) continue;
+            var recovered_packet: Packet = .{
+                .data = fec_set_ctx.data_shreds_buf[idx],
+                .len = lib.shred.Shred.min_size,
+                .addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0),
+            };
+            const recovered = Shred.fromPacketChecked(&recovered_packet) catch |err| {
+                logger.warn().logf(
+                    "RS-recovered shred failed structural re-validation: " ++
+                        "slot={} fec_set_idx={} idx={} err={s}. Dropping FEC set.",
+                    .{ shred.slot, shred.fec_set_idx, idx, @errorName(err) },
+                );
+                return error.RecoveredShredMalformed;
+            };
+            if (recovered.slot != shred.slot or
+                recovered.fec_set_idx != shred.fec_set_idx or
+                !recovered.variant.isData() or
+                !recovered.variant.eql(fec_set_ctx.data_variant) or
+                recovered.slot_idx != shred.fec_set_idx + idx)
+            {
+                logger.warn().logf(
+                    "RS-recovered shred header disagrees with ctx: slot={} " ++
+                        "fec_set_idx={} idx={} " ++
+                        "(recovered slot={} fec_set_idx={} slot_idx={} isData={}). " ++
+                        "Dropping FEC set.",
+                    .{
+                        shred.slot,                 shred.fec_set_idx,     idx,
+                        recovered.slot,             recovered.fec_set_idx, recovered.slot_idx,
+                        recovered.variant.isData(),
+                    },
+                );
+                return error.RecoveredShredMalformed;
+            }
+        }
 
         // writing out deshredded fec set
         {
@@ -388,7 +437,6 @@ pub const Receiver = struct {
 
             var bytes_written: u16 = 0;
             for (&fec_set_ctx.data_shreds_buf) |*buffer| {
-                // TODO: I think we need to re-validate the data shreds that we recovered
                 const data_shred: *const Shred = Shred.fromBufferUnchecked(buffer);
                 const payload = data_shred.dataPayload();
                 @memcpy(finished.payload_buf[bytes_written..][0..payload.len], payload);
