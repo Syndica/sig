@@ -1,5 +1,5 @@
-//! TODO: Not sure on where/which component with eventually "own" AccountFetch. For now, this was put together to be
-//! a drop in replacement for the existing blocking fetch for accounts being done in replay. We'll likely have an AccountFetch
+//! TODO: Not sure on where/which component with eventually "own" AccountResolver. For now, this was put together to be
+//! a drop in replacement for the existing blocking fetch for accounts being done in replay. We'll likely have an AccountResolver
 //! per exec-service, capable of handling batches of transactions, and cacheing accounts (?).
 //!
 //! TODO: Program cache/read-only accounts need to live somewhere. It would be nice of all accounts
@@ -9,7 +9,7 @@
 //! resolve a batch of transactions at once. A scheduler can take advantage of this to
 //! resolve multiple transactions in parallel (but in the order they are in the batch),
 //! specifically when the batch of transactions are non-conflicting with other batches.
-//! Each non-conflicting batch can also be executed in parallel. So maybe we want an AccountFetch-per-exec service?
+//! Each non-conflicting batch can also be executed in parallel. So maybe we want an AccountResolver-per-exec service?
 const std = @import("std");
 const lib = @import("../lib.zig");
 
@@ -73,6 +73,8 @@ fn resolveTableLookup(
     table: alt.AddressLookupTable,
     lookup: VersionedTransaction.View.AddressTableLookupIter.Item,
     current_slot: lib.solana.Slot,
+    /// True only when `table.meta.deactivation_slot` is in the current
+    /// bank's SlotHashes.
     deactivation_slot_is_recent: bool,
     writable_out: []Pubkey,
     readonly_out: []Pubkey,
@@ -84,7 +86,9 @@ fn resolveTableLookup(
 
     if (!active) {
         @branchHint(.unlikely);
-        return error.DeactivatedLookupTable;
+        // NOTE: this is what agave returns
+        // TODO: document this.
+        return error.LookupTableNotFound;
     }
 
     const active_len: usize = if (current_slot > table.meta.last_extended_slot)
