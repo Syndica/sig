@@ -10,7 +10,7 @@ const Region = topology.Region;
 const Fixture = fixture_loader.Fixture;
 
 const fixture_for_test = 410010000;
-const account_pool_memory = 0;
+const account_pool_memory = 1024 * 1024;
 
 const Topology = struct {
     shred_receiver: topology.ServiceRegions(.from(services.shred_receiver)),
@@ -108,6 +108,11 @@ pub fn main() !void {
     );
     defer std.posix.munmap(@ptrCast(account_lookup_pair));
 
+    const account_pool_init = account_pool.finish();
+    const account_pool_buf = try account_pool_init.memfd.mmapRaw(.rw, .{});
+    defer std.posix.munmap(account_pool_buf);
+    const account_pool_ptr: *lib.accounts_db.AccountPool = @ptrCast(account_pool_buf.ptr);
+
     var spawned: topology.Children(Topology) = undefined;
     try spawned.spawn(.sandboxed, .{
         .shred_receiver = .{
@@ -128,7 +133,7 @@ pub fn main() !void {
                 .replay_transaction_pool = transaction_pool.finish(),
                 .block_pool = block_pool.finish(),
                 .exec_req_response = exec_req_response_region.finish(),
-                .account_pool = account_pool.finish(),
+                .account_pool = account_pool_init,
                 .account_lookups = account_lookups.finish(),
                 .tel = telemetry_region.finish(),
             },
@@ -149,8 +154,10 @@ pub fn main() !void {
     }
 
     try waitForReplayOutput(
+        &spawned,
         exec_req_response,
         account_lookup_pair,
+        account_pool_ptr,
         fixture.manifest.entries.transaction_count,
         5 * std.time.ns_per_s,
     );
@@ -178,8 +185,10 @@ fn resignPackets(
 }
 
 fn waitForReplayOutput(
+    spawned: *topology.Children(Topology),
     exec_req_response: *lib.replay.ExecReqResponse,
     account_lookups: *lib.accounts_db.AccountLookups,
+    account_pool: *lib.accounts_db.AccountPool,
     expected_transaction_count: u32,
     timeout_ns: u64,
 ) !void {
@@ -189,35 +198,66 @@ fn waitForReplayOutput(
     var lookup_writer = account_lookups.out.get(.writer);
 
     var count: u32 = 0;
-    while (lib.clock.monotonic(.ns) - start < timeout_ns) {
-        var handled_lookup = false;
-        while (lookup_reader.next()) |request| {
-            const response = lookup_writer.next() orelse return error.AccountLookupResponseRingFull;
-            response.* = .{
-                .pubkey = request.*,
-                .account_index = .invalid,
-            };
-            handled_lookup = true;
-        }
-        if (handled_lookup) {
-            lookup_reader.markUsed();
-            lookup_writer.markUsed();
-        }
-
-        var handled_request = false;
-        while (request_reader.next()) |request| {
-            try std.testing.expect(request.request_kind == .txn_exec);
-            count += 1;
-            try std.testing.expect(count <= expected_transaction_count);
-            handled_request = true;
-            if (count == expected_transaction_count) {
-                request_reader.markUsed();
-                return;
-            }
-        }
-        if (handled_request) request_reader.markUsed();
+    while (spawned.isActive() and lib.clock.monotonic(.ns) - start < timeout_ns) {
+        try serviceAccountLookups(account_pool, &lookup_reader, &lookup_writer);
+        try drainReplayRequests(&request_reader, &count, expected_transaction_count);
         std.atomic.spinLoopHint();
     }
+    if (spawned.isActive()) return error.ServicesDidNotBecomeIdle;
 
+    try serviceAccountLookups(account_pool, &lookup_reader, &lookup_writer);
+    try drainReplayRequests(&request_reader, &count, expected_transaction_count);
     try std.testing.expectEqual(expected_transaction_count, count);
+}
+
+fn serviceAccountLookups(
+    account_pool: *lib.accounts_db.AccountPool,
+    lookup_reader: *@FieldType(lib.accounts_db.AccountLookups, "in").Iterator(.reader),
+    lookup_writer: *@FieldType(lib.accounts_db.AccountLookups, "out").Iterator(.writer),
+) !void {
+    var handled_lookup = false;
+    while (lookup_reader.next()) |request| {
+        const response = lookup_writer.next() orelse return error.AccountLookupResponseRingFull;
+        response.* = .{
+            .pubkey = request.*,
+            .account_index = try createMockAccount(account_pool, request),
+        };
+        handled_lookup = true;
+    }
+    if (handled_lookup) {
+        lookup_reader.markUsed();
+        lookup_writer.markUsed();
+    }
+}
+
+fn createMockAccount(
+    account_pool: *lib.accounts_db.AccountPool,
+    pubkey: *const lib.solana.Pubkey,
+) !lib.accounts_db.AccountPool.AccountRef {
+    const account_ref = try account_pool.alloc(0);
+    const account = account_pool.getAccount(account_ref);
+    account.* = .{
+        .ref_count = .init(1),
+        .pubkey = pubkey.*,
+        .owner = .ZEROES,
+        .lamports = 0,
+        .rent_epoch = 0,
+        .data = .{ .executable = false, .len = 0 },
+    };
+    return account_ref;
+}
+
+fn drainReplayRequests(
+    request_reader: *lib.replay.ExecReqResponse.RequestRing.Iterator(.reader),
+    count: *u32,
+    expected_transaction_count: u32,
+) !void {
+    var handled_request = false;
+    while (request_reader.next()) |request| {
+        try std.testing.expect(request.request_kind == .txn_exec);
+        count.* += 1;
+        try std.testing.expect(count.* <= expected_transaction_count);
+        handled_request = true;
+    }
+    if (handled_request) request_reader.markUsed();
 }

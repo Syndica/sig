@@ -72,7 +72,10 @@ pub const Fixture = struct {
             break .{ index_slot, index_slot.fec_sets[0] };
         } else return error.FixtureSlotNotFound;
 
-        const manifest_path = try std.fs.path.join(allocator, &.{ FIXTURE_DIR, index_fec_set.path });
+        const manifest_path = try std.fs.path.join(allocator, &.{
+            FIXTURE_DIR,
+            index_fec_set.path,
+        });
         defer allocator.free(manifest_path);
 
         const manifest = try loadZon(Manifest, allocator, manifest_path);
@@ -85,7 +88,11 @@ pub const Fixture = struct {
         const manifest_dir = std.fs.path.dirname(index_fec_set.path) orelse {
             return error.InvalidFixtureManifestPath;
         };
-        const shreds_path = try std.fs.path.join(allocator, &.{ FIXTURE_DIR, manifest_dir, "shreds.bin" });
+        const shreds_path = try std.fs.path.join(allocator, &.{
+            FIXTURE_DIR,
+            manifest_dir,
+            "shreds.bin",
+        });
         defer allocator.free(shreds_path);
 
         const packets = try loadFecSetPackets(allocator, shreds_path, &manifest);
@@ -105,7 +112,13 @@ fn loadZon(comptime T: type, allocator: std.mem.Allocator, path: []const u8) !T 
     const file = try std.fs.cwd().openFile(path, .{});
     defer file.close();
 
-    const contents = try file.readToEndAllocOptions(allocator, 1024 * 1024, null, .@"1", 0);
+    const contents = try file.readToEndAllocOptions(
+        allocator,
+        1024 * 1024,
+        null,
+        .@"1",
+        0,
+    );
     defer allocator.free(contents);
 
     var diag: std.zon.parse.Diagnostics = .{};
