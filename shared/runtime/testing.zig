@@ -448,7 +448,7 @@ pub fn expectTransactionAccountEqual(
         return if (expected.account.data.len != actual.account.data.len)
             error.DataLengthMismatch
         else
-            return error.DataMismatch;
+            error.DataMismatch;
     }
 
     if (!expected.account.owner.equals(&actual.account.owner))

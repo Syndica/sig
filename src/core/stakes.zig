@@ -580,7 +580,6 @@ pub const VoteAccounts = struct {
 
         for (self.vote_accounts.keys(), self.vote_accounts.values()) |pubkey, value| {
             const has_bls = switch (value.account.state) {
-                .v3 => false,
                 .v4 => |s| s.bls_pubkey_compressed != null,
             };
             const has_stake = value.stake != 0;
@@ -949,7 +948,7 @@ pub const VoteAccount = struct {
             .{},
         );
         const vote_state = try versioned_vote_state
-            .convertToVoteState(allocator, vote_pubkey, false);
+            .convertToVoteState(allocator, vote_pubkey);
         errdefer vote_state.deinit(allocator);
 
         return .init(
@@ -965,7 +964,6 @@ pub const VoteAccount = struct {
     ) !AccountSharedData {
         if (!builtin.is_test) @compileError("only for tests");
         const versioned_state: VoteStateVersions = switch (self.state) {
-            .v3 => |s| .{ .v3 = s },
             .v4 => |s| .{ .v4 = s },
         };
         const data = try sig.bincode.writeAlloc(allocator, versioned_state, .{});
@@ -1099,7 +1097,7 @@ fn createStakeAccount(
         vote_account.data,
         .{},
     );
-    const vote_state = try versioned_vote_state.convertToVoteState(allocator, null, false);
+    const vote_state = try versioned_vote_state.convertToVoteState(allocator, null);
     defer vote_state.deinit(allocator);
 
     const minimum_rent = rent.minimumBalance(StakeStateV2.SIZE);
@@ -1201,7 +1199,7 @@ pub fn randomStakes(
     for (voters) |*voter| voter.* = Pubkey.initRandom(random);
 
     for (0..options.num_voters) |i| {
-        var vote_state: VoteState = .{ .v3 = try VoteStateV3.init(
+        var vote_state: VoteState = .{ .v4 = try VoteStateV4.init(
             allocator,
             nodes[random.uintLessThan(usize, options.max_nodes)],
             Pubkey.initRandom(random),
@@ -1212,6 +1210,7 @@ pub fn randomStakes(
                 options.commission_max,
             ),
             options.epoch + 1,
+            voters[i],
         ) };
         errdefer vote_state.deinit(allocator);
         var vote_account = VoteAccount.init(allocator, .{
@@ -2276,7 +2275,6 @@ test "VoteAccounts.cloneAndFilterForVat filters non-alpenglow" {
         for (filtered.vote_accounts.values()) |v| {
             switch (v.account.state) {
                 .v4 => |*s| try std.testing.expect(s.bls_pubkey_compressed != null),
-                .v3 => return error.UnexpectedV3,
             }
         }
     }
@@ -2294,7 +2292,6 @@ test "VoteAccounts.cloneAndFilterForVat filters non-alpenglow" {
         for (filtered.vote_accounts.values()) |v| {
             switch (v.account.state) {
                 .v4 => |*s| try std.testing.expect(s.bls_pubkey_compressed != null),
-                .v3 => return error.UnexpectedV3,
             }
         }
     }

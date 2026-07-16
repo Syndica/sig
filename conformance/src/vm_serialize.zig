@@ -65,7 +65,8 @@ fn serializeInstruction(
     pb_instr_ctx: pb.InstrContext,
 ) !pb.VMSerializationEffects {
     var tc: TransactionContext = undefined;
-    try utils.createTransactionContext(allocator, pb_instr_ctx, .{}, &tc);
+    const compiled_message = try utils.createTransactionContext(allocator, pb_instr_ctx, .{}, &tc);
+    defer compiled_message.deinit(allocator);
     defer utils.deinitTransactionContext(allocator, tc);
 
     if (pb_instr_ctx.program_id.len != Pubkey.SIZE) return error.OutOfBounds;
@@ -77,6 +78,7 @@ fn serializeInstruction(
         program_id,
         pb_instr_ctx.data,
         pb_instr_ctx.instr_accounts.items,
+        compiled_message,
     );
     defer instr_info.deinit(allocator);
 

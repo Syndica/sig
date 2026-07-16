@@ -278,10 +278,6 @@ const TransactionScheduler = struct {
             account_locks.deinit(allocator);
         }
 
-        // Within an entry batch of transactions, account locking writers for verification.
-        var batch_locks = std.AutoHashMapUnmanaged(Pubkey, bool){};
-        defer batch_locks.deinit(allocator);
-
         // Within a transaction, dependencies on previous transactions.
         var txn_deps = std.AutoArrayHashMapUnmanaged(u32, void){};
         defer txn_deps.deinit(allocator);
@@ -290,7 +286,6 @@ const TransactionScheduler = struct {
         for (entries) |entry| {
             if (entry.isTick()) continue;
 
-            batch_locks.clearRetainingCapacity();
             for (self.transactions[i..][0..entry.transactions.len]) |transaction| {
                 i += 1;
 
@@ -300,20 +295,6 @@ const TransactionScheduler = struct {
                     transaction.accounts.items(.pubkey),
                     transaction.accounts.items(.is_writable),
                 ) |pubkey, writable| {
-                    // Verify that there's no conflicting writer accounts within a batch of txns.
-                    if (!self.svm_gateway.params.feature_set.active(
-                        .relax_intrabatch_account_locks,
-                        self.svm_gateway.params.slot,
-                    )) {
-                        const gop = try batch_locks.getOrPut(allocator, pubkey);
-                        if (gop.found_existing and (gop.value_ptr.* or writable)) {
-                            // Within batch: existing writer, or existing reader when writing.
-                            self.future.setError(.{ .invalid_transaction = .AccountInUse });
-                            return;
-                        }
-                        gop.value_ptr.* = writable;
-                    }
-
                     const gop = try account_locks.getOrPut(allocator, pubkey);
                     const lock = gop.value_ptr;
                     if (!gop.found_existing) lock.* = .{};
@@ -588,7 +569,7 @@ test "TransactionScheduler: duplicate batch passes through to svm" {
     );
 }
 
-test "TransactionScheduler: failed account locks" {
+test "TransactionScheduler: duplicate tx in same batch" {
     const allocator = std.testing.allocator;
     var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
 
@@ -598,8 +579,10 @@ test "TransactionScheduler: failed account locks" {
     var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
 
+    // With relax_intrabatch_account_locks hardcoded, duplicate txs in the same
+    // batch are caught by signature dedup rather than account lock checks.
     try std.testing.expectEqual(
-        ReplaySlotError{ .invalid_transaction = .AccountInUse },
+        ReplaySlotError{ .invalid_transaction = .AlreadyProcessed },
         try testSchedulerForBatches(allocator, &state, &.{
             &.{ tx, tx }, // same txn in same batch
         }),

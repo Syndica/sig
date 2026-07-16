@@ -28,7 +28,6 @@ pub const compute_budget = @import("compute_budget/lib.zig");
 pub const config = @import("config/lib.zig");
 pub const precompiles = @import("precompiles/lib.zig");
 pub const stake = @import("stake/lib.zig");
-pub const state = @import("stake/lib.zig");
 pub const system = @import("system/lib.zig");
 pub const testing = @import("testing.zig");
 pub const vote = @import("vote/lib.zig");
@@ -63,15 +62,15 @@ pub const NATIVE = sig.utils.pht(Program, &.{
     .{ bpf_loader.v4.ID,        .{ .func = bpf_loader.execute, .gate = .enable_loader_v4 } },
     .{ system.ID,               .{ .func = system.execute } },
     .{ vote.ID,                 .{ .func = vote.execute } },
-    .{ address_lookup_table.ID, .{ .func = address_lookup_table.execute } },
     .{ compute_budget.ID,       .{ .func = compute_budget.entrypoint } },
-    .{ stake.ID,                .{ .func = stake.execute } },
     .{ zk_elgamal.ID,           .{ .func = zk_elgamal.execute, .gate = .zk_elgamal_proof_program_enabled } },
 });
+// zig fmt: on
 
+// zig fmt: off
 pub const PRECOMPILE = sig.utils.pht(Program, &.{
     .{ precompiles.ed25519.ID,      .{ .func = precompiles.ed25519.execute } },
     .{ precompiles.secp256k1.ID,    .{ .func = precompiles.secp256k1.execute } },
-    .{ precompiles.secp256r1.ID,    .{ .func = precompiles.secp256r1.execute, .gate = .enable_secp256r1_precompile } },
+    .{ precompiles.secp256r1.ID,    .{ .func = precompiles.secp256r1.execute } },
 });
 // zig fmt: on

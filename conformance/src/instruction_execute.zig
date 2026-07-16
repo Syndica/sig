@@ -8,7 +8,6 @@ const sysvar = sig.runtime.sysvar;
 const program_loader = sig.runtime.program_loader;
 
 const Pubkey = sig.core.Pubkey;
-const AccountSharedData = sig.runtime.AccountSharedData;
 const InstructionError = sig.core.instruction.InstructionError;
 const TransactionContext = sig.runtime.transaction_context.TransactionContext;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
@@ -84,7 +83,7 @@ fn executeInstruction(
     const program_map: *ProgramMap = try allocator.create(ProgramMap);
 
     var tc: TransactionContext = undefined;
-    try utils.createTransactionContext(
+    const compiled_message = try utils.createTransactionContext(
         allocator,
         pb_instr_ctx,
         .{
@@ -93,15 +92,16 @@ fn executeInstruction(
         },
         &tc,
     );
+    defer compiled_message.deinit(allocator);
     defer utils.deinitTransactionContext(allocator, tc);
 
-    // Create an accounts map for loading programs, account data is owned by transaction context
-    // so does not need to be freed
-    var accounts_map = sig.utils.collections.PubkeyMap(AccountSharedData){};
-    errdefer accounts_map.deinit(allocator);
-    for (tc.accounts) |tc_account| {
-        try accounts_map.put(allocator, tc_account.pubkey, tc_account.account.*);
-    }
+    // Create an accounts map for loading programs. Must include ALL fixture
+    // accounts (not just the compiled-message subset in `tc.accounts`), since
+    // programs and their programdata accounts are typically not referenced by
+    // `instr_accounts`. The map borrows pb-owned data buffers, which live for
+    // the whole call.
+    var accounts_map = try utils.createProgramCacheAccountsMap(allocator, pb_instr_ctx);
+    defer accounts_map.deinit(allocator);
 
     // Override vm environment in the tc context
     vm_environment.* = sig.vm.Environment.initV1(
@@ -136,6 +136,7 @@ fn executeInstruction(
         .{ .data = pb_instr_ctx.program_id[0..Pubkey.SIZE].* },
         pb_instr_ctx.data,
         pb_instr_ctx.instr_accounts.items,
+        compiled_message,
     );
     defer instr_info.deinit(allocator);
 
@@ -154,5 +155,5 @@ fn executeInstruction(
         }
     }
 
-    return utils.createInstrEffects(allocator, &tc, result);
+    return utils.createInstrEffects(allocator, &tc, result, pb_instr_ctx, compiled_message);
 }

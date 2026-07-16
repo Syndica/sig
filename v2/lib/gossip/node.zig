@@ -51,11 +51,12 @@ pub fn GossipNode(comptime Effects: type) type {
         /// Sends snapshot sources from gossip to snapshot service
         pub fn reportSnapshotSource(
             self: Effects,
+            from: Pubkey,
             addr: std.net.Address,
             slot: Slot,
             hash: Hash,
         ) void {
-            _ = .{ self, addr, slot, hash };
+            _ = .{ self, from, addr, slot, hash };
             return undefined;
         }
     });

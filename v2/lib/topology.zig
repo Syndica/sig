@@ -46,6 +46,14 @@ pub const Mode = enum { sandboxed, threaded };
 pub const ServiceSpec = struct {
     ReadOnly: type,
     ReadWrite: type,
+
+    /// Converts from an opaque namespace into the more structured `ServiceSpec`.
+    pub fn from(S: type) ServiceSpec {
+        return .{
+            .ReadOnly = S.ReadOnly,
+            .ReadWrite = S.ReadWrite,
+        };
+    }
 };
 
 /// Typed handle for a shared-memory region. Created by `Region(T).simple()` or
@@ -99,7 +107,17 @@ pub fn Region(comptime T: type) type {
         ///
         /// You should not initialize this struct directly.
         /// Only create it using `finish`.
-        pub const Initialized = struct { memfd: Memfd };
+        pub const Initialized = struct {
+            memfd: Memfd,
+
+            // Phantom dependency on T so each `Region(T).Initialized` is a distinct type.
+            // Without this, the struct body is `{ memfd: Memfd }` regardless of T and Zig
+            // collapses every instantiation to the same type, which breaks `countRegionShares`
+            // (and any other code that filters topology fields by `Region(X).Initialized`).
+            comptime {
+                _ = &T;
+            }
+        };
     };
 }
 
@@ -498,9 +516,9 @@ fn spawnSandboxed(
     // makes it impossible for the service to gain privileges
     std.debug.assert(try std.posix.prctl(.SET_NO_NEW_PRIVS, .{ 1, 0, 0, 0 }) == 0);
 
-    // install a basic seccomp filter that bans syscalls except write+sleep
+    // install seccomp filter for service
     {
-        const bpf_filters = lib.linux.bpf.printSleepExit(resolved.stderr);
+        const bpf_filters = lib.linux.bpf.seccompFilters(resolved.stderr);
         const program: lib.linux.bpf.sock_fprog = .{
             .len = bpf_filters.len,
             .sock_filter = &bpf_filters,

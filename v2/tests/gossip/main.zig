@@ -7,8 +7,8 @@ const topology = lib.topology;
 const Region = topology.Region;
 
 const Topology = struct {
-    gossip: topology.ServiceRegions(services.gossip),
-    telemetry: topology.ServiceRegions(services.telemetry),
+    gossip: topology.ServiceRegions(.from(services.gossip)),
+    telemetry: topology.ServiceRegions(.from(services.telemetry)),
 };
 
 pub fn main() !void {
