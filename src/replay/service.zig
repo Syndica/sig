@@ -2571,7 +2571,6 @@ pub const DependencyStubs = struct {
         );
         errdefer epoch_tracker.deinit();
 
-
         const root_slot_constants = try sig.core.SlotConstants.fromBankFieldsForTest(
             allocator,
             bank_fields,
