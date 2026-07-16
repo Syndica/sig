@@ -277,7 +277,6 @@ pub const Shred = extern struct {
             return error.PacketSizeUnderExpected3;
 
         if (shred.variant.isData()) {
-            // [firedancer] https://github.com/firedancer-io/firedancer/commit/4936f39676997d95e5d15772d3904e5942fa9864
             const parent_offset = shred.code_or_data.data.parent_offset;
             const slot = shred.slot;
             const flags = shred.code_or_data.data.flags;
@@ -292,8 +291,10 @@ pub const Shred = extern struct {
 
             if (parent_offset > slot) return error.BadOffset;
 
-            if ((slot != 0 and parent_offset == 0) or (slot > 1 and parent_offset == slot))
-                return error.BadSlotOrParentOffset;
+            // `parent_offset == slot` chains to genesis (parent = 0); legal
+            // at any slot. Only `parent_offset == 0` at slot != 0 is illegal.
+            // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/blockstore.rs#L6059-L6066
+            if (slot != 0 and parent_offset == 0) return error.BadSlotOrParentOffset;
             if (shred.slot_idx < shred.fec_set_idx) return error.BadSlotIdx;
         } else {
             const code_header = shred.code_or_data.code;
