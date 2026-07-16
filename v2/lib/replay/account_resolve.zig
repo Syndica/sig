@@ -13,6 +13,8 @@
 const std = @import("std");
 const lib = @import("../lib.zig");
 
+const alt = lib.solana.account_lookup_table;
+
 const VersionedTransaction = lib.solana.transaction.VersionedTransaction;
 const Pubkey = lib.solana.Pubkey;
 
@@ -55,57 +57,63 @@ pub const ResolvedTransaction = struct {
     }
 };
 
+fn decodeLookupTableAccount(
+    owner: *const Pubkey,
+    data: []const u8,
+) ResolveError!alt.AddressLookupTable {
+    if (!owner.equals(&alt.ID))
+        return error.InvalidLookupTableOwner;
+
+    return alt.AddressLookupTable.deserialize(data) catch
+        return error.InvalidLookupTableData;
+}
+
 /// TODO: citations for each check done in this method + unit tests.
 fn resolveTableLookup(
-    table_account: *const lib.accounts_db.AccountPool.Account,
+    table: alt.AddressLookupTable,
     lookup: VersionedTransaction.View.AddressTableLookupIter.Item,
     current_slot: lib.solana.Slot,
     deactivation_slot_is_recent: bool,
     writable_out: []Pubkey,
     readonly_out: []Pubkey,
 ) ResolveError!void {
-    if (!table_account.owner.equals(
-        &lib.solana.address_lookup_table.PROGRAM_ID,
-    )) {
-        return error.InvalidLookupTableOwner;
-    }
-
-    const table = lib.solana.address_lookup_table.AddressLookupTable.deserialize(
-        table_account.getData(),
-    ) catch return error.InvalidLookupTableData;
-
-    const meta = table.meta;
-
-    const active = meta.deactivation_slot == std.math.maxInt(lib.solana.Slot) or
-        meta.deactivation_slot == current_slot or
+    const active =
+        table.meta.deactivation_slot == std.math.maxInt(lib.solana.Slot) or
+        table.meta.deactivation_slot == current_slot or
         deactivation_slot_is_recent;
 
-    if (!active) return error.DeactivatedLookupTable;
-
-    const active_len: usize = if (current_slot > meta.last_extended_slot)
-        table.addresses.len
-    else
-        meta.last_extended_slot_start_index;
-
-    if (active_len > table.addresses.len)
-        return error.InvalidLookupTableData;
-
-    if (writable_out.len != lookup.writable_indexes.len or
-        readonly_out.len != lookup.readonly_indexes.len)
-    {
-        unreachable;
+    if (!active) {
+        @branchHint(.unlikely);
+        return error.DeactivatedLookupTable;
     }
 
+    const active_len: usize = if (current_slot > table.meta.last_extended_slot)
+        table.addresses.len
+    else
+        table.meta.last_extended_slot_start_index;
+
+    if (active_len > table.addresses.len) {
+        @branchHint(.unlikely);
+        return error.InvalidLookupTableData;
+    }
+
+    std.debug.assert(writable_out.len == lookup.writable_indexes.len);
+    std.debug.assert(readonly_out.len == lookup.readonly_indexes.len);
+
     for (lookup.writable_indexes, writable_out) |index, *address| {
-        if (index >= active_len)
+        if (index >= active_len) {
+            @branchHint(.unlikely);
             return error.InvalidLookupTableIndex;
+        }
 
         address.* = table.addresses[index];
     }
 
     for (lookup.readonly_indexes, readonly_out) |index, *address| {
-        if (index >= active_len)
+        if (index >= active_len) {
+            @branchHint(.unlikely);
             return error.InvalidLookupTableIndex;
+        }
 
         address.* = table.addresses[index];
     }
