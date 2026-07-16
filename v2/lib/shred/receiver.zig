@@ -136,6 +136,12 @@ pub const Receiver = struct {
                 {
                     return error.UnexpectedDataCompleteShred;
                 }
+                // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/shred/filter.rs#L344-L349
+                if (shred.code_or_data.data.flags.last_shred_in_slot and
+                    (shred.slot_idx + 1) % FecSetCtx.fec_shred_count != 0)
+                {
+                    return error.MisalignedLastDataIndex;
+                }
             }
 
             if (shred.fec_set_idx % FecSetCtx.fec_shred_count != 0) return error.InvalidFecSetIdx;

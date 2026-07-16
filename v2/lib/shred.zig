@@ -287,8 +287,6 @@ pub const Shred = extern struct {
             // `discard_unexpected_data_complete_shreds` is enforced in
             // `Receiver.processPacket` (needs the activation slot).
 
-            // TODO: drop shreds with last_shred_in_slot that aren't the last data shred in the set.
-
             if (parent_offset > slot) return error.BadOffset;
 
             // `parent_offset == slot` chains to genesis (parent = 0); legal
