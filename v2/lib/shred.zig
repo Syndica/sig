@@ -103,6 +103,11 @@ pub const DeshreddedFecSet = extern struct {
     chained_merkle_root: Hash,
     /// set to a meaningless value for the bootstrap root
     id: FecSetId,
+    /// `shred.slot - parent_slot`. Every data shred in a FEC set carries
+    /// the same value (it lives in the merkle-hashed DataHeader), so the
+    /// FEC set can quote it. Downstream replay resolves the parent slot
+    /// as `id.slot - parent_offset`.
+    parent_offset: u16,
     data_complete: bool,
     slot_complete: bool,
     /// empty for the bootstrap root

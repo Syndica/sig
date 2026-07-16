@@ -91,6 +91,7 @@ const Config = struct {
     allow_no_avx512: bool,
     debug_skip_shred_sig_verify: bool,
     debug_skip_shred_version_check: bool,
+    debug_signature_disambiguation: bool,
 
     pub fn load(b: *Build) Config {
         const optimize = b.standardOptimizeOption(.{});
@@ -159,6 +160,15 @@ const Config = struct {
                 "Debug use only. Disables the shred_version mismatch rejection in Receiver. " ++
                     "Independent of -Ddebug-skip-shred-sig-verify so the harness can keep this " ++
                     "check on for parity with the reference implementations.",
+            ) orelse false,
+            .debug_signature_disambiguation = b.option(
+                bool,
+                "debug-signature-disambiguation",
+                "Debug / harness use only. Rekeys Receiver's in-progress and done ctx maps " ++
+                    "from `signature` to a synthetic `(slot, fec_set_idx, merkle_root)`-derived " ++
+                    "value. Makes ctx routing bijective with `(slot, fec_set_idx, merkle_root)` " ++
+                    "under sig-verify-off fuzz inputs where a mutator may synthesise distinct " ++
+                    "FEC sets sharing a signature. Cryptographically infeasible in production.",
             ) orelse false,
         };
     }
@@ -240,6 +250,11 @@ const Sig = struct {
             bool,
             "debug_skip_shred_version_check",
             config.debug_skip_shred_version_check,
+        );
+        build_options.addOption(
+            bool,
+            "debug_signature_disambiguation",
+            config.debug_signature_disambiguation,
         );
         const build_options_mod = build_options.createModule();
 
