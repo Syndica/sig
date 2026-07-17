@@ -28,6 +28,71 @@ pub const RecvConfig = extern struct {
     shred_version: u16,
 };
 
+pub const StreamerConfig = extern struct {
+    pub const MAX_PATH = 4096;
+
+    ledger_path: [MAX_PATH]u8,
+    ledger_path_len: u16,
+    start_slot: u64,
+    end_slot: u64,
+    rate_hz: f64,
+    seed: u64,
+    selected_count: u32,
+    plan_limit: u32,
+    corrupt_bytes: u32,
+    test_mode: TestMode,
+    shred_kind: ShredKindFilter,
+    has_start_slot: bool,
+    has_end_slot: bool,
+    has_rate_hz: bool,
+    has_seed: bool,
+    dry_run: bool,
+
+    pub const TestMode = enum(u8) {
+        linear,
+        reverse,
+        shuffle_global,
+        shuffle_slot,
+        drop,
+        late,
+        duplicate,
+        corrupt,
+
+        pub fn usesSelectedShreds(self: TestMode) bool {
+            return switch (self) {
+                .drop, .late, .duplicate, .corrupt => true,
+                .linear, .reverse, .shuffle_global, .shuffle_slot => false,
+            };
+        }
+    };
+
+    pub const ShredKindFilter = enum(u8) {
+        any,
+        data,
+        code,
+    };
+
+    pub fn ledgerPath(self: *const StreamerConfig) []const u8 {
+        return self.ledger_path[0..self.ledger_path_len];
+    }
+
+    pub fn startSlot(self: *const StreamerConfig) ?u64 {
+        return if (self.has_start_slot) self.start_slot else null;
+    }
+
+    pub fn endSlot(self: *const StreamerConfig) ?u64 {
+        return if (self.has_end_slot) self.end_slot else null;
+    }
+
+    pub fn rateHz(self: *const StreamerConfig) ?f64 {
+        return if (self.has_rate_hz) self.rate_hz else null;
+    }
+
+    pub fn getSeed(self: *const StreamerConfig) ?u64 {
+        return if (self.has_seed) self.seed else null;
+    }
+};
+
 pub const DeshredRing = Ring(1024, DeshreddedFecSet);
 
 /// Maximum number of data (or coding) shreds the protocol allows in a slot.

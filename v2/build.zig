@@ -349,6 +349,15 @@ const Sig = struct {
             };
         }
 
+        // shred_streamer needs RocksDB to read from Agave ledger
+        for (&service_libs) |*entry| {
+            if (std.mem.eql(u8, entry.name, "shred_streamer")) {
+                entry.module.addImport("rocksdb", deps.rocksdb);
+                entry.module.addImport("rocksdb-c", deps.rocksdb_c);
+                break;
+            }
+        }
+
         return .{
             .lib = lib,
             .services_mod = services_mod,
@@ -381,6 +390,11 @@ const Tools = struct {
             .name = "gossip",
             .root_source_file = "tests/gossip/main.zig",
             .services = &.{ "gossip", "telemetry" },
+        },
+        .{
+            .name = "shred-stream",
+            .root_source_file = "tests/shred_stream/main.zig",
+            .services = &.{ "shred_streamer", "shred_receiver", "replay", "accounts_db", "snapshot", "exec", "telemetry" },
         },
     };
 

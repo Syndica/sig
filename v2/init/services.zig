@@ -71,6 +71,17 @@ pub const replay = struct {
     };
 };
 
+pub const shred_streamer = struct {
+    pub const ReadOnly = struct {
+        config: *const lib.shred.StreamerConfig,
+    };
+
+    pub const ReadWrite = struct {
+        tvu_socket: *lib.net.Pair,
+        tel: *lib.telemetry.Region,
+    };
+};
+
 pub const shred_receiver = struct {
     pub const ReadOnly = struct {
         config: *const lib.shred.RecvConfig,
