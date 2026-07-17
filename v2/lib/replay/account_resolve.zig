@@ -10,6 +10,9 @@
 //! resolve multiple transactions in parallel (but in the order they are in the batch),
 //! specifically when the batch of transactions are non-conflicting with other batches.
 //! Each non-conflicting batch can also be executed in parallel. So maybe we want an AccountResolver-per-exec service?
+//!
+//! TODO: Agave processes ALT descriptors in transaction order and retrn immedately on the first error (on first
+//! descriptor that fails). Sig v1 does the same, Firedancer interpreter does the same (one table at a time, in order, and returns on first error).
 const std = @import("std");
 const lib = @import("../lib.zig");
 
@@ -19,6 +22,7 @@ const VersionedTransaction = lib.solana.transaction.VersionedTransaction;
 const Pubkey = lib.solana.Pubkey;
 
 const AccountLookups = lib.accounts_db.AccountLookups;
+const AccountPool = lib.accounts_db.AccountPool;
 
 /// Maximum number of submitted transactions whose completions have not yet
 /// been consumed.
@@ -120,6 +124,7 @@ pub const AccountResolver = struct {
                     // TODO: do we want a safer way to represent this in the future?
                     .dynamic_addresses = undefined,
                 },
+                .failure = null,
                 // TODO: need a pending result variant.
                 .result = undefined,
             },
@@ -207,6 +212,9 @@ pub const AccountResolver = struct {
         /// Number of Rooted requests submitted but not yet resolved.
         in_flight_lookups: u8,
 
+        /// Lowest-indexed failed lookup observer so far.
+        failure: ?LookupFailure,
+
         /// Holds both the working output buffer and eventual public completion.
         completion: Completion = undefined,
 
@@ -218,6 +226,11 @@ pub const AccountResolver = struct {
             draining_after_failure,
             /// Terminal result is available. This entry will be freed once the caller invokes `popCompleted()`
             complete,
+        };
+
+        const LookupFailure = struct {
+            lookup_index: u8,
+            err: ResolveError,
         };
 
         pub inline fn reset(self: *PendingTransaction) void {
@@ -237,6 +250,7 @@ pub const AccountResolver = struct {
                 },
                 .next_lookup_index = 0,
                 .in_flight_lookups = 0,
+                .failure = null,
                 .completion = undefined,
             };
         }
@@ -255,6 +269,7 @@ pub const AccountResolver = struct {
         readonly_offset: usize,
     };
 
+    // TODO: we should be able to track these up front and not have to perform this every time we get a response from Rooted.
     fn lookupAt(
         transaction: VersionedTransaction.View,
         target_index: u8,
@@ -309,7 +324,110 @@ pub const AccountResolver = struct {
         return false;
     }
 
-    fn drivePendingLookups(self: *AccountResolver) bool;
+    fn drivePendingLookups(self: *AccountResolver) bool {
+        // TODO: store writer on AccountResolver struct.
+        var writer = self.account_lookups.in.get(.writer);
+
+        var made_progress = false;
+        var submitted_count: usize = 0;
+        var rooted_queue_full = false;
+
+        defer if (submitted_count != 0) writer.markUsed();
+
+        for (0..self.pending_count) |i| {
+            const pending_index = (self.pending_head + i) % self.pending_queue.len;
+            const pending = &self.pending_queue[pending_index];
+
+            if (pending.status != .resolving)
+                continue;
+
+            const transaction = pending.completion.transaction
+                .tx_ref
+                .constPtr(self.transaction_pool)
+                .view();
+
+            while (pending.status == .resolving and
+                pending.next_lookup_index <
+                    transaction.layout.address_table_lookup_count)
+            {
+                const lookup_index = pending.next_lookup_index;
+                const position = lookupAt(transaction, lookup_index);
+
+                // Check Unrooted first.
+                const account_ref = self.unrooted.fetch(
+                    position.lookup.account_key,
+                    pending.completion.transaction.block_ref,
+                    self.block_pool,
+                    self.account_pool,
+                );
+
+                if (account_ref != .invalid) {
+                    // This descriptor has now been consumed, regardless of
+                    // whether semantic resolution succeeds.
+                    pending.next_lookup_index += 1;
+
+                    {
+                        defer self.releaseAccount(account_ref);
+
+                        self.resolveLookupAccount(
+                            pending,
+                            lookup_index,
+                            account_ref,
+                        ) catch |err| {
+                            recordLookupFailure(
+                                pending,
+                                lookup_index,
+                                err,
+                            );
+                        };
+                    }
+
+                    // This is always true because we just consumed a descriptor, but it makes the intent clearer.
+                    // TODO: Maybe re-write this a bit
+                    made_progress = true;
+                    made_progress |= self.maybeCompletePending(pending);
+
+                    continue;
+                }
+
+                // Once the Rooted ring is full, later transactions can still make
+                // progress through Unrooted hits, but no more Rooted misses can
+                // be submitted during this poll.
+                // TODO: perhaps we want to limit batch sizes to limit poll times?
+                if (rooted_queue_full)
+                    break;
+
+                const request = writer.next() orelse {
+                    rooted_queue_full = true;
+                    break;
+                };
+
+                const ticket: LookupTicket = .{
+                    .pending_index = @intCast(pending_index),
+                    .lookup_index = lookup_index,
+                    .generation = pending.gen,
+                };
+
+                request.* = .{
+                    .req_user_data = @bitCast(ticket),
+                    .pubkey = position.lookup.account_key.*,
+                };
+
+                // Update correlation state before markUsed() publishes the request.
+                pending.next_lookup_index += 1;
+                pending.in_flight_lookups += 1;
+
+                submitted_count += 1;
+                made_progress = true;
+            }
+
+            made_progress =
+                self.maybeCompletePending(pending) or
+                made_progress;
+        }
+
+        return made_progress;
+    }
 
     fn processRootedResult(
         self: *AccountResolver,
@@ -324,6 +442,8 @@ pub const AccountResolver = struct {
         }
 
         const pending = &self.pending_queue[pending_index];
+
+        // A stale response belongs to a previous use of this queue position.
         if (pending.gen != ticket.generation or
             pending.status == .free or
             pending.status == .complete)
@@ -332,29 +452,65 @@ pub const AccountResolver = struct {
             return;
         }
 
+        const transaction = pending.completion.transaction
+            .tx_ref
+            .constPtr(self.transaction_pool)
+            .view();
+
+        // The ticket was created internally from a submitted descriptor.
+        std.debug.assert(
+            ticket.lookup_index < pending.next_lookup_index,
+        );
+        std.debug.assert(
+            ticket.lookup_index <
+                transaction.layout.address_table_lookup_count,
+        );
+
+        // TODO: look into removing this somehow.
+        const position = lookupAt(transaction, ticket.lookup_index);
+
+        // NOTE: Rooted must echo the request pubkey unchanged. Firedancer treats a
+        // mismatch between the expected table and supplied table as an internal
+        // invariant violation rather than a transaction error.
+        // TODO: Perhaps make this a runtime check?
+        std.debug.assert(
+            result.pubkey.equals(position.lookup.account_key),
+        );
+
         std.debug.assert(pending.in_flight_lookups > 0);
         pending.in_flight_lookups -= 1;
 
         defer self.releaseAccount(result.account_index);
-        defer self.maybeCompletePending(pending);
+        defer _ = self.maybeCompletePending(pending);
 
-        if (pending.status == .draining_after_failure) {
-            return;
+        // If a lower-index failure is already known, this response cannot affect
+        // the final result. It still has to be consumed and released.
+        if (pending.failure) |failure| {
+            if (ticket.lookup_index >= failure.lookup_index)
+                return;
         }
 
-        if (result.account_index == .invalid) {
-            failPending(pending, .LookupTableNotFound);
-            return;
-        }
+        // TODO: re-write this bit
+        const maybe_error: ?ResolveError =
+            if (result.account_index == .invalid)
+                error.LookupTableNotFound
+            else blk: {
+                self.resolveLookupAccount(
+                    pending,
+                    ticket.lookup_index,
+                    result.account_index,
+                ) catch |err| break :blk err;
 
-        self.resolveLookupAccount(
-            pending,
-            ticket.lookup_index,
-            result.account_index,
-        ) catch |err| {
-            @branchHint(.unlikely);
-            failPending(pending, err);
-        };
+                break :blk null;
+            };
+
+        if (maybe_error) |err| {
+            recordLookupFailure(
+                pending,
+                ticket.lookup_index,
+                err,
+            );
+        }
     }
 
     fn resolveLookupAccount(
@@ -362,27 +518,161 @@ pub const AccountResolver = struct {
         pending: *PendingTransaction,
         lookup_index: u8,
         account_ref: AccountPool.AccountRef,
-    ) ResolveError!void;
+    ) ResolveError!void {
+        std.debug.assert(account_ref != .invalid);
 
-    fn failPending(
+        const resolved = &pending.completion.transaction;
+        const transaction = resolved.tx_ref
+            .constPtr(self.transaction_pool)
+            .view();
+
+        const position = lookupAt(transaction, lookup_index);
+        const account = self.account_pool.getAccount(account_ref);
+
+        // The storage lookup and ticket must identify the same table.
+        std.debug.assert(
+            account.pubkey.equals(position.lookup.account_key),
+        );
+
+        // Zero-lamport values are tombstones and shadow older Rooted versions.
+        // Do not fall back to Rooted after finding one in Unrooted.
+        if (account.lamports == 0)
+            return error.LookupTableNotFound;
+
+        const table = try decodeLookupTableAccount(
+            &account.owner,
+            account.getData(),
+        );
+
+        const writable_len = position.lookup.writable_indexes.len;
+        const readonly_len = position.lookup.readonly_indexes.len;
+
+        const loaded_writable_count: usize =
+            transaction.layout.loaded_writable_count;
+
+        const writable_start = position.writable_offset;
+        const readonly_start =
+            loaded_writable_count + position.readonly_offset;
+
+        std.debug.assert(writable_start + writable_len <= loaded_writable_count);
+        std.debug.assert(
+            readonly_start + readonly_len <=
+                transaction.loadedAddressCount(),
+        );
+
+        const writable_out =
+            resolved.dynamic_addresses[writable_start..][0..writable_len];
+
+        const readonly_out =
+            resolved.dynamic_addresses[readonly_start..][0..readonly_len];
+
+        const deactivation_slot_is_recent =
+            pending.bank_context.containsSlot(
+                table.meta.deactivation_slot,
+            );
+
+        try resolveTableLookup(
+            table,
+            position.lookup,
+            pending.bank_context.current_slot,
+            deactivation_slot_is_recent,
+            writable_out,
+            readonly_out,
+        );
+    }
+
+    fn recordLookupFailure(
         pending: *PendingTransaction,
+        lookup_index: u8,
         err: ResolveError,
-    ) void;
+    ) void {
+        // NOTE: We track the lowest-index failure we've seen so far. This is to match
+        // expected validator behavior.
+        //
+        // TODO: consider moving to linked-submissions strat where we batch submit all requests to rooted,
+        // which uses io_uring linked ops to processes all lookups in order, erroring on the first it sees.
+        if (pending.failure) |current| {
+            if (lookup_index < current.lookup_index) {
+                pending.failure = .{
+                    .lookup_index = lookup_index,
+                    .err = err,
+                };
+            }
+        } else {
+            pending.failure = .{
+                .lookup_index = lookup_index,
+                .err = err,
+            };
+        }
+
+        pending.status = .draining_after_failure;
+    }
 
     fn maybeCompletePending(
         self: *AccountResolver,
         pending: *PendingTransaction,
-    ) void;
+    ) bool {
+        if (pending.in_flight_lookups != 0)
+            return false;
 
-    fn validateNoDuplicateAccounts(
-        transaction: VersionedTransaction.View,
-        resolved: *const ResolvedTransaction,
-    ) ResolveError!void;
+        if (pending.failure) |failure| {
+            std.debug.assert(pending.status == .draining_after_failure);
+
+            pending.completion.result = .{ .failed = failure.err };
+            pending.status = .complete;
+            return true;
+        }
+
+        if (pending.status != .resolving)
+            return false;
+
+        const transaction = pending.completion.transaction
+            .tx_ref
+            .constPtr(self.transaction_pool)
+            .view();
+
+        // Some descriptors have not yet been submitted because the Rooted request
+        // ring was full.
+        if (pending.next_lookup_index !=
+            transaction.layout.address_table_lookup_count)
+        {
+            return false;
+        }
+
+        // TODO: need to validate this.
+        // TODO: document/link to agave/fd.
+        // validateNoDuplicateAccounts(
+        //     transaction,
+        //     &pending.completion.transaction,
+        // ) catch |err| {
+        //     pending.completion.result = .{ .failed = err };
+        //     pending.status = .complete;
+        //     return true;
+        // };
+
+        pending.completion.result = .{ .resolved = {} };
+        pending.status = .complete;
+        return true;
+    }
+
+    // TODO: gotta validate this. Agave uses HashSet, fd has it's own impl. We should do something custom here in the future.
+    // Note: document that agave performs this check after lookups.
+    // fn validateNoDuplicateAccounts(
+    //     transaction: VersionedTransaction.View,
+    //     resolved: *const ResolvedTransaction,
+    // ) ResolveError!void;
 
     fn releaseAccount(
         self: *AccountResolver,
         account_ref: AccountPool.AccountRef,
-    ) void;
+    ) void {
+        if (account_ref == .invalid)
+            return;
+
+        const account = self.account_pool.getAccount(account_ref);
+        if (account.unref())
+            self.account_pool.free(account_ref);
+    }
 };
 
 pub const ResolveError = error{
