@@ -88,7 +88,10 @@ pub const SourceFiles = struct {
         var files: SourceFiles = .{ .items = .empty };
 
         for (collected.items) |path| {
-            const file = try SourceFile.readAndParse(arena, path);
+            const file = SourceFile.readAndParse(arena, path) catch |e| {
+                log("{} reading file {s}\n", .{ e, path });
+                return e;
+            };
             try files.items.append(arena, file);
         }
 
@@ -172,7 +175,10 @@ fn collectPathRecursive(
     switch (blk: {
         const stat = std.fs.cwd().statFile(path) catch |err| switch (err) {
             error.IsDir => break :blk .directory,
-            else => |e| return e,
+            else => |e| {
+                log("{} reading file {s}\n", .{ e, path });
+                return e;
+            },
         };
         break :blk stat.kind;
     }) {
@@ -295,6 +301,8 @@ pub fn lineEndIncludingNewline(source: []const u8, offset: usize) usize {
 
 test "collectAndReadRecursive fails when root path is missing" {
     const allocator = std.testing.allocator;
+    should_log_in_test = false;
+    defer should_log_in_test = true;
     try std.testing.expectError(
         error.FileNotFound,
         SourceFiles.collectAndReadRecursive(allocator, &.{"lib/.missing_lint_path.zig"}),
@@ -324,4 +332,10 @@ test "line helpers clamp offsets and include newline" {
     try std.testing.expectEqual(8, lineEndIncludingNewline(source, 4));
     try std.testing.expectEqual(source.len, lineEndIncludingNewline(source, 8));
     try std.testing.expectEqual(source.len, lineEndIncludingNewline(source, source.len + 10));
+}
+
+var should_log_in_test = true;
+
+pub fn log(comptime fmt: []const u8, args: anytype) void {
+    if (!@import("builtin").is_test or should_log_in_test) std.debug.print(fmt, args);
 }

@@ -24,20 +24,19 @@ comptime {
 // sig itself.
 const project_paths = [_][]const u8{
     "build.zig",
+    "v2/main.zig",
+    "v2/services.zig",
+    "v2/components",
     "v2/init",
     "v2/lib",
     "v2/services",
+    "v2/tests",
     "v2/tools",
-    "v2/components/runtime",
 };
-const test_inclusion_roots = [_][]const u8{
+
+const test_inclusion_static_roots = [_][]const u8{
     "v2/lib/lib.zig",
     "v2/tools/lint/main.zig",
-    // The runtime uses a `foo/lib.zig` layout instead of v2's `foo.zig` next
-    // to `foo/` convention, so it can't participate in the test_inclusion
-    // check without a wholesale restructure of the runtime tree. Its own
-    // `comptime { _ = @import("...") }` inclusions in each `lib.zig` cover
-    // the same intent.
 };
 
 // File-level rules (line_length, unused_declarations) are skipped for files
@@ -116,9 +115,29 @@ fn run(ctx: *core.Context) !void {
         try lintFileLevelRules(ctx, file);
     }
 
-    for (test_inclusion_roots) |root| {
-        try test_inclusion.lint(ctx, root, &files);
+    // Walk `v2/components/` and add each subdir's `{api,component}.zig`
+    // as a joint pair of roots. Runtime is a legacy monolithic component
+    // that predates the pattern, so skip it explicitly.
+    var test_inclusion_roots: std.ArrayList([]const u8) = .empty;
+    try test_inclusion_roots.appendSlice(ctx.arena, &test_inclusion_static_roots);
+    var components_dir = try std.fs.cwd().openDir("v2/components", .{ .iterate = true });
+    defer components_dir.close();
+    var it = components_dir.iterate();
+    while (try it.next()) |entry| {
+        if (entry.kind != .directory) continue;
+        if (std.mem.eql(u8, entry.name, "runtime")) continue;
+        try test_inclusion_roots.append(ctx.arena, try std.fmt.allocPrint(
+            ctx.arena,
+            "v2/components/{s}/api.zig",
+            .{entry.name},
+        ));
+        try test_inclusion_roots.append(ctx.arena, try std.fmt.allocPrint(
+            ctx.arena,
+            "v2/components/{s}/component.zig",
+            .{entry.name},
+        ));
     }
+    try test_inclusion.lint(ctx, test_inclusion_roots.items, &files);
 
     if (ctx.config.mode == .fix) {
         for (files.items.items) |*file| {

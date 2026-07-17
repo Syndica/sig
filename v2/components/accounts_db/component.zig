@@ -1,5 +1,3 @@
-const std = @import("std");
-
 comptime {
     if (@import("builtin").is_test) {
         _ = @import("rooted.zig");

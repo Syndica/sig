@@ -1,4 +1,4 @@
-//! Ensures each source directory has companion Zig file that imports tests for sibling source files.
+//! Ensures each source directory has companion Zig file that imports tests for file source files.
 //!
 //! For files:
 //!
@@ -40,14 +40,51 @@ const ManagedBlock = struct {
 const managed_test_inclusion_wrapper = "if (@import(\"builtin\").is_test) {";
 const obsolete_ref_all_decls = "std.testing.refAllDecls(@This())";
 
+/// One companion source (a root file for the directory being linted) with
+/// its parsed managed blocks.
+const Companion = struct {
+    path: []const u8,
+    source: []const u8,
+    blocks: []const ManagedBlock,
+};
+
+/// Ensures every source file under each root_file's parent directory is
+/// included from a managed test-inclusion block.
+///
+/// Root files that share a parent directory (e.g. `foo/api.zig` +
+/// `foo/component.zig`) cooperate: a file in that directory only has to
+/// appear in ONE of their managed blocks, and each root is only required
+/// to list what it actually pulls in. Sub-directories keep the existing
+/// self-titled convention (`bar/baz.zig` for `bar/baz/`).
 pub fn lint(
     ctx: *core.Context,
-    root_file: []const u8,
+    root_files: []const []const u8,
     source_files: *const core.SourceFiles,
 ) !void {
-    const root_dir = std.fs.path.dirname(root_file) orelse
-        return error.InvalidTestInclusionRootFile;
+    // Group roots by parent directory. `roots_by_dir[dir]` is the set of
+    // companions that cover `dir` at the top of its walk. Sub-directories
+    // fall back to the self-titled convention inside `lintDir`.
+    var roots_by_dir: std.StringHashMap(std.ArrayList([]const u8)) = .init(ctx.arena);
+    for (root_files) |rf| {
+        const parent = std.fs.path.dirname(rf) orelse
+            return error.InvalidTestInclusionRootFile;
+        const gop = try roots_by_dir.getOrPut(parent);
+        if (!gop.found_existing) gop.value_ptr.* = .empty;
+        try gop.value_ptr.append(ctx.arena, rf);
+    }
 
+    var it = roots_by_dir.iterator();
+    while (it.next()) |entry| {
+        try lintTree(ctx, entry.key_ptr.*, entry.value_ptr.items, source_files);
+    }
+}
+
+fn lintTree(
+    ctx: *core.Context,
+    root_dir: []const u8,
+    root_files: []const []const u8,
+    source_files: *const core.SourceFiles,
+) !void {
     var source_paths: std.ArrayList([]const u8) = .empty;
     for (source_files.items.items) |source_file| {
         // gather source files that are in or under the root directory
@@ -75,80 +112,101 @@ pub fn lint(
         {
             i += 1;
         }
-        try lintDir(ctx, root_file, root_dir, dir_path, source_paths.items[start..i], source_files);
+        try lintDir(
+            ctx,
+            root_files,
+            root_dir,
+            dir_path,
+            source_paths.items[start..i],
+            source_files,
+        );
     }
 }
 
 fn lintDir(
     ctx: *core.Context,
-    root_file: []const u8,
+    root_files: []const []const u8,
     root_dir: []const u8,
     dir_path: []const u8,
     dir_source_paths: []const []const u8,
     source_files: *const core.SourceFiles,
 ) !void {
-    const is_root_dir = std.mem.eql(u8, dir_path, root_dir);
-    const companion_path = if (is_root_dir)
-        root_file
-    else
-        try std.fmt.allocPrint(ctx.arena, "{s}.zig", .{dir_path});
-
-    const companion_file = source_files.get(companion_path) orelse {
-        try ctx.addDiagnostic(
-            companion_path,
-            1,
-            1,
-            .test_inclusion,
-            "missing companion file",
-        );
-        return;
+    // At the walk root the companions are the caller-supplied `root_files`
+    // Everywhere else the file `<dir>.zig` is the sole companion.
+    const companion_paths: []const []const u8 = if (std.mem.eql(u8, dir_path, root_dir))
+        root_files
+    else blk: {
+        const self_titled = try std.fmt.allocPrint(ctx.arena, "{s}.zig", .{dir_path});
+        break :blk try ctx.arena.dupe([]const u8, &.{self_titled});
     };
 
+    var companions: std.ArrayList(Companion) = .empty;
+    for (companion_paths) |cp| {
+        const file = source_files.get(cp) orelse {
+            try ctx.addDiagnostic(cp, 1, 1, .test_inclusion, "missing companion file");
+            return;
+        };
+        const blocks = try findManagedBlocks(ctx.arena, file.source);
+        try companions.append(ctx.arena, .{
+            .path = cp,
+            .source = file.source,
+            .blocks = blocks.items,
+        });
+    }
+
+    // Expected imports are the files that are *not* companions themselves, relative
+    // to the companion directory.
+    const companion_dir = std.fs.path.dirname(companions.items[0].path) orelse root_dir;
     var all_expected_imports: std.ArrayList([]const u8) = .empty;
-    for (dir_source_paths) |source_path| {
-        if (std.mem.eql(u8, source_path, companion_path)) continue;
+    outer: for (dir_source_paths) |source_path| {
+        for (companions.items) |c| {
+            if (std.mem.eql(u8, source_path, c.path)) continue :outer;
+        }
         try all_expected_imports.append(
             ctx.arena,
-            try expectedImportPath(root_dir, companion_path, source_path),
+            try expectedImportPath(companion_dir, source_path),
         );
     }
     core.sortStrings(all_expected_imports.items);
 
-    const source = companion_file.source;
-    const skipped_imports = try skippedTestInclusionImports(ctx.arena, source);
+    // Skip comments may appear in any companion. Union them so a file
+    // only needs one opt-out.
+    var skipped_imports: std.ArrayList([]const u8) = .empty;
+    for (companions.items) |c| {
+        const partial = try skippedTestInclusionImports(ctx.arena, c.source);
+        for (partial.items) |item| {
+            if (!containsString(skipped_imports.items, item)) {
+                try skipped_imports.append(ctx.arena, item);
+            }
+        }
+    }
+
     const expected_imports = try filteredExpectedImports(
         ctx.arena,
         all_expected_imports.items,
         skipped_imports.items,
     );
 
-    const managed_blocks = try findManagedBlocks(ctx.arena, source);
-
-    switch (ctx.config.mode) {
+    // not possible to auto-fix when there are multiple companions
+    switch (if (companions.items.len == 1) ctx.config.mode else .check) {
         .check => try check(
             ctx,
-            companion_path,
+            companions.items,
             all_expected_imports.items.len != 0,
             expected_imports.items,
-            source,
-            managed_blocks.items,
         ),
         .fix => {
-            if (managed_blocks.items.len > 1) {
-                try addExtraManagedBlockDiagnostics(
-                    ctx,
-                    companion_path,
-                    source,
-                    managed_blocks.items[1..],
-                );
+            const c = companions.items[0];
+            if (c.blocks.len > 1) {
+                try addExtraManagedBlockDiagnostics(ctx, c.path, c.source, c.blocks[1..]);
                 return;
             }
             try fix(
                 ctx,
-                companion_file,
+                source_files.get(c.path).?,
                 all_expected_imports.items,
                 skipped_imports.items,
-                if (managed_blocks.items.len == 0) null else managed_blocks.items[0],
+                if (c.blocks.len == 0) null else c.blocks[0],
             );
         },
     }
@@ -169,11 +227,9 @@ fn lessByDirThenPath(root_dir: []const u8, left: []const u8, right: []const u8) 
 }
 
 fn expectedImportPath(
-    root_dir: []const u8,
-    companion_path: []const u8,
+    companion_dir: []const u8,
     file: []const u8,
 ) ![]const u8 {
-    const companion_dir = std.fs.path.dirname(companion_path) orelse root_dir;
     if (std.mem.startsWith(u8, file, companion_dir) and
         file.len > companion_dir.len and file[companion_dir.len] == '/')
     {
@@ -184,84 +240,102 @@ fn expectedImportPath(
 
 fn check(
     ctx: *core.Context,
-    companion_path: []const u8,
+    companions: []const Companion,
     expects_managed_block: bool,
     expected_imports: []const []const u8,
-    source: []const u8,
-    managed_blocks: []const ManagedBlock,
 ) !void {
-    try checkObsoleteRefAllDecls(ctx, companion_path, source);
-
-    const managed: ?ManagedBlock = if (managed_blocks.len == 0) null else managed_blocks[0];
-    for (managed_blocks) |block| {
-        const loc = core.lineColumn(source, block.start);
-        if (block.malformed) {
-            try addTestInclusionDiagnostic(
-                ctx,
-                companion_path,
-                loc,
-                "malformed managed test inclusion block",
-            );
+    // Per-companion format checks (independent of the cross-companion
+    // coverage rule below).
+    for (companions) |c| {
+        try checkObsoleteRefAllDecls(ctx, c.path, c.source);
+        for (c.blocks) |block| {
+            const loc = core.lineColumn(c.source, block.start);
+            if (block.malformed) {
+                const msg = "malformed managed test inclusion block";
+                try addTestInclusionDiagnostic(ctx, c.path, loc, msg);
+            }
+            if (block.custom_logic) {
+                const msg = "managed test inclusion block contains custom logic";
+                try addTestInclusionDiagnostic(ctx, c.path, loc, msg);
+            }
         }
-        if (block.custom_logic) {
+        if (c.blocks.len > 1) {
+            try addExtraManagedBlockDiagnostics(ctx, c.path, c.source, c.blocks[1..]);
+        }
+        if (c.blocks.len > 0 and !isSorted(c.blocks[0].imports.items)) {
             try addTestInclusionDiagnostic(
                 ctx,
-                companion_path,
-                loc,
-                "managed test inclusion block contains custom logic",
+                c.path,
+                core.lineColumn(c.source, c.blocks[0].start),
+                "unsorted test inclusion imports",
             );
         }
     }
 
     if (!expects_managed_block) {
-        try addExtraManagedBlockDiagnostics(ctx, companion_path, source, managed_blocks);
-        return;
-    }
-    if (managed_blocks.len > 1) {
-        try addExtraManagedBlockDiagnostics(
-            ctx,
-            companion_path,
-            source,
-            managed_blocks[1..],
-        );
+        for (companions) |c| {
+            try addExtraManagedBlockDiagnostics(ctx, c.path, c.source, c.blocks);
+        }
         return;
     }
 
-    const block = managed orelse {
+    // Union of imports across the canonical (first) block of each companion.
+    var union_imports: std.ArrayList([]const u8) = .empty;
+    var any_block_present = false;
+    for (companions) |c| {
+        if (c.blocks.len == 0) continue;
+        any_block_present = true;
+        for (c.blocks[0].imports.items) |imp| {
+            if (!containsString(union_imports.items, imp)) {
+                try union_imports.append(ctx.arena, imp);
+            }
+        }
+    }
+
+    // A malformed block still counts as "present". The malformed diagnostic
+    // above will nag the developer without also double-reporting as if the
+    // block were entirely missing.
+    if (!any_block_present) {
         try addTestInclusionDiagnostic(
             ctx,
-            companion_path,
+            companions[0].path,
             .{ .line = 1, .column = 1 },
             "missing managed test inclusion block",
         );
         return;
-    };
-
-    const loc = core.lineColumn(source, block.start);
-    if (!isSorted(block.imports.items)) {
-        try addTestInclusionDiagnostic(
-            ctx,
-            companion_path,
-            loc,
-            "unsorted test inclusion imports",
-        );
     }
-    try addStringDifferenceDiagnostics(
-        ctx,
-        companion_path,
-        loc,
-        expected_imports,
-        block.imports.items,
-        "missing test inclusion import",
-    );
-    try addStringDifferenceDiagnostics(
-        ctx,
-        companion_path,
-        loc,
-        block.imports.items,
-        expected_imports,
-        "extra test inclusion import",
-    );
+
+    // Missing imports report against the first companion (arbitrary but consistent).
+    for (expected_imports) |exp| {
+        if (!containsString(union_imports.items, exp)) {
+            try addTestInclusionDiagnostic(
+                ctx,
+                companions[0].path,
+                blockLoc(companions[0]),
+                "missing test inclusion import",
+            );
+        }
+    }
+    // Extras report against whichever companion owns them.
+    for (companions) |c| {
+        if (c.blocks.len == 0) continue;
+        const loc = core.lineColumn(c.source, c.blocks[0].start);
+        for (c.blocks[0].imports.items) |imp| {
+            if (!containsString(expected_imports, imp)) {
+                try addTestInclusionDiagnostic(
+                    ctx,
+                    c.path,
+                    loc,
+                    "extra test inclusion import",
+                );
+            }
+        }
+    }
+}
+
+fn blockLoc(c: Companion) core.Location {
+    if (c.blocks.len == 0) return .{ .line = 1, .column = 1 };
+    return core.lineColumn(c.source, c.blocks[0].start);
 }
 
 fn addTestInclusionDiagnostic(
@@ -292,21 +366,6 @@ fn addExtraManagedBlockDiagnostics(
             core.lineColumn(source, block.start),
             "extra managed test inclusion block",
         );
-    }
-}
-
-fn addStringDifferenceDiagnostics(
-    ctx: *core.Context,
-    companion_path: []const u8,
-    loc: core.Location,
-    candidates: []const []const u8,
-    existing: []const []const u8,
-    message: []const u8,
-) !void {
-    for (candidates) |candidate| {
-        if (!containsString(existing, candidate)) {
-            try addTestInclusionDiagnostic(ctx, companion_path, loc, message);
-        }
     }
 }
 
@@ -669,18 +728,18 @@ fn expectCheckDiagnostics(
     expected_imports: []const []const u8,
     expected_messages: []const []const u8,
 ) !void {
-    const managed_blocks = try findManagedBlocks(allocator, source);
+    // Build a single synthetic companion so the tests still exercise the
+    // full `check` path (production always goes through `lintDir` first).
+    const blocks = try findManagedBlocks(allocator, source);
+    const companions = [_]Companion{.{
+        .path = "lib/lib.zig",
+        .source = source,
+        .blocks = blocks.items,
+    }};
 
     var ctx: core.Context = .{ .arena = allocator, .config = .{} };
 
-    try check(
-        &ctx,
-        "lib/lib.zig",
-        expects_managed_block,
-        expected_imports,
-        source,
-        managed_blocks.items,
-    );
+    try check(&ctx, &companions, expects_managed_block, expected_imports);
     try expectDiagnosticMessages(ctx.diagnostics.items, expected_messages);
 }
 
@@ -1092,7 +1151,7 @@ test "fix skips files with multiple managed blocks" {
         .config = .{ .mode = .fix },
     };
 
-    try lintDir(&ctx, "lib/lib.zig", "lib", "lib", &.{ "lib/lib.zig", "lib/a.zig" }, &files);
+    try lintDir(&ctx, &.{"lib/lib.zig"}, "lib", "lib", &.{ "lib/lib.zig", "lib/a.zig" }, &files);
 
     try std.testing.expectEqual(1, ctx.diagnostics.items.len);
     try std.testing.expectEqualStrings(
@@ -1146,7 +1205,7 @@ test "fix preserves blank lines around managed block" {
         .config = .{ .mode = .fix },
     };
 
-    try lintDir(&ctx, "lib/lib.zig", "lib", "lib", &.{ "lib/lib.zig", "lib/a.zig" }, &files);
+    try lintDir(&ctx, &.{"lib/lib.zig"}, "lib", "lib", &.{ "lib/lib.zig", "lib/a.zig" }, &files);
 
     try std.testing.expectEqual(0, ctx.diagnostics.items.len);
     try std.testing.expect(files.items.items[0].has_changes);

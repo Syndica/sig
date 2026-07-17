@@ -1,6 +1,12 @@
 const std = @import("std");
 const lib = @import("lib");
 
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("pool.zig");
+    }
+}
+
 pub const AccountPool = @import("pool.zig").AccountPool;
 
 const Pubkey = lib.solana.Pubkey;

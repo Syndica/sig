@@ -1,6 +1,5 @@
 const std = @import("std");
 const lib = @import("lib");
-const api = @import("api.zig");
 
 const Pubkey = lib.solana.Pubkey;
 const Epoch = lib.solana.Epoch;
