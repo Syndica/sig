@@ -80,21 +80,35 @@ pub const AccountResolver = struct {
     /// This function does not perform account reads. The caller is expected to call `poll()`
     /// to drive the resolution process.
     ///
-    /// The caller must keep `tx_ref` alive in TransactionPool until the corresponding
-    /// completion is popped via `popCompleted()`.
+    /// Until the corresponding completion is popped via `popCompleted()`:
+    /// - `tx_ref` must remain allocated in `TransactionPool`;
+    /// - `block_ref` and its ancestor chain must remain allocated in `BlockPool`
+    ///   (walked by `Unrooted.fetch` on every poll);
+    /// - `bank_context.slot_hashes` storage AND contents must remain unchanged
+    ///   (`containsSlot()` re-reads it on every poll).
+    ///
+    /// The bank's `current_slot` must equal the slot of `block_ref` in `BlockPool`;
+    /// otherwise same-slot extension and deactivation checks silently use the
+    /// wrong slot.
+    ///
+    /// TODO: The resolver should retain a bank/fork context reference rather than
+    /// borrowing unrelated slices and pool IDs independently.
     pub fn submit(
         self: *AccountResolver,
         block_ref: lib.replay.BlockRef,
         tx_ref: lib.replay.TransactionPool.ItemId,
-        /// The storage backing `bank_context.slot_hashes` must remain valid until
-        /// the corresponding completion is consumed with `popCompleted()`.
-        /// TODO: find a way to remove this.
         bank_context: BankContext,
     ) SubmitError!void {
         if (self.pending_count == self.pending_queue.len) {
             @branchHint(.unlikely);
             return error.Full;
         }
+
+        // Blocks older than the bootstrap root have `null` here and should not
+        // be submitted for resolution.
+        const block_slot = block_ref.constPtr(self.block_pool).slot.opt() orelse
+            unreachable;
+        std.debug.assert(block_slot == bank_context.current_slot);
 
         const pending_index =
             (self.pending_head + self.pending_count) % self.pending_queue.len;
@@ -114,6 +128,7 @@ pub const AccountResolver = struct {
             .bank_context = bank_context,
             .next_lookup_index = 0,
             .in_flight_lookups = 0,
+            .failure = null,
             .completion = .{
                 .transaction = .{
                     .block_ref = block_ref,
@@ -124,7 +139,6 @@ pub const AccountResolver = struct {
                     // TODO: do we want a safer way to represent this in the future?
                     .dynamic_addresses = undefined,
                 },
-                .failure = null,
                 // TODO: need a pending result variant.
                 .result = undefined,
             },
@@ -301,10 +315,9 @@ pub const AccountResolver = struct {
     }
 
     pub fn poll(self: *AccountResolver) bool {
-        var made_progress: bool = false;
-        made_progress |= self.drainRootedResults();
-        made_progress |= self.drivePendingLookups();
-        return made_progress;
+        const drained = self.drainRootedResults();
+        const driven = self.drivePendingLookups();
+        return drained or driven;
     }
 
     fn drainRootedResults(self: *AccountResolver) bool {
@@ -385,7 +398,8 @@ pub const AccountResolver = struct {
                     // This is always true because we just consumed a descriptor, but it makes the intent clearer.
                     // TODO: Maybe re-write this a bit
                     made_progress = true;
-                    made_progress |= self.maybeCompletePending(pending);
+                    const completed = self.maybeCompletePending(pending);
+                    made_progress = completed or made_progress;
 
                     continue;
                 }
