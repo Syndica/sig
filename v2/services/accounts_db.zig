@@ -155,3 +155,9 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         }
     }
 }
+
+test "service has required declarations" {
+    try std.testing.expectEqual(.accounts_db, name);
+    const rw_fields = @typeInfo(ReadWrite).@"struct".fields;
+    try std.testing.expect(rw_fields.len > 0);
+}

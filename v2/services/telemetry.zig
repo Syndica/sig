@@ -213,3 +213,9 @@ fn setSendTimeOut(
         @ptrCast(&timeout),
     );
 }
+
+test "service has required declarations" {
+    try std.testing.expectEqual(.telemetry, name);
+    const rw_fields = @typeInfo(ReadWrite).@"struct".fields;
+    try std.testing.expect(rw_fields.len > 0);
+}
