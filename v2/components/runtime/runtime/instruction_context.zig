@@ -1,12 +1,13 @@
 const std = @import("std");
 const sig = @import("../component.zig");
+const solana = @import("lib").solana;
 
 const bincode = sig.bincode;
 const executor = sig.runtime.executor;
 const system_program = sig.runtime.program.system;
 const bpf_loader_program = sig.runtime.program.bpf_loader;
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 const Instruction = sig.core.instruction.Instruction;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionAccount = sig.core.instruction.InstructionAccount;

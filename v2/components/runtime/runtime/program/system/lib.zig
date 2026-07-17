@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../../../component.zig");
+const solana = @import("lib").solana;
 
 comptime {
     if (@import("builtin").is_test) {
@@ -9,7 +10,7 @@ comptime {
     }
 }
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 
 /// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/instruction.rs#L64
 pub const NONCE_STATE_SIZE: u64 = 80;

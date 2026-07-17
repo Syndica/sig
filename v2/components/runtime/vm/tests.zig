@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../component.zig");
+const solana = @import("lib").solana;
 
 const sbpf = sig.vm.sbpf;
 const memory = sig.vm.memory;
@@ -3473,7 +3474,7 @@ pub fn testSyscall(
 
     var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
         .accounts = &.{.{
-            .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+            .pubkey = solana.Pubkey.initRandom(prng.random()),
             .owner = sig.runtime.ids.NATIVE_LOADER_ID,
         }},
         .compute_meter = config.compute_meter,

@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../component.zig");
+const vm = @import("../component.zig").vm;
 
 const ComputeBudget = @This();
 
@@ -204,8 +204,8 @@ pub fn poseidonCost(self: ComputeBudget, len: std.math.IntFittingRange(0, 12)) u
 
 pub fn curveGroupOperationCost(
     self: ComputeBudget,
-    comptime curve_id: sig.vm.syscalls.ecc.CurveId,
-    group_op: sig.vm.syscalls.ecc.GroupOp,
+    comptime curve_id: vm.syscalls.ecc.CurveId,
+    group_op: vm.syscalls.ecc.GroupOp,
 ) u64 {
     switch (curve_id) {
         inline //

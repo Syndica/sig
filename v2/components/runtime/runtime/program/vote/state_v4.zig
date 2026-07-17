@@ -2,6 +2,7 @@
 const std = @import("std");
 const std14 = @import("std14");
 const sig = @import("../../../component.zig");
+const solana = @import("lib").solana;
 
 const Allocator = std.mem.Allocator;
 
@@ -11,8 +12,8 @@ const InstructionError = sig.core.instruction.InstructionError;
 const VoteError = vote_program.VoteError;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
-const Pubkey = sig.core.Pubkey;
-const Hash = sig.core.hash.Hash;
+const Pubkey = solana.Pubkey;
+const Hash = solana.hash.Hash;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
 
 const AuthorizedVoters = state.AuthorizedVoters;

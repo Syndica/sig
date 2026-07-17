@@ -2,10 +2,11 @@
 
 const std = @import("std");
 const sig = @import("../../component.zig");
+const solana = @import("lib").solana;
 
 const programs = sig.runtime.program;
 
-const Feature = sig.core.features.Feature;
+const Feature = solana.features.Feature;
 
 pub const TOTAL_COUNT_BUILTINS: usize = 9;
 pub const BUILTIN_COSTS: std.StaticStringMap(BuiltinCost) = costs: {

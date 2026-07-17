@@ -1,11 +1,12 @@
 const sig = @import("../../component.zig");
+const solana = @import("lib").solana;
 
 const program = sig.runtime.program;
-const features = sig.core.features;
+const features = solana.features;
 
 const Feature = features.Feature;
-const Pubkey = sig.core.Pubkey;
-const Hash = sig.core.Hash;
+const Pubkey = solana.Pubkey;
+const Hash = solana.Hash;
 
 /// Configuration for migrating a built-in program to Core BPF.
 pub const CoreBpfMigrationConfig = struct {

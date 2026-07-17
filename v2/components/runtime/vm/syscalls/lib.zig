@@ -1,6 +1,7 @@
 const std = @import("std");
 const std14 = @import("std14");
 const sig = @import("../../component.zig");
+const solana = @import("lib").solana;
 
 comptime {
     if (@import("builtin").is_test) {
@@ -25,7 +26,7 @@ const serialize = sig.runtime.program.bpf.serialize;
 const memory = sig.vm.memory;
 const Murmur3 = std.hash.Murmur3_32;
 const SyscallError = sig.vm.SyscallError;
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 const MemoryMap = memory.MemoryMap;
 const InstructionError = sig.core.instruction.InstructionError;
 const RegisterMap = sig.vm.interpreter.RegisterMap;
@@ -33,7 +34,7 @@ const TransactionContext = sig.runtime.TransactionContext;
 const TransactionReturnData = sig.runtime.transaction_context.TransactionReturnData;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const AccountMeta = cpi.AccountMetaRust;
-const Feature = sig.core.features.Feature;
+const Feature = solana.features.Feature;
 
 pub const Error = sig.vm.ExecutionError;
 
@@ -1488,7 +1489,7 @@ test "set and get return data" {
         prng.random(),
         .{
             .accounts = &.{.{
-                .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+                .pubkey = solana.Pubkey.initRandom(prng.random()),
                 .owner = sig.runtime.ids.NATIVE_LOADER_ID,
             }},
             .compute_meter = 10_000,

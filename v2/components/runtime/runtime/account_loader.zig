@@ -4,12 +4,13 @@ const std = @import("std");
 const std14 = @import("std14");
 const sig = @import("../component.zig");
 const tracy = @import("tracy");
+const solana = @import("lib").solana;
 const runtime = sig.runtime;
 
 const Allocator = std.mem.Allocator;
 
-const Hash = sig.core.Hash;
-const Pubkey = sig.core.Pubkey;
+const Hash = solana.Hash;
+const Pubkey = solana.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
 const RENT_EXEMPT_RENT_EPOCH = sig.core.rent_collector.RENT_EXEMPT_RENT_EPOCH;
 const CollectedInfo = sig.core.rent_collector.CollectedInfo;

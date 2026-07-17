@@ -1,12 +1,13 @@
 const std = @import("std");
 const sig = @import("../component.zig");
+const solana = @import("lib").solana;
 
 const bincode = sig.bincode;
 const sysvars = sig.runtime.sysvar;
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 const Clock = sysvars.Clock;
-const EpochSchedule = sig.core.EpochSchedule;
+const EpochSchedule = solana.EpochSchedule;
 const EpochRewards = sysvars.EpochRewards;
 const Rent = sysvars.Rent;
 const SlotHashes = sysvars.SlotHashes;

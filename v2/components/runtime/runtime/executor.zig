@@ -1,6 +1,7 @@
 const std = @import("std");
 const tracy = @import("tracy");
 const sig = @import("../component.zig");
+const solana = @import("lib").solana;
 
 const ids = sig.runtime.ids;
 const program = sig.runtime.program;
@@ -9,7 +10,7 @@ const bpf_loader_program = sig.runtime.program.bpf_loader;
 
 const Instruction = sig.core.instruction.Instruction;
 const InstructionError = sig.core.instruction.InstructionError;
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 
 const InstructionInfo = sig.runtime.InstructionInfo;
 const TransactionContext = sig.runtime.TransactionContext;

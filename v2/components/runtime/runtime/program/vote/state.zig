@@ -5,6 +5,7 @@ const sig = @import("../../../component.zig");
 const vote_program = @import("lib.zig");
 const builtin = @import("builtin");
 const state_v4 = @import("state_v4.zig");
+const solana = @import("lib").solana;
 
 const Allocator = std.mem.Allocator;
 
@@ -12,8 +13,8 @@ const InstructionError = sig.core.instruction.InstructionError;
 const VoteError = vote_program.VoteError;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
-const Pubkey = sig.core.Pubkey;
-const Hash = sig.core.hash.Hash;
+const Pubkey = solana.Pubkey;
+const Hash = solana.hash.Hash;
 const SortedMap = sig.utils.collections.SortedMapUnmanaged;
 const AccountSharedData = sig.runtime.AccountSharedData;
 

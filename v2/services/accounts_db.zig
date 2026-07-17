@@ -4,8 +4,6 @@ const lib = @import("lib");
 const services = @import("services");
 const accounts_db = @import("accounts_db");
 
-const tel = lib.telemetry;
-
 const SnapshotIter = lib.solana.snapshot.SnapshotIter;
 
 const Rooted = accounts_db.Rooted;

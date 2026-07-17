@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../../component.zig");
+const solana = @import("lib").solana;
 
 comptime {
     if (@import("builtin").is_test) {
@@ -17,7 +18,7 @@ comptime {
 }
 
 const bincode = sig.bincode;
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 
 pub const OWNER_ID: Pubkey = .parse("Sysvar1111111111111111111111111111111111111");
 
@@ -25,7 +26,7 @@ pub const DEFAULT_BURN_PERCENT = @import("rent.zig").DEFAULT_BURN_PERCENT;
 
 pub const Clock = @import("clock.zig").Clock;
 pub const EpochRewards = @import("epoch_rewards.zig").EpochRewards;
-pub const EpochSchedule = sig.core.EpochSchedule;
+pub const EpochSchedule = solana.EpochSchedule;
 pub const Fees = @import("fees.zig").Fees;
 pub const LastRestartSlot = @import("last_restart_slot.zig").LastRestartSlot;
 pub const RecentBlockhashes = @import("recent_blockhashes.zig").RecentBlockhashes;

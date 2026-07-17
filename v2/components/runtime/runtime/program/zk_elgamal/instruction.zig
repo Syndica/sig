@@ -1,5 +1,5 @@
-const sig = @import("../../../component.zig");
-const Pubkey = sig.core.Pubkey;
+const solana = @import("lib").solana;
+const Pubkey = solana.Pubkey;
 
 pub const ProofInstruction = enum(u8) {
     /// Close a zero-knowledge proof context state.

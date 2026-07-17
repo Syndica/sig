@@ -2,11 +2,12 @@ const builtin = @import("builtin");
 const std = @import("std");
 const std14 = @import("std14");
 const sig = @import("../../../component.zig");
+const solana = @import("lib").solana;
 
 const program = sig.runtime.program;
 const vm = sig.vm;
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 
 const InstructionContext = sig.runtime.InstructionContext;

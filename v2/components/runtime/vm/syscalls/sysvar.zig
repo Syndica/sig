@@ -2,14 +2,15 @@ const std = @import("std");
 const builtin = @import("builtin");
 const std14 = @import("std14");
 const sig = @import("../../component.zig");
+const solana = @import("lib").solana;
 
 const bincode = sig.bincode;
 const memory = sig.vm.memory;
 const sysvar = sig.runtime.sysvar;
 
-const Hash = sig.core.Hash;
+const Hash = solana.Hash;
 const Error = sig.vm.syscalls.Error;
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 const MemoryMap = memory.MemoryMap;
 const InstructionError = sig.core.instruction.InstructionError;
 const RegisterMap = sig.vm.interpreter.RegisterMap;

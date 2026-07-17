@@ -3,7 +3,6 @@ const start = @import("start_service");
 const lib = @import("lib");
 const services = @import("services");
 const snapshot = @import("snapshot");
-const tel = lib.telemetry;
 
 const download = snapshot.download;
 

@@ -1,6 +1,6 @@
-const sig = @import("../../../component.zig");
+const solana = @import("lib").solana;
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/5fb000f27e476add032e08a1de9e89310b0eab4b/sdk/program/src/bpf_loader_upgradeable.rs#L29
 pub const State = union(enum) {

@@ -1,8 +1,8 @@
 const builtin = @import("builtin");
-const sig = @import("../../component.zig");
 const std = @import("std");
+const solana = @import("lib").solana;
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/rent.rs#L35
 pub const DEFAULT_LAMPORTS_PER_BYTE_YEAR: u64 = 1_000_000_000 / 100 * 365 / (1024 * 1024);

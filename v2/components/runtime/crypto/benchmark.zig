@@ -1,8 +1,9 @@
 const std = @import("std");
 const sig = @import("../component.zig");
+const solana = @import("lib").solana;
 
 const Ed25519 = std.crypto.sign.Ed25519;
-const Hash = sig.core.Hash;
+const Hash = solana.Hash;
 const Sha256 = std.crypto.hash.sha2.Sha256;
 
 pub const BenchmarkSigVerify = struct {
@@ -78,8 +79,8 @@ pub const BenchmarkSigVerify = struct {
 
         switch (args.num_signatures) {
             inline 1, 100, 1_000 => |N| {
-                const signatures: [N]sig.core.Signature = @splat(.fromSignature(signature));
-                const pubkey: [N]sig.core.Pubkey = @splat(.fromPublicKey(&keypair.public_key));
+                const signatures: [N]solana.Signature = @splat(.fromSignature(signature));
+                const pubkey: [N]solana.Pubkey = @splat(.fromPublicKey(&keypair.public_key));
 
                 var start = sig.time.Timer.start();
                 std.mem.doNotOptimizeAway(sig.crypto.ed25519.verifyBatchOverSingleMessage(

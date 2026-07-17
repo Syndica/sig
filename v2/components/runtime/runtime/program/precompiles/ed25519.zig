@@ -1,8 +1,9 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const sig = @import("../../../component.zig");
+const solana = @import("lib").solana;
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 const PrecompileProgramError = sig.runtime.program.precompiles.PrecompileProgramError;
@@ -82,7 +83,7 @@ pub fn verify(
             sig_offsets.signature_offset,
             32 * 2, // 1 scalar + 1 point
         );
-        const signature: sig.core.Signature = sig.core.Signature.fromBytes(signature_bytes[0..64]).*;
+        const signature: solana.Signature = solana.Signature.fromBytes(signature_bytes[0..64]).*;
 
         const pubkey_bytes = try getInstructionData(
             data,
@@ -93,7 +94,7 @@ pub fn verify(
         );
         // specifically not using `fromBytes`, since we want the encoding error to happen inside of
         // the `verifySignature` call.
-        const pubkey: sig.core.Pubkey = .{ .data = pubkey_bytes[0..32].* };
+        const pubkey: solana.Pubkey = .{ .data = pubkey_bytes[0..32].* };
 
         const msg = try getInstructionData(
             data,

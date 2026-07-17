@@ -1,4 +1,4 @@
-const sig = @import("../../../component.zig");
+const solana = @import("lib").solana;
 
 comptime {
     if (@import("builtin").is_test) {
@@ -10,7 +10,7 @@ comptime {
     }
 }
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 
 pub const v1 = struct {
     /// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/sdk-ids/src/lib.rs#L11

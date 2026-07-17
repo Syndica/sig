@@ -1,11 +1,12 @@
 const sig = @import("../component.zig");
 const std = @import("std");
+const solana = @import("lib").solana;
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 const Epoch = sig.core.Epoch;
 const Rent = sig.runtime.sysvar.Rent;
 const AccountSharedData = sig.runtime.AccountSharedData;
-const EpochSchedule = sig.core.EpochSchedule;
+const EpochSchedule = solana.EpochSchedule;
 const TransactionError = sig.core.transaction_error.TransactionError;
 
 pub const RENT_EXEMPT_RENT_EPOCH: Epoch = std.math.maxInt(Epoch);

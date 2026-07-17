@@ -1,7 +1,7 @@
 const std = @import("std");
-const sig = @import("../../component.zig");
-const Pubkey = sig.core.Pubkey;
-const Instruction = sig.core.Instruction;
+const solana = @import("lib").solana;
+const Pubkey = solana.Pubkey;
+const Instruction = @import("../../component.zig").core.Instruction;
 
 pub const ID: Pubkey = .parse("Sysvar1nstructions1111111111111111111111111");
 

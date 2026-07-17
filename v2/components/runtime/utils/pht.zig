@@ -1,6 +1,6 @@
 const std = @import("std");
-const sig = @import("../component.zig");
-const Pubkey = sig.core.Pubkey;
+const solana = @import("lib").solana;
+const Pubkey = solana.Pubkey;
 
 /// Compile-time perfect hash table.
 /// Based off of: https://cmph.sourceforge.net/papers/esa09.pdf.

@@ -2,14 +2,12 @@ const builtin = @import("builtin");
 const std = @import("std");
 const std14 = @import("std14");
 const sig = @import("../../component.zig");
-
-const Allocator = std.mem.Allocator;
+const solana = @import("lib").solana;
 
 const bincode = sig.bincode;
 
-const BlockhashQueue = sig.core.BlockhashQueue;
-const Hash = sig.core.Hash;
-const Pubkey = sig.core.Pubkey;
+const Hash = solana.Hash;
+const Pubkey = solana.Pubkey;
 
 /// A list of entries ordered by descending block height.
 /// The first entry holds the most recent blockhash.

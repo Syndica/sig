@@ -1,9 +1,9 @@
 const builtin = @import("builtin");
 const std = @import("std");
-const sig = @import("../../component.zig");
+const solana = @import("lib").solana;
 
-const Hash = sig.core.Hash;
-const Pubkey = sig.core.Pubkey;
+const Hash = solana.Hash;
+const Pubkey = solana.Pubkey;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/epoch-rewards/src/lib.rs#L26
 pub const EpochRewards = extern struct {

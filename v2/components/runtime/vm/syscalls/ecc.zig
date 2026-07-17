@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const sig = @import("../../component.zig");
+const solana = @import("lib").solana;
 
 const bn254 = sig.crypto.bn254;
 const bls12_381 = sig.crypto.bls12_381;
@@ -989,7 +990,7 @@ test "edwards curve group operations" {
         prng.random(),
         .{
             .accounts = &.{.{
-                .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+                .pubkey = solana.Pubkey.initRandom(prng.random()),
                 .owner = sig.runtime.ids.NATIVE_LOADER_ID,
             }},
             .compute_meter = total_compute,
@@ -1123,7 +1124,7 @@ test "ristretto curve group operations" {
         prng.random(),
         .{
             .accounts = &.{.{
-                .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+                .pubkey = solana.Pubkey.initRandom(prng.random()),
                 .owner = sig.runtime.ids.NATIVE_LOADER_ID,
             }},
             .compute_meter = 10_000,
@@ -1260,7 +1261,7 @@ test "multiscalar multiplication" {
         prng.random(),
         .{
             .accounts = &.{.{
-                .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+                .pubkey = solana.Pubkey.initRandom(prng.random()),
                 .owner = sig.runtime.ids.NATIVE_LOADER_ID,
             }},
             .compute_meter = total_compute,
@@ -1355,7 +1356,7 @@ test "multiscalar multiplication large" {
         prng.random(),
         .{
             .accounts = &.{.{
-                .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+                .pubkey = solana.Pubkey.initRandom(prng.random()),
                 .owner = sig.runtime.ids.NATIVE_LOADER_ID,
             }},
             .compute_meter = 500_000,
@@ -1443,7 +1444,7 @@ test "alt_bn128 add" {
         allocator,
         prng.random(),
         .{ .accounts = &.{.{
-            .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+            .pubkey = solana.Pubkey.initRandom(prng.random()),
             .owner = sig.runtime.ids.NATIVE_LOADER_ID,
         }}, .compute_meter = 334 },
     );
@@ -1512,7 +1513,7 @@ test "alt_bn128 mul" {
         allocator,
         prng.random(),
         .{ .accounts = &.{.{
-            .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+            .pubkey = solana.Pubkey.initRandom(prng.random()),
             .owner = sig.runtime.ids.NATIVE_LOADER_ID,
         }}, .compute_meter = 3_840 },
     );
@@ -1577,7 +1578,7 @@ test "alt_bn128 pairing" {
         allocator,
         prng.random(),
         .{ .accounts = &.{.{
-            .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+            .pubkey = solana.Pubkey.initRandom(prng.random()),
             .owner = sig.runtime.ids.NATIVE_LOADER_ID,
         }}, .compute_meter = 48_986 },
     );
@@ -1664,7 +1665,7 @@ test "alt_bn128 g1 compress/decompress" {
         allocator,
         prng.random(),
         .{ .accounts = &.{.{
-            .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+            .pubkey = solana.Pubkey.initRandom(prng.random()),
             .owner = sig.runtime.ids.NATIVE_LOADER_ID,
         }}, .compute_meter = 628 * 2 },
     );
@@ -1727,7 +1728,7 @@ test "alt_bn128 g2 compress/decompress" {
         allocator,
         prng.random(),
         .{ .accounts = &.{.{
-            .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+            .pubkey = solana.Pubkey.initRandom(prng.random()),
             .owner = sig.runtime.ids.NATIVE_LOADER_ID,
         }}, .compute_meter = 13_896 * 2 },
     );
@@ -1799,7 +1800,7 @@ test "alt_bn128 compression failure cases" {
         prng.random(),
         .{
             .accounts = &.{.{
-                .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+                .pubkey = solana.Pubkey.initRandom(prng.random()),
                 .owner = sig.runtime.ids.NATIVE_LOADER_ID,
             }},
             // one compress + two decompress + (3 * base_cost)
@@ -1889,7 +1890,7 @@ test "alt_bn128 group op failure cases" {
         prng.random(),
         .{
             .accounts = &.{.{
-                .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+                .pubkey = solana.Pubkey.initRandom(prng.random()),
                 .owner = sig.runtime.ids.NATIVE_LOADER_ID,
             }},
             // one compress + two decompress + (3 * base_cost)
@@ -1941,7 +1942,7 @@ test "alt_bn128 group op translates result buffer before input buffer" {
         allocator,
         prng.random(),
         .{ .accounts = &.{.{
-            .pubkey = sig.core.Pubkey.initRandom(prng.random()),
+            .pubkey = solana.Pubkey.initRandom(prng.random()),
             .owner = sig.runtime.ids.NATIVE_LOADER_ID,
         }}, .compute_meter = 100_000 },
     );

@@ -1,11 +1,12 @@
 const std = @import("std");
 const sig = @import("../../../component.zig");
+const solana = @import("lib").solana;
 
 const bincode = sig.bincode;
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 const Epoch = sig.core.Epoch;
 const Slot = sig.core.Slot;
-const FeatureSet = sig.core.FeatureSet;
+const FeatureSet = solana.features.Set;
 const sysvar = sig.runtime.sysvar;
 
 /// Self-referencing namespace for backward-compatible `stake.state.*` paths.

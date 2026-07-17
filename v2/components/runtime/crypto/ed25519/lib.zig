@@ -1,9 +1,9 @@
-const sig = @import("../../component.zig");
 const lib = @import("lib");
 const std = @import("std");
 const std14 = @import("std14");
 const builtin = @import("builtin");
 const build_options = @import("build-options");
+const solana = @import("lib").solana;
 
 pub const pippenger = lib.crypto.ed25519.pippenger;
 pub const straus = lib.crypto.ed25519.straus;
@@ -53,8 +53,8 @@ const CompressedScalar = [32]u8;
 /// loop to a `verify` one, allowing batched verification.
 pub fn verifyBatchOverSingleMessage(
     max: comptime_int,
-    signatures: []const sig.core.Signature,
-    public_keys: []const sig.core.Pubkey,
+    signatures: []const solana.Signature,
+    public_keys: []const solana.Pubkey,
     message: []const u8,
 ) !void {
     std.debug.assert(signatures.len <= max);
@@ -106,8 +106,8 @@ pub fn verifyBatchOverSingleMessage(
 /// but this is that same thing, just for single messages, and with the ability to toggle
 /// between `verify` and `verify_strict` semantics (used in ed25519 precompile).
 pub fn verifySignature(
-    signature: sig.core.Signature,
-    pubkey: sig.core.Pubkey,
+    signature: solana.Signature,
+    pubkey: solana.Pubkey,
     message: []const u8,
     strict: bool,
 ) !void {
@@ -592,8 +592,8 @@ test "eddsa test cases" {
         var sig_bytes: [64]u8 = undefined;
         _ = try std.fmt.hexToBytes(&sig_bytes, entry.sig_hex);
 
-        const public_key: sig.core.Pubkey = try .fromBytes(public_key_bytes);
-        const signature: sig.core.Signature = sig.core.Signature.fromBytes(&sig_bytes).*;
+        const public_key: solana.Pubkey = try .fromBytes(public_key_bytes);
+        const signature: solana.Signature = solana.Signature.fromBytes(&sig_bytes).*;
 
         const result = verifyBatchOverSingleMessage(
             1,
@@ -670,8 +670,8 @@ test "wycheproof" {
             const signature_bytes = try std.fmt.hexToBytes(&sig_buffer, case.sig);
             if (signature_bytes.len != 64) continue;
 
-            const pubkey = sig.core.Pubkey.fromBytes(public_key_buffer) catch continue;
-            const signature: sig.core.Signature = sig.core.Signature.fromBytes(&sig_buffer).*;
+            const pubkey = solana.Pubkey.fromBytes(public_key_buffer) catch continue;
+            const signature: solana.Signature = solana.Signature.fromBytes(&sig_buffer).*;
 
             // Single verify
             {

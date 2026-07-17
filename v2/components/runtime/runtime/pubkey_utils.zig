@@ -1,7 +1,7 @@
 const std = @import("std");
-const sig = @import("../component.zig");
+const solana = @import("lib").solana;
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 
 // TODO: Consider moving the below to the pubkey module
 
@@ -43,7 +43,7 @@ pub fn createWithSeed(
     if (std.mem.eql(u8, owner.data[offset..], PDA_MARKER))
         return PubkeyError.IllegalOwner;
 
-    return .{ .data = sig.core.Hash.initMany(&.{
+    return .{ .data = solana.Hash.initMany(&.{
         &base.data,
         seed,
         &owner.data,

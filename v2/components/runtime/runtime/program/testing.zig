@@ -1,11 +1,12 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../../component.zig");
+const solana = @import("lib").solana;
 
 const executor = sig.runtime.executor;
 const runtime_testing = sig.runtime.testing;
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 const LogCollector = sig.runtime.LogCollector;
 
 pub const InstructionContextAccountMetaParams = runtime_testing.InstructionInfoAccountMetaParams;

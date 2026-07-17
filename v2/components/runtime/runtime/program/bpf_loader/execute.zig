@@ -3,6 +3,7 @@ const std = @import("std");
 const tracy = @import("tracy");
 const std14 = @import("std14");
 const sig = @import("../../../component.zig");
+const solana = @import("lib").solana;
 
 const ids = sig.runtime.ids;
 const bincode = sig.bincode;
@@ -15,7 +16,7 @@ const system_program = sig.runtime.program.system;
 const bpf_loader_program = sig.runtime.program.bpf_loader;
 const stable_log = sig.runtime.stable_log;
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 const ExecutionError = sig.vm.ExecutionError;
 
@@ -2392,7 +2393,7 @@ pub fn verifyProgram(
     allocator: std.mem.Allocator,
     data: []const u8,
     slot: sig.core.Slot,
-    feature_set: *const sig.core.FeatureSet,
+    feature_set: *const solana.features.Set,
     compute_budget: *const sig.runtime.ComputeBudget,
     log_collector: ?*sig.runtime.LogCollector,
     disable_sbpf_v0_v1_v2_deployment: bool,

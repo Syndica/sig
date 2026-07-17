@@ -2,11 +2,12 @@ const builtin = @import("builtin");
 const std = @import("std");
 const std14 = @import("std14");
 const sig = @import("../../component.zig");
+const solana = @import("lib").solana;
 
 const bincode = sig.bincode;
 
-const Epoch = sig.core.Epoch;
-const Pubkey = sig.core.Pubkey;
+const Epoch = solana.Epoch;
+const Pubkey = solana.Pubkey;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/sysvar/src/stake_history.rs#L67
 pub const StakeHistory = struct {

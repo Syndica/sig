@@ -10,10 +10,11 @@
 const std = @import("std");
 const std14 = @import("std14");
 const sig = @import("../component.zig");
+const solana = @import("lib").solana;
 
 const account_loader = sig.runtime.account_loader;
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 
 const ids = sig.runtime.ids;
 

@@ -1,9 +1,9 @@
 const builtin = @import("builtin");
 const std = @import("std");
-const sig = @import("../../component.zig");
+const solana = @import("lib").solana;
 
-const Pubkey = sig.core.Pubkey;
-const Slot = sig.core.Slot;
+const Pubkey = solana.Pubkey;
+const Slot = solana.Slot;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/last-restart-slot/src/lib.rs#L15
 pub const LastRestartSlot = extern struct {

@@ -8,9 +8,7 @@ const services = @import("services");
 const gossip_api = @import("gossip_api");
 const snapshot_api = @import("snapshot_api");
 const gossip = @import("gossip");
-const tel = lib.telemetry;
 
-const Pair = lib.net.Pair;
 const Packet = lib.net.Packet;
 
 const Pubkey = lib.solana.Pubkey;

@@ -1,4 +1,4 @@
-const sig = @import("../../../component.zig");
+const solana = @import("lib").solana;
 
 comptime {
     if (@import("builtin").is_test) {
@@ -30,19 +30,19 @@ pub const ProofType = enum(u8) {
 };
 
 pub const ProofContextStateMeta = extern struct {
-    context_state_authority: sig.core.Pubkey,
+    context_state_authority: solana.Pubkey,
     proof_type: ProofType,
 };
 
 pub fn ProofContextState(C: type) type {
     return extern struct {
-        context_state_authority: sig.core.Pubkey,
+        context_state_authority: solana.Pubkey,
         proof_type: ProofType,
         context: [C.BYTE_LEN]u8,
     };
 }
 
-pub const ID: sig.core.Pubkey = .parse("ZkE1Gama1Proof11111111111111111111111111111");
+pub const ID: solana.Pubkey = .parse("ZkE1Gama1Proof11111111111111111111111111111");
 
 // [agave] https://github.com/anza-xyz/agave/blob/master/programs/zk-elgamal-proof/src/lib.rs#L19-L31
 pub const CLOSE_CONTEXT_STATE_COMPUTE_UNITS: u64 = 3_300;

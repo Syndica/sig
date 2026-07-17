@@ -3,8 +3,7 @@
 
 // TODO: move IDs to programs as they are implemented, or to a more appropriate location for non-program IDs
 
-const sig = @import("../component.zig");
-const Pubkey = sig.core.Pubkey;
+const Pubkey = @import("lib").solana.Pubkey;
 
 pub const NATIVE_LOADER_ID: Pubkey = .parse("NativeLoader1111111111111111111111111111111");
 

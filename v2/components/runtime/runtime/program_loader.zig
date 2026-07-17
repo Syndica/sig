@@ -2,6 +2,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const tracy = @import("tracy");
 const sig = @import("../component.zig");
+const solana = @import("lib").solana;
 
 const bpf_loader = sig.runtime.program.bpf_loader;
 const vm = sig.vm;
@@ -10,7 +11,7 @@ const Allocator = std.mem.Allocator;
 
 const AccountReader = sig.runtime.execution_interfaces.AccountReader;
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 const AccountSharedData = sig.runtime.AccountSharedData;
 
 const failing_allocator = sig.utils.allocators.failing.allocator(.{});

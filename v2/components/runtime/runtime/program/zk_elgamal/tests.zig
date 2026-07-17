@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../../../component.zig");
+const solana = @import("lib").solana;
 
 const zksdk = sig.zksdk;
 const zk_elgamal = sig.runtime.program.zk_elgamal;
@@ -737,8 +738,8 @@ fn testVerifyProofWithoutContext(
     }
 
     // case where the instruction data is a offset to an account containing the proof data
-    const account_0_key = sig.core.Pubkey.initRandom(random);
-    const owner_key = sig.core.Pubkey.initRandom(random);
+    const account_0_key = solana.Pubkey.initRandom(random);
+    const owner_key = solana.Pubkey.initRandom(random);
 
     var success_account_data: [4 + 1]u8 = undefined;
     success_account_data[0] = @intFromEnum(instruction);
@@ -857,8 +858,8 @@ fn testVerifyProofWithContext(
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
-    const context_state_key = sig.core.Pubkey.initRandom(random);
-    const context_authority_key = sig.core.Pubkey.initRandom(random);
+    const context_state_key = solana.Pubkey.initRandom(random);
+    const context_authority_key = solana.Pubkey.initRandom(random);
 
     var expected_contents: [33 + Proof.Context.BYTE_LEN]u8 = undefined;
     expected_contents[0..32].* = @bitCast(context_authority_key);
@@ -979,9 +980,9 @@ fn testCloseState(
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
 
-    const context_state_key = sig.core.Pubkey.initRandom(random);
-    const context_authority_key = sig.core.Pubkey.initRandom(random);
-    const destination_key = sig.core.Pubkey.initRandom(random);
+    const context_state_key = solana.Pubkey.initRandom(random);
+    const context_authority_key = solana.Pubkey.initRandom(random);
+    const destination_key = solana.Pubkey.initRandom(random);
 
     var initial_contents: [33 + Proof.Context.BYTE_LEN]u8 = undefined;
     initial_contents[0..32].* = @bitCast(context_authority_key);

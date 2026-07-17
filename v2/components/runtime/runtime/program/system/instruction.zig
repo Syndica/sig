@@ -1,9 +1,10 @@
 const std = @import("std");
 const sig = @import("../../../component.zig");
+const solana = @import("lib").solana;
 
 const bincode = sig.bincode;
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 
 const SEED_FIELD_CONFIG = sig.runtime.program.SEED_FIELD_CONFIG;
 

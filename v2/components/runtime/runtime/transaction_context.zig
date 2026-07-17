@@ -2,20 +2,21 @@ const std = @import("std");
 const tracy = @import("tracy");
 const std14 = @import("std14");
 const sig = @import("../component.zig");
+const solana = @import("lib").solana;
 
 const program = sig.runtime.program;
 const vm = sig.vm;
 
-const Hash = sig.core.Hash;
+const Hash = solana.Hash;
 const Instruction = sig.core.instruction.Instruction;
 const InstructionError = sig.core.instruction.InstructionError;
 const EpochStakeReader = sig.runtime.execution_interfaces.EpochStakeReader;
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const BorrowedAccountContext = sig.runtime.BorrowedAccountContext;
-const FeatureSet = sig.core.FeatureSet;
+const FeatureSet = solana.features.Set;
 const LogCollector = sig.runtime.LogCollector;
 const SysvarCache = sig.runtime.SysvarCache;
 const InstructionContext = sig.runtime.InstructionContext;

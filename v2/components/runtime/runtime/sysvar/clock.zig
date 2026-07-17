@@ -1,10 +1,10 @@
 const builtin = @import("builtin");
 const std = @import("std");
-const sig = @import("../../component.zig");
+const solana = @import("lib").solana;
 
-const Pubkey = sig.core.Pubkey;
-const Slot = sig.core.Slot;
-const Epoch = sig.core.Epoch;
+const Pubkey = solana.Pubkey;
+const Slot = solana.Slot;
+const Epoch = solana.Epoch;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/clock/src/lib.rs#L184
 pub const Clock = extern struct {

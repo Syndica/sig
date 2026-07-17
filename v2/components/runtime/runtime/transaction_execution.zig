@@ -2,6 +2,7 @@ const std = @import("std");
 const std14 = @import("std14");
 const sig = @import("../component.zig");
 const tracy = @import("tracy");
+const solana = @import("lib").solana;
 
 const account_loader = sig.runtime.account_loader;
 const program_loader = sig.runtime.program_loader;
@@ -10,9 +11,9 @@ const compute_budget_program = sig.runtime.program.compute_budget;
 const cost_model = sig.runtime.cost_model;
 const vm = sig.vm;
 
-const Hash = sig.core.Hash;
+const Hash = solana.Hash;
 const InstructionErrorEnum = sig.core.instruction.InstructionErrorEnum;
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
 const RentState = sig.core.RentCollector.RentState;
 
@@ -22,7 +23,7 @@ const StatusChecker = sig.runtime.execution_interfaces.StatusChecker;
 const EpochStakeReader = sig.runtime.execution_interfaces.EpochStakeReader;
 
 const LoadedAccount = sig.runtime.account_loader.LoadedAccount;
-const FeatureSet = sig.core.FeatureSet;
+const FeatureSet = solana.features.Set;
 const FeeDetails = sig.runtime.check_transactions.FeeDetails;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const LoadedTransactionAccounts = sig.runtime.account_loader.LoadedTransactionAccounts;

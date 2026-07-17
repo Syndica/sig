@@ -1,12 +1,13 @@
 const std = @import("std");
 const tracy = @import("tracy");
 const sig = @import("../../../component.zig");
+const solana = @import("lib").solana;
 
 const nonce = sig.runtime.nonce;
 const pubkey_utils = sig.runtime.pubkey_utils;
 const system_program = sig.runtime.program.system;
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 
 const InstructionContext = sig.runtime.InstructionContext;
@@ -1216,7 +1217,7 @@ test "executeCreateAccountAllowPrefund feature gated" {
 test "executeAdvanceNonceAccount" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
-    const Hash = sig.core.Hash;
+    const Hash = solana.Hash;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -1310,7 +1311,7 @@ test "executeAdvanceNonceAccount" {
 test "executeWithdrawNonceAccount" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
-    const Hash = sig.core.Hash;
+    const Hash = solana.Hash;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -1403,7 +1404,7 @@ test "executeWithdrawNonceAccount" {
 test "executeWithdrawNonceAccount: initialized full-withdraw missing signer" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
-    const Hash = sig.core.Hash;
+    const Hash = solana.Hash;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -1468,7 +1469,7 @@ test "executeWithdrawNonceAccount: initialized full-withdraw missing signer" {
 test "executeInitializeNonceAccount" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
-    const Hash = sig.core.Hash;
+    const Hash = solana.Hash;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -1560,7 +1561,7 @@ test "executeInitializeNonceAccount" {
 test "executeAuthorizeNonceAccount" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
-    const Hash = sig.core.Hash;
+    const Hash = solana.Hash;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -1824,7 +1825,7 @@ test "executeTransferWithSeed" {
 test "executeUpgradeNonceAccount" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
-    const Hash = sig.core.Hash;
+    const Hash = solana.Hash;
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);

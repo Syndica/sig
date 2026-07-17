@@ -1,11 +1,12 @@
 const std = @import("std");
 const tracy = @import("tracy");
 const sig = @import("../component.zig");
+const solana = @import("lib").solana;
 
 const bincode = sig.bincode;
 
 const InstructionError = sig.core.instruction.InstructionError;
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 
 const AccountSharedData = sig.runtime.AccountSharedData;
 const TransactionContext = sig.runtime.TransactionContext;

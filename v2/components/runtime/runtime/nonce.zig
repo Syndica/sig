@@ -1,8 +1,9 @@
 const std = @import("std");
 const sig = @import("../component.zig");
+const solana = @import("lib").solana;
 
-const Hash = sig.core.Hash;
-const Pubkey = sig.core.Pubkey;
+const Hash = solana.Hash;
+const Pubkey = solana.Pubkey;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/nonce/state/current.rs#L10-L11
 const DURABLE_NONCE_HASH_PREFIX = "DURABLE_NONCE";

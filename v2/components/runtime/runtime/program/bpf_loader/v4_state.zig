@@ -1,6 +1,6 @@
-const sig = @import("../../../component.zig");
+const solana = @import("lib").solana;
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 
 pub const Status = enum(u64) {
     /// Program is in maintenance

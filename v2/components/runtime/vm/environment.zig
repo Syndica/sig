@@ -1,10 +1,11 @@
 const std = @import("std");
 const sig = @import("../component.zig");
 const tracy = @import("tracy");
+const solana = @import("lib").solana;
 
 const syscalls = sig.vm.syscalls;
 
-const FeatureSet = sig.core.FeatureSet;
+const FeatureSet = solana.features.Set;
 const ComputeBudget = sig.runtime.ComputeBudget;
 const Config = sig.vm.Config;
 const SbpfVersion = sig.vm.sbpf.Version;

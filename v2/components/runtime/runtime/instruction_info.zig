@@ -1,10 +1,11 @@
 const std = @import("std");
 const sig = @import("../component.zig");
+const solana = @import("lib").solana;
 
 const bincode = sig.bincode;
 
 const InstructionError = sig.core.instruction.InstructionError;
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 const Transaction = sig.core.Transaction;
 
 /// Intruction information which is constant across instruction execution

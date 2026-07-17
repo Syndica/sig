@@ -1,10 +1,11 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../component.zig");
+const solana = @import("lib").solana;
 
 const AccountSharedData = @import("AccountSharedData.zig");
-const Hash = sig.core.Hash;
-const Pubkey = sig.core.Pubkey;
+const Hash = solana.Hash;
+const Pubkey = solana.Pubkey;
 
 pub const AccountLoadError = error{ OutOfMemory, AccountsDBError };
 

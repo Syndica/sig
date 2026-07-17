@@ -2,8 +2,9 @@ const std = @import("std");
 const builtin = @import("builtin");
 const libsecp256k1 = @import("secp256k1");
 const sig = @import("../../../component.zig");
+const solana = @import("lib").solana;
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 const InstructionContext = sig.runtime.InstructionContext;
 const PrecompileProgramError = sig.runtime.program.precompiles.PrecompileProgramError;

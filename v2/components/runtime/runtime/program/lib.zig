@@ -1,5 +1,6 @@
 const std = @import("std");
 const sig = @import("../../component.zig");
+const solana = @import("lib").solana;
 
 comptime {
     if (@import("builtin").is_test) {
@@ -46,7 +47,7 @@ pub const SEED_FIELD_CONFIG = sig.bincode.utf8StringCodec([]const u8, 1024 * 102
 
 const Program = struct {
     func: EntrypointFn,
-    gate: ?sig.core.features.Feature = null,
+    gate: ?solana.features.Feature = null,
 
     const EntrypointFn = *const fn (
         std.mem.Allocator,

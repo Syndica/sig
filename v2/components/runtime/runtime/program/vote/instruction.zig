@@ -1,12 +1,13 @@
 const std = @import("std");
 const sig = @import("../../../component.zig");
+const solana = @import("lib").solana;
 
 const vote_program = sig.runtime.program.vote;
 const vote_state = vote_program.state;
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 const Slot = sig.core.Slot;
-const Hash = sig.core.Hash;
+const Hash = solana.Hash;
 const InstructionAccount = sig.core.instruction.InstructionAccount;
 
 const SEED_FIELD_CONFIG = sig.runtime.program.SEED_FIELD_CONFIG;

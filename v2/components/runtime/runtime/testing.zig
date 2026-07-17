@@ -1,15 +1,16 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../component.zig");
+const solana = @import("lib").solana;
 
 const bincode = sig.bincode;
 const sysvar = sig.runtime.sysvar;
 const vm = sig.vm;
 
-const Pubkey = sig.core.Pubkey;
-const Hash = sig.core.Hash;
+const Pubkey = solana.Pubkey;
+const Hash = solana.Hash;
 const Slot = sig.core.Slot;
-const FeatureSet = sig.core.FeatureSet;
+const FeatureSet = solana.features.Set;
 const InstructionInfo = sig.runtime.InstructionInfo;
 const LogCollector = sig.runtime.LogCollector;
 const SysvarCache = sig.runtime.SysvarCache;
@@ -53,7 +54,7 @@ pub const ExecuteContextsParams = struct {
     slot: Slot = 0,
 
     pub const FeatureParams = struct {
-        feature: sig.core.features.Feature,
+        feature: solana.features.Feature,
         slot: Slot = 0,
     };
 
@@ -61,7 +62,7 @@ pub const ExecuteContextsParams = struct {
 
     pub const SysvarCacheParams = struct {
         clock: ?sysvar.Clock = null,
-        epoch_schedule: ?sig.core.EpochSchedule = null,
+        epoch_schedule: ?solana.EpochSchedule = null,
         epoch_rewards: ?sysvar.EpochRewards = null,
         rent: ?sysvar.Rent = null,
         last_restart_slot: ?sysvar.LastRestartSlot = null,

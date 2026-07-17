@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const std14 = @import("std14");
 const sig = @import("../../component.zig");
+const solana = @import("lib").solana;
 
 const ids = sig.runtime.ids;
 const bpf_loader_program = sig.runtime.program.bpf_loader;
@@ -10,7 +11,7 @@ const pubkey_utils = sig.runtime.pubkey_utils;
 const serialize = sig.runtime.program.bpf.serialize;
 const memory = sig.vm.memory;
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 const Epoch = sig.core.Epoch;
 const Instruction = sig.core.Instruction;
 const InstructionAccount = sig.core.instruction.InstructionAccount;
@@ -1302,7 +1303,7 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/cpi.rs#L202-L216
 fn isV3InstructionBlacklisted(
     instruction_data: []const u8,
-    feature_set: *const sig.core.FeatureSet,
+    feature_set: *const solana.features.Set,
     slot: sig.core.Slot,
 ) bool {
     if (instruction_data.len == 0) return true;
@@ -2530,7 +2531,7 @@ fn testCpiCommon(comptime AccountType: type) !void {
         const account = ctx.getAccount();
 
         if (virtual_address_space_adjustments) {
-            const feature_set: *sig.core.FeatureSet = @constCast(ctx.tc.feature_set);
+            const feature_set: *solana.features.Set = @constCast(ctx.tc.feature_set);
             feature_set.setSlot(.syscall_parameter_address_restrictions, ctx.tc.slot);
             feature_set.setSlot(.virtual_address_space_adjustments, ctx.tc.slot);
             feature_set.setSlot(.account_data_direct_mapping, ctx.tc.slot);
@@ -2683,7 +2684,7 @@ test "invokeSigned: post-CPI region upgrade — testnet block 407910980" {
     }
 
     // (vasa=on, dm=off) — the testnet feature state at slot 407,910,980.
-    const feature_set: *sig.core.FeatureSet = @constCast(tc.feature_set);
+    const feature_set: *solana.features.Set = @constCast(tc.feature_set);
     feature_set.setSlot(.virtual_address_space_adjustments, tc.slot);
 
     try sig.runtime.executor.pushInstruction(tc, try testing.createInstructionInfo(
@@ -2813,8 +2814,8 @@ test "invokeSigned: post-CPI region upgrade — testnet block 407910980" {
 }
 
 test isV3InstructionBlacklisted {
-    const all_enabled = sig.core.features.Set.ALL_ENABLED_AT_GENESIS;
-    const all_disabled = sig.core.features.Set.ALL_DISABLED;
+    const all_enabled = solana.features.Set.ALL_ENABLED_AT_GENESIS;
+    const all_disabled = solana.features.Set.ALL_DISABLED;
     try std.testing.expect(isV3InstructionBlacklisted(&.{}, &all_disabled, 0));
     try std.testing.expect(!isV3InstructionBlacklisted(&.{3}, &all_disabled, 0));
     try std.testing.expect(!isV3InstructionBlacklisted(&.{4}, &all_disabled, 0));

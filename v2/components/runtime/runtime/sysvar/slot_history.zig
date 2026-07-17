@@ -1,11 +1,12 @@
 //! system variables definitions and addresses (clock, slot_history, …)
 const std = @import("std");
 const sig = @import("../../component.zig");
+const solana = @import("lib").solana;
 
 const Allocator = std.mem.Allocator;
 
-const Slot = sig.core.Slot;
-const Pubkey = sig.core.Pubkey;
+const Slot = solana.Slot;
+const Pubkey = solana.Pubkey;
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
 const BitVecConfig = sig.bloom.bit_vec.BitVecConfig;
 

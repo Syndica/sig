@@ -7,8 +7,9 @@
 /// - https://github.com/anza-xyz/agave/blob/v3.1.8/cost-model/src/cost_model.rs
 const std = @import("std");
 const sig = @import("../component.zig");
+const solana = @import("lib").solana;
 
-const FeatureSet = sig.core.FeatureSet;
+const FeatureSet = solana.features.Set;
 const Slot = sig.core.Slot;
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 const ComputeBudgetLimits = sig.runtime.program.compute_budget.ComputeBudgetLimits;

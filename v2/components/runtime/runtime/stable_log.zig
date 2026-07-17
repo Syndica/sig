@@ -2,8 +2,9 @@
 
 const std = @import("std");
 const sig = @import("../component.zig");
+const solana = @import("lib").solana;
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 const LogCollector = sig.runtime.LogCollector;
 const TransactionContext = sig.runtime.TransactionContext;
 

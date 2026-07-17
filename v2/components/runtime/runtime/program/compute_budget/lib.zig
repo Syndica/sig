@@ -2,13 +2,14 @@ const builtin = @import("builtin");
 const std = @import("std");
 const tracy = @import("tracy");
 const sig = @import("../../../component.zig");
+const solana = @import("lib").solana;
 
 const builtin_program_costs = sig.runtime.program.builtin_program_costs;
 
 const Message = sig.core.transaction.Message;
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
-const FeatureSet = sig.core.FeatureSet;
+const FeatureSet = solana.features.Set;
 const InstructionContext = sig.runtime.InstructionContext;
 const TransactionError = sig.core.transaction_error.TransactionError;
 const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
@@ -457,7 +458,7 @@ fn testComputeBudgetLimits(
         .signature_count = 0,
         .readonly_signed_count = 0,
         .readonly_unsigned_count = 0,
-        .recent_blockhash = sig.core.Hash.ZEROES,
+        .recent_blockhash = solana.Hash.ZEROES,
         .account_keys = account_keys,
         .instructions = instructions,
         .address_lookups = &.{},

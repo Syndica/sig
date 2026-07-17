@@ -1,8 +1,8 @@
 const builtin = @import("builtin");
 const std = @import("std");
-const sig = @import("../../component.zig");
+const solana = @import("lib").solana;
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/sysvar/src/fees.rs#L43
 pub const Fees = extern struct {

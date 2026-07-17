@@ -1,11 +1,12 @@
 const std = @import("std");
 const sig = @import("../../../component.zig");
+const solana = @import("lib").solana;
 
 const program_loader = sig.runtime.program_loader;
 const vm = sig.vm;
 
 const program = sig.runtime.program;
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 const ExecuteContextParams = sig.runtime.testing.ExecuteContextsParams;
 const AccountParams = ExecuteContextParams.AccountParams;
 const AccountSharedData = sig.runtime.AccountSharedData;

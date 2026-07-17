@@ -1,5 +1,5 @@
 const std = @import("std");
-const bincode = @import("../bincode/bincode.zig");
+const bincode = @import("../component.zig").bincode;
 const testing = std.testing;
 
 const DynamicArrayBitSet = @import("bit_set.zig").DynamicArrayBitSet;

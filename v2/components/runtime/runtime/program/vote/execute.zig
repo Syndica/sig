@@ -1,12 +1,13 @@
 const std = @import("std");
 const tracy = @import("tracy");
 const sig = @import("../../../component.zig");
+const solana = @import("lib").solana;
 
 const vote_program = sig.runtime.program.vote;
 const pubkey_utils = sig.runtime.pubkey_utils;
 const vote_instruction = vote_program.vote_instruction;
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 const InstructionError = sig.core.instruction.InstructionError;
 const VoteState = vote_program.state.VoteState;
 const VoteStateV3 = vote_program.state.VoteStateV3;
@@ -26,7 +27,7 @@ const InstructionContext = sig.runtime.InstructionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 const Rent = sig.runtime.sysvar.Rent;
 const Clock = sig.runtime.sysvar.Clock;
-const EpochSchedule = sig.core.EpochSchedule;
+const EpochSchedule = solana.EpochSchedule;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
 
 const VoteProgramInstruction = vote_instruction.Instruction;
@@ -1608,7 +1609,7 @@ fn setVoteState(
 test "isCommissionUpdateAllowed epoch half check" {
     const DEFAULT_SLOTS_PER_EPOCH = sig.core.time.DEFAULT_SLOTS_PER_EPOCH;
     const DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET =
-        sig.core.epoch_schedule.DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET;
+        solana.epoch_schedule.DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET;
 
     const TestCase = struct {
         slot: sig.core.Slot,
@@ -1660,7 +1661,7 @@ test "isCommissionUpdateAllowed epoch half check" {
 test "isCommissionUpdateAllowed warmup epoch half check with warmup" {
     const DEFAULT_SLOTS_PER_EPOCH = sig.core.time.DEFAULT_SLOTS_PER_EPOCH;
     const DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET =
-        sig.core.epoch_schedule.DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET;
+        solana.epoch_schedule.DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET;
 
     const epoch_schedule = try testEpochSchedule(
         DEFAULT_SLOTS_PER_EPOCH,
@@ -1682,7 +1683,7 @@ test "isCommissionUpdateAllowed warmup epoch half check with warmup" {
 test "isCommissionUpdateAllowed epoch half check with warmup" {
     const DEFAULT_SLOTS_PER_EPOCH = sig.core.time.DEFAULT_SLOTS_PER_EPOCH;
     const DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET =
-        sig.core.epoch_schedule.DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET;
+        solana.epoch_schedule.DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET;
 
     const TestCase = struct {
         slot: sig.core.Slot,
@@ -1742,7 +1743,7 @@ fn testEpochSchedule(
         @panic("testEpochSchedule should only in test");
     }
 
-    const MINIMUM_SLOTS_PER_EPOCH = sig.core.epoch_schedule.MINIMUM_SLOTS_PER_EPOCH;
+    const MINIMUM_SLOTS_PER_EPOCH = solana.epoch_schedule.MINIMUM_SLOTS_PER_EPOCH;
     std.debug.assert(slots_per_epoch >= MINIMUM_SLOTS_PER_EPOCH);
 
     var first_normal_epoch: u64 = 0;
@@ -3840,7 +3841,7 @@ test "vote_program: vote" {
 
     const vote = Vote{
         .slots = &slots,
-        .hash = sig.core.Hash.ZEROES,
+        .hash = solana.Hash.ZEROES,
         .timestamp = null,
     };
 
@@ -3960,7 +3961,7 @@ test "vote_program: vote switch" {
 
     const vote = Vote{
         .slots = &slots,
-        .hash = sig.core.Hash.ZEROES,
+        .hash = solana.Hash.ZEROES,
         .timestamp = null,
     };
 
@@ -4001,7 +4002,7 @@ test "vote_program: vote switch" {
         std.testing.allocator,
         vote_program.ID,
         VoteProgramInstruction{
-            .vote_switch = .{ .vote = vote, .hash = sig.core.Hash.ZEROES },
+            .vote_switch = .{ .vote = vote, .hash = solana.Hash.ZEROES },
         },
         &.{
             .{ .is_signer = false, .is_writable = true, .index_in_transaction = 0 },
@@ -4080,7 +4081,7 @@ test "vote_program: vote missing signature" {
 
     const vote = Vote{
         .slots = &slots,
-        .hash = sig.core.Hash.ZEROES,
+        .hash = solana.Hash.ZEROES,
         .timestamp = null,
     };
 
@@ -4336,7 +4337,7 @@ test "vote_program: vote state update" {
     var initial_state_bytes = ([_]u8{0} ** VoteStateV3.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
 
-    const vote_slot_hash = sig.core.Hash.initRandom(prng.random());
+    const vote_slot_hash = solana.Hash.initRandom(prng.random());
 
     // VoteStateUpdate.
     var lockouts = [_]Lockout{
@@ -4387,9 +4388,9 @@ test "vote_program: vote state update" {
     const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
-            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 6, .hash = solana.Hash.ZEROES },
+            .{ .slot = 4, .hash = solana.Hash.ZEROES },
+            .{ .slot = 2, .hash = solana.Hash.ZEROES },
         },
     );
     // deinitialised by expectProgramExecuteResult
@@ -4481,7 +4482,7 @@ test "vote_program: vote state update switch" {
     var initial_state_bytes = ([_]u8{0} ** VoteStateV3.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
 
-    const vote_slot_hash = sig.core.Hash.initRandom(prng.random());
+    const vote_slot_hash = solana.Hash.initRandom(prng.random());
 
     // VoteStateUpdate.
     var lockouts = [_]Lockout{
@@ -4627,7 +4628,7 @@ test "vote_program: compact vote state update" {
     var initial_state_bytes = ([_]u8{0} ** VoteStateV3.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
 
-    const vote_slot_hash = sig.core.Hash.initRandom(prng.random());
+    const vote_slot_hash = solana.Hash.initRandom(prng.random());
 
     // VoteStateUpdate.
     var lockouts = [_]Lockout{
@@ -4678,9 +4679,9 @@ test "vote_program: compact vote state update" {
     const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
-            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 6, .hash = solana.Hash.ZEROES },
+            .{ .slot = 4, .hash = solana.Hash.ZEROES },
+            .{ .slot = 2, .hash = solana.Hash.ZEROES },
         },
     );
     // deinitialised by expectProgramExecuteResult
@@ -4772,7 +4773,7 @@ test "vote_program: compact vote state update switch" {
     var initial_state_bytes = ([_]u8{0} ** VoteStateV3.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
 
-    const vote_slot_hash = sig.core.Hash.initRandom(prng.random());
+    const vote_slot_hash = solana.Hash.initRandom(prng.random());
 
     // VoteStateUpdate.
     var lockouts = [_]Lockout{
@@ -4823,9 +4824,9 @@ test "vote_program: compact vote state update switch" {
     const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
-            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 6, .hash = solana.Hash.ZEROES },
+            .{ .slot = 4, .hash = solana.Hash.ZEROES },
+            .{ .slot = 2, .hash = solana.Hash.ZEROES },
         },
     );
     // deinitialised by expectProgramExecuteResult
@@ -4836,7 +4837,7 @@ test "vote_program: compact vote state update switch" {
         VoteProgramInstruction{
             .compact_update_vote_state_switch = .{
                 .vote_state_update = vote_state_update,
-                .hash = sig.core.Hash.ZEROES,
+                .hash = solana.Hash.ZEROES,
             },
         },
         &.{
@@ -4918,7 +4919,7 @@ test "vote_program: tower sync" {
     var initial_state_bytes = ([_]u8{0} ** VoteStateV3.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
 
-    const vote_slot_hash = sig.core.Hash.initRandom(prng.random());
+    const vote_slot_hash = solana.Hash.initRandom(prng.random());
 
     // VoteStateUpdate.
     var lockouts = [_]Lockout{
@@ -4934,7 +4935,7 @@ test "vote_program: tower sync" {
         .hash = vote_slot_hash,
         .root = null,
         .timestamp = null,
-        .block_id = sig.core.Hash.ZEROES,
+        .block_id = solana.Hash.ZEROES,
     };
 
     var final_state_init = try VoteStateV3.init(
@@ -4970,9 +4971,9 @@ test "vote_program: tower sync" {
     const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
-            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 6, .hash = solana.Hash.ZEROES },
+            .{ .slot = 4, .hash = solana.Hash.ZEROES },
+            .{ .slot = 2, .hash = solana.Hash.ZEROES },
         },
     );
     // deinitialised by expectProgramExecuteResult
@@ -5064,7 +5065,7 @@ test "vote_program: tower sync switch" {
     var initial_state_bytes = ([_]u8{0} ** VoteStateV3.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], vote_state, .{});
 
-    const vote_slot_hash = sig.core.Hash.initRandom(prng.random());
+    const vote_slot_hash = solana.Hash.initRandom(prng.random());
 
     // VoteStateUpdate.
     var lockouts = [_]Lockout{
@@ -5080,7 +5081,7 @@ test "vote_program: tower sync switch" {
         .hash = vote_slot_hash,
         .root = null,
         .timestamp = null,
-        .block_id = sig.core.Hash.ZEROES,
+        .block_id = solana.Hash.ZEROES,
     };
 
     var final_state_init = try VoteStateV3.init(
@@ -5116,9 +5117,9 @@ test "vote_program: tower sync switch" {
     const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
-            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 6, .hash = solana.Hash.ZEROES },
+            .{ .slot = 4, .hash = solana.Hash.ZEROES },
+            .{ .slot = 2, .hash = solana.Hash.ZEROES },
         },
     );
     // deinitialised by expectProgramExecuteResult
@@ -5129,7 +5130,7 @@ test "vote_program: tower sync switch" {
         VoteProgramInstruction{
             .tower_sync_switch = .{
                 .tower_sync = tower_sync,
-                .hash = sig.core.Hash.ZEROES,
+                .hash = solana.Hash.ZEROES,
             },
         },
         &.{
@@ -5308,7 +5309,7 @@ test "vote_program: tower sync with v4 feature" {
     var initial_state_bytes = ([_]u8{0} ** VoteStateV3.MAX_VOTE_STATE_SIZE);
     _ = try sig.bincode.writeToSlice(initial_state_bytes[0..], initial_versioned, .{});
 
-    const vote_slot_hash = sig.core.Hash.initRandom(prng.random());
+    const vote_slot_hash = solana.Hash.initRandom(prng.random());
 
     var lockouts = [_]Lockout{
         .{ .slot = 2, .confirmation_count = 4 },
@@ -5321,7 +5322,7 @@ test "vote_program: tower sync with v4 feature" {
         .hash = vote_slot_hash,
         .root = null,
         .timestamp = null,
-        .block_id = sig.core.Hash.ZEROES,
+        .block_id = solana.Hash.ZEROES,
     };
 
     // Build the expected final V4 state: V3→V4 conversion + tower sync applied
@@ -5353,9 +5354,9 @@ test "vote_program: tower sync with v4 feature" {
     const slot_hashes = SlotHashes.initWithEntries(
         &.{
             .{ .slot = 8, .hash = vote_slot_hash },
-            .{ .slot = 6, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 4, .hash = sig.core.Hash.ZEROES },
-            .{ .slot = 2, .hash = sig.core.Hash.ZEROES },
+            .{ .slot = 6, .hash = solana.Hash.ZEROES },
+            .{ .slot = 4, .hash = solana.Hash.ZEROES },
+            .{ .slot = 2, .hash = solana.Hash.ZEROES },
         },
     );
 
@@ -6116,7 +6117,7 @@ test "vote_program: vote with v4 feature" {
 
     const vote = Vote{
         .slots = &slots,
-        .hash = sig.core.Hash.ZEROES,
+        .hash = solana.Hash.ZEROES,
         .timestamp = null,
     };
 

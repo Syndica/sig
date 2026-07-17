@@ -1,7 +1,8 @@
 const std = @import("std");
 const sig = @import("../../../component.zig");
+const solana = @import("lib").solana;
 
-const Pubkey = sig.core.Pubkey;
+const Pubkey = solana.Pubkey;
 const Slot = sig.core.Slot;
 const sysvar = sig.runtime.sysvar;
 const InstructionError = sig.core.instruction.InstructionError;

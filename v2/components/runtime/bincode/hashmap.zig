@@ -1,8 +1,8 @@
 const std = @import("std");
-const sig = @import("../component.zig");
+const utils = @import("../component.zig").utils;
 const bincode = @import("bincode.zig");
 
-const hashMapInfo = sig.utils.types.hashMapInfo;
+const hashMapInfo = utils.types.hashMapInfo;
 
 const FieldConfig = bincode.FieldConfig;
 const Params = bincode.Params;
@@ -215,7 +215,7 @@ pub fn hashMapFieldConfig(
 }
 
 /// Individually configure the FieldConfig for the key and value.
-pub fn HashMapConfig(comptime hm_info: sig.utils.types.HashMapInfo) type {
+pub fn HashMapConfig(comptime hm_info: utils.types.HashMapInfo) type {
     return struct {
         key: FieldConfig(hm_info.Key) = .{},
         value: FieldConfig(hm_info.Value) = .{},

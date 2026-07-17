@@ -2,13 +2,14 @@ const std = @import("std");
 const std14 = @import("std14");
 const sig = @import("../component.zig");
 const tracy = @import("tracy");
+const solana = @import("lib").solana;
 
 const Allocator = std.mem.Allocator;
 
 const AccountReader = sig.runtime.execution_interfaces.AccountReader;
 
-const Hash = sig.core.Hash;
-const Pubkey = sig.core.Pubkey;
+const Hash = solana.Hash;
+const Pubkey = solana.Pubkey;
 const RentCollector = sig.core.rent_collector.RentCollector;
 const AccountMeta = sig.core.instruction.InstructionAccount;
 

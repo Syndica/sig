@@ -2,14 +2,15 @@ const std = @import("std");
 const tracy = @import("tracy");
 const std14 = @import("std14");
 const sig = @import("../component.zig");
+const solana = @import("lib").solana;
 
 const leb = std.leb;
 
 const Blake3 = std.crypto.hash.Blake3;
 
-const Hash = sig.core.Hash;
-const Pubkey = sig.core.Pubkey;
-const Signature = sig.core.Signature;
+const Hash = solana.Hash;
+const Pubkey = solana.Pubkey;
+const Signature = solana.Signature;
 const KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 const shortVecConfig = sig.bincode.shortvec.sliceConfig;
