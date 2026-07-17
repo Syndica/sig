@@ -113,10 +113,13 @@ pub const ExecutionRegistry = extern struct {
         transactions: TxSegmentNode.Id.Optional,
     };
 
+    /// TODO(1740): determine upper bound of trtansactions per block
+    const tx_per_block = 10_000;
+
     /// Uses a capacity such that there is roughly a 1:1000 ratio of blocks:transactions.
     pub const TxSegmentPool = collections.SharedPool(
         TxSegmentNode,
-        BlockPool.capacity * 1000 / TxSegmentNode.tx_per_segment,
+        BlockPool.capacity * tx_per_block / TxSegmentNode.tx_per_segment,
     );
 
     pub const TxSegmentNode = extern struct {
