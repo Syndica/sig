@@ -76,7 +76,7 @@ pub fn build(b: *Build) !void {
     ci_step.dependOn(lint_step);
     ci_step.dependOn(&b.addFmt(.{
         .check = true,
-        .paths = &.{ "build.zig", "build.zig.zon", "v2", "scripts" },
+        .paths = &.{ "build.zig", "build.zig.zon", "v2", "tools" },
     }).step);
 
     // docs
@@ -623,7 +623,7 @@ const Tools = struct {
     ) Tools {
         const shred_stream_exe = blk: {
             const module = b.createModule(.{
-                .root_source_file = b.path("v2/tools/shred_stream.zig"),
+                .root_source_file = b.path("tools/shred_stream.zig"),
                 .target = config.target,
                 .optimize = config.optimize,
                 .imports = &.{
@@ -644,13 +644,13 @@ const Tools = struct {
         const lint_exe: Executable = .init(b, config.exe, .{
             .name = "sig-lint",
             .root_module = b.createModule(.{
-                .root_source_file = b.path("v2/tools/lint/main.zig"),
+                .root_source_file = b.path("tools/lint/main.zig"),
                 .target = b.graph.host,
                 .optimize = .ReleaseSafe,
             }),
         }, .{});
         unit_tests.add("lint-tests", b.createModule(.{
-            .root_source_file = b.path("v2/tools/lint/main.zig"),
+            .root_source_file = b.path("tools/lint/main.zig"),
             .target = b.graph.host,
             .optimize = .Debug,
         }));
@@ -665,7 +665,7 @@ const Tools = struct {
                     .root_module = b.createModule(.{
                         .target = b.graph.host,
                         .optimize = .Debug,
-                        .root_source_file = b.path("v2/tools/gen_docs_entry.zig"),
+                        .root_source_file = b.path("tools/gen_docs_entry.zig"),
                     }),
                 }),
             );

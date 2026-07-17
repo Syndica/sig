@@ -7,12 +7,10 @@
 # moved to results/metrics/output-{commit}-{timestamp}.json
 #
 # these output files are then compared/visualized using the
-# scripts/benchmark_server.py script
+# v1/scripts/benchmark_server.py script
 
-# now in the scripts/ dir
-cd "$(dirname "$0")"
-# now in the sig dir
-cd ..
+# now in the v1 dir
+cd "$(dirname "$0")/.."
 
 # pull the latest changes
 git pull

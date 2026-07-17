@@ -1,5 +1,3 @@
-#!/usr/bin/env bash
-#
 # to install kcov follow the instructions at:
 #   https://github.com/SimonKagstrom/kcov/blob/master/INSTALL.md
 # to build on mac the following should work:
@@ -13,23 +11,20 @@
 #   export PATH=$PATH:/path/to/kcov/build/src
 #   ```
 
-set -exo pipefail
-
-echo "=> Cleaning up" 
+echo "=> Clearing kcov-output directory" 
 rm -rf kcov-output 
 mkdir kcov-output 
 
-if [ -z "$1" ]; then
-    echo "=> Building Sig" 
-    zig build test -Dno-run -Dlong-tests
-    test_bin="./zig-out/bin/test"
-else
-    test_bin="$1"
-fi
+echo "=> Building Sig" 
+zig build 
 
-echo "=> Running kcov on tests" 
+echo "=> Running kcov on gossip spy" 
 kcov \
-    --include-pattern=src/ \
+    --include-pattern=src/gossip/ \
     --exclude-pattern=$HOME/.cache \
-    kcov-output \
-    $test_bin 
+    kcov-output/ \
+    ./zig-out/bin/fuzz --seed 19 gossip-service 50_000
+    
+# open report
+echo "=> Opening kcov-output/index.html" 
+open kcov-output/index.html

@@ -106,7 +106,7 @@ def format(paths):
 
 if __name__ == "__main__":
     # read cli -- either single file or multiple files
-    # python scripts/view_bench.py b_results.txt b_results.txt
+    # python v1/scripts/view_bench.py b_results.txt b_results.txt
 
     # each file should be something like:
     # {benchmark_name}, {runtime1}, {runtime2}, ...

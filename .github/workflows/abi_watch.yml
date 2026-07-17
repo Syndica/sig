@@ -27,4 +27,4 @@
 #         python -m pip install requests
 #     - name: run
 #       run: |
-#         python scripts/agave_gossip_hash_check.py
+#         python tools/agave_gossip_hash_check.py

@@ -18,12 +18,13 @@ mkdir kcov-output
 echo "=> Building Sig" 
 zig build 
 
-echo "=> Running kcov on gossip spy" 
+echo "=> Running kcov on accountsdb" 
 kcov \
-    --include-pattern=src/gossip/ \
+    --include-pattern=src/accountsdb/ \
+    # not sure why this is necessary with --include-pattern but it is
     --exclude-pattern=$HOME/.cache \
     kcov-output/ \
-    ./zig-out/bin/fuzz --seed 19 gossip-table 50_000
+    ./zig-out/bin/fuzz accountsdb
 
 # open report
 echo "=> Opening kcov-output/index.html" 

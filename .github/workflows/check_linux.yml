@@ -35,8 +35,8 @@ jobs:
 
       - name: Pre-download zig dependencies
         run: |
-          ./scripts/fetch-zig-deps.py
-          ./scripts/fetch-zig-deps.py v2/build.zig.zon
+          ./tools/fetch-zig-deps.py
+          ./tools/fetch-zig-deps.py v2/build.zig.zon
           zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36 -Denable-tsan=false -Dno-network-tests -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: Set up kcov
@@ -49,7 +49,7 @@ jobs:
           -Denable-tsan=false -Dno-network-tests -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: Collect v1 coverage
-        run: bash scripts/kcov_ci.sh
+        run: bash v1/scripts/kcov_ci.sh
 
       - name: Collect v2 coverage
         run: |
@@ -143,11 +143,11 @@ jobs:
 
       - name: Build
         run: |
-          ./scripts/fetch-zig-deps.py
+          ./tools/fetch-zig-deps.py
           zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -Dallow-no-sha -Dallow-no-avx512 -p workspace/zig-out-release --summary all
 
       - name: Run Gossip
-        run: bash scripts/gossip_test.sh 120 workspace/zig-out-release/bin/sig
+        run: bash v1/scripts/gossip_test.sh 120 workspace/zig-out-release/bin/sig
 
       - name: Run Gossip Service Fuzzer
         run: workspace/zig-out-release/bin/fuzz --seed 19 gossip-service 10000
@@ -177,7 +177,7 @@ jobs:
 
       - name: Build
         run: |
-          ./scripts/fetch-zig-deps.py
+          ./tools/fetch-zig-deps.py
           zig build -Denable-tsan=true -Dallow-no-sha -Dallow-no-avx512 -p workspace/zig-out --summary all
 
       - name: Build Tests
@@ -217,35 +217,35 @@ jobs:
 
       - name: Check style
         run: |
-          python3 scripts/style.py --check src
-          python3 scripts/style.py --check shared
-          python3 scripts/style.py --check conformance/src
+          python3 tools/style.py --check src
+          python3 tools/style.py --check shared
+          python3 tools/style.py --check conformance/src
 
       - name: Check docs
         run: python3 docs/check.py ./
 
       - name: Shared tests
         run: |
-          ./scripts/fetch-zig-deps.py shared/build.zig.zon
+          ./tools/fetch-zig-deps.py shared/build.zig.zon
           cd shared
           zig build test -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: V2 checks
         run: |
-          ./scripts/fetch-zig-deps.py v2/build.zig.zon
+          ./tools/fetch-zig-deps.py v2/build.zig.zon
           cd v2/
           zig build ci -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: Build and test hashmap ledger (linux)
         run: |
           set -eo pipefail
-          ./scripts/fetch-zig-deps.py
+          ./tools/fetch-zig-deps.py
           zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dfilter="ledger" -Dallow-no-sha -Dallow-no-avx512 --summary all
           zig-out/bin/test 2>&1 | cat
 
       - name: Webzockets tests (linux)
         run: |
-          ./scripts/fetch-zig-deps.py src/rpc/webzockets/build.zig.zon
+          ./tools/fetch-zig-deps.py src/rpc/webzockets/build.zig.zon
           cd src/rpc/webzockets
           zig build test --summary all
 
@@ -267,7 +267,7 @@ jobs:
 
       - name: Build Conformance
         run: |
-          ./scripts/fetch-zig-deps.py conformance/build.zig.zon
+          ./tools/fetch-zig-deps.py conformance/build.zig.zon
           cd conformance
           zig build -Dallow-no-sha -Dallow-no-avx512 -Ddisable-feature-status-logs --summary all
 
@@ -327,7 +327,7 @@ jobs:
 
       - name: Build Sig target and Agave target
         run: |
-          ./scripts/fetch-zig-deps.py conformance/build.zig.zon
+          ./tools/fetch-zig-deps.py conformance/build.zig.zon
           cd conformance
           zig build solfuzz_sig -Dallow-no-sha -Dallow-no-avx512 --summary all
           . commits.env

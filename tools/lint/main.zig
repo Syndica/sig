@@ -1,7 +1,5 @@
 const std = @import("std");
 
-const Allocator = std.mem.Allocator;
-
 const cli = @import("cli.zig");
 const core = @import("core.zig");
 const line_length = @import("line_length.zig");
@@ -31,12 +29,12 @@ const project_paths = [_][]const u8{
     "v2/lib",
     "v2/services",
     "v2/tests",
-    "v2/tools",
+    "tools",
 };
 
 const test_inclusion_static_roots = [_][]const u8{
     "v2/lib/lib.zig",
-    "v2/tools/lint/main.zig",
+    "tools/lint/main.zig",
 };
 
 // File-level rules (line_length, unused_declarations) are skipped for files

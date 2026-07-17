@@ -9,7 +9,7 @@ const gossip_table_fuzz = sig.gossip.fuzz_table;
 const ledger_fuzz = sig.ledger.fuzz_ledger;
 
 // Supported fuzz filters.
-// NOTE: changing these enum variants will require a change to the fuzz/kcov in `scripts/`
+// NOTE: changing these enum variants will require a change to the fuzz/kcov in `v1/scripts/`
 pub const FuzzFilter = enum {
     accountsdb,
     // snapshot,

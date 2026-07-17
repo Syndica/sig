@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+#
 # to install kcov follow the instructions at:
 #   https://github.com/SimonKagstrom/kcov/blob/master/INSTALL.md
 # to build on mac the following should work:
@@ -11,21 +13,23 @@
 #   export PATH=$PATH:/path/to/kcov/build/src
 #   ```
 
-echo "=> Clearing kcov-output directory" 
+set -exo pipefail
+
+echo "=> Cleaning up" 
 rm -rf kcov-output 
 mkdir kcov-output 
 
-echo "=> Building Sig" 
-zig build 
+if [ -z "$1" ]; then
+    echo "=> Building Sig" 
+    zig build test -Dno-run -Dlong-tests
+    test_bin="./zig-out/bin/test"
+else
+    test_bin="$1"
+fi
 
-echo "=> Running kcov on accountsdb" 
+echo "=> Running kcov on tests" 
 kcov \
-    --include-pattern=src/accountsdb/ \
-    # not sure why this is necessary with --include-pattern but it is
+    --include-pattern=src/ \
     --exclude-pattern=$HOME/.cache \
-    kcov-output/ \
-    ./zig-out/bin/fuzz accountsdb
-
-# open report
-echo "=> Opening kcov-output/index.html" 
-open kcov-output/index.html
+    kcov-output \
+    $test_bin 
