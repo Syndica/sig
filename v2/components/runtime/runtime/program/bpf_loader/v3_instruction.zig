@@ -101,8 +101,8 @@ pub const Close = struct {
     };
 };
 
-/// Minimum number of bytes that an `ExtendProgram` / `ExtendProgramChecked` instruction
-/// must request when SIMD-0431 (`loader_v3_minimum_extend_program_size`) is active.
+/// Minimum number of bytes that an `ExtendProgram` instruction must request
+/// when SIMD-0431 (`loader_v3_minimum_extend_program_size`) is active.
 ///
 /// [solana-sdk] https://github.com/anza-xyz/solana-sdk/blob/loader-v3-interface@v7.0.0/loader-v3-interface/src/instruction.rs#L18
 pub const MINIMUM_EXTEND_PROGRAM_BYTES: u32 = 10240;
@@ -122,37 +122,6 @@ pub const ExtendProgram = struct {
         /// `[WRITE, SIGNER]` The payer account, optional, that will pay necessary rent exemption
         /// costs for the increased storage size.
         payer = 3,
-    };
-};
-
-pub const ExtendProgramChecked = struct {
-    /// Number of bytes to extend the program data.
-    additional_bytes: u32,
-
-    pub const AccountIndex = enum(u3) {
-        /// `[WRITE]` The ProgramData account.
-        program_data = 0,
-        /// `[WRITE]` The ProgramData account's associated Program account.
-        program = 1,
-        /// `[SIGNER]` The authority.
-        authority = 2,
-        /// `[]` System program (`solana_sdk::system_program::id()`),
-        /// optional used to transfer lamports from the payer to the ProgramData account.
-        system_program = 3,
-        /// `[WRITE, SIGNER]` The payer account, optional, that will pay necessary rent exemption
-        /// costs for the increased storage size.
-        payer = 4,
-    };
-};
-
-pub const Migrate = struct {
-    pub const AccountIndex = enum(u2) {
-        /// `[WRITE]` The ProgramData account.
-        program_data = 0,
-        /// `[WRITE]` The Program account.
-        program = 1,
-        /// `[SIGNER]` The current authority.
-        authority = 2,
     };
 };
 
@@ -301,28 +270,4 @@ pub const Instruction = union(enum) {
     ///   1. `[signer]` The current authority.
     ///   2. `[signer]` The new authority.
     set_authority_checked: SetAuthorityChecked,
-
-    /// Migrate the program to loader-v4.
-    ///
-    /// # Account references
-    ///   0. `[writable]` The ProgramData account.
-    ///   1. `[writable]` The Program account.
-    ///   2. `[signer]` The current authority.
-    migrate: Migrate,
-
-    /// Extend a program's ProgramData account by the specified number of bytes.
-    /// Only upgradeable programs can be extended.
-    ///
-    /// This instruction differs from ExtendProgram in that the authority is a
-    /// required signer.
-    ///
-    /// # Account references
-    ///   0. `[writable]` The ProgramData account.
-    ///   1. `[writable]` The ProgramData account's associated Program account.
-    ///   2. `[signer]` The authority.
-    ///   3. `[]` System program (`solana_sdk::system_program::id()`), optional, used to transfer
-    ///      lamports from the payer to the ProgramData account.
-    ///   4. `[signer]` The payer account, optional, that will pay necessary rent exemption costs
-    ///      for the increased storage size.
-    extend_program_checked: ExtendProgramChecked,
 };

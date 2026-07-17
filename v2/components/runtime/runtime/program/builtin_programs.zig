@@ -96,12 +96,6 @@ pub const BUILTINS = [_]BuiltinProgram{
         .core_bpf_migration_config = null,
     },
     .{
-        .program_id = program.bpf_loader.v4.ID,
-        .data = "loader_v4",
-        .enable_feature_id = .enable_loader_v4,
-        .core_bpf_migration_config = null,
-    },
-    .{
         .program_id = program.compute_budget.ID,
         .data = "compute_budget_program",
         .enable_feature_id = null,
