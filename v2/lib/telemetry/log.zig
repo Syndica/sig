@@ -630,9 +630,9 @@ pub const EntryValueFmt = struct {
                 else
                     @ptrCast(@alignCast(ptr));
                 const has_whitespace = WhitespaceDetector.detect(fmt_str, .{value.*});
-                if (has_whitespace) try w.writeAll("\"");
+                if (has_whitespace) try w.writeByte('"');
                 try w.print(fmt_str, .{value.*});
-                if (has_whitespace) try w.writeAll("\"");
+                if (has_whitespace) try w.writeByte('"');
             }
         };
         return .{
@@ -656,9 +656,9 @@ pub const EntryValueFmt = struct {
             ) std.Io.Writer.Error!void {
                 const args: @TypeOf(args_ptr) = @ptrCast(@alignCast(ptr));
                 const has_whitespace = WhitespaceDetector.detect(fmt_str, args.*);
-                if (has_whitespace) try w.writeAll("\"");
+                if (has_whitespace) try w.writeByte('"');
                 try w.print(fmt_str, args.*);
-                if (has_whitespace) try w.writeAll("\"");
+                if (has_whitespace) try w.writeByte('"');
             }
         };
         return .{
@@ -872,49 +872,41 @@ pub const WhitespaceDetector = struct {
 };
 
 test WhitespaceDetector {
-    {
-        var wd: WhitespaceDetector = .init();
-        try wd.writer.writeAll("no-whitespace-here");
-        try std.testing.expect(!wd.found);
-    }
-    {
-        var wd: WhitespaceDetector = .init();
-        try wd.writer.writeAll("hello world");
-        try std.testing.expect(wd.found);
-    }
-    {
-        var wd: WhitespaceDetector = .init();
-        try wd.writer.writeAll("end ");
-        try std.testing.expect(wd.found);
-    }
-    {
-        var wd: WhitespaceDetector = .init();
-        try wd.writer.writeAll(" start");
-        try std.testing.expect(wd.found);
-    }
-    {
-        var wd: WhitespaceDetector = .init();
-        try wd.writer.print("value={d}", .{42});
-        try std.testing.expect(!wd.found);
-    }
-    {
-        var wd: WhitespaceDetector = .init();
-        try wd.writer.print("value = {d}", .{42});
-        try std.testing.expect(wd.found);
-    }
-    {
-        var wd: WhitespaceDetector = .init();
-        try wd.writer.print("value={s}", .{"hello world"});
-        try std.testing.expect(wd.found);
-    }
-    {
-        var wd: WhitespaceDetector = .init();
-        try wd.writer.writeByte('\t');
-        try std.testing.expect(wd.found);
-    }
-    {
-        var wd: WhitespaceDetector = .init();
-        try wd.writer.writeByte('\n');
-        try std.testing.expect(wd.found);
-    }
+    var wd: WhitespaceDetector = undefined;
+
+    wd = .init();
+    try wd.writer.writeAll("no-whitespace-here");
+    try std.testing.expect(!wd.found);
+
+    wd = .init();
+    try wd.writer.writeAll("hello world");
+    try std.testing.expect(wd.found);
+
+    wd = .init();
+    try wd.writer.writeAll("end ");
+    try std.testing.expect(wd.found);
+
+    wd = .init();
+    try wd.writer.writeAll(" start");
+    try std.testing.expect(wd.found);
+
+    wd = .init();
+    try wd.writer.print("value={d}", .{42});
+    try std.testing.expect(!wd.found);
+
+    wd = .init();
+    try wd.writer.print("value = {d}", .{42});
+    try std.testing.expect(wd.found);
+
+    wd = .init();
+    try wd.writer.print("value={s}", .{"hello world"});
+    try std.testing.expect(wd.found);
+
+    wd = .init();
+    try wd.writer.writeByte('\t');
+    try std.testing.expect(wd.found);
+
+    wd = .init();
+    try wd.writer.writeByte('\n');
+    try std.testing.expect(wd.found);
 }
