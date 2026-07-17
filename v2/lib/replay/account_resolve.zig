@@ -655,14 +655,14 @@ pub const AccountResolver = struct {
 
         // TODO: need to validate this.
         // TODO: document/link to agave/fd.
-        // validateNoDuplicateAccounts(
-        //     transaction,
-        //     &pending.completion.transaction,
-        // ) catch |err| {
-        //     pending.completion.result = .{ .failed = err };
-        //     pending.status = .complete;
-        //     return true;
-        // };
+        validateNoDuplicateAccounts(
+            transaction,
+            &pending.completion.transaction,
+        ) catch |err| {
+            pending.completion.result = .{ .failed = err };
+            pending.status = .complete;
+            return true;
+        };
 
         pending.completion.result = .{ .resolved = {} };
         pending.status = .complete;
@@ -671,10 +671,29 @@ pub const AccountResolver = struct {
 
     // TODO: gotta validate this. Agave uses HashSet, fd has it's own impl. We should do something custom here in the future.
     // Note: document that agave performs this check after lookups.
-    // fn validateNoDuplicateAccounts(
-    //     transaction: VersionedTransaction.View,
-    //     resolved: *const ResolvedTransaction,
-    // ) ResolveError!void;
+    fn validateNoDuplicateAccounts(
+        transaction: VersionedTransaction.View,
+        resolved: *const ResolvedTransaction,
+    ) error{AccountLoadedTwice}!void {
+        const static_keys = transaction.staticAccountKeys();
+        const dynamic_keys = resolved.dynamic_addresses[0..transaction.loadedAddressCount()];
+
+        for (static_keys, 0..) |*key, i| {
+            for (static_keys[i + 1 ..]) |*other| {
+                if (key.equals(other)) return error.AccountLoadedTwice;
+            }
+
+            for (dynamic_keys) |*other| {
+                if (key.equals(other)) return error.AccountLoadedTwice;
+            }
+        }
+
+        for (dynamic_keys, 0..) |*key, i| {
+            for (dynamic_keys[i + 1 ..]) |*other| {
+                if (key.equals(other)) return error.AccountLoadedTwice;
+            }
+        }
+    }
 
     fn releaseAccount(
         self: *AccountResolver,
@@ -689,14 +708,14 @@ pub const AccountResolver = struct {
     }
 };
 
-pub const ResolveError = error{
+pub const LookupError = error{
     LookupTableNotFound,
     InvalidLookupTableOwner,
     InvalidLookupTableData,
     InvalidLookupTableIndex,
-    DeactivatedLookupTable,
-    AccountLoadedTwice,
 };
+
+pub const ResolveError = LookupError || error{AccountLoadedTwice};
 
 pub const ResolvedTransaction = struct {
     block_ref: lib.replay.BlockRef,
