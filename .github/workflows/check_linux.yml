@@ -57,7 +57,7 @@ jobs:
           # Run kcov 10 times to reproduce flaky failure (issue #1710)
           for i in $(seq 1 10); do
             echo "=== kcov run $i/10 ==="
-            if ! zig build unit-test -Dkcov --summary all; then
+            if ! zig build test -Dkcov --summary all; then
               echo "FAILED on run $i"
               exit 1
             fi
