@@ -22,7 +22,7 @@ pub fn build(b: *Build) !void {
     // install (default step)
     const install_step = b.getInstallStep();
     install_step.dependOn(sig.exe.installStep());
-    install_step.dependOn(tools.shred_stream.installStep());
+    install_step.dependOn(tools.shred_stream_replay.installStep());
     install_step.dependOn(tools.lint.installStep());
     for (unit_tests.tests.items) |exe| install_step.dependOn(exe.installStep());
     for (tools.black_box_tests) |exe| install_step.dependOn(exe.installStep());
@@ -47,10 +47,6 @@ pub fn build(b: *Build) !void {
     // bb-test
     const bb_test_step = b.step("bb-test", "Run black box tests.");
     for (tools.black_box_tests) |bbt| bbt.addToStep(bb_test_step);
-
-    // shred-stream
-    const shred_stream_step = b.step("shred-stream", "Stream shreds from an Agave ledger");
-    tools.shred_stream.addToStep(shred_stream_step);
 
     // lint
     const lint_step = b.step("lint", "Run lint checks");
@@ -331,6 +327,8 @@ const Sig = struct {
                     .{ .name = "start_service", .module = start_service },
                     .{ .name = "tracy", .module = deps.tracy },
                     .{ .name = "services", .module = services_mod },
+                    .{ .name = "rocksdb", .module = deps.rocksdb },
+                    .{ .name = "rocksdb-c", .module = deps.rocksdb_c },
                 },
             });
             unit_tests.add(service.name, service_mod);
@@ -367,7 +365,7 @@ const Sig = struct {
 /// Everything other than Sig itself: developer tools, ci scripts, docs,
 /// integration tests, etc.
 const Tools = struct {
-    shred_stream: Executable,
+    shred_stream_replay: Executable,
     lint: Executable,
     docs: *Build.Step.InstallDir,
     black_box_tests: [black_box_test_descriptions.len]Executable,
@@ -391,26 +389,6 @@ const Tools = struct {
         unit_tests: *UnitTests,
         sig: Sig,
     ) Tools {
-        const shred_stream_exe = blk: {
-            const module = b.createModule(.{
-                .root_source_file = b.path("scripts/shred_stream.zig"),
-                .target = config.target,
-                .optimize = config.optimize,
-                .imports = &.{
-                    .{ .name = "lib", .module = sig.lib },
-                    .{ .name = "rocksdb", .module = deps.rocksdb },
-                    .{ .name = "rocksdb-c", .module = deps.rocksdb_c },
-                },
-            });
-            unit_tests.add("shred-stream", module);
-            const shred_stream_exe: Executable = .init(b, config.exe, .{
-                .name = "shred-stream",
-                .root_module = module,
-                .use_llvm = config.use_llvm,
-            }, .{});
-            break :blk shred_stream_exe;
-        };
-
         const lint_exe: Executable = .init(b, config.exe, .{
             .name = "sig-lint",
             .root_module = b.createModule(.{
@@ -424,6 +402,31 @@ const Tools = struct {
             .target = b.graph.host,
             .optimize = .Debug,
         }));
+
+        // shred-stream-replay: standalone tool, not auto-run in CI
+        const shred_stream_replay_exe = blk: {
+            const module = b.createModule(.{
+                .root_source_file = b.path("tests/shred_stream_replay/main.zig"),
+                .target = config.target,
+                .optimize = config.optimize,
+                .imports = &.{
+                    .{ .name = "lib", .module = sig.lib },
+                    .{ .name = "tracy", .module = deps.tracy },
+                    .{ .name = "services", .module = sig.services_mod },
+                },
+            });
+            const exe: Executable = .init(b, .{ .install = config.exe.install, .run = false }, .{
+                .name = "shred-stream-replay",
+                .root_module = module,
+                .use_llvm = config.use_llvm,
+            }, .{});
+            for (&[_][]const u8{ "shred_streamer", "shred_receiver", "telemetry" }) |service_name| {
+                exe.compile.linkLibrary(for (sig.service_libs) |entry| {
+                    if (std.mem.eql(u8, entry.name, service_name)) break entry.lib;
+                } else std.debug.panic("unknown service '{s}'", .{service_name}));
+            }
+            break :blk exe;
+        };
 
         // generates unified docs for all modules
         // NOTE: have to specify `-Dno-bin` & `-Dno-run` in order to
@@ -501,7 +504,7 @@ const Tools = struct {
         }
 
         return .{
-            .shred_stream = shred_stream_exe,
+            .shred_stream_replay = shred_stream_replay_exe,
             .lint = lint_exe,
             .docs = install_docs,
             .black_box_tests = bbt_exes,
