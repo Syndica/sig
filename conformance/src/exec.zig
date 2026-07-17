@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const pb = @import("proto/org/solana/sealevel/v1.pb.zig");
+
 const Allocator = std.mem.Allocator;
 
 pub const output_buffer_size: usize = 128 * 1024 * 1024;
@@ -35,8 +37,50 @@ pub fn execFixture(
 
     const actual = out_buf[0..@intCast(out_sz)];
 
-    const expected = fixture.expected;
+    // Round-trip the fixture's `expected` through sig's pb codec so the byte
+    // compare sees the same canonical form the entrypoint emitted. Without
+    // this, semantically equivalent fixtures (differing in field order,
+    // zero-default omission, unknown fields, packed vs unpacked repeated)
+    // spuriously mismatch. Falls back to raw bytes when the entrypoint has
+    // no registered output type.
+    const expected = if (normalize_expected.get(fixture.entrypoint)) |normalize|
+        try normalize(allocator, fixture.expected)
+    else
+        fixture.expected;
     return if (std.mem.eql(u8, actual, expected)) .pass else .mismatch;
+}
+
+const NormalizeFn = *const fn (
+    allocator: Allocator,
+    bytes: []const u8,
+) anyerror![]const u8;
+
+/// Maps an entrypoint symbol to the pb message type its output is encoded
+/// as. Kept in lockstep with `entrypoints` in `lib.zig` — every entrypoint
+/// there must have an entry here or it degrades silently to raw-byte
+/// compare.
+const normalize_expected: std.StaticStringMap(NormalizeFn) = .initComptime(.{
+    .{ "sol_compat_instr_execute_v1", normalizerFor(pb.InstrEffects) },
+    .{ "sol_compat_vm_interp_v1", normalizerFor(pb.SyscallEffects) },
+    .{ "sol_compat_vm_cpi_syscall_v1", normalizerFor(pb.SyscallEffects) },
+    .{ "sol_compat_vm_syscall_execute_v1", normalizerFor(pb.SyscallEffects) },
+    .{ "sol_compat_vm_serialize_execute_v1", normalizerFor(pb.VMSerializationEffects) },
+    .{ "sol_compat_elf_loader_v1", normalizerFor(pb.ELFLoaderEffects) },
+    .{ "sol_compat_txn_execute_v1", normalizerFor(pb.TxnResult) },
+});
+
+fn normalizerFor(comptime T: type) NormalizeFn {
+    return &struct {
+        fn call(alloc: Allocator, bytes: []const u8) anyerror![]const u8 {
+            var reader: std.Io.Reader = .fixed(bytes);
+            var msg = try T.decode(&reader, alloc);
+            defer msg.deinit(alloc);
+            var w: std.Io.Writer.Allocating = .init(alloc);
+            defer w.deinit();
+            try msg.encode(&w.writer, alloc);
+            return alloc.dupe(u8, w.written());
+        }
+    }.call;
 }
 
 pub const DirectoryRunStats = struct {

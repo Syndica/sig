@@ -19,8 +19,8 @@ pub fn main() !void {
     const gpa = dba_state.allocator();
 
     const gossip_port = 8001;
-    const self_kp: gossip_api.KeyPair = .fromKeyPair(try .generateDeterministic(@splat(1)));
-    const ext_kp: gossip_api.KeyPair = .fromKeyPair(try .generateDeterministic(@splat(2)));
+    const self_kp: lib.crypto.KeyPair = .fromKeyPair(try .generateDeterministic(@splat(1)));
+    const ext_kp: lib.crypto.KeyPair = .fromKeyPair(try .generateDeterministic(@splat(2)));
 
     const gossip_cluster_info: gossip_api.ClusterInfo = .{
         .public_ip = .fromNetAddress(.initIp4(.{ 123, 45, 67, 89 }, gossip_port)),

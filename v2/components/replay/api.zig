@@ -1,4 +1,8 @@
+const std = @import("std");
 const lib = @import("lib");
+
+// This is a bit large currently because of the unrooted store
+pub const scratch_buffer_size = 3 * 1024 * 1024 * 1024;
 
 pub const TransactionPool = lib.collections.SharedPool([1232]u8, 10_000);
 
@@ -6,7 +10,7 @@ pub const BlockPool = lib.collections.SharedPool(Node, 1024);
 
 /// NOTE: this is what we use for referencing blocks. This is equivalent to the block's index
 /// our block mem pool. If you want what Agave calls the "Block ID", this is the merkle root of
-///  the last fec set.
+/// the last fec set.
 pub const BlockRef = BlockPool.ItemId;
 
 // TODO: large values (e.g. Hashes) should probably live elsewhere in memory to keep tree
@@ -16,7 +20,9 @@ pub const Node = extern struct {
     parent: BlockRef.Optional = .null,
     child: BlockRef.Optional = .null,
     sibling: BlockRef.Optional = .null,
-    slot: lib.solana.Slot,
+    /// this is null for blocks older than the bootstrap root. do not unwrap
+    /// unless you are certain the block is not older than the bootstrap root
+    slot: lib.util.PackedOptional(lib.solana.Slot, std.math.maxInt(lib.solana.Slot)),
 };
 
 pub const ExecReqResponse = extern struct {
@@ -48,6 +54,8 @@ pub const ExecRequest = extern struct {
         txn_exec: extern struct {
             block_idx: BlockRef,
             tx_idx: TransactionPool.ItemId,
+            n_account_refs: u8,
+            account_ref_buf: [128]lib.account_pool.AccountPool.AccountRef,
         },
         txn_sig_verify: extern struct {
             tx_idx: TransactionPool.ItemId,
@@ -63,6 +71,8 @@ pub const ExecResponse = extern struct {
         txn_exec: extern struct {
             block_idx: BlockRef,
             tx_idx: TransactionPool.ItemId,
+            n_account_refs: u8,
+            account_ref_buf: [128]lib.account_pool.AccountPool.AccountRef,
             result: TxExecResult,
         },
         txn_sig_verify: extern struct { success: bool },

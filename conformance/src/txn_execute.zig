@@ -765,8 +765,7 @@ fn serializeSanitizationError(err: TransactionError) pb.TxnResult {
     const converted = utils.convertTransactionError(err);
     return .{
         .executed = false,
-        .sanitization_error = true,
-        .status = converted.err,
+        .txn_error = converted.err,
         .instruction_error = converted.instruction_error,
         .custom_error = converted.custom_error,
         .instruction_error_index = converted.instruction_index,
@@ -848,10 +847,7 @@ fn serializeOutput(
 
     return .{
         .executed = true,
-        .sanitization_error = false,
-        .is_ok = txn.err == null,
-
-        .status = errors.err,
+        .txn_error = errors.err,
         .instruction_error = errors.instruction_error,
         .instruction_error_index = errors.instruction_index,
         .custom_error = errors.custom_error,

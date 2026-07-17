@@ -91,10 +91,13 @@ pub const FecSetId = extern struct {
 // Currently this copies a lot.
 pub const DeshreddedFecSet = extern struct {
     merkle_root: Hash,
+    /// set to a meaningless value for the bootstrap root
     chained_merkle_root: Hash,
+    /// set to a meaningless value for the bootstrap root
     id: FecSetId,
     data_complete: bool,
     slot_complete: bool,
+    /// empty for the bootstrap root
     payload_len: u16,
 
     // TODO: this should be sent separately, ideally in a mem pool.

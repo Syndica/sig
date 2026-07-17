@@ -261,7 +261,7 @@ pub fn main() !void {
     var gossip_source_to_snapshot: Region(snapshot_api.SnapshotSourceRing) = try .simple();
     gossip_source_to_snapshot.ptr().init();
 
-    var snapshot_ready_to_accounts_db: Region(snapshot_api.SnapshotDataRing) = try .simple();
+    var snapshot_ready_to_accounts_db: Region(snapshot_api.SnapshotData) = try .simple();
     snapshot_ready_to_accounts_db.ptr().init();
 
     var snapshot_metadata: Region(accounts_db_api.RuntimeMetadata) = try .simple();
@@ -271,6 +271,8 @@ pub fn main() !void {
     var account_pool: Region(accounts_db_api.AccountPool) =
         try .sized(@sizeOf(accounts_db_api.AccountPool) + unrooted_memory);
     account_pool.ptr().init(unrooted_memory);
+
+    var replay_scratch: Region([replay_api.scratch_buffer_size]u8) = try .simple();
 
     var shreds_to_replay: Region(shred_api.DeshredRing) = try .simple();
     shreds_to_replay.ptr().init();
@@ -338,11 +340,14 @@ pub fn main() !void {
         .replay = .{
             .ro = .{},
             .rw = .{
+                .scratch_memory = replay_scratch.finish(),
                 .snapshot_metadata_in = snapshot_metadata.finish(),
                 .deshredded_in = shreds_to_replay.finish(),
                 .replay_transaction_pool = transaction_pool.finish(),
                 .block_pool = block_pool.finish(),
                 .exec_req_response = exec_req_response.finish(),
+                .account_pool = account_pool.finish(),
+                .account_lookups = replay_account_lookups.finish(),
                 .tel = telemetry_region.finish(),
             },
         },

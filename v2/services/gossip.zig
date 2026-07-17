@@ -50,7 +50,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
 
     const Effects = struct {
         packet_writer: *lib.net.Pair.PacketRing.Iterator(.writer),
-        keypair: *const gossip_api.KeyPair,
+        keypair: *const lib.crypto.KeyPair,
         snapshot_writer: *snapshot_api.SnapshotSourceRing.Iterator(.writer),
 
         const Self = @This();

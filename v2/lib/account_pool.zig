@@ -1,5 +1,5 @@
 const std = @import("std");
-const lib = @import("lib");
+const lib = @import("../lib.zig");
 
 const Pubkey = lib.solana.Pubkey;
 const Epoch = lib.solana.Epoch;
@@ -8,55 +8,73 @@ pub const AccountPool = extern struct {
     // pool could have concurrent alloc/free calls
     lock: Lock,
 
-    allocated: Index,
+    allocated: AccountRef,
     buckets: [data_size_classes.len]Bucket,
 
     memory_len: usize,
     memory: [0]u8 align(index_scale), // VLA [0..memory_len]
 
-    // 8-byte aligned offset into memory
-    pub const Index = u32;
-    pub const invalid_index = std.math.maxInt(Index);
+    const IndexInt = u32;
+    pub const AccountRef = enum(IndexInt) {
+        invalid = std.math.maxInt(IndexInt),
+        _,
+
+        pub const Int = IndexInt;
+
+        pub fn index(self: AccountRef) ?IndexInt {
+            if (self == .invalid) return null;
+            return @intFromEnum(self);
+        }
+
+        pub fn fromInt(int: IndexInt) AccountRef {
+            return @enumFromInt(int);
+        }
+    };
+
     const index_scale = 8;
 
     const Bucket = extern struct {
-        free_list: Index,
+        free_list: AccountRef,
         stolen: extern struct {
-            start: Index,
+            start: AccountRef,
             end: u32,
         },
 
-        fn pushFreeList(self: *Bucket, idx: Index, memory: []u8) void {
-            memory[@as(u64, idx) * index_scale ..][0..@sizeOf(Index)].* = @bitCast(self.free_list);
+        fn pushFreeList(self: *Bucket, idx: AccountRef, memory: []u8) void {
+            memory[@as(u64, idx.index().?) * index_scale ..][0..@sizeOf(AccountRef)].* =
+                @bitCast(@intFromEnum(self.free_list));
+
             self.free_list = idx;
         }
 
-        fn popFreeList(self: *Bucket, memory: []const u8) ?Index {
+        fn popFreeList(self: *Bucket, memory: []const u8) ?AccountRef {
             const idx = self.free_list;
-            if (idx == invalid_index) return null;
+            if (idx == .invalid) return null;
 
-            self.free_list = @bitCast(memory[@as(u64, idx) * index_scale ..][0..@sizeOf(Index)].*);
+            self.free_list = .fromInt(@bitCast(
+                memory[@as(u64, idx.index().?) * index_scale ..][0..@sizeOf(AccountRef)].*,
+            ));
             return idx;
         }
 
-        fn bumpStolenBlock(self: *Bucket, idx_bump: Index) ?Index {
+        fn bumpStolenBlock(self: *Bucket, idx_bump: AccountRef) ?AccountRef {
             const idx = self.stolen.start;
-            if (idx == invalid_index) return null;
+            if (idx == .invalid) return null;
 
-            if (idx + idx_bump > self.stolen.end) return null;
-            self.stolen.start = idx + idx_bump;
+            if (idx.index().? + idx_bump.index().? > self.stolen.end) return null;
+            self.stolen.start = .fromInt(idx.index().? + idx_bump.index().?);
             return idx;
         }
     };
 
     pub fn init(self: *AccountPool, memory_len: usize) void {
         self.lock = .{};
-        self.allocated = 0;
+        self.allocated = .fromInt(0);
         @memset(&self.buckets, .{
-            .free_list = invalid_index,
+            .free_list = .invalid,
             .stolen = .{
-                .start = invalid_index,
-                .end = invalid_index,
+                .start = .invalid,
+                .end = @intFromEnum(AccountRef.invalid),
             },
         });
         self.memory_len = memory_len;
@@ -129,7 +147,7 @@ pub const AccountPool = extern struct {
         }
 
         // Bumps a ref on the account to keep it alive
-        pub fn ref(self: *Account) *Account {
+        pub fn ref(self: *Account) void {
             const rc = self.ref_count.fetchAdd(1, .monotonic);
             std.debug.assert(rc != std.math.maxInt(u32));
         }
@@ -147,7 +165,7 @@ pub const AccountPool = extern struct {
         }
     };
 
-    pub fn alloc(self: *AccountPool, data_len: u32) !Index {
+    pub fn alloc(self: *AccountPool, data_len: u32) !AccountRef {
         std.debug.assert(data_len <= MAX_DATA_LEN);
 
         const memory = self.memory[0..].ptr[0..self.memory_len];
@@ -165,17 +183,19 @@ pub const AccountPool = extern struct {
         }
 
         const idx_bump = // how many Indexes worth of memory are we wanting to alloc
-            std.math.divCeil(Index, @sizeOf(Account) + sc_data_size, index_scale) catch unreachable;
+            std.math.divCeil(AccountRef.Int, @sizeOf(Account) + sc_data_size, index_scale) catch
+                unreachable;
 
         // try bump from our own bucket's stolen block, if any
-        if (bucket.bumpStolenBlock(idx_bump)) |idx| {
+        if (bucket.bumpStolenBlock(.fromInt(idx_bump))) |idx| {
             return idx;
         }
 
         // try bump from total memory
-        if ((@as(u64, self.allocated + idx_bump) * index_scale) <= self.memory_len) {
+        if ((@as(u64, self.allocated.index().? + idx_bump) * index_scale) <= self.memory_len) {
             const idx = self.allocated;
-            self.allocated += idx_bump;
+
+            self.allocated = .fromInt(self.allocated.index().? + idx_bump);
             return idx;
         }
 
@@ -186,7 +206,7 @@ pub const AccountPool = extern struct {
             const target = &self.buckets[target_sc_idx];
 
             // try steal from its own stolen bump allocating region
-            if (target.bumpStolenBlock(idx_bump)) |idx| {
+            if (target.bumpStolenBlock(.fromInt(idx_bump))) |idx| {
                 return idx;
             }
 
@@ -194,13 +214,13 @@ pub const AccountPool = extern struct {
             if (target.popFreeList(memory)) |stolen_block_idx| {
                 bucket.stolen = .{
                     .start = stolen_block_idx,
-                    .end = stolen_block_idx + (std.math.divCeil(
-                        Index,
+                    .end = stolen_block_idx.index().? + (std.math.divCeil(
+                        AccountRef.Int,
                         @sizeOf(Account) + target_sc_data_size,
                         index_scale,
                     ) catch unreachable),
                 };
-                return bucket.bumpStolenBlock(idx_bump) orelse unreachable;
+                return bucket.bumpStolenBlock(.fromInt(idx_bump)) orelse unreachable;
             }
         }
 
@@ -210,15 +230,15 @@ pub const AccountPool = extern struct {
         return error.OutOfMemory;
     }
 
-    pub fn getAccount(self: *AccountPool, idx: Index) *Account {
-        std.debug.assert(idx != invalid_index);
-        std.debug.assert(idx < self.allocated);
+    pub fn getAccount(self: *AccountPool, idx: AccountRef) *Account {
+        std.debug.assert(idx != .invalid);
+        std.debug.assert(idx.index().? < self.allocated.index().?);
         return @ptrCast(@alignCast(
-            self.memory[0..].ptr[@as(u64, idx) * index_scale ..][0..@sizeOf(Account)],
+            self.memory[0..].ptr[@as(u64, idx.index().?) * index_scale ..][0..@sizeOf(Account)],
         ));
     }
 
-    pub fn free(self: *AccountPool, idx: Index) void {
+    pub fn free(self: *AccountPool, idx: AccountRef) void {
         const acc = self.getAccount(idx);
         std.debug.assert(acc.ref_count.load(.monotonic) == 0);
 

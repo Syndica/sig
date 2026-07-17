@@ -714,6 +714,168 @@ const InProgressSets = struct {
     };
 };
 
+const TEST_DATA_SHRED_PACKET_LEN = 1203;
+
+fn initTestDataPacket(packet: *Packet, version: u16) void {
+    packet.data = @splat(0);
+    packet.len = TEST_DATA_SHRED_PACKET_LEN;
+
+    const shred: *Shred = @ptrCast(packet);
+    shred.* = .{
+        .signature = .ZEROES,
+        .variant = .{ .kind = .merkle_data_chained, .merkle_count = 0 },
+        .slot = 1,
+        .slot_idx = 0,
+        .version = version,
+        .fec_set_idx = 0,
+        .code_or_data = .{
+            .data = .{
+                .parent_offset = 1,
+                .flags = .{
+                    .reference_tick = 0,
+                    .data_complete = false,
+                    .last_shred_in_slot = false,
+                },
+                .size = @offsetOf(Shred, "code_or_data") + @sizeOf(Shred.DataHeader),
+            },
+        },
+    };
+}
+
+fn signTestDataPacket(packet: *Packet, keypair: *const lib.crypto.KeyPair) !void {
+    const shred: *Shred = @ptrCast(packet);
+    var merkle_root: Hash = undefined;
+    try shred.merkleRoot(&merkle_root);
+    shred.signature = try keypair.sign(&merkle_root.data);
+}
+
+test "shred.receiver: empty packet" {
+    const allocator = std.testing.allocator;
+
+    var receiver: Receiver = try .init(allocator, 1, 1);
+    defer receiver.deinit(allocator);
+
+    var packet: Packet = undefined;
+    packet.len = 0;
+
+    const leader_schedule: *const lib.solana.LeaderSchedule = undefined;
+    var deshred_writer: DeshredRing.Iterator(.writer) = undefined;
+
+    try std.testing.expectError(
+        error.PacketUnderMinHeaderSize,
+        receiver.processPacket(
+            leader_schedule,
+            0,
+            &packet,
+            &deshred_writer,
+            .noop,
+        ),
+    );
+}
+
+test "shred.receiver: shred version mismatch" {
+    const allocator = std.testing.allocator;
+
+    var receiver: Receiver = try .init(allocator, 1, 1);
+    defer receiver.deinit(allocator);
+
+    var packet: Packet = undefined;
+    initTestDataPacket(&packet, 1);
+
+    const leader_schedule: *const lib.solana.LeaderSchedule = undefined;
+    var deshred_writer: DeshredRing.Iterator(.writer) = undefined;
+
+    try std.testing.expectError(
+        error.ShredVersionMismatch,
+        receiver.processPacket(
+            leader_schedule,
+            2,
+            &packet,
+            &deshred_writer,
+            .noop,
+        ),
+    );
+}
+
+test "shred.receiver: one shred (unfinished fec set)" {
+    const allocator = std.testing.allocator;
+
+    var receiver: Receiver = try .init(allocator, 1, 1);
+    defer receiver.deinit(allocator);
+
+    const std_keypair = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(@splat(1));
+    const keypair: lib.crypto.KeyPair = .fromKeyPair(std_keypair);
+
+    const leader_schedule = try allocator.create(lib.solana.LeaderSchedule);
+    defer allocator.destroy(leader_schedule);
+    leader_schedule.base_slot = 1;
+    leader_schedule.leaders[0] = keypair.pubkey;
+
+    var packet: Packet = undefined;
+    _ = initTestDataPacket(&packet, 1);
+    try signTestDataPacket(&packet, &keypair);
+
+    var deshred_writer: DeshredRing.Iterator(.writer) = undefined;
+
+    const result = try receiver.processPacket(
+        leader_schedule,
+        1,
+        &packet,
+        &deshred_writer,
+        .noop,
+    );
+    switch (result) {
+        .unfinished_fec_set => |unfinished| {
+            try std.testing.expectEqual(1, unfinished.total_shreds_received);
+        },
+        else => try std.testing.expect(false),
+    }
+}
+
+test "shred.receiver: duplicate shred" {
+    const allocator = std.testing.allocator;
+
+    var receiver: Receiver = try .init(allocator, 1, 1);
+    defer receiver.deinit(allocator);
+
+    const std_keypair = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(@splat(1));
+    const keypair: lib.crypto.KeyPair = .fromKeyPair(std_keypair);
+
+    const leader_schedule = try allocator.create(lib.solana.LeaderSchedule);
+    defer allocator.destroy(leader_schedule);
+    leader_schedule.base_slot = 1;
+    leader_schedule.leaders[0] = keypair.pubkey;
+
+    var packet: Packet = undefined;
+    _ = initTestDataPacket(&packet, 1);
+    try signTestDataPacket(&packet, &keypair);
+
+    var deshred_writer: DeshredRing.Iterator(.writer) = undefined;
+
+    const first_result = try receiver.processPacket(
+        leader_schedule,
+        1,
+        &packet,
+        &deshred_writer,
+        .noop,
+    );
+    switch (first_result) {
+        .unfinished_fec_set => |unfinished| {
+            try std.testing.expectEqual(1, unfinished.total_shreds_received);
+        },
+        else => try std.testing.expect(false),
+    }
+
+    const second_result = try receiver.processPacket(
+        leader_schedule,
+        1,
+        &packet,
+        &deshred_writer,
+        .noop,
+    );
+    try std.testing.expectEqual(.shred_already_seen, std.meta.activeTag(second_result));
+}
+
 test "InProgressSets basic usage" {
     const allocator = std.testing.allocator;
     const set_signature: Signature = .ZEROES;

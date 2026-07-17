@@ -88,7 +88,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
         try zst_reader.init(snapshot_dir, snapshot_path);
         defer zst_reader.deinit();
 
-        var out = rw.ready_snapshot_out.getView(.writer);
+        var out = rw.ready_snapshot_out.ring.getView(.writer);
         defer out.close();
 
         while (true) {
@@ -97,8 +97,15 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
 
             // cap decompress size to ensure advance() is called frequently enough to unblock rooted
             const decompressed = buf[0..@min(buf.len, 128 * 1024)];
-
             const n = try zst_reader.read(.from(logger), decompressed);
+
+            // Update the completion value
+            const total: f64 = @floatFromInt(zst_reader.file_size);
+            const consumed: f64 = @floatFromInt(zst_reader.file_reader.getOffset());
+            var completion = @min(100.0, (consumed * 100) / total);
+            if (zst_reader.file_size == 0) completion = 100.0; // guard against 0-len snapshots
+            rw.ready_snapshot_out.completion.store(completion, .monotonic);
+
             if (n == 0) break; // file reader EOF
             out.advance(n);
         }

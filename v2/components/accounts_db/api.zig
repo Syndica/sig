@@ -1,13 +1,10 @@
 const std = @import("std");
 const lib = @import("lib");
 
-comptime {
-    if (@import("builtin").is_test) {
-        _ = @import("pool.zig");
-    }
-}
-
-pub const AccountPool = @import("pool.zig").AccountPool;
+/// AccountPool lives in `lib` (not this component) because `replay`'s api
+/// embeds `AccountPool.AccountRef` in its extern request/response structs.
+/// See `v2/lib/accounts_db.zig` for the rationale.
+pub const AccountPool = lib.account_pool.AccountPool;
 
 const Pubkey = lib.solana.Pubkey;
 const Hash = lib.solana.Hash;
@@ -28,7 +25,7 @@ pub const AccountLookups = extern struct {
     pub const Request = Pubkey;
     pub const Result = extern struct {
         pubkey: Pubkey,
-        account_index: AccountPool.Index, // .invalid_index if not found
+        account_index: AccountPool.AccountRef, // .invalid if not found
     };
 
     pub fn init(self: *AccountLookups) void {
@@ -37,11 +34,20 @@ pub const AccountLookups = extern struct {
     }
 };
 
+/// How to consume this struct:
+/// 1. read all ring buffers in the correct order (specify the correct order
+///    here if more are added, currently there is only one: the blockhash queue)
+/// 2. call getSlotBlocking
+/// 3. read other fields
 pub const RuntimeMetadata = extern struct {
     slot: std.atomic.Value(u64),
+    /// The merkle root of the last fec set (tower) or the root of roots (alpenglow)
+    block_id: Hash,
     blockhash_queue: extern struct {
         /// read after consuming all of hashes
         max_age: u64,
+        /// Accountsdb blocks until enough hashes are read from here to make
+        /// room for accountsdb to write all of its block hashes here.
         hashes: lib.ipc.Ring(256, Hash),
     },
 
@@ -63,6 +69,8 @@ pub const RuntimeMetadata = extern struct {
         std.debug.assert(self.slot.swap(slot, .release) == invalid_slot);
     }
 
+    /// Accountsdb writes the slot last, so you need to empty all the ring
+    /// buffers before calling this.
     pub fn getSlotBlocking(self: *RuntimeMetadata, runner: lib.runner.Connection) !Slot {
         while (true) {
             const slot = self.slot.load(.acquire);

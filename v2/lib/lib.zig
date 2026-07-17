@@ -1,5 +1,6 @@
 comptime {
     if (@import("builtin").is_test) {
+        _ = @import("account_pool.zig");
         _ = @import("clock.zig");
         _ = @import("collections.zig");
         _ = @import("crypto.zig");
@@ -14,6 +15,7 @@ comptime {
     }
 }
 
+pub const account_pool = @import("account_pool.zig");
 pub const net = @import("net.zig");
 pub const clock = @import("clock.zig");
 pub const crypto = @import("crypto.zig");

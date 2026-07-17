@@ -24,7 +24,7 @@ pub const ResolvedArgs = extern struct {
     service_idx: u16,
 
     pub const ThreadCrashFn = *const fn (?*anyopaque, u16) callconv(.c) void;
-    pub const max_regions = 8; // chosen arbitrarily
+    pub const max_regions = 16; // chosen arbitrarily
     const page_size_min = std.heap.page_size_min;
 };
 
