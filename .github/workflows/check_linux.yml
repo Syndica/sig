@@ -54,9 +54,21 @@ jobs:
       - name: Collect v2 coverage
         run: |
           cd v2
-          zig build test -Dkcov --summary all
+          # Run kcov 10 times to reproduce flaky failure (issue #1710)
+          for i in $(seq 1 10); do
+            echo "=== kcov run $i/10 ==="
+            if ! zig build unit-test -Dkcov --summary all; then
+              echo "FAILED on run $i"
+              exit 1
+            fi
+            echo "PASSED run $i"
+            # Clean kcov output between runs to avoid stale state
+            rm -rf zig-out .zig-cache/o/*/output
+          done
+          echo "All 10 runs passed"
 
       - name: Debug coverage reports
+        if: false  # Disabled for flake reproduction (issue #1710)
         run: |
           echo "=== v1 report ==="
           head -15 kcov-merged/kcov-merged/cobertura.xml
@@ -71,7 +83,7 @@ jobs:
           grep 'filename=' v2/zig-out/kcov/kcov-merged/cobertura.xml | head -3
 
       - name: Generate local coverage report
-        if: github.event_name == 'pull_request'
+        if: false  # Disabled for flake reproduction (issue #1710)
         run: |
           pip install --quiet diff-cover==10.3.0
           # Determine the base branch to diff against
@@ -95,7 +107,7 @@ jobs:
           fi
 
       - name: Upload coverage to Codecov
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        if: false  # Disabled for flake reproduction (issue #1710)
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
