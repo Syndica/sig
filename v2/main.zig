@@ -156,7 +156,7 @@ const Config = struct {
 /// Names + region wiring for every service in the runner. One field per service:
 /// the field name selects the service to spawn (`svc_main_<name>`); the value is
 /// a `ServiceLayout` whose `.ro`/`.rw` fields hold the typed regions matching the
-/// service's `ReadOnly`/`ReadWrite` schema in `init/services.zig`.
+/// service's `ReadOnly`/`ReadWrite` schema in `services.zig`.
 const Topology = struct {
     net: ServiceRegions(.from(services.net)),
     gossip: ServiceRegions(.from(services.gossip)),

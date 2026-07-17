@@ -18,25 +18,27 @@ _Sig_ is a Solana validator client implemented in Zig. Read the [introductory bl
 <br/>
 <br/>
 
+## Project Status
+
+Sig currently ships as two parallel implementations:
+
+- **`v2/`**: The current implementation. build.zig in the repo root is for v2. A multi-process architecture where each service (gossip, shred receiver, snapshot, accountsdb, replay, exec, telemetry, net) runs in its own sandboxed process and communicates through typed shared-memory regions. New development happens here. See [`v2/README.md`](v2/README.md) for architecture, build & run, and how to add a service or component.
+- **`v1/`**: The original single-process implementation. In maintenance mode: only critical bug fixes are accepted. Has its own `build.zig`.
+
+Each implementation has an independent build process.
+
 ## File Structure
 
 ```
-src/
-├─ sig.zig # library entrypoint
-├─ cmd.zig # exec entrypoint
-├─ tests.zig
-├─ fuzz.zig
-├─ benchmarks.zig
-data/
-├─ genesis-files/
-├─ test-data/
-docs/
-metrics/
-├─ prometheus/
-├─ grafana/
-├─ alloy/
-├─ loki/
-scripts/
+build.zig, build.zig.zon    # top-level build for v2
+README.md
+v2/                         # current implementation (multi-process). See v2/README.md
+v1/                         # original implementation (single-process, maintenance mode)
+conformance/                # solana test-vector harness for v2 runtime, has its own build
+config/                     # example runtime config for v2 (used by `zig build run`)
+docs/                       # docusaurus docs site + generation scripts
+scripts/                    # dev / ci scripts
+ci/                 # supporting assets
 ```
 
 ## Resources

@@ -553,7 +553,7 @@ pub fn addRuntime(
     unit_tests.add("runtime_api", api);
 
     const component = b.addModule("runtime", .{
-        .root_source_file = b.path(runtime_dir ++ "/lib.zig"),
+        .root_source_file = b.path(runtime_dir ++ "/component.zig"),
         .target = config.target,
         .optimize = config.optimize,
         .imports = &.{

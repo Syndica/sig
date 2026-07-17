@@ -1,19 +1,9 @@
-pub const ELF_DATA_DIR = "v2/components/runtime/data/test-elfs/";
+//! This file only exists to satisfy the runtime-internal imports that look for
+//! lib.zig. The module is defined by component.zig.
+//!
+//! TODO: Remove this file and replace all imports.
 
-comptime {
-    if (@import("builtin").is_test) {
-        _ = @import("bincode/bincode.zig");
-        _ = @import("bloom/bit_set.zig");
-        _ = @import("bloom/bit_vec.zig");
-        _ = @import("core/lib.zig");
-        _ = @import("crypto/lib.zig");
-        _ = @import("runtime/lib.zig");
-        _ = @import("time/lib.zig");
-        _ = @import("utils/lib.zig");
-        _ = @import("vm/lib.zig");
-        _ = @import("zksdk/lib.zig");
-    }
-}
+pub const ELF_DATA_DIR = "v2/components/runtime/data/test-elfs/";
 
 pub const bincode = @import("bincode/bincode.zig");
 pub const bloom = struct {

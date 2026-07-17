@@ -11,7 +11,7 @@
 //!       passed into the topology struct. This also unmaps the memfd.
 //!  2. Define and initialize a topology struct describing every service. Each field is
 //!     named after a service and has type `ServiceRegions(spec)`. `spec` is a
-//!     `ServiceSpec` (typically declared in `init/services.zig`) whose
+//!     `ServiceSpec` (typically declared in `services.zig`) whose
 //!     `ReadOnly`/`ReadWrite` types list the typed pointers each service expects;
 //!     `ServiceRegions` mirrors them with `Region(T).Initialized` fields.
 //!  3. Call `spawn(&children, mode, topology)` once. It iterates every field of the
@@ -47,7 +47,7 @@ pub const Mode = enum { sandboxed, threaded };
 /// Pair of structs declaring what regions a service consumes. `ReadOnly` and
 /// `ReadWrite` are each a struct of typed pointers (e.g. `*const Config`, `*Pair`).
 /// `ServiceRegions` mirrors them with corresponding `Region(T).Initialized` fields.
-/// Typically declared inline in `init/services.zig`.
+/// Typically declared inline in `services.zig`.
 pub const ServiceSpec = struct {
     ReadOnly: type,
     ReadWrite: type,
