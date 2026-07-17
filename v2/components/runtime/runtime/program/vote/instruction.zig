@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../../../lib.zig");
+const sig = @import("../../../component.zig");
 
 const vote_program = sig.runtime.program.vote;
 const vote_state = vote_program.state;

@@ -6,7 +6,7 @@
 //! [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/account.rs#L118
 
 const std = @import("std");
-const sig = @import("../lib.zig");
+const sig = @import("../component.zig");
 const AccountSharedData = @This();
 
 const Pubkey = sig.core.Pubkey;

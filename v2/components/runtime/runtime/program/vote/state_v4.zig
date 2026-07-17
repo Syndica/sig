@@ -1,7 +1,7 @@
 //! [SIMD-0185] Vote account state v4: commission in bps, no prior_voters, collectors, BLS key.
 const std = @import("std");
 const std14 = @import("std14");
-const sig = @import("../../../lib.zig");
+const sig = @import("../../../component.zig");
 
 const Allocator = std.mem.Allocator;
 

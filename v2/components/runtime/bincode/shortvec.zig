@@ -1,7 +1,5 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
-
-const bincode = sig.bincode;
+const bincode = @import("bincode.zig");
 
 const MAX_ENCODING_LENGTH: usize = 3;
 

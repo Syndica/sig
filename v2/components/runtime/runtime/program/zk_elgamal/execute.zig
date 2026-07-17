@@ -1,6 +1,6 @@
 const std = @import("std");
 const tracy = @import("tracy");
-const sig = @import("../../../lib.zig");
+const sig = @import("../../../component.zig");
 
 const zksdk = sig.zksdk;
 const zk_elgamal = sig.runtime.program.zk_elgamal;

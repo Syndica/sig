@@ -1,7 +1,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const tracy = @import("tracy");
-const sig = @import("../lib.zig");
+const sig = @import("../component.zig");
 
 const bpf_loader = sig.runtime.program.bpf_loader;
 const vm = sig.vm;

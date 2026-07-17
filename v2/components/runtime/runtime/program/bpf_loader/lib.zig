@@ -1,4 +1,4 @@
-const sig = @import("../../../lib.zig");
+const sig = @import("../../../component.zig");
 
 comptime {
     if (@import("builtin").is_test) {

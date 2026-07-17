@@ -1,9 +1,9 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
+const vm = @import("lib.zig");
 const sbpf = @import("sbpf.zig");
 const exe = @import("executable.zig");
 
-const SyscallError = sig.vm.SyscallError;
+const SyscallError = vm.SyscallError;
 
 /// Upper half of a pointer is the region index, lower half the virtual address inside that region.
 pub const VIRTUAL_ADDRESS_BITS = 32;

@@ -1,6 +1,6 @@
 const std = @import("std");
 const tracy = @import("tracy");
-const sig = @import("../../../lib.zig");
+const sig = @import("../../../component.zig");
 
 const nonce = sig.runtime.nonce;
 const pubkey_utils = sig.runtime.pubkey_utils;

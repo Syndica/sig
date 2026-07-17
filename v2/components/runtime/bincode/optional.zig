@@ -1,6 +1,5 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
-const bincode = sig.bincode;
+const bincode = @import("bincode.zig");
 
 pub fn defaultToNullOnEof(
     comptime T: type,

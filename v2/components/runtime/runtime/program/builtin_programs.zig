@@ -1,4 +1,4 @@
-const sig = @import("../../lib.zig");
+const sig = @import("../../component.zig");
 
 const program = sig.runtime.program;
 const features = sig.core.features;

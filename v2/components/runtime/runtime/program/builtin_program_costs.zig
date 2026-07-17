@@ -1,7 +1,7 @@
 //! [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/builtins-default-costs/src/lib.rs
 
 const std = @import("std");
-const sig = @import("../../lib.zig");
+const sig = @import("../../component.zig");
 
 const programs = sig.runtime.program;
 

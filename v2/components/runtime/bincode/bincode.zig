@@ -21,7 +21,7 @@ pub const shortvec = @import("shortvec.zig");
 const std = @import("std");
 const std14 = @import("std14");
 const builtin = @import("builtin");
-const sig = @import("../lib.zig");
+const sig = @import("../component.zig");
 
 const testing = std.testing;
 

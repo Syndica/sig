@@ -1,4 +1,4 @@
-const sig = @import("../../lib.zig");
+const sig = @import("../../component.zig");
 const lib = @import("lib");
 const std = @import("std");
 const std14 = @import("std14");

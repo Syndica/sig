@@ -1,6 +1,5 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
-const bincode = sig.bincode;
+const bincode = @import("bincode.zig");
 
 pub fn defaultOnEof(comptime T: type, comptime eof_value: T) bincode.FieldConfig(T) {
     const S = struct {

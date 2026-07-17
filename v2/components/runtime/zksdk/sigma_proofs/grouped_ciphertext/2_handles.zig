@@ -4,7 +4,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const std14 = @import("std14");
-const sig = @import("../../../lib.zig");
+const sig = @import("../../../component.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const elgamal = sig.zksdk.elgamal;

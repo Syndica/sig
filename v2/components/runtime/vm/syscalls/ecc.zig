@@ -1,7 +1,7 @@
 //! Syscalls that work with Elliptic Curves
 
 const std = @import("std");
-const sig = @import("../../lib.zig");
+const sig = @import("../../component.zig");
 
 const bn254 = sig.crypto.bn254;
 const bls12_381 = sig.crypto.bls12_381;

@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
+const sig = @import("../component.zig");
 
 const sbpf = sig.vm.sbpf;
 const memory = sig.vm.memory;

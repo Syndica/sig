@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
+const sig = @import("../component.zig");
 const bincode = @import("bincode.zig");
 
 const hashMapInfo = sig.utils.types.hashMapInfo;

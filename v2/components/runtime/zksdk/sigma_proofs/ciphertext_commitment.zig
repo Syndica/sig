@@ -3,7 +3,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
-const sig = @import("../../lib.zig");
+const sig = @import("../../component.zig");
 
 const ed25519 = sig.crypto.ed25519;
 const Edwards25519 = std.crypto.ecc.Edwards25519;

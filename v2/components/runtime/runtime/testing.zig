@@ -1,6 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
-const sig = @import("../lib.zig");
+const sig = @import("../component.zig");
 
 const bincode = sig.bincode;
 const sysvar = sig.runtime.sysvar;

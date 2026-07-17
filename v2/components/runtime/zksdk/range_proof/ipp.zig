@@ -1,7 +1,7 @@
 const std = @import("std");
 const std14 = @import("std14");
 const table = @import("table");
-const sig = @import("../../lib.zig");
+const sig = @import("../../component.zig");
 
 const Edwards25519 = std.crypto.ecc.Edwards25519;
 const Sha3 = std.crypto.hash.sha3.Sha3_512;

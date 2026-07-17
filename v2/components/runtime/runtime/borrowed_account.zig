@@ -1,6 +1,6 @@
 const std = @import("std");
 const tracy = @import("tracy");
-const sig = @import("../lib.zig");
+const sig = @import("../component.zig");
 
 const bincode = sig.bincode;
 

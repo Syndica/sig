@@ -1,13 +1,13 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
+const vm = @import("lib.zig");
 const tracy = @import("tracy");
 
-const sbpf = sig.vm.sbpf;
-const memory = sig.vm.memory;
+const sbpf = vm.sbpf;
+const memory = vm.memory;
 
 const Instruction = sbpf.Instruction;
 const Register = Instruction.Register;
-const SyscallMap = sig.vm.SyscallMap;
+const SyscallMap = vm.SyscallMap;
 
 pub const Executable = struct {
     bytes: []const u8,

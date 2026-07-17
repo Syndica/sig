@@ -1,6 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
-const sig = @import("../../lib.zig");
+const sig = @import("../../component.zig");
 
 const executor = sig.runtime.executor;
 const runtime_testing = sig.runtime.testing;

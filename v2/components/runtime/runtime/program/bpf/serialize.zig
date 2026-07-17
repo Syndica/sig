@@ -1,7 +1,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 const std14 = @import("std14");
-const sig = @import("../../../lib.zig");
+const sig = @import("../../../component.zig");
 
 const program = sig.runtime.program;
 const vm = sig.vm;

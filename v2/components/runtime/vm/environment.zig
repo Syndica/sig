@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
+const sig = @import("../component.zig");
 const tracy = @import("tracy");
 
 const syscalls = sig.vm.syscalls;

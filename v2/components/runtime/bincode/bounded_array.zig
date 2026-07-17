@@ -1,5 +1,5 @@
 const std = @import("std");
-const sig = @import("../lib.zig");
+const sig = @import("../component.zig");
 const bincode = sig.bincode;
 
 /// The standard bincode serialization for an ArrayList

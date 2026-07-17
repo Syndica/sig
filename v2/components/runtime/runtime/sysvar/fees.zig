@@ -1,6 +1,6 @@
 const builtin = @import("builtin");
 const std = @import("std");
-const sig = @import("../../lib.zig");
+const sig = @import("../../component.zig");
 
 const Pubkey = sig.core.Pubkey;
 

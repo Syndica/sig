@@ -2,7 +2,7 @@
 const std = @import("std");
 const std14 = @import("std14");
 const phash = @import("poseidon");
-const sig = @import("../../lib.zig");
+const sig = @import("../../component.zig");
 
 const MemoryMap = sig.vm.memory.MemoryMap;
 const RegisterMap = sig.vm.interpreter.RegisterMap;

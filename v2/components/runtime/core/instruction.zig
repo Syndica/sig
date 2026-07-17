@@ -2,7 +2,7 @@
 // https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/instruction/src/error.rs
 
 const std = @import("std");
-const sig = @import("../lib.zig");
+const sig = @import("../component.zig");
 
 const Pubkey = sig.core.Pubkey;
 
