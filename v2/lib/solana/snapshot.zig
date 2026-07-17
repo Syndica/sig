@@ -8,6 +8,8 @@ const Pubkey = lib.solana.Pubkey;
 const Slot = lib.solana.Slot;
 const Epoch = lib.solana.Epoch;
 const Hash = lib.solana.Hash;
+const EpochSchedule = lib.solana.EpochSchedule;
+const Inflation = lib.solana.Inflation;
 
 fn readInt(Int: type, r: anytype) !u64 {
     var buf: [@sizeOf(Int)]u8 = undefined;
@@ -106,309 +108,10 @@ pub const Manifest = struct {
     }
 };
 
-fn PubkeyMap(comptime Value: type) type {
-    return struct {
-        entries: []Entry,
-        zero_entry: Entry = undefined,
-        zero_entry_populated: bool = false,
-
-        const Self = @This();
-        const Entry = struct {
-            pubkey: Pubkey,
-            value: Value,
-        };
-
-        pub fn init(fba: *std.heap.FixedBufferAllocator, len: usize) !Self {
-            const cap = try std.math.ceilPowerOfTwo(u64, len);
-            const entries = try fba.allocator().alloc(Entry, cap);
-            @memset(entries, .{ .pubkey = .ZEROES, .value = undefined });
-            return .{ .entries = entries };
-        }
-
-        pub fn insert(self: *Self, pubkey: *const Pubkey, value: *const Value) void {
-            // We use zero pubkey to mean empty slot in the map, so special case it here.
-            if (pubkey.isZeroed()) {
-                @branchHint(.unlikely);
-                self.zero_entry = .{ .pubkey = .ZEROES, .value = value.* };
-                self.zero_entry_populated = true;
-                return;
-            }
-
-            const mask = self.entries.len - 1;
-            var i = pubkey.hash(0) & mask;
-            while (true) {
-                const e = &self.entries[i];
-                i = (i + 1) & mask;
-                if (e.pubkey.equals(pubkey) or e.pubkey.isZeroed()) {
-                    e.* = .{ .pubkey = pubkey.*, .value = value.* };
-                    break;
-                }
-            }
-        }
-
-        pub fn find(self: *Self, pubkey: *const Pubkey) ?*Entry {
-            if (pubkey.isZeroed()) {
-                @branchHint(.unlikely);
-                if (self.zero_entry_populated) return &self.zero_entry;
-                return null;
-            }
-
-            const mask = self.entries.len - 1;
-            var i = pubkey.hash(0) & mask;
-            while (true) {
-                const e = &self.entries[i];
-                i = (i + 1) & mask;
-                if (e.pubkey.equals(pubkey)) return e;
-                if (e.pubkey.isZeroed()) return null;
-            }
-        }
-    };
-}
-
-pub const EpochStakes = struct {
-    epoch: Epoch,
-    vote_accounts: VoteAccountMap,
-    stake_delegations: StakeDelegationMap,
-    stake_history: StakeHistory,
-
-    // Maps vote_account -> account info
-    const VoteAccountMap = PubkeyMap(VoteAccount);
-
-    const VoteAccount = extern struct {
-        stake: u64,
-        // A vote account lives in its PubkeyMap and is optionally linked to other entries in the
-        // map who share the same node owner.
-        next: ?*VoteAccount = null,
-    };
-
-    // HashMap(Pubkey, { stake: u64, account: AccountSharedData }) where AccountSharedData =
-    // { lamports: u64, data: Vec(u8), owner: Pubkey, executable: bool, rent_epoch: Epoch }
-    fn readVoteAccounts(
-        fba: *std.heap.FixedBufferAllocator,
-        r: anytype,
-        len: u64,
-    ) !VoteAccountMap {
-        var vote_accounts = try VoteAccountMap.init(fba, len);
-        var vote_entry_header: extern struct {
-            key: Pubkey,
-            stake: u64,
-            lamports: u64,
-            data_len: u64,
-        } = undefined;
-        for (0..len) |_| {
-            try r.readSliceAll(std.mem.asBytes(&vote_entry_header));
-            // skip rest of its AccountSharedData (TODO: validate)
-            try r.discardAll(vote_entry_header.data_len + // data bytes
-                32 + // owner: Pubkey
-                1 + // executable: bool
-                8 // rent_epoch: Epoch
-            );
-            vote_accounts.insert(&vote_entry_header.key, &.{
-                .stake = vote_entry_header.stake,
-            });
-        }
-        return vote_accounts;
-    }
-
-    const StakeDelegationMap = PubkeyMap(Delegation); // this thing is MASSIVE
-    const Delegation = extern struct {
-        voter: Pubkey,
-        stake: u64,
-        activation_epoch: Epoch,
-        deactivation_epoch: Epoch,
-        warmup_cooldown_rate: f64,
-        credits_observed: u64,
-    };
-
-    pub fn readStakeDelegations(
-        fba: *std.heap.FixedBufferAllocator,
-        r: anytype,
-        len: u64,
-    ) !StakeDelegationMap {
-        // read in chunks to amortize the cost of `r.readSliceAll` calls.
-        var delegation_map = try StakeDelegationMap.init(fba, len);
-        var delegation_chunk: [64]extern struct {
-            pubkey: Pubkey,
-            voter_pubkey: Pubkey,
-            stake: u64,
-            activation_epoch: Epoch,
-            deactivation_epoch: Epoch,
-            warmup_cooldown_rate: f64,
-            credits_observed: u64,
-        } = undefined;
-
-        var n = len;
-        while (n > 0) {
-            const num_chunks = @min(n, delegation_chunk.len);
-            n -= num_chunks;
-
-            const chunk = delegation_chunk[0..num_chunks];
-            try r.readSliceAll(std.mem.sliceAsBytes(chunk));
-
-            for (chunk) |*delegation| {
-                delegation_map.insert(&delegation.pubkey, &.{
-                    .voter = delegation.voter_pubkey,
-                    .stake = delegation.stake,
-                    .activation_epoch = delegation.activation_epoch,
-                    .deactivation_epoch = delegation.deactivation_epoch,
-                    .warmup_cooldown_rate = delegation.warmup_cooldown_rate,
-                    .credits_observed = delegation.credits_observed,
-                });
-            }
-        }
-
-        return delegation_map;
-    }
-
-    const StakeHistory = struct {
-        latest_epoch: Epoch,
-        entries: []Entry,
-
-        const Entry = extern struct {
-            effective: u64,
-            activating: u64,
-            deactivating: u64,
-        };
-    };
-
-    fn readStakeHistory(
-        fba: *std.heap.FixedBufferAllocator,
-        r: anytype,
-        len: usize,
-    ) !StakeHistory {
-        // https://docs.rs/solana-stake-history/1.0.0/src/solana_stake_history/lib.rs.html#22
-        const MAX_ENTRIES = 512;
-        if (len > MAX_ENTRIES) return error.TooManyStakeHistoryEntries;
-
-        var latest_epoch: ?Epoch = null;
-        const entries = try fba.allocator().alloc(StakeHistory.Entry, len);
-        var i: usize = 0;
-
-        // read in chunks to amortize the cost of `r.readSliceAll` calls.
-        var last_epoch: ?Epoch = null;
-        var history_chunks: [64]extern struct {
-            epoch: Epoch,
-            effective: u64,
-            activating: u64,
-            deactivating: u64,
-        } = undefined;
-
-        var n = len;
-        while (n > 0) {
-            const num_chunks = @min(n, history_chunks.len);
-            n -= num_chunks;
-
-            const chunk = history_chunks[0..num_chunks];
-            try r.readSliceAll(std.mem.sliceAsBytes(chunk));
-
-            // set the first epoch
-            if (latest_epoch == null) {
-                latest_epoch = chunk[0].epoch;
-            }
-
-            // history entries must have strictly descending entries:
-            // https://docs.rs/solana-stake-history/1.0.0/src/solana_stake_history/lib.rs.html#140-144
-            for (chunk) |*e| {
-                if (last_epoch != null and last_epoch.? <= e.epoch) {
-                    @branchHint(.unlikely);
-                    return error.InvalidStakeHistoryEpochEntry;
-                }
-                last_epoch = e.epoch;
-                entries[i] = .{
-                    .effective = e.effective,
-                    .activating = e.activating,
-                    .deactivating = e.deactivating,
-                };
-                i += 1;
-            }
-        }
-
-        return .{
-            .latest_epoch = latest_epoch orelse return error.NoStakeHistoryEntries,
-            .entries = entries,
-        };
-    }
-
-    pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !EpochStakes {
-        // epoch_stakes: Stakes(Delegation)
-        //   vote_accounts: VoteAccounts
-        const vote_len = try readInt(u64, r);
-        const vote_accounts = try readVoteAccounts(fba, r, vote_len);
-
-        //   stake_delegations: HashMap(Pubkey, Delegation)
-        const stakes_len = try readInt(u64, r);
-        const stake_delegations = try readStakeDelegations(fba, r, stakes_len);
-
-        //   unused: u64
-        //   epoch: Epoch
-        //   stake_history: Vec(...) see below
-        var info: extern struct {
-            _unused: u64,
-            epoch: Epoch,
-            stake_history_len: u64,
-        } = undefined;
-        try r.readSliceAll(std.mem.asBytes(&info));
-
-        //   stake_history: Vec({ epoch: Epoch, effective: u64, activating: u64, deactivating: u64 })
-        const stake_history = try readStakeHistory(fba, r, info.stake_history_len);
-
-        return .{
-            .epoch = info.epoch,
-            .vote_accounts = vote_accounts,
-            .stake_delegations = stake_delegations,
-            .stake_history = stake_history,
-        };
-    }
-
-    pub fn discard(r: anytype) !void {
-        // dicard vote accounts
-        var len = try readInt(u64, r);
-        var vote_entry_header: extern struct {
-            key: Pubkey,
-            stake: u64,
-            lamports: u64,
-            data_len: u64,
-        } = undefined;
-        for (0..len) |_| { // the data_len is variable, so need to skip each one by one.
-            try r.readSliceAll(std.mem.asBytes(&vote_entry_header));
-            try r.discardAll(vote_entry_header.data_len + // data bytes
-                32 + // owner: Pubkey
-                1 + // executable: bool
-                8 // rent_epoch: Epoch
-            );
-        }
-
-        // discard stake delegations
-        len = try readInt(u64, r);
-        try r.discardAll(len * (32 + // pubkey: Pubkey,
-            32 + // voter_pubkey: Pubkey,
-            8 + // stake: u64,
-            8 + // activation_epoch: Epoch,
-            8 + // deactivation_epoch: Epoch,
-            8 // warmup_cooldown_rate: f64,
-        ));
-
-        //   unused: u64
-        //   epoch: Epoch
-        //   stake_history: Vec(...) see below
-        var info: extern struct {
-            _unused: u64,
-            epoch: Epoch,
-            stake_history_len: u64,
-        } = undefined;
-        try r.readSliceAll(std.mem.asBytes(&info));
-
-        // discard stake history
-        try r.discardAll(info.stake_history_len * (8 + // epoch: Epoch,
-            8 + // effective: u64,
-            8 + // activating: u64,
-            8 // deactivating: u64,
-        ));
-    }
-};
-
 pub const BankFields = struct {
     slot: Slot,
+    epoch_schedule: EpochSchedule,
+    inflation: Inflation,
     blockhash_queue: BlockHashQueue,
 
     pub const BlockHashQueue = struct {
@@ -512,48 +215,81 @@ pub const BankFields = struct {
             8 // accounts_data_len: u64
         );
         const slot = try readInt(Slot, r);
-        try r.discardAll(
-            8 + // _unused_epoch: Epoch
-                8 + // block_height: u64
-                32 + // leader_id: Pubkey
-                8 + // _unused_collector_fees: u64
-                8 + // _unused_fee_calculator: u64
-                // fee_rate_governor:
-                8 + //   target_lamports_per_signature: u64
-                8 + //   target_signatures_per_slot: u64
-                8 + //   min_lamports_per_signature: u64
-                8 + //   max_lamports_per_signature: u64
-                1 + //   burn_percent: u8
-                8 + // _unused_collected_rent: u64
-                // _unused_rent_collector:
-                8 + //   epoch: Epoch
-                //   epoch_schedule: EpochSchedule:
-                8 + //     slots_per_epoch: u64
-                8 + //     leader_schedule_slot_offset: u64
-                1 + //     warmup: bool
-                8 + //     first_normal_epoch: u64
-                8 + //     first_normal_slot: u64
-                8 + //   slots_per_year: f64
-                //   rent:
-                8 + //     lamports_per_byte: u64
-                8 + //     exemption_threshold: [8]u8
-                1 + //     burn_percent: u8
-                // epoch_schedule: EpochSchedule:
-                8 + //   slots_per_epoch: u64
-                8 + //   leader_schedule_slot_offset: u64
-                1 + //   warmup: bool
-                8 + //   first_normal_epoch: u64
-                8 + //   first_normal_slot: u64
-                // inflation:
-                8 + //   initial: f64
-                8 + //   terminal: f64
-                8 + //   taper: f64
-                8 + //   foundation: f64
-                8 + //   foundation_term: f64
-                8, //   __unused: f64
+        try r.discardAll(8 + // _unused_epoch: Epoch
+            8 + // block_height: u64
+            32 + // leader_id: Pubkey
+            8 + // _unused_collector_fees: u64
+            8 + // _unused_fee_calculator: u64
+            // fee_rate_governor:
+            8 + //   target_lamports_per_signature: u64
+            8 + //   target_signatures_per_slot: u64
+            8 + //   min_lamports_per_signature: u64
+            8 + //   max_lamports_per_signature: u64
+            1 + //   burn_percent: u8
+            8 + // _unused_collected_rent: u64
+            // _unused_rent_collector:
+            8 + //   epoch: Epoch
+            //   epoch_schedule: EpochSchedule:
+            8 + //     slots_per_epoch: u64
+            8 + //     leader_schedule_slot_offset: u64
+            1 + //     warmup: bool
+            8 + //     first_normal_epoch: u64
+            8 + //     first_normal_slot: u64
+            8 + //   slots_per_year: f64
+            //   rent:
+            8 + //     lamports_per_byte: u64
+            8 + //     exemption_threshold: [8]u8
+            1 //     burn_percent: u8
         );
 
-        try EpochStakes.discard(r);
+        var epoch_schedule: EpochSchedule = undefined;
+        try r.readSliceAll(std.mem.asBytes(&epoch_schedule));
+
+        var inflation: Inflation = undefined;
+        try r.readSliceAll(std.mem.asBytes(&inflation));
+
+        // stakes: Stakes(.Delegation)
+        //     vote_accounts: HashMap(Pubkey, {stake, AccountData})
+        const vote_acc_len = try readInt(u64, r);
+        for (0..vote_acc_len) |_| {
+            try r.discardAll(
+                32 + // key: Pubkey
+                    8 + // value.stake: u64
+                    8, // value.account.lamports: u64
+            );
+            // value.account.data: Vec(u8)
+            const data_len = try readInt(u64, r);
+            try r.discardAll(
+                data_len + // account data bytes
+                    32 + // value.account.owner: Pubkey
+                    1 + // value.account.executable: bool
+                    8, // value.account.rent_epoch: Epoch(u64)
+            );
+        }
+
+        //   stake_delegations: HashMap(Pubkey, Delegation)
+        const stake_del_len = try readInt(u64, r);
+        try r.discardAll(stake_del_len * (32 + // key: Pubkey
+            // Delegation:
+            32 + //   voter_pubkey: Pubkey
+            8 + //   stake: u64
+            8 + //   activation_epoch: Epoch
+            8 + //   deactivation_epoch: Epoch
+            8 //   warmup_cooldown_rate: f64
+        ));
+
+        try r.discardAll(
+            8 + // stakes.unused: u64
+                8, // stakes.epoch: Epoch
+        );
+
+        //   stake_history: Vec({ epoch: Epoch, effective: u64, activating: u64, deactivating: u64 })
+        const stake_history_len = try readInt(u64, r);
+        try r.discardAll(stake_history_len * (8 + // epoch: Epoch
+            8 + // effective: u64
+            8 + // activating: u64
+            8 // deactivating: u64
+        ));
 
         // _unused_accounts.unused1: HashSet(Pubkey)
         const unused1_len = try readInt(u64, r);
@@ -574,6 +310,8 @@ pub const BankFields = struct {
 
         return .{
             .slot = slot,
+            .epoch_schedule = epoch_schedule,
+            .inflatino = inflation,
             .blockhash_queue = blockhash_queue,
         };
     }
@@ -649,7 +387,7 @@ pub const ExtraFields = struct {
     ///   sequence of per-FEC-set Merkle roots of the block's shreds.
     block_id: Hash,
 
-    const VersionedEpochStakes = struct {
+    pub const VersionedEpochStakes = struct {
         epoch: Epoch,
         stakes: EpochStakes,
         total_stake: u64,
@@ -657,6 +395,152 @@ pub const ExtraFields = struct {
         node_id_to_vote_accounts: NodeToVoteAccountList,
         // maps vote account to authorized voter
         epoch_authorized_voters: EpochAuthorizedVoters,
+
+        fn PubkeyMap(comptime Value: type) type {
+            return struct {
+                entries: []Entry,
+                len: usize = 0,
+                zero_entry: Entry = undefined,
+                zero_entry_populated: bool = false,
+
+                const Self = @This();
+                const Entry = struct {
+                    pubkey: Pubkey,
+                    value: Value,
+                };
+
+                pub fn init(fba: *std.heap.FixedBufferAllocator, len: usize) !Self {
+                    const cap = try std.math.ceilPowerOfTwo(u64, len);
+                    const entries = try fba.allocator().alloc(Entry, cap);
+                    @memset(entries, .{ .pubkey = .ZEROES, .value = undefined });
+                    return .{ .entries = entries };
+                }
+
+                pub fn insert(self: *Self, pubkey: *const Pubkey, value: *const Value) void {
+                    // We use zero pubkey to mean empty slot in the map, so special case it here.
+                    if (pubkey.isZeroed()) {
+                        @branchHint(.unlikely);
+                        self.zero_entry = .{ .pubkey = .ZEROES, .value = value.* };
+                        self.len += @intFromBool(!self.zero_entry_populated);
+                        self.zero_entry_populated = true;
+                        return;
+                    }
+
+                    const mask = self.entries.len - 1;
+                    var i = pubkey.hash(0) & mask;
+                    while (true) {
+                        const e = &self.entries[i];
+                        i = (i + 1) & mask;
+                        if (e.pubkey.equals(pubkey) or e.pubkey.isZeroed()) {
+                            self.len += @intFromBool(e.pubkey.isZeroed());
+                            e.* = .{ .pubkey = pubkey.*, .value = value.* };
+                            break;
+                        }
+                    }
+                }
+
+                pub fn find(self: *Self, pubkey: *const Pubkey) ?*Entry {
+                    if (pubkey.isZeroed()) {
+                        @branchHint(.unlikely);
+                        if (self.zero_entry_populated) return &self.zero_entry;
+                        return null;
+                    }
+
+                    const mask = self.entries.len - 1;
+                    var i = pubkey.hash(0) & mask;
+                    while (true) {
+                        const e = &self.entries[i];
+                        i = (i + 1) & mask;
+                        if (e.pubkey.equals(pubkey)) return e;
+                        if (e.pubkey.isZeroed()) return null;
+                    }
+                }
+            };
+        }
+
+        pub const EpochStakes = struct {
+            epoch: Epoch,
+            vote_accounts: VoteAccountMap,
+
+            // Maps vote_account -> stake & node membership list
+            const VoteAccountMap = PubkeyMap(VoteAccount);
+            const VoteAccount = extern struct {
+                stake: u64,
+                // A vote account lives in its PubkeyMap and is optionally linked to other entries
+                // in the map who share the same node owner.
+                next: ?*VoteAccount = null,
+            };
+
+            // HashMap(Pubkey, { stake: u64, account: AccountSharedData }) where AccountSharedData =
+            // { lamports: u64, data: Vec(u8), owner: Pubkey, executable: bool, rent_epoch: Epoch }
+            fn readVoteAccounts(
+                fba: *std.heap.FixedBufferAllocator,
+                r: anytype,
+            ) !VoteAccountMap {
+                const len = try readInt(u64, r);
+                var vote_accounts = try VoteAccountMap.init(fba, len);
+                var vote_entry_header: extern struct {
+                    key: Pubkey,
+                    stake: u64,
+                    lamports: u64,
+                    data_len: u64,
+                } = undefined;
+                for (0..len) |_| {
+                    try r.readSliceAll(std.mem.asBytes(&vote_entry_header));
+                    // skip rest of its AccountSharedData (TODO: validate)
+                    try r.discardAll(vote_entry_header.data_len + // data bytes
+                        32 + // owner: Pubkey
+                        1 + // executable: bool
+                        8 // rent_epoch: Epoch
+                    );
+                    vote_accounts.insert(&vote_entry_header.key, &.{
+                        .stake = vote_entry_header.stake,
+                    });
+                }
+                return vote_accounts;
+            }
+
+            pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !EpochStakes {
+                // epoch_stakes: Stakes(Delegation)
+                //   vote_accounts: VoteAccounts
+                const vote_accounts = try readVoteAccounts(fba, r);
+
+                //   stake_delegations: HashMap(Pubkey, { Delegation, credits_observed: u64 })
+                //
+                // NOTE: this is discarded instead of stored:
+                // https://github.com/anza-xyz/agave/blob/v4.2/runtime/src/epoch_stakes.rs#L442-L443
+                const stake_del_len = try readInt(u64, r);
+                try r.discardAll(stake_del_len * (32 + // key: Pubkey
+                    32 + // delegation.voter_pubkey: Pubkey
+                    8 + // delegation.stake: u64
+                    8 + // delegation.activation_epoch: Epoch
+                    8 + // delegation.deactivation_epoch: Epoch
+                    8 + // delegation.warmup_cooldown_rate: f64
+                    8 // credits_observed: u64
+                ));
+
+                //   unused: u64
+                //   epoch: Epoch
+                var info: extern struct { _unused: u64, epoch: Epoch } = undefined;
+                try r.readSliceAll(std.mem.asBytes(&info));
+
+                //   stake_history: Vec({Epoch, effective: u64, activating: u64, deactivating: u64})
+                //
+                // NOTE: this is often 0-len on testnet snapshots and is fine to discard.
+                // Its better to parse it out of the StakeHistory sysvar account from the db.
+                const stake_history_len = try readInt(u64, r);
+                try r.discardAll(stake_history_len * (8 + // epoch: Epoch
+                    8 + // effective: u64
+                    8 + // activating: u64
+                    8 // deactivating: u64
+                ));
+
+                return .{
+                    .epoch = info.epoch,
+                    .vote_accounts = vote_accounts,
+                };
+            }
+        };
 
         const NodeToVoteAccountList = struct {
             map: PubkeyMap(struct {
@@ -732,7 +616,9 @@ pub const ExtraFields = struct {
 
                         // a node in a list either points to next, or points to itself (tail)
                         const vote_account = &vote_entry.value;
-                        if (vote_account.next != null) return error.VoteAccountOwnedByMultipleNodes;
+                        if (vote_account.next != null) {
+                            return error.VoteAccountOwnedByMultipleNodes;
+                        }
                         vote_account.next = vote_account;
 
                         // track link list.
@@ -856,6 +742,13 @@ pub const ExtraFields = struct {
             for (versioned_epoch_stakes) |*versioned_epoch_stake| {
                 versioned_epoch_stake.* = try .read(fba, r);
             }
+
+            // sort them by the epoch to make it easier for rooted to store deltas
+            std.mem.sortUnstable(VersionedEpochStakes, versioned_epoch_stakes, {}, struct {
+                fn lessThan(_: void, a: VersionedEpochStakes, b: VersionedEpochStakes) bool {
+                    return a.epoch < b.epoch;
+                }
+            }.lessThan);
         }
 
         // accounts_lt_hash: NullOnEof(?LtHash)

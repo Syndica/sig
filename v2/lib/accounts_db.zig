@@ -10,6 +10,7 @@ comptime {
 }
 
 const Pubkey = lib.solana.Pubkey;
+const Epoch = lib.solana.Epoch;
 const Hash = lib.solana.Hash;
 const Slot = lib.solana.Slot;
 
@@ -57,6 +58,23 @@ pub const RuntimeMetadata = extern struct {
         /// room for accountsdb to write all of its block hashes here.
         hashes: lib.ipc.Ring(256, Hash),
     },
+    // List of adjustments to make to any Epoch related data structures
+    epoch: Epoch,
+    epoch_deltas: lib.ipc.Ring(256, EpochDelta),
+
+    pub const EpochDelta = extern struct {
+        info: packed struct(u8) {
+            op: enum(u1) { upsert, remove },
+            has_authorized_voter: bool,
+            _unused: u6 = 0,
+        },
+        key: Pubkey, // Voter's pubkey
+        value: extern struct {
+            stake: u64, // lamports
+            node_owner: Pubkey,
+            authorized_voter: Pubkey, // valid if `info.has_authorized_voter`
+        },
+    };
 
     // 0 may be a valid slot, so use something that will never be reached.
     const invalid_slot = std.math.maxInt(Slot);
@@ -66,6 +84,8 @@ pub const RuntimeMetadata = extern struct {
 
         self.blockhash_queue.max_age = 0;
         self.blockhash_queue.hashes.init();
+
+        self.epoch_deltas.init();
     }
 
     /// Unblocks all getSlotBlocking() callers with the given slot value.
