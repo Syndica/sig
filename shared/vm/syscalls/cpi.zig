@@ -1315,10 +1315,6 @@ fn isV3InstructionBlacklisted(
             .enable_bpf_loader_set_authority_checked_ix,
             slot,
         ),
-        .extend_program_checked => !feature_set.active(
-            .enable_extend_program_checked,
-            slot,
-        ),
         .close => false,
         else => true,
     };
@@ -2823,6 +2819,8 @@ test isV3InstructionBlacklisted {
     try std.testing.expect(!isV3InstructionBlacklisted(&.{7}, &all_enabled, 0));
     try std.testing.expect(!isV3InstructionBlacklisted(&.{3}, &all_disabled, 0));
     try std.testing.expect(isV3InstructionBlacklisted(&.{8}, &all_disabled, 0));
+    // Byte 9 (former extend_program_checked) is always blacklisted since the
+    // variant was removed — intToEnum fails and falls into catch return true.
     try std.testing.expect(isV3InstructionBlacklisted(&.{9}, &all_disabled, 0));
-    try std.testing.expect(!isV3InstructionBlacklisted(&.{9}, &all_enabled, 0));
+    try std.testing.expect(isV3InstructionBlacklisted(&.{9}, &all_enabled, 0));
 }
