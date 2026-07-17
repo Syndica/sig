@@ -245,12 +245,47 @@ pub const Appender = struct {
 
     pub fn appendLatencyHistogram(
         self: Appender,
-        comptime id: Id,
+        id: Id,
         comptime layout: tel.LatencyHistogram.Layout,
     ) tel.LatencyHistogram {
         const raw = self.appendLatencyHistogramRaw(id, layout);
         raw.init();
         return .fromRaw(layout, raw);
+    }
+
+    pub fn appendVariantHistogram(
+        self: Appender,
+        name: []const u8,
+        comptime V: type,
+        comptime Hist: type,
+        comptime config: if (Hist == tel.LatencyHistogram)
+            tel.LatencyHistogram.Layout
+        else
+            []const f64,
+    ) tel.VariantHistogram(V, Hist) {
+        const Vh = tel.VariantHistogram(V, Hist);
+        var vh: Vh = .{ .histograms = @splat(undefined) };
+
+        for (&vh.histograms, 0..) |*hist_ptr, tag_index| {
+            const tag = Vh.Indexer.keyForIndex(tag_index);
+            const id: Id = .{
+                .name = name,
+                .label_count = 1,
+                .labels = switch (tag) {
+                    inline else => |itag| comptime labels: {
+                        const str = "variant=\"" ++ @tagName(itag) ++ "\"";
+                        const no_sentinel: [str.len]u8 = str.*;
+                        break :labels &no_sentinel ++ [_:'}']u8{};
+                    },
+                },
+            };
+            hist_ptr.* = if (Hist == tel.LatencyHistogram)
+                self.appendLatencyHistogram(id, config)
+            else
+                self.appendHistogram(id, config);
+        }
+
+        return vh;
     }
 
     pub fn appendFields(
@@ -286,8 +321,21 @@ pub const Appender = struct {
                 else => blk: {
                     if (isVariantCounter(s_field.type)) {
                         break :blk self.appendVariantCounter(id_name, s_field.type.Value);
-                    }
-                    comptime unreachable;
+                    } else if (maybeVariantHistogram(s_field.type)) |Hist| {
+                        break :blk self.appendVariantHistogram(
+                            id_name,
+                            s_field.type.Value,
+                            Hist,
+                            if (Hist == tel.LatencyHistogram)
+                                field_config.layout orelse @compileError(std.fmt.comptimePrint(
+                                    "VariantHistogram metric '{s}' requires a `.layout`.\n",
+                                    .{s_field.name},
+                                ))
+                            else
+                                field_config.upper_bounds orelse
+                                    &tel.Histogram.DEFAULT_UPPER_BOUNDS,
+                        );
+                    } else comptime unreachable;
                 },
             };
         }
@@ -332,7 +380,7 @@ pub const Appender = struct {
 
     pub fn appendLatencyHistogramRaw(
         self: Appender,
-        comptime id: Id,
+        id: Id,
         comptime layout: tel.LatencyHistogram.Layout,
     ) tel.LatencyHistogram.Raw {
         const header_words = tel.LatencyHistogram.Layout.header_words;
@@ -405,6 +453,12 @@ pub fn FieldConfigs(comptime S: type) type {
             tel.LatencyHistogram => FieldConfigLatencyHistogram,
             else => blk: {
                 if (isVariantCounter(s_field.type)) break :blk FieldConfigBasic;
+                if (maybeVariantHistogram(s_field.type)) |Hist| {
+                    break :blk if (Hist == tel.LatencyHistogram)
+                        FieldConfigLatencyHistogram
+                    else
+                        FieldConfigHistogram;
+                }
                 @compileError("Unsupported: " ++ @typeName(s_field.type));
             },
         };
@@ -437,6 +491,24 @@ inline fn isVariantCounter(comptime S: type) bool {
         if (!is_variant) return false;
         if (tel.Variant(S.Value) != S) return false;
         return true;
+    }
+}
+
+inline fn maybeVariantHistogram(comptime S: type) ?type {
+    comptime {
+        if (!@hasDecl(S, "Value")) return null;
+        if (@TypeOf(S.Value) != type) return null;
+        switch (@typeInfo(S.Value)) {
+            .@"enum", .error_set => {},
+            .@"union" => |u| if (u.tag_type == null) return null,
+            else => return null,
+        }
+        if (!@hasField(S, "histograms")) return null;
+        const info = @typeInfo(@FieldType(S, "histograms"));
+        if (info != .array) return null;
+        const Hist = info.array.child;
+        if (tel.VariantHistogram(S.Value, Hist) != S) return null;
+        return Hist;
     }
 }
 
@@ -522,4 +594,159 @@ pub fn collect(
     };
     const sort_ctx: SortCtx = .{ .ids = metrics.keys() };
     metrics.sort(sort_ctx);
+}
+
+/// Allocates a fresh telemetry `Region` backed by a heap buffer, for exercising the appender and
+/// `collect` paths in tests. Caller owns the returned buffer and must free it.
+fn testRegion(gpa: std.mem.Allocator) !struct { *tel.Region, []align(@alignOf(tel.Region)) u8 } {
+    const params: tel.Region.InitParams = .{
+        .port = 0,
+        .log_filters_encoded = &.{},
+        .service_count = 1,
+        .id_mem_len = 4096,
+        .gauges_len = 16,
+        .histogram_data_len = 4096,
+    };
+    const buf = try gpa.alignedAlloc(u8, .of(tel.Region), params.info().regionSize());
+    const region: *tel.Region = @ptrCast(buf.ptr);
+    region.init(params);
+    return .{ region, buf };
+}
+
+/// Collects `region`'s currently-registered metrics into a fresh, caller-owned `Map`.
+fn testCollect(gpa: std.mem.Allocator, region: *tel.Region) !Map {
+    const slices = region.getSlices();
+    var metrics: Map = .empty;
+    errdefer metrics.deinit(gpa);
+    try collect(gpa, &metrics, .{
+        .id_mem = slices.id_mem[0..region.id_mem_end.load(.monotonic)],
+        .gauges = slices.gauges,
+        .histogram_data = slices.histogram_data,
+    });
+    return metrics;
+}
+
+test "variant histogram: appendVariantHistogram registers one latency series per variant" {
+    const gpa = std.testing.allocator;
+    const Method = enum { get, put, delete };
+
+    const region, const buf = try testRegion(gpa);
+    defer gpa.free(buf);
+
+    const vh = region.metricAppender().appendVariantHistogram(
+        "req_latency_seconds",
+        Method,
+        tel.LatencyHistogram,
+        .{ .schema = 2, .min_ns = 512, .octaves = 4 },
+    );
+
+    // Observations land in the histogram for their own tag and nowhere else.
+    vh.observe(.get, 700);
+    vh.observe(.get, 800);
+    vh.observe(.put, 1024);
+    inline for (.{ .{ Method.get, 2 }, .{ Method.put, 1 }, .{ Method.delete, 0 } }) |case| {
+        var snap = vh.get(case[0]).swapOutSnapshot();
+        defer snap.release();
+        try std.testing.expectEqual(@as(u63, case[1]), snap.count);
+    }
+
+    var metrics = try testCollect(gpa, region);
+    defer metrics.deinit(gpa);
+
+    var seen: usize = 0;
+    for (metrics.keys(), metrics.values()) |id, any| {
+        if (!std.mem.eql(u8, id.name, "req_latency_seconds")) continue;
+        seen += 1;
+        try std.testing.expectEqual(@as(usize, 1), id.label_count);
+        try std.testing.expectEqual(Kind.latency_histogram, std.meta.activeTag(any));
+        try std.testing.expect(
+            std.mem.eql(u8, id.labels, "variant=\"get\"") or
+                std.mem.eql(u8, id.labels, "variant=\"put\"") or
+                std.mem.eql(u8, id.labels, "variant=\"delete\""),
+        );
+    }
+    try std.testing.expectEqual(@as(usize, 3), seen);
+}
+
+test "variant histogram: appendVariantHistogram registers one bounds series per variant" {
+    const gpa = std.testing.allocator;
+    const Outcome = enum { ok, err, timeout };
+
+    const region, const buf = try testRegion(gpa);
+    defer gpa.free(buf);
+
+    const vh = region.metricAppender().appendVariantHistogram(
+        "request_size_bytes",
+        Outcome,
+        tel.Histogram,
+        &.{ 1, 10, 100, 1000 },
+    );
+
+    // Observations land in the histogram for their own tag and nowhere else; the `.err` sample of
+    // 5000 sits above the top bound, landing in the implicit `+Inf` bucket but still counted.
+    vh.observe(.ok, 5);
+    vh.observe(.ok, 50);
+    vh.observe(.err, 5000);
+    inline for (.{ .{ Outcome.ok, 2 }, .{ Outcome.err, 1 }, .{ Outcome.timeout, 0 } }) |case| {
+        var snap = vh.get(case[0]).swapOutSnapshot();
+        defer snap.release();
+        try std.testing.expectEqual(@as(u63, case[1]), snap.count);
+    }
+
+    var metrics = try testCollect(gpa, region);
+    defer metrics.deinit(gpa);
+
+    var seen: usize = 0;
+    for (metrics.keys(), metrics.values()) |id, any| {
+        if (!std.mem.eql(u8, id.name, "request_size_bytes")) continue;
+        seen += 1;
+        try std.testing.expectEqual(@as(usize, 1), id.label_count);
+        try std.testing.expectEqual(Kind.histogram, std.meta.activeTag(any));
+        try std.testing.expect(
+            std.mem.eql(u8, id.labels, "variant=\"ok\"") or
+                std.mem.eql(u8, id.labels, "variant=\"err\"") or
+                std.mem.eql(u8, id.labels, "variant=\"timeout\""),
+        );
+    }
+    try std.testing.expectEqual(@as(usize, 3), seen);
+}
+
+test "variant histogram: appendFields registers latency and bounds variants" {
+    const gpa = std.testing.allocator;
+    const Method = enum { get, put };
+    const Outcome = enum { ok, err };
+    const Metrics = struct {
+        latency: tel.VariantHistogram(Method, tel.LatencyHistogram),
+        sizes: tel.VariantHistogram(Outcome, tel.Histogram),
+    };
+
+    const region, const buf = try testRegion(gpa);
+    defer gpa.free(buf);
+
+    const metrics_struct = region.metricAppender().appendFields(Metrics, .{
+        .prefix = "svc",
+        .fields = .{
+            .latency = .{ .layout = .{ .schema = 2, .min_ns = 512, .octaves = 4 } },
+            .sizes = .{ .id_override = null, .upper_bounds = &.{ 1, 10, 100 } },
+        },
+    });
+    metrics_struct.latency.observe(.get, 700);
+    metrics_struct.sizes.observe(.ok, 50);
+
+    var metrics = try testCollect(gpa, region);
+    defer metrics.deinit(gpa);
+
+    var latency_series: usize = 0;
+    var sizes_series: usize = 0;
+    for (metrics.keys(), metrics.values()) |id, any| {
+        if (std.mem.eql(u8, id.name, "svc_latency")) {
+            latency_series += 1;
+            try std.testing.expectEqual(Kind.latency_histogram, std.meta.activeTag(any));
+        } else if (std.mem.eql(u8, id.name, "svc_sizes")) {
+            sizes_series += 1;
+            try std.testing.expectEqual(Kind.histogram, std.meta.activeTag(any));
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 2), latency_series); // get, put
+    try std.testing.expectEqual(@as(usize, 2), sizes_series); // ok, err
 }

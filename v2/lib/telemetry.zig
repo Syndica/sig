@@ -1126,6 +1126,66 @@ pub const LatencyHistogram = struct {
     }
 };
 
+/// One `Hist` per variant of `V`, held in a fixed inline array indexed by `EnumIndexer`, so each
+/// tag records into its own distribution through a direct index rather than a map lookup. `V` may
+/// be an enum, a tagged union (its tag type is used), or an error set: `Tag` is what `observe`
+/// takes, and `Enum` is the `FieldEnum` assigning each variant its array slot in declaration order.
+///
+/// The histogram analogue of `Variant`, and intended to be exposed the same way: one metric name
+/// (e.g. `method_elapsed_seconds`) carrying a series per tag under a `variant="<tag>"` label, so
+/// variants can be summed together or filtered apart in Prometheus/Grafana. `Hist` is any histogram
+/// with an `observe(u64)` — `LatencyHistogram` for ns-native latencies, `Histogram` for explicit
+/// bounds. Each `Hist` carries its own layout at runtime and this type constrains none of them;
+/// giving every variant identical buckets, so the series aggregate cleanly, is the appender's job.
+pub fn VariantHistogram(comptime V: type, comptime Hist: type) type {
+    return struct {
+        histograms: [Indexer.count]Hist,
+        const VariantHistogramSelf = @This();
+
+        pub const Value = V;
+        pub const Enum = std.meta.FieldEnum(Value);
+        pub const Tag = switch (@typeInfo(Value)) {
+            .@"enum" => Value,
+            .@"union" => |u_info| u_info.tag_type.?,
+            .error_set => Value,
+            else => @compileError("Unsupported: " ++ @typeName(Value)),
+        };
+
+        pub const Indexer = std.enums.EnumIndexer(Enum);
+
+        /// Records an observed value into the histogram for `tag`. For a `LatencyHistogram` the
+        /// value is a latency in nanoseconds; for a `Histogram` it is a raw observation.
+        pub fn observe(self: *const VariantHistogramSelf, tag: Tag, value: u64) void {
+            self.histograms[indexFromTag(tag)].observe(value);
+        }
+
+        /// Returns the individual `Hist` handle registered for `tag`, for operations beyond
+        /// `observe` (e.g. snapshotting a single variant's distribution).
+        pub fn get(self: *const VariantHistogramSelf, tag: Tag) Hist {
+            return self.histograms[indexFromTag(tag)];
+        }
+
+        fn indexFromTag(value: Tag) usize {
+            return Indexer.indexOf(enumFromTag(value));
+        }
+
+        fn enumFromTag(value: Tag) Enum {
+            return switch (@typeInfo(Value)) {
+                .@"enum" => if (Enum == Value) value else switch (value) {
+                    inline else => |itag| @field(Enum, @tagName(itag)),
+                },
+                .@"union" => |u_info| if (Enum == u_info.tag_type) value else switch (value) {
+                    inline else => |_, itag| @field(Enum, @tagName(itag)),
+                },
+                .error_set => switch (value) {
+                    inline else => |tag| @field(Enum, @errorName(tag)),
+                },
+                else => @compileError("Unsupported: " ++ @typeName(Value)),
+            };
+        }
+    };
+}
+
 fn initBuckets(
     comptime len: usize,
     upper_bounds: *const [len]f64,
