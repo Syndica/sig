@@ -182,18 +182,19 @@ pub fn main() !void {
         const cfg_file = try std.fs.cwd().openFile(cfg_path, .{});
         defer cfg_file.close();
 
-        var read_buf: [4096]u8 = undefined;
-        var file_reader = cfg_file.reader(&read_buf);
-        var cfg_bytes = try file_reader.interface.allocRemaining(allocator, .limited(1024 * 1024));
-        cfg_bytes = try allocator.realloc(cfg_bytes, cfg_bytes.len + 1);
-        cfg_bytes[cfg_bytes.len - 1] = 0;
-        const cfg_str_z: [:0]u8 = cfg_bytes[0 .. cfg_bytes.len - 1 :0];
+        var file_reader = cfg_file.reader(&.{});
+        const file_size = try file_reader.getSize();
+
+        if (file_size > 1024 * 1024) return error.ConfigFileTooBig;
+        const cfg_bytes = try allocator.allocSentinel(u8, @intCast(file_size), 0);
         defer allocator.free(cfg_bytes);
+
+        try file_reader.interface.readSliceAll(cfg_bytes);
 
         var diag: std.zon.parse.Diagnostics = .{};
         defer diag.deinit(allocator);
 
-        const config = std.zon.parse.fromSlice(Config, allocator, cfg_str_z, &diag, .{}) catch |err| {
+        const config = std.zon.parse.fromSlice(Config, allocator, cfg_bytes, &diag, .{}) catch |err| {
             std.log.err("{f}", .{diag});
             return err;
         };
