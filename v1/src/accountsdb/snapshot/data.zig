@@ -540,10 +540,11 @@ pub const Manifest = struct {
         file: std.fs.File,
     ) !Manifest {
         const size = (try file.stat()).size;
-        var read_buf: [4096]u8 = undefined;
-        var file_reader = file.reader(&read_buf);
-        const contents = try file_reader.interface.allocRemaining(allocator, .limited64(size));
+        const contents = try allocator.alloc(u8, @intCast(size));
         defer allocator.free(contents);
+
+        var file_reader = file.reader(&.{});
+        try file_reader.interface.readSliceAll(contents);
 
         var fbs = std.io.fixedBufferStream(contents);
         return decodeFromBincode(allocator, fbs.reader(), .{
