@@ -3,7 +3,7 @@ const sig = @import("../sig.zig");
 const geyser = sig.geyser;
 
 const Account = sig.core.Account;
-const Slot = sig.core.time.Slot;
+const Slot = sig.core.Slot;
 const Pubkey = sig.core.pubkey.Pubkey;
 const GeyserWriter = sig.geyser.GeyserWriter;
 const VersionedAccountPayload = sig.geyser.core.VersionedAccountPayload;

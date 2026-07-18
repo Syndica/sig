@@ -28,3 +28,20 @@ pub const utils = @import("utils/lib.zig");
 pub const vm = @import("vm/lib.zig");
 pub const zksdk = @import("zksdk/lib.zig");
 pub const build_options = @import("build-options");
+
+pub const v2 = struct {
+    pub const lib = @import("lib");
+
+    pub const epoch_schedule = lib.solana.epoch_schedule;
+    pub const features = lib.solana.features;
+    pub const pubkey = lib.solana.pubkey;
+    pub const signature = lib.solana.signature;
+    pub const time = lib.solana.time;
+    pub const transaction = lib.solana.transaction;
+
+    pub const Epoch = lib.solana.Epoch;
+    pub const EpochSchedule = lib.solana.EpochSchedule;
+    pub const FeatureSet = lib.solana.features.Set;
+    pub const Hash = lib.solana.Hash;
+    pub const Slot = lib.solana.Slot;
+};

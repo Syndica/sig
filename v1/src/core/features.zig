@@ -1,28 +1,21 @@
-//! v1-only additions on top of the shared `features` namespace.
-//!
-//! `activationStateFromAccount` (with its helper `FeatureActivationState`)
-//! is only consumed by v1 (from `replay/epoch_transitions.zig`); nothing
-//! in the runtime tree references it, so it lives here rather than in
-//! the shared runtime module.
-
 const shared = @import("shared");
 const sig = @import("../sig.zig");
 
-const Pubkey = shared.core.Pubkey;
+const Pubkey = sig.core.Pubkey;
 
 // Re-export the shared features namespace so `sig.core.features.*` in v1
 // resolves through this file. Anything already exposed by
-// `shared.core.features` stays reachable via these aliases.
-pub const FEATURE_SET_ID = shared.core.features.FEATURE_SET_ID;
-pub const ZonInfo = shared.core.features.ZonInfo;
-pub const Status = shared.core.features.Status;
-pub const all_features = shared.core.features.all_features;
-pub const features = shared.core.features.features;
-pub const Feature = shared.core.features.Feature;
-pub const pubkey_map = shared.core.features.pubkey_map;
-pub const status_map = shared.core.features.status_map;
-pub const isKnownFeatureId = shared.core.features.isKnownFeatureId;
-pub const Set = shared.core.features.Set;
+// `shared.v2.features` stays reachable via these aliases.
+pub const FEATURE_SET_ID = shared.v2.features.FEATURE_SET_ID;
+pub const ZonInfo = shared.v2.features.ZonInfo;
+pub const Status = shared.v2.features.Status;
+pub const all_features = shared.v2.features.all_features;
+pub const features = shared.v2.features.features;
+pub const Feature = shared.v2.features.Feature;
+pub const pubkey_map = shared.v2.features.pubkey_map;
+pub const status_map = shared.v2.features.status_map;
+pub const isKnownFeatureId = shared.v2.features.isKnownFeatureId;
+pub const Set = shared.v2.features.Set;
 
 const failing_allocator = shared.utils.allocators.failing.allocator(.{});
 

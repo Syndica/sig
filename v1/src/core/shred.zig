@@ -1,6 +1,6 @@
-const Hash = @import("shared").core.Hash;
 const std = @import("std");
 const HardForks = @import("hard_forks.zig").HardForks;
+const Hash = @import("shared").v2.Hash;
 
 pub const Nonce = u32;
 

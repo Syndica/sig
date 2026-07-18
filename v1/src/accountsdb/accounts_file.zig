@@ -6,10 +6,10 @@ const Account = sig.core.account.Account;
 const AccountDataHandle = sig.accounts_db.buffer_pool.AccountDataHandle;
 const AccountFileInfo = sig.accounts_db.snapshot.data.AccountFileInfo;
 const BufferPool = sig.accounts_db.buffer_pool.BufferPool;
-const Epoch = sig.core.time.Epoch;
+const Epoch = sig.core.Epoch;
 const Hash = sig.core.hash.Hash;
 const Pubkey = sig.core.pubkey.Pubkey;
-const Slot = sig.core.time.Slot;
+const Slot = sig.core.Slot;
 const bincode = sig.bincode;
 
 const writeIntLittleMem = sig.core.account.writeIntLittleMem;

@@ -5,8 +5,8 @@
 const std = @import("std");
 const shared = @import("shared");
 
-pub const Hash = shared.core.Hash;
-const Slot = shared.core.Slot;
+pub const Hash = shared.v2.Hash;
+const Slot = shared.v2.Slot;
 
 pub const SlotAndHash = struct {
     slot: Slot,

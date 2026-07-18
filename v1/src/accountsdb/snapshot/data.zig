@@ -9,11 +9,11 @@ const tracy = @import("tracy");
 const bincode = sig.bincode;
 
 const BankFields = sig.core.BankFields;
-const Epoch = sig.core.time.Epoch;
+const Epoch = sig.core.Epoch;
 const Hash = sig.core.hash.Hash;
 const InstructionError = sig.core.instruction.InstructionErrorEnum;
 const Pubkey = sig.core.pubkey.Pubkey;
-const Slot = sig.core.time.Slot;
+const Slot = sig.core.Slot;
 const SlotAndHash = sig.core.hash.SlotAndHash;
 const SlotHistory = sig.runtime.sysvar.SlotHistory;
 const VersionedEpochStakes = sig.core.VersionedEpochStakes;

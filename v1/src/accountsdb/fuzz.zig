@@ -10,7 +10,7 @@ const cli = @import("cli");
 
 const Account = sig.runtime.AccountSharedData;
 const Pubkey = sig.core.pubkey.Pubkey;
-const Slot = sig.core.time.Slot;
+const Slot = sig.core.Slot;
 
 const Db = sig.accounts_db.Db;
 const AccountStore = sig.accounts_db.AccountStore;
