@@ -96,6 +96,8 @@ const Pool = lib.collections.Pool;
 
 const Unrooted = lib.accounts_db.Unrooted;
 
+const AccountResolver = replay.account_resolve.AccountResolver;
+
 comptime {
     _ = start;
 }
@@ -377,6 +379,48 @@ fn bootstrap(
         .{ root_slot, snapshot_metadata.block_id },
     );
 }
+
+/// Very simple FIFO queue for tracking the order in which transactions were submitted to the `AccountResolver`.
+///
+/// For now it's used to maintain the current FIFO order of transaction execution the current replay implementation has,
+/// while allowing the `AccountResolver` to resolve transactions out of order.
+///
+/// TODO: replace this with something better once we implement a transaction scheduler.
+const ResolveOrder = struct {
+    entries: [AccountResolver.MAX_PENDING_TRANSACTIONS]Entry = undefined,
+    head: usize = 0,
+    count: usize = 0,
+
+    const Entry = struct {
+        request_id: AccountResolver.RequestId,
+        block_ref: lib.replay.BlockRef,
+        transaction_idx: u32,
+
+        state: enum {
+            resolving_alts,
+            executing,
+        } = .resolving_alts,
+    };
+
+    fn push(self: *ResolveOrder, entry: Entry) void {
+        std.debug.assert(self.count < self.entries.len);
+
+        const index = (self.head + self.count) % self.entries.len;
+        self.entries[index] = entry;
+        self.count += 1;
+    }
+
+    fn peek(self: *ResolveOrder) ?*Entry {
+        if (self.count == 0) return null;
+        return &self.entries[self.head];
+    }
+
+    fn pop(self: *ResolveOrder) void {
+        std.debug.assert(self.count != 0);
+        self.head = (self.head + 1) % self.entries.len;
+        self.count -= 1;
+    }
+};
 
 // TODO:
 // 1) *never* block the replay thread (remove this function)

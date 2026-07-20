@@ -34,13 +34,6 @@ const Pubkey = lib.solana.Pubkey;
 const AccountLookups = lib.accounts_db.AccountLookups;
 const AccountPool = lib.accounts_db.AccountPool;
 
-/// Maximum number of submitted transactions whose completions have not yet
-/// been consumed.
-///
-/// This is also the range encoded by the pending index in future Rooted lookup
-/// request user-data.
-pub const MAX_PENDING_TRANSACTIONS: usize = AccountLookups.capacity;
-
 pub const AccountResolver = struct {
     account_pool: *lib.accounts_db.AccountPool,
     account_lookups: *AccountLookups,
@@ -53,13 +46,17 @@ pub const AccountResolver = struct {
     // even if they are not in submission order. This would be useful for a scheduler that wants
     // to execute non-conflicting transactions in parallel.
 
-    pending_queue: [MAX_PENDING_TRANSACTIONS]PendingTransaction,
-
-    /// Index of the oldest submitted, unconsumed transaction in `pending`.
-    pending_head: usize,
+    pending: [MAX_PENDING_TRANSACTIONS]PendingTransaction,
 
     /// Includes resolving entries and completed entries that are not yet popped.
     pending_count: usize,
+
+    /// Maximum number of submitted transactions whose completions have not yet
+    /// been consumed.
+    ///
+    /// This is also the range encoded by the pending index in future Rooted lookup
+    /// request user-data.
+    pub const MAX_PENDING_TRANSACTIONS: usize = AccountLookups.capacity;
 
     pub const InitParams = struct {
         account_pool: *lib.accounts_db.AccountPool,
@@ -79,8 +76,7 @@ pub const AccountResolver = struct {
             .transaction_pool = params.transaction_pool,
             .unrooted = params.unrooted,
 
-            .pending_queue = @splat(.empty()),
-            .pending_head = 0,
+            .pending = @splat(.empty()),
             .pending_count = 0,
         };
     }
@@ -108,11 +104,8 @@ pub const AccountResolver = struct {
         block_ref: lib.replay.BlockRef,
         tx_ref: lib.replay.TransactionPool.ItemId,
         bank_context: BankContext,
-        /// Used by replay to track things. Should be removed/replaced by what the scheduler
-        /// needs in the future.
-        transaction_idx: u32,
-    ) SubmitError!void {
-        if (self.pending_count == self.pending_queue.len) {
+    ) SubmitError!RequestId {
+        if (self.pending_count == self.pending.len) {
             @branchHint(.unlikely);
             return error.Full;
         }
@@ -123,10 +116,8 @@ pub const AccountResolver = struct {
             unreachable;
         std.debug.assert(block_slot == bank_context.current_slot);
 
-        const pending_index =
-            (self.pending_head + self.pending_count) % self.pending_queue.len;
-
-        const pending = &self.pending_queue[pending_index];
+        const pending_index = self.findFreePendingIndex() orelse return error.Full;
+        const pending = &self.pending[pending_index];
         std.debug.assert(pending.status == .free);
 
         const gen = nextGeneration(pending.gen);
@@ -143,8 +134,6 @@ pub const AccountResolver = struct {
             .in_flight_lookups = 0,
             .failure = null,
             .completion = .{
-                .transaction_idx = transaction_idx,
-
                 .transaction = .{
                     .block_ref = block_ref,
                     .tx_ref = tx_ref,
@@ -167,56 +156,94 @@ pub const AccountResolver = struct {
         }
 
         self.pending_count += 1;
+
+        return .{
+            .pending_index = @intCast(pending_index),
+            .generation = pending.gen,
+        };
     }
 
-    /// Returns a pointer to the oldest submitted completion, preserving submission order.
+    // TODO: use a free list instead.
+    fn findFreePendingIndex(self: *const AccountResolver) ?usize {
+        if (self.pending_count == self.pending.len)
+            return null;
+
+        for (self.pending, 0..) |pending, index| {
+            if (pending.status == .free)
+                return index;
+        }
+
+        unreachable;
+    }
+
+    pub fn getPendingMut(
+        self: *AccountResolver,
+        request_id: RequestId,
+    ) *PendingTransaction {
+        const pending = &self.pending[request_id.pending_index];
+        std.debug.assert(pending.status != .free);
+        std.debug.assert(pending.gen == request_id.generation);
+        return pending;
+    }
+
+    pub fn getPendingConst(
+        self: *const AccountResolver,
+        request_id: RequestId,
+    ) *const PendingTransaction {
+        const pending = &self.pending[request_id.pending_index];
+        std.debug.assert(pending.status != .free);
+        std.debug.assert(pending.gen == request_id.generation);
+        return pending;
+    }
+
+    /// Returns a pointer to the next completed transaction. This is not necessarily in FIFO
+    /// order with respect to submission order. Some transactions may complete before others.
     ///
-    /// A later transaction may already be complete internally, but it remains
-    /// hidden while an earlier transaction is unresolved.
-    ///
-    /// The returned pointer remains valid until popCompleted() is called.
+    /// The returned pointer remains valid until `consumeCompletion()` is called.
     ///
     /// TODO: we should return a batch of completions instead of one at a time.
-    pub fn peekCompleted(self: *const AccountResolver) ?*const Completion {
-        if (self.pending_count == 0) return null;
+    pub fn peekCompletion(
+        self: *const AccountResolver,
+        request_id: RequestId,
+    ) ?*const Completion {
+        const pending = self.getPendingConst(request_id);
 
-        const pending = &self.pending_queue[self.pending_head];
-        std.debug.assert(pending.status != .free);
-
-        if (pending.status != .complete) return null;
+        if (pending.status != .complete)
+            return null;
 
         return &pending.completion;
     }
 
-    /// Consumes the completion returned by peekCompleted()
+    /// Consumes the completion returned by `peekCompletion()`
     ///
     /// This invalidates any pointer previously return for that completion.
-    /// It does not destroy the TrnsactionPool.ItemId, ownership of `tx_ref` remains with the caller.
-    pub fn popCompleted(self: *AccountResolver) void {
-        std.debug.assert(self.pending_count > 0);
+    /// It does not destroy the `TransactionPool.ItemId`, ownership of `tx_ref` remains with the caller.
+    pub fn consumeCompletion(
+        self: *AccountResolver,
+        request_id: RequestId,
+    ) void {
+        const pending = self.getPendingMut(request_id);
 
-        const pending = &self.pending_queue[self.pending_head];
         std.debug.assert(pending.status == .complete);
         std.debug.assert(pending.in_flight_lookups == 0);
 
         pending.reset();
-
-        self.pending_head = (self.pending_head + 1) % self.pending_queue.len;
         self.pending_count -= 1;
     }
 
-    /// Restarts ALT expansion for the completed transaction at the queue head.
+    /// Restarts ALT expansion for the requested transaction.
     ///
     /// The initial expansion may be speculative: replay can parse ahead of earlier
     /// transactions that create or extend a referenced lookup table. The caller
     /// invokes this only after those earlier transactions have completed and
     /// published their writes, making the retried lookup authoritative.
     ///
-    /// This mirrors Firedancer's fallback concept. Firedancer marks a transaction
+    /// This sorta mirrors Firedancer's fallback concept: Firedancer marks a transaction
     /// as `serializing` when eager ALT expansion fails, waits for all preceding
     /// transactions to complete, then resolves the ALTs again during execution.
+    ///
     /// Sig retries through the existing resolver instead of deferring resolution
-    /// to the executor.
+    /// to the executor. (TODO: check if this is what we want).
     ///
     /// The retry starts from descriptor zero so the result cannot combine lookup
     /// tables observed against different account-state versions.
@@ -227,10 +254,13 @@ pub const AccountResolver = struct {
     /// [fd](Authoritative execution-time ALT reload right before exec):
     /// * https://github.com/firedancer-io/firedancer/blob/0c9b9cc9d0e6c36a500bade630e66c8304c3e0a0/src/flamenco/runtime/fd_executor.c#L877.
     /// NOTE: replay/scheduler must ensure that all prior transactions have completed and commited their writes.
-    pub fn retryHeadAlts(self: *AccountResolver) void {
-        std.debug.assert(self.pending_count != 0);
+    pub fn retryAlts(self: *AccountResolver, request_id: RequestId) void {
+        const pending = self.getPendingMut(request_id);
+        switch (pending.completion.result) {
+            .needs_serialization => {},
+            else => unreachable,
+        }
 
-        const pending = &self.pending_queue[self.pending_head];
         std.debug.assert(pending.status == .complete);
         std.debug.assert(pending.in_flight_lookups == 0);
         std.debug.assert(pending.completion.result == .failed);
@@ -248,6 +278,12 @@ pub const AccountResolver = struct {
         pending.completion.result = undefined;
     }
 
+    pub const RequestId = packed struct(u32) {
+        pending_index: u8,
+        generation: u16,
+        _reserved: u8 = 0,
+    };
+
     const LookupTicket = packed struct(u32) {
         // Note: we use u8 here, but this must be larger if `MAX_PENDING_TRANSACTIONS` is increased beyond 256.
         pending_index: u8,
@@ -257,14 +293,17 @@ pub const AccountResolver = struct {
 
     /// Terminal result exposed to the caller.
     pub const Completion = struct {
-        /// convenient for replay bookkeeping, will likely get replaced by something more useful for the scheduler.
-        transaction_idx: u32,
-
         transaction: ResolvedTransaction,
         result: Result,
 
         pub const Result = union(enum) {
             resolved: void,
+
+            /// Speculative ALT resolution failed. The caller must establish a serialization
+            /// boundary and retry with `retryAlts()`.
+            needs_serialization: LookupError,
+
+            /// Terminal failure that cannot be retried.
             failed: ResolveError,
         };
 
@@ -285,6 +324,7 @@ pub const AccountResolver = struct {
         }
     };
 
+    // TODO: improve the layout of this struct to optimize iteration.
     const PendingTransaction = struct {
         /// Incremented whenever this array position is reused.
         ///
@@ -325,7 +365,7 @@ pub const AccountResolver = struct {
 
         const LookupFailure = struct {
             lookup_index: u8,
-            err: ResolveError,
+            err: LookupError,
         };
 
         const AltAttempt = enum {
@@ -335,7 +375,7 @@ pub const AccountResolver = struct {
             authoritative,
         };
 
-        pub inline fn reset(self: *PendingTransaction) void {
+        pub fn reset(self: *PendingTransaction) void {
             // Preserve the generation across re-use.
             const gen = self.gen;
             self.* = PendingTransaction.empty();
@@ -359,7 +399,7 @@ pub const AccountResolver = struct {
         }
     };
 
-    inline fn nextGeneration(current: u16) u16 {
+    fn nextGeneration(current: u16) u16 {
         var next = current +% 1;
         // 0 is reserved for uninitialized PendingTransaction entries, so we skip it.
         if (next == 0) next = 1;
@@ -437,10 +477,7 @@ pub const AccountResolver = struct {
 
         defer if (submitted_count != 0) writer.markUsed();
 
-        for (0..self.pending_count) |i| {
-            const pending_index = (self.pending_head + i) % self.pending_queue.len;
-            const pending = &self.pending_queue[pending_index];
-
+        for (&self.pending_count, 0..) |*pending, pending_idx| {
             if (pending.status != .resolving)
                 continue;
 
@@ -507,7 +544,7 @@ pub const AccountResolver = struct {
                 };
 
                 const ticket: LookupTicket = .{
-                    .pending_index = @intCast(pending_index),
+                    .pending_index = @intCast(pending_idx),
                     .lookup_index = lookup_index,
                     .generation = pending.gen,
                 };
@@ -540,12 +577,12 @@ pub const AccountResolver = struct {
         const ticket: LookupTicket = @bitCast(result.req_user_data);
         const pending_index: usize = ticket.pending_index;
 
-        if (pending_index >= self.pending_queue.len) {
+        if (pending_index >= self.pending.len) {
             self.releaseAccount(result.account_index);
             return;
         }
 
-        const pending = &self.pending_queue[pending_index];
+        const pending = &self.pending[pending_index];
 
         // A stale response belongs to a previous use of this queue position.
         if (pending.gen != ticket.generation or
@@ -722,7 +759,15 @@ pub const AccountResolver = struct {
         if (pending.failure) |failure| {
             std.debug.assert(pending.status == .draining_after_failure);
 
-            pending.completion.result = .{ .failed = failure.err };
+            pending.completion.result = switch (pending.alt_attempt) {
+                .speculative => .{
+                    .needs_serialization = failure.err,
+                },
+                .authoritative => .{
+                    .failed = failure.err,
+                },
+            };
+
             pending.status = .complete;
             return true;
         }
@@ -1107,27 +1152,43 @@ test "AccountResolver: no-ALT legacy transaction completes at submit()" {
     const tx_ref = try fx.insertTransactionBytes(bytes);
 
     var resolver = fx.resolver();
-    try resolver.submit(
-        block,
-        tx_ref,
-        fx.bankContextForSlot(100),
-        0,
-    );
+    const req = try resolver.submit(block, tx_ref, fx.bankContextForSlot(100));
 
-    // submit() must synthesise a completion inline (no poll required).
+    // submit() reserves exactly one slot in the pending queue.
     try std.testing.expectEqual(@as(usize, 1), resolver.pending_count);
 
-    const completion = resolver.peekCompleted() orelse return error.ExpectedCompletion;
+    // No-ALT transactions must synthesise a completion inline, before any poll().
+    const completion = resolver.peekCompletion(req) orelse return error.ExpectedCompletion;
+
+    // Completion echoes back the block/tx the caller submitted.
     try std.testing.expectEqual(block, completion.transaction.block_ref);
     try std.testing.expectEqual(tx_ref, completion.transaction.tx_ref);
+
+    // No lookups => resolved outcome (no needs_serialization, no failed).
     try std.testing.expect(completion.result == .resolved);
 
-    // No Rooted requests should have been queued.
-    var rooted_reader = fx.account_lookups.in.get(.reader);
-    try std.testing.expectEqual(null, rooted_reader.peek());
+    // Cross-check the pending entry directly to catch state-shape drift.
+    const pending = resolver.getPendingConst(req);
 
-    // Pop clears the completion and frees the slot.
-    resolver.popCompleted();
+    // Nothing was sent to Rooted, so nothing should be in flight.
+    try std.testing.expectEqual(AccountResolver.PendingTransaction.Status.complete, pending.status);
+    try std.testing.expectEqual(@as(u8, 0), pending.in_flight_lookups);
+
+    // Initial submission is always speculative
+    try std.testing.expectEqual(AccountResolver.PendingTransaction.AltAttempt.speculative, pending.alt_attempt);
+
+    // No Rooted requests should have been queued: no ALTs means no lookups.
+    var rooted_reader = fx.account_lookups.in.get(.reader);
+    try std.testing.expectEqual(@as(?*const AccountLookups.Request, null), rooted_reader.peek());
+
+    // consumeCompletion() must free the pending slot for reuse.
+    resolver.consumeCompletion(req);
     try std.testing.expectEqual(@as(usize, 0), resolver.pending_count);
-    try std.testing.expectEqual(null, resolver.peekCompleted());
+
+    // Slot is back to .free; the RequestId is now dangling and must not be
+    // peeked at (peekCompletion would trip the getPendingConst() assert).
+    try std.testing.expectEqual(
+        AccountResolver.PendingTransaction.Status.free,
+        resolver.pending[req.pending_index].status,
+    );
 }
