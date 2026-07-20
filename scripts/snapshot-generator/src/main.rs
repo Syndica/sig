@@ -232,7 +232,7 @@ fn build_status_cache(slot: Slot) -> (Vec<u8>, Value) {
         buf.extend_from_slice(&ok_key);
         buf.extend_from_slice(&0u32.to_le_bytes()); // Ok tag
 
-        // Err(InstructionError(3, Custom(9))) entry.
+        // Err(InstructionError(instruction_index, Custom(custom_code))) entry.
         buf.extend_from_slice(&err_key);
         buf.extend_from_slice(&1u32.to_le_bytes()); // Err tag
         buf.extend_from_slice(&8u32.to_le_bytes()); // TxErr::InstructionError
