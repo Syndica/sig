@@ -111,12 +111,6 @@ pub const AccountResolver = struct {
         /// Used by replay to track things. Should be removed/replaced by what the scheduler
         /// needs in the future.
         transaction_idx: u32,
-        /// Supplied and used by replay to detect if earlier transactions executed after
-        /// ALT resolution began. If those earlier transactions happened to modify
-        /// the same ALT accounts, replay must re-submit the transaction for ALT resolution.
-        /// TODO: scheduler changes should utilize/change this to avoid re-submitting
-        /// transactions that are known to be non-conflicting with earlier transactions.
-        state_version: u64,
     ) SubmitError!void {
         if (self.pending_count == self.pending_queue.len) {
             @branchHint(.unlikely);
@@ -150,7 +144,6 @@ pub const AccountResolver = struct {
             .failure = null,
             .completion = .{
                 .transaction_idx = transaction_idx,
-                .state_version = state_version,
 
                 .transaction = .{
                     .block_ref = block_ref,
@@ -164,6 +157,7 @@ pub const AccountResolver = struct {
                 // TODO: need a pending result variant.
                 .result = undefined,
             },
+            .alt_attempt = .speculative,
         };
 
         // TODO: if the transaction has no lookups we should skip the resolver entirely.
@@ -211,6 +205,49 @@ pub const AccountResolver = struct {
         self.pending_count -= 1;
     }
 
+    /// Restarts ALT expansion for the completed transaction at the queue head.
+    ///
+    /// The initial expansion may be speculative: replay can parse ahead of earlier
+    /// transactions that create or extend a referenced lookup table. The caller
+    /// invokes this only after those earlier transactions have completed and
+    /// published their writes, making the retried lookup authoritative.
+    ///
+    /// This mirrors Firedancer's fallback concept. Firedancer marks a transaction
+    /// as `serializing` when eager ALT expansion fails, waits for all preceding
+    /// transactions to complete, then resolves the ALTs again during execution.
+    /// Sig retries through the existing resolver instead of deferring resolution
+    /// to the executor.
+    ///
+    /// The retry starts from descriptor zero so the result cannot combine lookup
+    /// tables observed against different account-state versions.
+    ///
+    /// [fd](Eager ALT expansion and serializing fallback):
+    /// * https://github.com/firedancer-io/firedancer/blob/0c9b9cc9d0e6c36a500bade630e66c8304c3e0a0/src/discof/replay/fd_sched.c#L2242
+    /// * https://github.com/firedancer-io/firedancer/blob/0c9b9cc9d0e6c36a500bade630e66c8304c3e0a0/src/discof/replay/fd_rdisp.h#L332
+    /// [fd](Authoritative execution-time ALT reload right before exec):
+    /// * https://github.com/firedancer-io/firedancer/blob/0c9b9cc9d0e6c36a500bade630e66c8304c3e0a0/src/flamenco/runtime/fd_executor.c#L877.
+    /// NOTE: replay/scheduler must ensure that all prior transactions have completed and commited their writes.
+    pub fn retryHeadAlts(self: *AccountResolver) void {
+        std.debug.assert(self.pending_count != 0);
+
+        const pending = &self.pending_queue[self.pending_head];
+        std.debug.assert(pending.status == .complete);
+        std.debug.assert(pending.in_flight_lookups == 0);
+        std.debug.assert(pending.completion.result == .failed);
+        std.debug.assert(pending.alt_attempt == .speculative);
+
+        const err = pending.completion.result.failed;
+        std.debug.assert(isLookupError(err));
+
+        pending.gen = nextGeneration(pending.gen);
+        pending.status = .resolving;
+        pending.next_lookup_index = 0;
+        pending.in_flight_lookups = 0;
+        pending.failure = null;
+        pending.alt_attempt = .authoritative;
+        pending.completion.result = undefined;
+    }
+
     const LookupTicket = packed struct(u32) {
         // Note: we use u8 here, but this must be larger if `MAX_PENDING_TRANSACTIONS` is increased beyond 256.
         pending_index: u8,
@@ -222,10 +259,6 @@ pub const AccountResolver = struct {
     pub const Completion = struct {
         /// convenient for replay bookkeeping, will likely get replaced by something more useful for the scheduler.
         transaction_idx: u32,
-        /// Supplied and used by replay to detect if earlier transactions executed after
-        /// ALT resolution began. If those earlier transactions happened to modify
-        /// the same ALT accounts, replay must re-submit the transaction for ALT resolution.
-        state_version: u64,
 
         transaction: ResolvedTransaction,
         result: Result,
@@ -234,6 +267,22 @@ pub const AccountResolver = struct {
             resolved: void,
             failed: ResolveError,
         };
+
+        /// Returns true if the result is a failure that can be retried by re-submitting the transaction to the resolver.
+        /// This is true for all lookup-table-related failures, but not for other transaction errors.
+        ///
+        /// The assumption here is that the transaction failed speculative ALT resolution due to a recent modification of a lookup table.
+        /// This causes this transaction to make the scheduled execution to be a point of "serialization", i.e we need all prior writes to be
+        /// flushed first before we can correctly retry this transaction. This is the same behavior as Firedancer's "serializing" transactions.
+        // TODO: likely rename this.
+        pub fn needsSerializationRetry(
+            completion: *const Completion,
+        ) bool {
+            return switch (completion.result) {
+                .resolved => false,
+                .failed => |err| isLookupError(err),
+            };
+        }
     };
 
     const PendingTransaction = struct {
@@ -261,7 +310,10 @@ pub const AccountResolver = struct {
         /// Holds both the working output buffer and eventual public completion.
         completion: Completion = undefined,
 
-        pub const Status = enum(u2) {
+        /// Indicates whether this is a speculative or authoritative ALT attempt.
+        alt_attempt: AltAttempt = .speculative,
+
+        pub const Status = enum {
             free,
             /// More lookup descrriptors to submit.
             resolving,
@@ -274,6 +326,13 @@ pub const AccountResolver = struct {
         const LookupFailure = struct {
             lookup_index: u8,
             err: ResolveError,
+        };
+
+        const AltAttempt = enum {
+            /// The initial ALT expansion attempt, which may be speculative.
+            speculative,
+            /// The retry ALT expansion attempt, which is authoritative.
+            authoritative,
         };
 
         pub inline fn reset(self: *PendingTransaction) void {
@@ -295,6 +354,7 @@ pub const AccountResolver = struct {
                 .in_flight_lookups = 0,
                 .failure = null,
                 .completion = undefined,
+                .alt_attempt = .speculative,
             };
         }
     };
@@ -738,6 +798,7 @@ pub const AccountResolver = struct {
     }
 };
 
+// TODO: is there a better way to consolidate the error states and helper fn below?
 pub const LookupError = error{
     LookupTableNotFound,
     InvalidLookupTableOwner,
@@ -746,6 +807,19 @@ pub const LookupError = error{
 };
 
 pub const ResolveError = LookupError || error{AccountLoadedTwice};
+
+fn isLookupError(err: ResolveError) bool {
+    return switch (err) {
+        error.LookupTableNotFound,
+        error.InvalidLookupTableOwner,
+        error.InvalidLookupTableData,
+        error.InvalidLookupTableIndex,
+        => true,
+
+        // This error is not related to a potential ALT state change, so it is not retryable.
+        error.AccountLoadedTwice => false,
+    };
+}
 
 pub const ResolvedTransaction = struct {
     block_ref: lib.replay.BlockRef,
@@ -1037,7 +1111,6 @@ test "AccountResolver: no-ALT legacy transaction completes at submit()" {
         block,
         tx_ref,
         fx.bankContextForSlot(100),
-        0,
         0,
     );
 
