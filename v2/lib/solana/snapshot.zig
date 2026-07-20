@@ -822,21 +822,24 @@ test "deserialized snapshot matches generated snapshot json" {
     const merged = parsed_json.value.object.get("merged_fields").?.object;
     const accounts = parsed_json.value.object.get("accounts").?.object;
 
-    const compressed = try std.fs.cwd().readFileAlloc(allocator, snapshot_path, 16 * 1024 * 1024);
-    defer allocator.free(compressed);
-
-    var zstd_reader_state = try @import("zstd").Reader.init(compressed);
-    defer zstd_reader_state.deinit();
-    var zstd_reader = zstd_reader_state.reader();
-    const tar_bytes = try zstd_reader.readAllAlloc(allocator, 32 * 1024 * 1024);
-    defer allocator.free(tar_bytes);
+    const zst_reader = try allocator.create(ZstReader);
+    defer allocator.destroy(zst_reader);
+    try zst_reader.init(std.fs.cwd(), snapshot_path);
+    defer zst_reader.deinit();
 
     const SnapshotBufReader = struct {
-        bytes: []const u8,
+        zst_reader: *ZstReader,
+        buf: [128 * 1024]u8 = undefined,
         pos: usize = 0,
+        end: usize = 0,
 
         pub fn getBuffer(self: *@This()) []const u8 {
-            return self.bytes[self.pos..];
+            if (self.pos == self.end) {
+                self.pos = 0;
+                self.end = self.zst_reader.read(.noop, &self.buf) catch |e|
+                    std.debug.panic("ZstReader.read failed: {t}", .{e});
+            }
+            return self.buf[self.pos..self.end];
         }
 
         pub fn advance(self: *@This(), n: usize) void {
@@ -844,7 +847,7 @@ test "deserialized snapshot matches generated snapshot json" {
         }
     };
 
-    var snapshot_reader: SnapshotBufReader = .{ .bytes = tar_bytes };
+    var snapshot_reader: SnapshotBufReader = .{ .zst_reader = zst_reader };
     const fba_buf = try allocator.alloc(u8, 8 * 1024 * 1024);
     defer allocator.free(fba_buf);
     var fba: std.heap.FixedBufferAllocator = .init(fba_buf);
