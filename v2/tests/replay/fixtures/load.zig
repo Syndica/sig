@@ -5,7 +5,8 @@ const lib = @import("lib");
 pub const FEC_SHRED_COUNT = 32;
 
 const FIXTURE_DIR = "tests/replay/fixtures";
-const FIXTURE_INDEX_PATH = FIXTURE_DIR ++ "/index.zon";
+const FIXTURE_INDEX_PATH = "index.zon";
+const MAX_ZON_FILE_SIZE = 1024 * 1024;
 
 pub const Index = struct {
     schema_version: u32,
@@ -61,7 +62,10 @@ pub const Fixture = struct {
     packets: [FEC_SHRED_COUNT]lib.net.Packet,
 
     pub fn load(slot: lib.solana.Slot, allocator: std.mem.Allocator) !Fixture {
-        const index = try loadZon(Index, allocator, FIXTURE_INDEX_PATH);
+        var fixtures_dir = try std.fs.cwd().openDir(FIXTURE_DIR, .{});
+        defer fixtures_dir.close();
+
+        const index = try loadZon(Index, allocator, fixtures_dir, FIXTURE_INDEX_PATH);
         defer std.zon.parse.free(allocator, index);
 
         try std.testing.expectEqual(@as(u32, 1), index.schema_version);
@@ -72,13 +76,7 @@ pub const Fixture = struct {
             break .{ index_slot, index_slot.fec_sets[0] };
         } else return error.FixtureSlotNotFound;
 
-        const manifest_path = try std.fs.path.join(allocator, &.{
-            FIXTURE_DIR,
-            index_fec_set.path,
-        });
-        defer allocator.free(manifest_path);
-
-        const manifest = try loadZon(Manifest, allocator, manifest_path);
+        const manifest = try loadZon(Manifest, allocator, fixtures_dir, index_fec_set.path);
         errdefer std.zon.parse.free(allocator, manifest);
 
         try std.testing.expectEqual(@as(u32, 1), manifest.schema_version);
@@ -88,14 +86,10 @@ pub const Fixture = struct {
         const manifest_dir = std.fs.path.dirname(index_fec_set.path) orelse {
             return error.InvalidFixtureManifestPath;
         };
-        const shreds_path = try std.fs.path.join(allocator, &.{
-            FIXTURE_DIR,
-            manifest_dir,
-            "shreds.bin",
-        });
-        defer allocator.free(shreds_path);
+        var manifest_dir_handle = try fixtures_dir.openDir(manifest_dir, .{});
+        defer manifest_dir_handle.close();
 
-        const packets = try loadFecSetPackets(allocator, shreds_path, &manifest);
+        const packets = try loadFecSetPackets(allocator, manifest_dir_handle, &manifest);
 
         return .{
             .manifest = manifest,
@@ -108,18 +102,22 @@ pub const Fixture = struct {
     }
 };
 
-fn loadZon(comptime T: type, allocator: std.mem.Allocator, path: []const u8) !T {
-    const file = try std.fs.cwd().openFile(path, .{});
+fn loadZon(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    dir: std.fs.Dir,
+    path: []const u8,
+) !T {
+    const file = try dir.openFile(path, .{});
     defer file.close();
 
-    const contents = try file.readToEndAllocOptions(
-        allocator,
-        1024 * 1024,
-        null,
-        .@"1",
-        0,
-    );
+    var file_reader = file.reader(&.{});
+    const file_size = try file_reader.getSize();
+    if (file_size > MAX_ZON_FILE_SIZE) return error.FileTooBig;
+
+    const contents = try allocator.allocSentinel(u8, @intCast(file_size), 0);
     defer allocator.free(contents);
+    try file_reader.interface.readSliceAll(contents);
 
     var diag: std.zon.parse.Diagnostics = .{};
     defer diag.deinit(allocator);
@@ -134,10 +132,10 @@ fn loadZon(comptime T: type, allocator: std.mem.Allocator, path: []const u8) !T 
 
 fn loadFecSetPackets(
     allocator: std.mem.Allocator,
-    path: []const u8,
+    dir: std.fs.Dir,
     manifest: *const Manifest,
 ) ![FEC_SHRED_COUNT]lib.net.Packet {
-    const file = try std.fs.cwd().openFile(path, .{});
+    const file = try dir.openFile("shreds.bin", .{});
     defer file.close();
 
     var read_buf: [4096]u8 = undefined;
@@ -188,7 +186,7 @@ fn loadFecSetPackets(
 }
 
 // NOTE: Transplanted from v1's src/ledger/tests.zig shred fixture loader.
-inline fn readChunk(allocator: std.mem.Allocator, reader: *std.Io.Reader) !?[]const u8 {
+fn readChunk(allocator: std.mem.Allocator, reader: *std.Io.Reader) !?[]const u8 {
     const size = reader.takeInt(u64, .little) catch |err| switch (err) {
         error.EndOfStream => return null,
         else => return err,

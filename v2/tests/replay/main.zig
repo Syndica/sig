@@ -214,13 +214,12 @@ fn waitForReplayOutput(
 
     // Phase 2: wait for services to go idle.
     const idle_start = lib.clock.monotonic(.ns);
-    while (spawned.isActive()) {
+    while (spawned.isActive()) : (std.atomic.spinLoopHint()) {
         if (lib.clock.monotonic(.ns) - idle_start >= idle_timeout_ns) {
             return error.ServicesDidNotBecomeIdle;
         }
         try serviceAccountLookups(account_pool, &lookup_reader, &lookup_writer);
         try drainReplayRequests(&request_reader, &count, expected_transaction_count);
-        std.atomic.spinLoopHint();
     }
 
     // Final drain after idle, then exact assert.
