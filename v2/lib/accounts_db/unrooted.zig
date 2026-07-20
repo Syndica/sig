@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const lib = @import("../lib.zig");
 
 const tracy = @import("tracy");
@@ -13,13 +14,17 @@ pub const Unrooted = extern struct {
 
     // [firedancer] https://github.com/firedancer-io/firedancer/blob/c2050b9c7fb8787b1eaaf9e50cac421a7281f70f/src/flamenco/runtime/fd_cost_tracker.h#L78
     // TODO: calculate this constant ourselves / keep it up to date
-    const max_mutations_per_block = 367_535;
+    //
+    // Shrunk in test builds to keep the fixture memory footprint reasonable
+    // (~4MiB total vs ~1.5GiB at production capacity).
+    // TODO: Should we add comptime param to Unrooted for this? Does make code messy.
+    const max_mutations_per_block: u32 = if (builtin.is_test) 1024 else 367_535;
 
     const max_blocks = lib.replay.BlockPool.capacity;
 
     const Map = extern struct {
         len: u32 = 0, // only used to assert `max_mutations_per_block` holds true
-        data: [N]AccountRef = @splat(.invalid), // ~1.4MiB
+        data: [N]AccountRef = @splat(.invalid), // ~1.4MiB at production N
 
         // NOTE: might be a good idea to oversize this for performance reasons
         const N = max_mutations_per_block;

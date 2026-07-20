@@ -719,7 +719,7 @@ const testing = std.testing;
 /// Test-only helper that builds in-memory `VersionedTransaction` values
 /// without going through bincode. All slices are backed by the test
 /// allocator so leaks surface via `testing.allocator`'s assertions.
-const Builder = struct {
+pub const Builder = struct {
     allocator: std.mem.Allocator,
     signatures: std.ArrayList(Signature) = .empty,
     header: MessageHeader = .{
@@ -732,7 +732,7 @@ const Builder = struct {
     instructions: std.ArrayList(CompiledInstruction) = .empty,
     alts: std.ArrayList(AddressLookup) = .empty,
 
-    fn deinit(self: *Builder) void {
+    pub fn deinit(self: *Builder) void {
         self.signatures.deinit(self.allocator);
         self.account_keys.deinit(self.allocator);
         for (self.instructions.items) |ix| {
@@ -748,36 +748,36 @@ const Builder = struct {
     }
 
     /// Distinct pubkey for index `i`. Last byte = `i`; the rest are zero.
-    fn pubkey(i: u8) Pubkey {
+    pub fn pubkey(i: u8) Pubkey {
         var p: Pubkey = Pubkey.ZEROES;
         p.data[31] = i;
         return p;
     }
 
     /// Push `n` signatures (zeroed; content doesn't affect sanitize).
-    fn pushSigs(self: *Builder, n: usize) !void {
+    pub fn pushSigs(self: *Builder, n: usize) !void {
         try self.signatures.appendNTimes(self.allocator, Signature.ZEROES, n);
     }
 
-    fn pushSig(self: *Builder, signature: Signature) !void {
+    pub fn pushSig(self: *Builder, signature: Signature) !void {
         try self.signatures.append(self.allocator, signature);
     }
 
     /// Push `n` distinct pubkeys.
-    fn pushKeys(self: *Builder, n: u8) !void {
+    pub fn pushKeys(self: *Builder, n: u8) !void {
         var i: u8 = 0;
         while (i < n) : (i += 1) try self.account_keys.append(self.allocator, pubkey(i));
     }
 
-    fn pushKey(self: *Builder, pubkey_value: Pubkey) !void {
+    pub fn pushKey(self: *Builder, pubkey_value: Pubkey) !void {
         try self.account_keys.append(self.allocator, pubkey_value);
     }
 
-    fn setRecentBlockhash(self: *Builder, recent_blockhash: Hash) void {
+    pub fn setRecentBlockhash(self: *Builder, recent_blockhash: Hash) void {
         self.recent_blockhash = recent_blockhash;
     }
 
-    fn pushInstrWithData(
+    pub fn pushInstrWithData(
         self: *Builder,
         program_id_index: u8,
         accounts: []const u8,
@@ -794,11 +794,11 @@ const Builder = struct {
         });
     }
 
-    fn pushInstr(self: *Builder, program_id_index: u8, accounts: []const u8) !void {
+    pub fn pushInstr(self: *Builder, program_id_index: u8, accounts: []const u8) !void {
         try self.pushInstrWithData(program_id_index, accounts, &.{});
     }
 
-    fn pushAltWithKey(
+    pub fn pushAltWithKey(
         self: *Builder,
         account_key: Pubkey,
         writable: []const u8,
@@ -815,11 +815,11 @@ const Builder = struct {
         });
     }
 
-    fn pushAlt(self: *Builder, writable: []const u8, readonly: []const u8) !void {
+    pub fn pushAlt(self: *Builder, writable: []const u8, readonly: []const u8) !void {
         try self.pushAltWithKey(pubkey(0xff), writable, readonly);
     }
 
-    fn build(self: *Builder, kind: std.meta.Tag(VersionedMessage)) VersionedTransaction {
+    pub fn build(self: *Builder, kind: std.meta.Tag(VersionedMessage)) VersionedTransaction {
         if (kind == .legacy and self.alts.items.len > 0)
             @panic("legacy transaction can't have ALTs");
         const msg: VersionedMessage = switch (kind) {
@@ -846,7 +846,7 @@ const Builder = struct {
     /// Baseline minimum-valid legacy transaction: 1 sig, fee payer + program,
     /// 1 empty-data instruction. Modify fields after calling this to produce
     /// the negative case under test.
-    fn baselineLegacy(allocator: std.mem.Allocator) !Builder {
+    pub fn baselineLegacy(allocator: std.mem.Allocator) !Builder {
         var b: Builder = .{ .allocator = allocator };
         errdefer b.deinit();
         try b.pushSigs(1);
@@ -856,7 +856,7 @@ const Builder = struct {
     }
 
     /// Serialise this Builder's typed value as `kind` via bincode.
-    fn serialize(
+    pub fn serialize(
         self: *Builder,
         kind: std.meta.Tag(VersionedMessage),
         out: []u8,
@@ -868,7 +868,10 @@ const Builder = struct {
 
     /// Serialise this Builder's typed value as `kind` via bincode, then
     /// feed the bytes through `parseTransaction`.
-    fn parse(self: *Builder, kind: std.meta.Tag(VersionedMessage)) !VersionedTransaction.Layout {
+    pub fn parse(
+        self: *Builder,
+        kind: std.meta.Tag(VersionedMessage),
+    ) !VersionedTransaction.Layout {
         // Enough headroom for every negative test (largest is 129 static
         // keys + 65 empty instructions + a handful of MAX-sized ALTs, all
         // well under 32 KiB).

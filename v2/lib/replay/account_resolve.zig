@@ -13,6 +13,16 @@
 //!
 //! TODO: Agave processes ALT descriptors in transaction order and retrn immedately on the first error (on first
 //! descriptor that fails). Sig v1 does the same, Firedancer interpreter does the same (one table at a time, in order, and returns on first error).
+//!
+//! TODO: Expand the state machine here to cover these two phases:
+//! * Phase 1 discovers dependencies: complete pubkey set plus read/write metadata.
+//!                                   |
+//!                                   v
+//!         [Scheduler uses that information: determines conflicts
+//!          and which transactions can safely run together.]
+//!                                   |
+//!                                   v
+//! * Phase 2 loads account state: only for transactions the scheduler has marked ready.
 const std = @import("std");
 const lib = @import("../lib.zig");
 
@@ -337,6 +347,7 @@ pub const AccountResolver = struct {
         return false;
     }
 
+    // TODO: Refactor this code to show the unrooted -> rooted flow more clearly.
     fn drivePendingLookups(self: *AccountResolver) bool {
         // TODO: store writer on AccountResolver struct.
         var writer = self.account_lookups.in.get(.writer);
@@ -831,3 +842,194 @@ pub const BankContext = struct {
         return false;
     }
 };
+
+// TODO: unit tests:
+// Unrooted hit;
+// Unrooted tombstone shadows Rooted;
+// Rooted miss, request and completion;
+// Rooted responses arriving out of order;
+// lowest descriptor error wins;
+// failure drains all outstanding responses and releases all refs;
+// Rooted request ring full does not advance the descriptor;
+// FIFO completion hides later finished transactions;
+// pending queue wrap and generation reuse;
+// static/dynamic and dynamic/dynamic duplicate detection;
+// writable/readonly output ordering across multiple tables.
+
+/// Reusable state harness for `AccountResolver` unit tests.
+///
+/// Owns the backing memory for every pool the resolver needs and provides
+/// small helpers to seed blocks, transactions, and (later) accounts and
+/// unrooted map entries.
+const Fixture = struct {
+    allocator: std.mem.Allocator,
+
+    account_pool_memory: []align(@alignOf(lib.accounts_db.AccountPool)) u8,
+    account_pool: *lib.accounts_db.AccountPool,
+
+    account_lookups: *AccountLookups,
+
+    block_pool_memory: []align(@alignOf(lib.replay.BlockPool)) u8,
+    block_pool: *lib.replay.BlockPool,
+
+    transaction_pool_memory: []align(@alignOf(lib.replay.TransactionPool)) u8,
+    transaction_pool: *lib.replay.TransactionPool,
+
+    unrooted: *lib.accounts_db.Unrooted,
+
+    const test_account_pool_memory_len = 64 * 1024;
+
+    fn init(allocator: std.mem.Allocator) !Fixture {
+        const account_pool_memory = try allocator.alignedAlloc(
+            u8,
+            .of(lib.accounts_db.AccountPool),
+            @sizeOf(lib.accounts_db.AccountPool) + test_account_pool_memory_len,
+        );
+        errdefer allocator.free(account_pool_memory);
+        const account_pool: *lib.accounts_db.AccountPool = @ptrCast(account_pool_memory.ptr);
+        account_pool.init(test_account_pool_memory_len);
+
+        const account_lookups = try allocator.create(AccountLookups);
+        errdefer allocator.destroy(account_lookups);
+        account_lookups.init();
+
+        const block_pool_memory = try allocator.alignedAlloc(
+            u8,
+            .of(lib.replay.BlockPool),
+            lib.replay.BlockPool.size(),
+        );
+        errdefer allocator.free(block_pool_memory);
+        const block_pool: *lib.replay.BlockPool = @ptrCast(block_pool_memory.ptr);
+        block_pool.init();
+
+        const transaction_pool_memory = try allocator.alignedAlloc(
+            u8,
+            .of(lib.replay.TransactionPool),
+            lib.replay.TransactionPool.size(),
+        );
+        errdefer allocator.free(transaction_pool_memory);
+        const transaction_pool: *lib.replay.TransactionPool = @ptrCast(transaction_pool_memory.ptr);
+        transaction_pool.init();
+
+        const unrooted = try allocator.create(lib.accounts_db.Unrooted);
+        errdefer allocator.destroy(unrooted);
+        unrooted.init();
+
+        return .{
+            .allocator = allocator,
+            .account_pool_memory = account_pool_memory,
+            .account_pool = account_pool,
+            .account_lookups = account_lookups,
+            .block_pool_memory = block_pool_memory,
+            .block_pool = block_pool,
+            .transaction_pool_memory = transaction_pool_memory,
+            .transaction_pool = transaction_pool,
+            .unrooted = unrooted,
+        };
+    }
+
+    fn deinit(self: *Fixture) void {
+        self.allocator.destroy(self.unrooted);
+        self.allocator.free(self.transaction_pool_memory);
+        self.allocator.free(self.block_pool_memory);
+        self.allocator.destroy(self.account_lookups);
+        self.allocator.free(self.account_pool_memory);
+    }
+
+    /// Allocates a root block (`parent = .null`) at `slot`.
+    fn insertRootBlock(self: *Fixture, slot: lib.solana.Slot) !lib.replay.BlockRef {
+        const block_ref = try self.block_pool.createId();
+        block_ref.ptr(self.block_pool).* = .{
+            .parent = .null,
+            .child = .null,
+            .sibling = .null,
+            .slot = .init(slot),
+        };
+        return block_ref;
+    }
+
+    /// Allocates a child block chained to `parent` at `slot`.
+    // fn insertChildBlock(
+    //     self: *Fixture,
+    //     parent: lib.replay.BlockRef,
+    //     slot: lib.solana.Slot,
+    // ) !lib.replay.BlockRef {
+    //     const block_ref = try self.block_pool.createId();
+    //     block_ref.ptr(self.block_pool).* = .{
+    //         .parent = .init(parent),
+    //         .child = .null,
+    //         .sibling = .null,
+    //         .slot = .init(slot),
+    //     };
+    //     return block_ref;
+    // }
+
+    /// Copies `bytes` into a fresh `TransactionRecord` and populates its
+    /// `Layout` by re-parsing. Returns the pool id.
+    fn insertTransactionBytes(
+        self: *Fixture,
+        bytes: []const u8,
+    ) !lib.replay.TransactionPool.ItemId {
+        const tx_ref = try self.transaction_pool.createId();
+        errdefer self.transaction_pool.destroyId(tx_ref);
+
+        const record = self.transaction_pool.indexToPtr(tx_ref);
+        std.debug.assert(bytes.len <= record.payload.len);
+        @memcpy(record.payload[0..bytes.len], bytes);
+
+        var reader: lib.solana.transaction.SliceReader = .{ .bytes = bytes };
+        record.layout = try VersionedTransaction.parse(&reader);
+
+        return tx_ref;
+    }
+
+    fn resolver(self: *Fixture) AccountResolver {
+        return AccountResolver.init(.{
+            .account_pool = self.account_pool,
+            .account_lookups = self.account_lookups,
+            .block_pool = self.block_pool,
+            .transaction_pool = self.transaction_pool,
+            .unrooted = self.unrooted,
+        });
+    }
+
+    fn bankContextForSlot(_: *const Fixture, slot: lib.solana.Slot) BankContext {
+        return .{ .current_slot = slot, .slot_hashes = &.{} };
+    }
+};
+
+test "AccountResolver: no-ALT legacy transaction completes at submit()" {
+    var fx = try Fixture.init(std.testing.allocator);
+    defer fx.deinit();
+
+    // Fixed block at slot 100. submit() asserts block.slot == bank.current_slot.
+    const block = try fx.insertRootBlock(100);
+
+    // Minimal legacy transaction: 1 sig, fee payer + program, 1 empty ix, no ALTs.
+    var tx_builder = try lib.solana.transaction.Builder.baselineLegacy(std.testing.allocator);
+    defer tx_builder.deinit();
+
+    var buf: [VersionedTransaction.MAX_BYTES]u8 = undefined;
+    const bytes = try tx_builder.serialize(.legacy, &buf);
+    const tx_ref = try fx.insertTransactionBytes(bytes);
+
+    var resolver = fx.resolver();
+    try resolver.submit(block, tx_ref, fx.bankContextForSlot(100));
+
+    // submit() must synthesise a completion inline (no poll required).
+    try std.testing.expectEqual(@as(usize, 1), resolver.pending_count);
+
+    const completion = resolver.peekCompleted() orelse return error.ExpectedCompletion;
+    try std.testing.expectEqual(block, completion.transaction.block_ref);
+    try std.testing.expectEqual(tx_ref, completion.transaction.tx_ref);
+    try std.testing.expect(completion.result == .resolved);
+
+    // No Rooted requests should have been queued.
+    var rooted_reader = fx.account_lookups.in.get(.reader);
+    try std.testing.expectEqual(null, rooted_reader.peek());
+
+    // Pop clears the completion and frees the slot.
+    resolver.popCompleted();
+    try std.testing.expectEqual(@as(usize, 0), resolver.pending_count);
+    try std.testing.expectEqual(null, resolver.peekCompleted());
+}
