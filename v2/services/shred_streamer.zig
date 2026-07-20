@@ -113,7 +113,7 @@ const ShredKindFilter = enum {
 
 const Config = struct {
     ledger: []const u8,
-    target: []const u8,
+    target: []const u8 = "",
     start_slot: ?Slot = null,
     end_slot: ?Slot = null,
     rate_hz: ?f64 = null,
@@ -167,10 +167,9 @@ const PartialConfig = struct {
             try stdout.print("missing required argument: --ledger <path>\n", .{});
             return error.InvalidArguments;
         };
-        const target = self.target orelse {
-            try stdout.print("missing required argument: --target <ip:port>\n", .{});
-            return error.InvalidArguments;
-        };
+        // --target is optional: only needed by the legacy UDP path (legacyMain),
+        // not by the v2 service which writes directly to the IPC ring.
+        const target = self.target orelse "";
 
         if (self.start_slot != null and
             self.end_slot != null and
@@ -2985,7 +2984,7 @@ test "parse and write shred keys" {
 }
 
 test "slot bounds helpers respect optional bounds" {
-    const base: Config = .{ .ledger = "ledger", .target = "127.0.0.1:8002" };
+    const base: Config = .{ .ledger = "ledger" };
     try std.testing.expect(base.slotSelected(10));
     try std.testing.expect(!base.pastEndSlot(100));
 
