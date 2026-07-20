@@ -58,21 +58,29 @@ pub const RuntimeMetadata = extern struct {
         /// room for accountsdb to write all of its block hashes here.
         hashes: lib.ipc.Ring(256, Hash),
     },
-    // List of adjustments to make to any Epoch related data structures
-    epoch: Epoch,
     epoch_deltas: lib.ipc.Ring(256, EpochDelta),
 
     pub const EpochDelta = extern struct {
         info: packed struct(u8) {
-            op: enum(u1) { upsert, remove },
-            has_authorized_voter: bool,
-            _unused: u6 = 0,
+            op: enum(u2) {
+                diff_start,
+                diff_stop,
+                upsert_voter,
+                remove_voter,
+            },
+            has_authorized_voter: bool = false,
+            _unused: u5 = 0,
         },
-        key: Pubkey, // Voter's pubkey
-        value: extern struct {
-            stake: u64, // lamports
-            node_owner: Pubkey,
-            authorized_voter: Pubkey, // valid if `info.has_authorized_voter`
+        data: extern union {
+            diff_start: Epoch,
+            diff_stop: void,
+            upsert_voter: extern struct {
+                pubkey: Pubkey,
+                stake: u64, // lamports
+                node_owner: Pubkey,
+                authorized_voter: Pubkey, // valid if `info.has_authorized_voter`
+            },
+            remove_voter: Pubkey,
         },
     };
 

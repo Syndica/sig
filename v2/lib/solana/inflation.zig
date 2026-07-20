@@ -1,3 +1,5 @@
+// TODO: move this into core
+
 const std = @import("std");
 
 /// Zig's `std.math.pow` may return a result that is off by up to one ULP, when comparing to glibc or musl's `pow()`.
@@ -8,25 +10,25 @@ const std = @import("std");
 extern fn pow(f64, f64) f64;
 
 /// Analogous to [Inflation](https://github.com/anza-xyz/agave/blob/55aff7288e596e93d1184ba827048b1e3dc98061/sdk/src/inflation.rs#L6)
-pub const Inflation = struct {
+pub const Inflation = extern struct {
     /// Initial inflation percentage, from time=0
-    initial: f64,
+    initial: f64 align(1),
 
     /// Terminal inflation percentage, to time=INF
-    terminal: f64,
+    terminal: f64 align(1),
 
     /// Rate per year, at which inflation is lowered until reaching terminal
     ///  i.e. inflation(year) == MAX(terminal, initial*((1-taper)^year))
-    taper: f64,
+    taper: f64 align(1),
 
     /// Percentage of total inflation allocated to the foundation
-    foundation: f64,
+    foundation: f64 align(1),
 
     /// Duration of foundation pool inflation, in years
-    foundation_term: f64,
+    foundation_term: f64 align(1),
 
     /// DEPRECATED, this field is currently unused
-    __unused: f64,
+    __unused: f64 align(1),
 
     pub const DEFAULT = Inflation{
         .initial = 0.08,

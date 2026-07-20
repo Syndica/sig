@@ -17,6 +17,8 @@ const Slot = lib.solana.Slot;
 const Epoch = lib.solana.Epoch;
 const Hash = lib.solana.Hash;
 
+const VersionedEpochStakes = lib.solana.snapshot.ExtraFields.VersionedEpochStakes;
+
 /// The rooted database stores data on disk in the form of [journal][ring of sector data].
 /// TODO: The ring aspect is not implemented, so for now it grows indefinitely.
 pub const Rooted = struct {
@@ -171,6 +173,9 @@ pub const Rooted = struct {
             /// holds the block_id followed by a serialized addition to the blockhash queue.
             /// body layout: `{ block_id: Hash, [info.count]Hash }`
             block_metadata,
+            /// holds `info.count` number of `EpochDelta`s, a set of which must start with
+            /// `EpochDelta.op == .diff_start` and end with `EpochDelta.op == .diff_stop`.
+            epoch_deltas,
             _, // TODO: add other types of sections
         },
         info: packed union {
@@ -259,6 +264,9 @@ pub const Rooted = struct {
             blockhash_writer.close(); // close when done.
         }
 
+        var epoch_delta_writer = runtime_metadata.epoch_deltas.getView(.writer);
+        defer epoch_delta_writer.close();
+
         var timer = try std.time.Timer.start();
         var n_puts: usize = 0;
         var n_bytes_read: usize = 0;
@@ -335,6 +343,53 @@ pub const Rooted = struct {
                         );
                         blockhash_writer.advance(take);
                         num_hashes -= take;
+                    }
+                },
+                .epoch_deltas => {
+                    var has_diff_start = false;
+                    var has_diff_stop = false;
+
+                    var len: usize = header.info.count;
+                    while (len > 0) {
+                        const delta_buf = try epoch_delta_writer.getBufferBlocking(runner);
+                        if (delta_buf.len == 0) {
+                            // epoch_delta_reader closed their end. just skip the deltas then.
+                            try self.readExisting(
+                                .from(logger),
+                                null,
+                                @sizeOf(RuntimeMetadata.EpochDelta) * len,
+                            );
+                            break;
+                        }
+
+                        const n = @min(delta_buf.len, len);
+                        try self.readExisting(
+                            .from(logger),
+                            @ptrCast(delta_buf.ptr),
+                            @sizeOf(RuntimeMetadata.EpochDelta) * n,
+                        );
+
+                        // verify the delta orders
+                        for (delta_buf[0..n]) |*delta| {
+                            switch (delta.info.op) {
+                                .diff_start => {
+                                    if (has_diff_start) return error.MultipleEpochDiffStart;
+                                    has_diff_start = true;
+                                },
+                                .diff_stop => {
+                                    if (!has_diff_start) return error.MissingEpochDiffStart;
+                                    if (has_diff_stop) return error.MultipleEpochDiffStop;
+                                    has_diff_stop = true;
+                                },
+                                .upsert_voter, .remove_voter => {
+                                    if (!has_diff_start) return error.MissingEpochDiffStart;
+                                    if (has_diff_stop) return error.OverrunEpochDiffs;
+                                },
+                            }
+                        }
+
+                        epoch_delta_writer.advance(n);
+                        len -= n;
                     }
                 },
                 _ => return error.InvalidSector,
@@ -487,11 +542,100 @@ pub const Rooted = struct {
             }
         }
 
+        { // write each epoch and its deltas
+            var epoch_delta_writer = runtime_metadata.epoch_deltas.get(.writer);
+
+            const versioned_epoch_stakes: []const VersionedEpochStakes =
+                snapshot_iter.manifest.extra_fields.versioned_epoch_stakes;
+
+            // Emit deltas for each epoch
+            var maybe_prev: ?*const VersionedEpochStakes = null;
+            for (versioned_epoch_stakes) |*curr| {
+                defer maybe_prev = curr;
+
+                logger.info().logf("writing EpochStakes for epoch={}", .{curr.epoch});
+                try self.writeEpochDelta(.from(logger), runner, &epoch_delta_writer, .{
+                    .info = .{ .op = .diff_start },
+                    .data = .{ .diff_start = curr.epoch },
+                });
+
+                var it = curr.vote_accounts.iterator();
+                while (it.next()) |e| {
+                    // diff it against prev VersionedEpochStakes
+                    const auth_voter = curr.epoch_authorized_voters.find(&e.pubkey);
+                    if (maybe_prev) |prev| diff: {
+                        const prev_e = prev.vote_accounts.find(&e.pubkey) orelse break :diff;
+                        const prev_auth_voter = prev.epoch_authorized_voters.find(&e.pubkey);
+
+                        if (prev_e.value.node.equals(&e.value.node) and
+                            prev_e.value.stake == e.value.stake and ((prev_auth_voter == null and auth_voter == null) or
+                            (prev_auth_voter != null and auth_voter != null and (prev_auth_voter.?.value.equals(&auth_voter.?.value))))) continue; // the entry didnt change, dont emit a delta
+                    }
+
+                    // either a new entry or a modified entry, emit delta
+                    try self.writeEpochDelta(.from(logger), runner, &epoch_delta_writer, .{
+                        .info = .{
+                            .op = .upsert_voter,
+                            .has_authorized_voter = auth_voter != null,
+                        },
+                        .data = .{ .upsert_voter = .{
+                            .pubkey = e.pubkey,
+                            .stake = e.value.stake,
+                            .node_owner = e.value.node,
+                            .authorized_voter = if (auth_voter) |a| a.pubkey else .ZEROES,
+                        } },
+                    });
+                }
+
+                var prev_it = if (maybe_prev) |prev| prev.vote_accounts.iterator() else continue;
+                while (prev_it.next()) |prev_e| {
+                    if (curr.vote_accounts.find(&prev_e.pubkey) == null) {
+                        // exist in prev but not in curr == deleted
+                        try self.writeEpochDelta(.from(logger), runner, &epoch_delta_writer, .{
+                            .info = .{ .op = .remove_voter },
+                            .data = .{ .remove_voter = prev_e.pubkey },
+                        });
+                    }
+                }
+
+                try self.writeEpochDelta(.from(logger), runner, &epoch_delta_writer, .{
+                    .info = .{ .op = .diff_stop },
+                    .data = .{ .diff_stop = {} },
+                });
+            }
+        }
+
         // write the slot to commit the RuntimeMetadata stuff
         runtime_metadata.populateSlot(slot);
 
         try self.commitTransaction(.from(logger));
         logger.info().logf("populated from snapshot: {} accounts", .{self.table.count()});
+    }
+
+    fn writeEpochDelta(
+        self: *Rooted,
+        logger: tel.Logger("writeEpochDelta"),
+        runner: lib.runner.Connection,
+        epoch_delta_writer: *@FieldType(RuntimeMetadata, "epoch_deltas").Iterator(.writer),
+        epoch_delta: RuntimeMetadata.EpochDelta,
+    ) !void {
+        // send to replay
+        (try epoch_delta_writer.nextBlocking(runner)).* = epoch_delta;
+
+        // write together with sector header,
+        var buf: extern struct {
+            header: SectorHeader align(1),
+            delta: RuntimeMetadata.EpochDelta align(1),
+        } = .{
+            .header = .{
+                .type = .epoch_deltas,
+                .info = .{ .count = 1 }, // TODO: batching,
+            },
+            .delta = epoch_delta,
+        };
+
+        var r = std.Io.Reader.fixed(std.mem.asBytes(&buf));
+        try self.queueWrite(.from(logger), @sizeOf(@TypeOf(buf)), &r);
     }
 
     pub fn beginTransaction(
