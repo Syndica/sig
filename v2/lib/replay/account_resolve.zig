@@ -108,6 +108,15 @@ pub const AccountResolver = struct {
         block_ref: lib.replay.BlockRef,
         tx_ref: lib.replay.TransactionPool.ItemId,
         bank_context: BankContext,
+        /// Used by replay to track things. Should be removed/replaced by what the scheduler
+        /// needs in the future.
+        transaction_idx: u32,
+        /// Supplied and used by replay to detect if earlier transactions executed after
+        /// ALT resolution began. If those earlier transactions happened to modify
+        /// the same ALT accounts, replay must re-submit the transaction for ALT resolution.
+        /// TODO: scheduler changes should utilize/change this to avoid re-submitting
+        /// transactions that are known to be non-conflicting with earlier transactions.
+        state_version: u64,
     ) SubmitError!void {
         if (self.pending_count == self.pending_queue.len) {
             @branchHint(.unlikely);
@@ -140,6 +149,9 @@ pub const AccountResolver = struct {
             .in_flight_lookups = 0,
             .failure = null,
             .completion = .{
+                .transaction_idx = transaction_idx,
+                .state_version = state_version,
+
                 .transaction = .{
                     .block_ref = block_ref,
                     .tx_ref = tx_ref,
@@ -208,6 +220,13 @@ pub const AccountResolver = struct {
 
     /// Terminal result exposed to the caller.
     pub const Completion = struct {
+        /// convenient for replay bookkeeping, will likely get replaced by something more useful for the scheduler.
+        transaction_idx: u32,
+        /// Supplied and used by replay to detect if earlier transactions executed after
+        /// ALT resolution began. If those earlier transactions happened to modify
+        /// the same ALT accounts, replay must re-submit the transaction for ALT resolution.
+        state_version: u64,
+
         transaction: ResolvedTransaction,
         result: Result,
 
@@ -1014,7 +1033,13 @@ test "AccountResolver: no-ALT legacy transaction completes at submit()" {
     const tx_ref = try fx.insertTransactionBytes(bytes);
 
     var resolver = fx.resolver();
-    try resolver.submit(block, tx_ref, fx.bankContextForSlot(100));
+    try resolver.submit(
+        block,
+        tx_ref,
+        fx.bankContextForSlot(100),
+        0,
+        0,
+    );
 
     // submit() must synthesise a completion inline (no poll required).
     try std.testing.expectEqual(@as(usize, 1), resolver.pending_count);
