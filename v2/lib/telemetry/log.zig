@@ -144,7 +144,6 @@ pub const Message = struct {
 
     /// IMPORTANT: This should be kept in sync with `write`.
     pub fn computeHeader(self: Message) Header {
-        std.debug.assert(self.msg.surround == .literal);
         return .{
             .epoch_millis = self.epoch_millis,
             .scope_len = @intCast(self.scope.len),
@@ -160,7 +159,6 @@ pub const Message = struct {
         try w.writeStruct(header, tel.endian);
         try w.writeAll(self.scope);
         try EntryField.writeFields(self.fields, w);
-        std.debug.assert(self.msg.surround == .literal);
         try self.msg.format(w);
         return header;
     }
@@ -215,8 +213,8 @@ test Message {
             .epoch_millis = 0,
             .level = .err,
             .scope = "foo",
-            .fields = &.{.init("fizz", .fromValue(.literal, "{s}", &"buzz"))},
-            .msg = .fromFmt(.literal, "{s}", &.{"bar"}),
+            .fields = &.{.init("fizz", .fromValue("{s}", &"buzz"))},
+            .msg = .fromFmt("{s}", &.{"bar"}),
         };
         const expected_header: Message.Header = .{
             .epoch_millis = 0,
@@ -236,10 +234,10 @@ test Message {
             .level = .debug,
             .scope = "scope1",
             .fields = &.{
-                .init("field_a", .fromValue(.quoted, "0x{X}", &0xFAF0)),
-                .init("field_b", .fromValue(.literal, "{s}", &"value")),
+                .init("field_a", .fromValue("0x{X}", &0xFAF0)),
+                .init("field_b", .fromValue("{s}", &"ab cd")),
             },
-            .msg = .fromFmt(.literal, "message {s} here", &.{"goes"}),
+            .msg = .fromFmt("message {s} here", &.{"goes"}),
         },
         &encoded.writer,
     );
@@ -250,10 +248,10 @@ test Message {
 
     const decoded_slices = decoded_header.getSlicesFromFixedBuffer(&encoded_r) orelse
         return error.TestExpectedNonNull;
-    try std.testing.expectEqualStrings("message goes here", decoded_slices.msg);
+    try std.testing.expectEqualStrings("\"message goes here\"", decoded_slices.msg);
     try std.testing.expectEqualStrings("scope1", decoded_slices.scope);
     try std.testing.expectEqualStrings(
-        "field_a=\"0xFAF0\" field_b=value",
+        "field_a=0xFAF0 field_b=\"ab cd\"",
         decoded_slices.fields_str,
     );
 }
@@ -592,66 +590,52 @@ pub const EntryField = struct {
 
 test EntryField {
     try std.testing.expectFmt("foo=bar", "{f}", .{
-        EntryField.init("foo", .fromValue(.literal, "{s}", &"bar")),
+        EntryField.init("foo", .fromValue("{s}", &"bar")),
     });
     try std.testing.expectFmt("", "{f}", .{EntryField.listFmt(&.{})});
-    try std.testing.expectFmt("foo=\"bar\"", "{f}", .{
-        EntryField.listFmt(&.{.init("foo", .fromValue(.quoted, "{s}", &"bar"))}),
+    try std.testing.expectFmt("foo=\"foo bar\"", "{f}", .{
+        EntryField.listFmt(&.{.init("foo", .fromValue("{s}", &"foo bar"))}),
     });
 }
 
 /// Type-erased formatter.
 pub const EntryValueFmt = struct {
-    surround: Surround,
     ptr: *const anyopaque,
     formatFn: *const fn (
-        surround: Surround,
         value: *const anyopaque,
         w: *std.Io.Writer,
     ) std.Io.Writer.Error!void,
 
     pub fn format(self: EntryValueFmt, w: *std.Io.Writer) std.Io.Writer.Error!void {
-        try self.formatFn(self.surround, self.ptr, w);
+        try self.formatFn(self.ptr, w);
     }
-
-    pub const Surround = enum {
-        literal,
-        quoted,
-
-        fn str(surround: Surround) []const u8 {
-            return switch (surround) {
-                .literal => "",
-                .quoted => "\"",
-            };
-        }
-    };
 
     /// Resulting formatter will write the equivalent of:
     /// `std.Io.Writer.print(w, fmt_str, .{value_ptr.*})`.
     pub fn fromValue(
-        surround_value: Surround,
         comptime fmt_str: []const u8,
-        /// Pointer to an integer.
+        /// Pointer to a value.
         value_ptr: anytype,
     ) EntryValueFmt {
         const is_comptime_known = isComptimeKnown(value_ptr.*);
+        comptime var ptr_info = @typeInfo(@TypeOf(value_ptr));
+        ptr_info.pointer.is_const = true;
         const erased = struct {
             fn formatImpl(
-                surround: Surround,
                 ptr: *const anyopaque,
                 w: *std.Io.Writer,
             ) std.Io.Writer.Error!void {
-                const value: @TypeOf(value_ptr) = if (is_comptime_known)
+                const value: @Type(ptr_info) = if (is_comptime_known)
                     value_ptr
                 else
                     @ptrCast(@alignCast(ptr));
-                try w.writeAll(surround.str());
+                const has_whitespace = WhitespaceDetector.detect(fmt_str, .{value.*});
+                if (has_whitespace) try w.writeByte('"');
                 try w.print(fmt_str, .{value.*});
-                try w.writeAll(surround.str());
+                if (has_whitespace) try w.writeByte('"');
             }
         };
         return .{
-            .surround = surround_value,
             .ptr = @ptrCast(value_ptr),
             .formatFn = erased.formatImpl,
         };
@@ -660,7 +644,6 @@ pub const EntryValueFmt = struct {
     /// Resulting formatter will write the equivalent of:
     /// `std.Io.Writer.print(w, fmt_strs, args_ptr.*)`.
     pub fn fromFmt(
-        surround_value: Surround,
         comptime fmt_str: []const u8,
         /// Pointer to a tuple of arguments, instead of the value.
         /// Must outlive the return value.
@@ -668,18 +651,17 @@ pub const EntryValueFmt = struct {
     ) EntryValueFmt {
         const erased = struct {
             fn formatImpl(
-                surround: Surround,
                 ptr: *const anyopaque,
                 w: *std.Io.Writer,
             ) std.Io.Writer.Error!void {
                 const args: @TypeOf(args_ptr) = @ptrCast(@alignCast(ptr));
-                try w.writeAll(surround.str());
+                const has_whitespace = WhitespaceDetector.detect(fmt_str, args.*);
+                if (has_whitespace) try w.writeByte('"');
                 try w.print(fmt_str, args.*);
-                try w.writeAll(surround.str());
+                if (has_whitespace) try w.writeByte('"');
             }
         };
         return .{
-            .surround = surround_value,
             .ptr = @ptrCast(args_ptr),
             .formatFn = erased.formatImpl,
         };
@@ -688,10 +670,10 @@ pub const EntryValueFmt = struct {
 
 test EntryValueFmt {
     try std.testing.expectFmt("123", "{f}", .{
-        EntryValueFmt.fromValue(.literal, "{d}", &123),
+        EntryValueFmt.fromValue("{d}", &123),
     });
-    try std.testing.expectFmt("321 foo", "{f}", .{
-        EntryValueFmt.fromFmt(.literal, "{d} {s}", &.{ 321, "foo" }),
+    try std.testing.expectFmt("\"321 foo\"", "{f}", .{
+        EntryValueFmt.fromFmt("{d} {s}", &.{ 321, "foo" }),
     });
 }
 
@@ -765,7 +747,7 @@ pub fn streamLogs(
 
         // message
         try output.writeByte(' ');
-        try output.print("message=\"{s}\"", .{slices.msg});
+        try output.print("message={s}", .{slices.msg});
 
         try output.writeByte('\n');
     }
@@ -838,4 +820,93 @@ test Iso8601Fmt {
 
 inline fn isComptimeKnown(value: anytype) bool {
     return @typeInfo(@TypeOf(.{value})).@"struct".fields[0].is_comptime;
+}
+
+/// Discards all data written to it, but tracks whether any whitespace character
+/// (per `std.ascii.whitespace`) was ever written. Unbuffered: every write goes
+/// through `drain`, so `found` is up-to-date without needing to flush.
+pub const WhitespaceDetector = struct {
+    writer: std.Io.Writer,
+    found: bool,
+
+    pub fn init() WhitespaceDetector {
+        return .{
+            .writer = .{
+                .vtable = &.{ .drain = drain },
+                .buffer = &.{},
+            },
+            .found = false,
+        };
+    }
+
+    pub fn detect(comptime fmt_str: []const u8, args: anytype) bool {
+        var white_space: WhitespaceDetector = .init();
+        white_space.writer.print(fmt_str, args) catch unreachable;
+        return white_space.found;
+    }
+
+    fn drain(
+        w: *std.Io.Writer,
+        data: []const []const u8,
+        splat: usize,
+    ) std.Io.Writer.Error!usize {
+        const self: *WhitespaceDetector = @alignCast(@fieldParentPtr("writer", w));
+        const rest = data[0 .. data.len - 1];
+        const pattern = data[data.len - 1];
+        var written: usize = pattern.len * splat;
+        for (rest) |bytes| written += bytes.len;
+
+        if (!self.found) {
+            for (rest) |bytes| {
+                if (std.mem.indexOfAny(u8, bytes, &std.ascii.whitespace) != null) {
+                    self.found = true;
+                    return written;
+                }
+            }
+            if (splat != 0 and std.mem.indexOfAny(u8, pattern, &std.ascii.whitespace) != null)
+                self.found = true;
+        }
+
+        return written;
+    }
+};
+
+test WhitespaceDetector {
+    var wd: WhitespaceDetector = undefined;
+
+    wd = .init();
+    try wd.writer.writeAll("no-whitespace-here");
+    try std.testing.expect(!wd.found);
+
+    wd = .init();
+    try wd.writer.writeAll("hello world");
+    try std.testing.expect(wd.found);
+
+    wd = .init();
+    try wd.writer.writeAll("end ");
+    try std.testing.expect(wd.found);
+
+    wd = .init();
+    try wd.writer.writeAll(" start");
+    try std.testing.expect(wd.found);
+
+    wd = .init();
+    try wd.writer.print("value={d}", .{42});
+    try std.testing.expect(!wd.found);
+
+    wd = .init();
+    try wd.writer.print("value = {d}", .{42});
+    try std.testing.expect(wd.found);
+
+    wd = .init();
+    try wd.writer.print("value={s}", .{"hello world"});
+    try std.testing.expect(wd.found);
+
+    wd = .init();
+    try wd.writer.writeByte('\t');
+    try std.testing.expect(wd.found);
+
+    wd = .init();
+    try wd.writer.writeByte('\n');
+    try std.testing.expect(wd.found);
 }
