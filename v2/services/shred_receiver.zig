@@ -87,6 +87,10 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     var packet_iter = rw.tvu_socket.recv.get(.reader);
     var deshred_out = rw.deshredded_out.get(.writer);
 
+    // TODO: it only needs the slot out of this. Is it worth making its own region?
+    const slot = try rw.snapshot_metadata.getSlotBlocking(runner);
+    _ = slot; // TODO: actually use the slot.
+
     while (true) {
         {
             const idle_zone = tracy.Zone.init(@src(), .{ .name = "idle" });

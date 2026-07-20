@@ -58,6 +58,19 @@ pub fn build(b: *Build) void {
     });
     const sig_mod = sig_dep.module("sig");
 
+    // The shred-parse harness feeds the Receiver shreds whose merkle roots
+    // are not signed by any known leader, so sig_v2 is built with the
+    // ed25519 verify path stubbed out at comptime. Shred-version checking
+    // stays on (the default).
+    const sig_v2_dep = b.dependency("sig_v2", .{
+        .target = target,
+        .optimize = optimize,
+        .@"allow-no-sha" = allow_no_sha,
+        .@"allow-no-avx512" = allow_no_avx512,
+        .@"debug-skip-shred-sig-verify" = true,
+    });
+    const sig_v2_mod = sig_v2_dep.module("sig_v2");
+
     const pb_dep = b.dependency("pb", .{
         .target = target,
         .optimize = optimize,
@@ -66,6 +79,7 @@ pub fn build(b: *Build) void {
 
     const common_imports = [_]Build.Module.Import{
         .{ .name = "sig", .module = sig_mod },
+        .{ .name = "sig_v2", .module = sig_v2_mod },
         .{ .name = "protobuf", .module = pb_mod },
         .{ .name = "build-options", .module = build_options.createModule() },
     };
@@ -82,7 +96,8 @@ pub fn build(b: *Build) void {
             .imports = &common_imports,
         }),
     });
-    // the self-hosted backend causes a lot of issues when running in python test suite
+    // Self-hosted backend hits issues in the python test suite and can't
+    // lower sig_v2's AVX-512 vector code.
     solfuzz_sig_lib.use_llvm = true;
     solfuzz_sig_step.dependOn(&solfuzz_sig_lib.step);
     install_step.dependOn(&solfuzz_sig_lib.step);
@@ -158,6 +173,8 @@ pub fn build(b: *Build) void {
         }),
         .filters = filters,
     });
+    // The self-hosted backend can't lower sig_v2's AVX-512 vector code.
+    test_exe.use_llvm = true;
     test_step.dependOn(&test_exe.step);
     install_step.dependOn(&test_exe.step);
 
@@ -180,6 +197,9 @@ pub fn build(b: *Build) void {
             std.fs.path.join(b.allocator, &.{ proto_dir, "vm.proto" }) catch @panic("OOM"),
             std.fs.path.join(b.allocator, &.{ proto_dir, "txn.proto" }) catch @panic("OOM"),
             std.fs.path.join(b.allocator, &.{ proto_dir, "elf.proto" }) catch @panic("OOM"),
+            std.fs.path.join(b.allocator, &.{ proto_dir, "vm_serialization.proto" }) catch @panic("OOM"),
+            std.fs.path.join(b.allocator, &.{ proto_dir, "shred.proto" }) catch @panic("OOM"),
+            std.fs.path.join(b.allocator, &.{ proto_dir, "metadata.proto" }) catch @panic("OOM"),
         },
         .include_directories = &.{proto_dir},
     });

@@ -25,8 +25,17 @@ pub const Receiver = struct {
     root_slot: Slot,
     max_slot: Slot,
 
+    features: Features,
+
     in_progress: InProgressSets,
     done: DoneSets,
+
+    /// Per-feature activation slots. A feature is enforced for shreds
+    /// whose slot is `>= activation_slot`; the default `maxInt(Slot)`
+    /// keeps every feature inactive.
+    pub const Features = struct {
+        discard_unexpected_data_complete_shreds: Slot = std.math.maxInt(Slot),
+    };
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -45,12 +54,25 @@ pub const Receiver = struct {
 
             .root_slot = 0,
             .max_slot = std.math.maxInt(Slot),
+            .features = .{},
         };
     }
 
     pub fn deinit(self: *Receiver, allocator: std.mem.Allocator) void {
         self.in_progress.deinit(allocator);
         self.done.deinit(allocator);
+    }
+
+    /// Reset to the post-init state without freeing any heap memory. Intended
+    /// for callers that reuse a single Receiver across many independent inputs
+    /// (e.g. the conformance shred-parse harness, which runs one fixture per
+    /// invocation and must not leak state between them).
+    pub fn reset(self: *Receiver) void {
+        self.in_progress.reset();
+        self.done.reset();
+        self.root_slot = 0;
+        self.max_slot = std.math.maxInt(Slot);
+        self.features = .{};
     }
 
     pub fn updateSlotRange(self: *Receiver, root_slot: Slot, max_slot: Slot) void {
@@ -88,17 +110,14 @@ pub const Receiver = struct {
             if (shred.slot > state.max_slot) return error.ShredTooNew;
 
             // ignore shred with wrong version
-            if (shred.version != network_shred_version) {
-                if (!build_options.debug_skip_shred_checks) return error.ShredVersionMismatch;
-            }
+            if (shred.version != network_shred_version and
+                !build_options.debug_skip_shred_version_check)
+                return error.ShredVersionMismatch;
 
             // reject shreds greater than the max per slot
-            // [agave] https://github.com/anza-xyz/agave/blob/ce2b875e7a9587106cb505e14ab769f9356b8238/ledger/src/shred.rs#L772
-            // [firedancer] https://github.com/firedancer-io/firedancer/blob/e547465daf50329a163ffbd0aa3089b9822d1759/src/disco/shred/fd_fec_resolver.c#L505
-            const max_shreds_per_slot = 32768;
-            if (shred.fec_set_idx > max_shreds_per_slot - FecSetCtx.fec_shred_count)
+            if (shred.fec_set_idx > lib.shred.max_shreds_per_slot - FecSetCtx.fec_shred_count)
                 return error.FecSetIndexTooHigh;
-            if (shred.slot_idx >= max_shreds_per_slot)
+            if (shred.slot_idx >= lib.shred.max_shreds_per_slot)
                 return error.SlotIndexTooHigh;
 
             // ignore any with bad counts or indices (SIMD 0317 enforces this)
@@ -109,6 +128,14 @@ pub const Receiver = struct {
                     return error.BadCodeShredCount;
                 if (shred.code_or_data.code.code_shred_idx >= FecSetCtx.fec_shred_count)
                     return error.BadCodeShredIdx;
+            } else {
+                // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/shred/filter.rs#L327-L342
+                if (shred.slot >= state.features.discard_unexpected_data_complete_shreds and
+                    shred.code_or_data.data.flags.data_complete and
+                    shred.slot_idx != shred.fec_set_idx + FecSetCtx.fec_shred_count - 1)
+                {
+                    return error.UnexpectedDataCompleteShred;
+                }
             }
 
             if (shred.fec_set_idx % FecSetCtx.fec_shred_count != 0) return error.InvalidFecSetIdx;
@@ -195,7 +222,7 @@ pub const Receiver = struct {
             const shred_merkle_root: Hash = blk: {
                 var shred_merkle_root: Hash = undefined;
 
-                if (!build_options.debug_skip_shred_checks) {
+                if (!build_options.debug_skip_shred_sig_verify) {
                     const slot_leader = leader_schedule.get(shred.slot) orelse {
                         logger.warn().logf("slot {} missing?\n", .{shred.slot});
                         return error.UnknownLeader;
@@ -535,6 +562,15 @@ const InProgressSets = struct {
         self.eviction.deinit();
     }
 
+    /// Returns the set to its post-init state without freeing any heap memory.
+    /// Preserves the existing capacities of `ctx_pool`, `signature_map`, and
+    /// `eviction`.
+    fn reset(self: *InProgressSets) void {
+        self.ctx_pool.reset();
+        self.signature_map.clearRetainingCapacity();
+        self.eviction.items.len = 0;
+    }
+
     fn getFecSetCtx(self: *const InProgressSets, signature: *const Signature) ?*FecSetCtx {
         const map_ctx = self.mapContext();
         return self.signature_map.getAdapted(signature, map_ctx);
@@ -557,7 +593,7 @@ const InProgressSets = struct {
             break :id self.ctx_pool.createId() catch unreachable;
         };
 
-        const new_idx: u32 = new_pool_id.index().?;
+        const new_idx: u32 = new_pool_id.index();
 
         self.ids[new_idx] = id;
         self.eviction.add(new_pool_id) catch unreachable; // eviction can't be full, we *just* evicted
@@ -602,7 +638,7 @@ const InProgressSets = struct {
     fn removeEvictedSet(self: *InProgressSets, evicted_pool_idx: Pool.ItemId) void {
         const map_ctx = self.mapContext();
 
-        const evicted_idx = evicted_pool_idx.index().?;
+        const evicted_idx = evicted_pool_idx.index();
 
         const evicted_sig: *Signature = &self.signatures[evicted_idx];
         // const node: *FecSetCtx = @ptrCast(&self.ctx_pool.buf[evicted_idx]);
@@ -623,7 +659,7 @@ const InProgressSets = struct {
     fn containsId(self: *const InProgressSets, id: FecSetId) bool {
         return for (self.signature_map.values()) |fec_set_ctx| {
             const pool_id = self.ctx_pool.ptrToIndex(fec_set_ctx);
-            const idx = pool_id.index().?;
+            const idx = pool_id.index();
 
             if (self.ids[idx].eql(&id)) break true;
         } else false;
@@ -657,7 +693,7 @@ const InProgressSets = struct {
         pub fn eql(ctx: SignatureContext, a: *const Signature, _: void, key_idx: usize) bool {
             const set: *FecSetCtx = ctx.map.values()[key_idx];
             const pool_id = ctx.ctx_pool.ptrToIndex(set);
-            const idx = pool_id.index().?;
+            const idx = pool_id.index();
 
             const b: *const Signature = &ctx.signatures[idx];
             return a.eql(b);
@@ -670,12 +706,174 @@ const InProgressSets = struct {
 
             // remove greatest (slot, fec id) first
             return std.math.Order.invert(FecSetId.order(
-                &self.ids[a.index().?],
-                &self.ids[b.index().?],
+                &self.ids[a.index()],
+                &self.ids[b.index()],
             ));
         }
     };
 };
+
+const TEST_DATA_SHRED_PACKET_LEN = 1203;
+
+fn initTestDataPacket(packet: *Packet, version: u16) void {
+    packet.data = @splat(0);
+    packet.len = TEST_DATA_SHRED_PACKET_LEN;
+
+    const shred: *Shred = @ptrCast(packet);
+    shred.* = .{
+        .signature = .ZEROES,
+        .variant = .{ .kind = .merkle_data_chained, .merkle_count = 0 },
+        .slot = 1,
+        .slot_idx = 0,
+        .version = version,
+        .fec_set_idx = 0,
+        .code_or_data = .{
+            .data = .{
+                .parent_offset = 1,
+                .flags = .{
+                    .reference_tick = 0,
+                    .data_complete = false,
+                    .last_shred_in_slot = false,
+                },
+                .size = @offsetOf(Shred, "code_or_data") + @sizeOf(Shred.DataHeader),
+            },
+        },
+    };
+}
+
+fn signTestDataPacket(packet: *Packet, keypair: *const lib.gossip.KeyPair) !void {
+    const shred: *Shred = @ptrCast(packet);
+    var merkle_root: Hash = undefined;
+    try shred.merkleRoot(&merkle_root);
+    shred.signature = try keypair.sign(&merkle_root.data);
+}
+
+test "shred.receiver: empty packet" {
+    const allocator = std.testing.allocator;
+
+    var receiver: Receiver = try .init(allocator, 1, 1);
+    defer receiver.deinit(allocator);
+
+    var packet: Packet = undefined;
+    packet.len = 0;
+
+    const leader_schedule: *const lib.solana.LeaderSchedule = undefined;
+    var deshred_writer: DeshredRing.Iterator(.writer) = undefined;
+
+    try std.testing.expectError(
+        error.PacketUnderMinHeaderSize,
+        receiver.processPacket(
+            leader_schedule,
+            0,
+            &packet,
+            &deshred_writer,
+            .noop,
+        ),
+    );
+}
+
+test "shred.receiver: shred version mismatch" {
+    const allocator = std.testing.allocator;
+
+    var receiver: Receiver = try .init(allocator, 1, 1);
+    defer receiver.deinit(allocator);
+
+    var packet: Packet = undefined;
+    initTestDataPacket(&packet, 1);
+
+    const leader_schedule: *const lib.solana.LeaderSchedule = undefined;
+    var deshred_writer: DeshredRing.Iterator(.writer) = undefined;
+
+    try std.testing.expectError(
+        error.ShredVersionMismatch,
+        receiver.processPacket(
+            leader_schedule,
+            2,
+            &packet,
+            &deshred_writer,
+            .noop,
+        ),
+    );
+}
+
+test "shred.receiver: one shred (unfinished fec set)" {
+    const allocator = std.testing.allocator;
+
+    var receiver: Receiver = try .init(allocator, 1, 1);
+    defer receiver.deinit(allocator);
+
+    const std_keypair = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(@splat(1));
+    const keypair: lib.gossip.KeyPair = .fromKeyPair(std_keypair);
+
+    const leader_schedule = try allocator.create(lib.solana.LeaderSchedule);
+    defer allocator.destroy(leader_schedule);
+    leader_schedule.base_slot = 1;
+    leader_schedule.leaders[0] = keypair.pubkey;
+
+    var packet: Packet = undefined;
+    _ = initTestDataPacket(&packet, 1);
+    try signTestDataPacket(&packet, &keypair);
+
+    var deshred_writer: DeshredRing.Iterator(.writer) = undefined;
+
+    const result = try receiver.processPacket(
+        leader_schedule,
+        1,
+        &packet,
+        &deshred_writer,
+        .noop,
+    );
+    switch (result) {
+        .unfinished_fec_set => |unfinished| {
+            try std.testing.expectEqual(1, unfinished.total_shreds_received);
+        },
+        else => try std.testing.expect(false),
+    }
+}
+
+test "shred.receiver: duplicate shred" {
+    const allocator = std.testing.allocator;
+
+    var receiver: Receiver = try .init(allocator, 1, 1);
+    defer receiver.deinit(allocator);
+
+    const std_keypair = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(@splat(1));
+    const keypair: lib.gossip.KeyPair = .fromKeyPair(std_keypair);
+
+    const leader_schedule = try allocator.create(lib.solana.LeaderSchedule);
+    defer allocator.destroy(leader_schedule);
+    leader_schedule.base_slot = 1;
+    leader_schedule.leaders[0] = keypair.pubkey;
+
+    var packet: Packet = undefined;
+    _ = initTestDataPacket(&packet, 1);
+    try signTestDataPacket(&packet, &keypair);
+
+    var deshred_writer: DeshredRing.Iterator(.writer) = undefined;
+
+    const first_result = try receiver.processPacket(
+        leader_schedule,
+        1,
+        &packet,
+        &deshred_writer,
+        .noop,
+    );
+    switch (first_result) {
+        .unfinished_fec_set => |unfinished| {
+            try std.testing.expectEqual(1, unfinished.total_shreds_received);
+        },
+        else => try std.testing.expect(false),
+    }
+
+    const second_result = try receiver.processPacket(
+        leader_schedule,
+        1,
+        &packet,
+        &deshred_writer,
+        .noop,
+    );
+    try std.testing.expectEqual(.shred_already_seen, std.meta.activeTag(second_result));
+}
 
 test "InProgressSets basic usage" {
     const allocator = std.testing.allocator;
@@ -742,6 +940,15 @@ const DoneSets = struct {
         self.done_map.deinit(allocator);
         self.eviction.allocator = allocator;
         self.eviction.deinit();
+    }
+
+    /// Returns the set to its post-init state without freeing any heap memory.
+    /// Preserves the existing capacities of `done_pool`, `done_map`, and
+    /// `eviction`.
+    fn reset(self: *DoneSets) void {
+        self.done_pool.reset();
+        self.done_map.clearRetainingCapacity();
+        self.eviction.items.len = 0;
     }
 
     // This signature+id must not be inside DoneSet already - any shred inside DoneSets should be
@@ -861,4 +1068,39 @@ test "DoneSets basic usage" {
     try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_1, &sig_1)); // 1 was evicted
     try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
     try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_3, &sig_3));
+}
+
+test "DoneSets reset clears state without freeing" {
+    const allocator = std.testing.allocator;
+
+    var done_sets: DoneSets = try .init(allocator, 2);
+    defer done_sets.deinit(allocator);
+
+    const sig_1: Signature = .parse(
+        \\3NyXqg7XjPBX5eW2zpExpAJTdXCHpVt4RR2uPPc6XUzTCVeAphwzpNBxHtYPpipE1gne2NW6ELW6HVdaB7oV9DEn
+    );
+    const sig_2: Signature = .parse(
+        \\2RUa9Sv3T2vwxeubSwJUS63W7N2wT9RaMcaoGJS6a28zGmSvpdArZMcDe7n3JTeBtuh1BkSgaJ8eN3WF7TBMjkG6
+    );
+
+    const id_1: FecSetId = .{ .slot = 1, .fec_set_idx = 0 };
+    const id_2: FecSetId = .{ .slot = 2, .fec_set_idx = 0 };
+
+    done_sets.setDone(&sig_1, id_1);
+    done_sets.setDone(&sig_2, id_2);
+    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_1, &sig_1));
+    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
+
+    done_sets.reset();
+
+    // After reset both lookups must miss.
+    try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_1, &sig_1));
+    try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_2, &sig_2));
+
+    // Capacity is retained — refilling to the original size must not allocate
+    // (eviction.allocator is the testing failing allocator after init).
+    done_sets.setDone(&sig_1, id_1);
+    done_sets.setDone(&sig_2, id_2);
+    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_1, &sig_1));
+    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
 }

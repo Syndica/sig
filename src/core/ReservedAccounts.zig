@@ -76,7 +76,7 @@ const ACCOUNTS = [_]struct { pubkey: Pubkey, feature: ?Feature }{
     .{ .pubkey = sig.runtime.program.precompiles.ed25519.ID,   .feature = null },
     .{ .pubkey = sig.runtime.ids.FEATURE_PROGRAM_ID,           .feature = null },
     .{ .pubkey = sig.runtime.program.precompiles.secp256k1.ID, .feature = null },
-    .{ .pubkey = sig.runtime.program.precompiles.secp256r1.ID, .feature = .enable_secp256r1_precompile },
+    .{ .pubkey = sig.runtime.program.precompiles.secp256r1.ID, .feature = null },
     .{ .pubkey = sig.runtime.ids.STAKE_CONFIG_PROGRAM_ID,      .feature = null },
     .{ .pubkey = sig.runtime.program.stake.ID,                 .feature = null },
     .{ .pubkey = sig.runtime.program.system.ID,                .feature = null },

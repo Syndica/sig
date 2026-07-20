@@ -211,15 +211,21 @@ test "getSigners collects signer keys and excludes non-signers" {
     const signers = try ixn_info.getSigners(allocator);
     defer allocator.free(signers);
 
-    // Tally result occurrences by seed (byte 0): both signers present once,
-    // the non-signer absent.
-    var seen: [InstructionInfo.MAX_ACCOUNT_METAS]u8 = @splat(0);
-    for (signers) |key| seen[key.data[0]] += 1;
-
     try std.testing.expectEqual(2, signers.len);
-    try std.testing.expectEqual(1, seen[signer_a.data[0]]);
-    try std.testing.expectEqual(1, seen[signer_b.data[0]]);
-    try std.testing.expectEqual(0, seen[non_signer.data[0]]);
+
+    // Verify both signers are present and the non-signer is absent by
+    // comparing full pubkeys (not just data[0] which can collide).
+    var found_a = false;
+    var found_b = false;
+    var found_non_signer = false;
+    for (signers) |key| {
+        if (key.equals(&signer_a)) found_a = true;
+        if (key.equals(&signer_b)) found_b = true;
+        if (key.equals(&non_signer)) found_non_signer = true;
+    }
+    try std.testing.expect(found_a);
+    try std.testing.expect(found_b);
+    try std.testing.expect(!found_non_signer);
 }
 
 // Regression: the conformance/fuzz harness admits instructions with far more

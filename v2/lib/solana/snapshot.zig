@@ -7,6 +7,7 @@ const tel = lib.telemetry;
 const Pubkey = lib.solana.Pubkey;
 const Slot = lib.solana.Slot;
 const Epoch = lib.solana.Epoch;
+const Hash = lib.solana.Hash;
 
 fn readInt(Int: type, r: anytype) !u64 {
     var buf: [@sizeOf(Int)]u8 = undefined;
@@ -74,10 +75,12 @@ pub const StatusCache = struct {
     }
 
     /// Discards an InstructionError union. Most variants are void; Custom is u32; BorshIoError is Vec(u8).
+    ///
+    /// See SerdeInstructionError in agave's runtime/src/serde_snapshot/status_cache.rs
     fn discardInstructionError(r: anytype) !void {
         switch (try readInt(u32, r)) {
             25 => try r.discardAll(4), // Custom: u32
-            45 => { // BorshIoError: Vec(u8)
+            44 => { // BorshIoError: Vec(u8)
                 const len = try readInt(u64, r);
                 try r.discardAll(len);
             },
@@ -105,26 +108,75 @@ pub const Manifest = struct {
 
 pub const BankFields = struct {
     slot: Slot,
+    blockhash_queue: BlockHashQueue,
+
+    pub const BlockHashQueue = struct {
+        last_hash: ?Hash,
+        max_age: u64,
+        hashes: struct {
+            array: []Hash,
+            count: usize,
+        },
+
+        pub const Entry = extern struct {
+            hash: Hash,
+            hash_index: u64,
+        };
+
+        pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !BlockHashQueue {
+            const last_hash_index = try readInt(u64, r);
+            const maybe_last_hash: ?Hash = if (!(try readBool(r))) null else blk: {
+                var hash: Hash = undefined;
+                try r.readSliceAll(std.mem.asBytes(&hash));
+                break :blk hash;
+            };
+
+            const n_hash_infos = try readInt(u64, r);
+            const hashes = try fba.allocator().alloc(Hash, n_hash_infos);
+
+            const BlockhashEntry = extern struct {
+                hash: Hash,
+                lamports_per_signature: u64,
+                hash_index: u64,
+                timestamp: u64,
+            };
+
+            const entries = try fba.allocator().alloc(BlockhashEntry, n_hash_infos);
+            defer fba.allocator().free(entries); // its the last allocation, so makes sense
+            try r.readSliceAll(std.mem.sliceAsBytes(entries));
+
+            const max_age = try readInt(u64, r);
+
+            // sort entries by hash_index
+            std.mem.sortUnstable(BlockhashEntry, entries, {}, struct {
+                fn lessThan(_: void, a: BlockhashEntry, b: BlockhashEntry) bool {
+                    return a.hash_index < b.hash_index;
+                }
+            }.lessThan);
+
+            // then add only the live ones by max_age to the hashes
+            var count: usize = 0;
+            for (entries) |*e| {
+                const age = last_hash_index - e.hash_index;
+                if (age <= max_age) {
+                    hashes[count] = e.hash;
+                    count += 1;
+                }
+            }
+
+            return .{
+                .last_hash = maybe_last_hash,
+                .max_age = max_age,
+                .hashes = .{ .array = hashes, .count = count },
+            };
+        }
+    };
 
     pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !BankFields {
         const zone = tracy.Zone.init(@src(), .{ .name = "BankFields.read" });
         defer zone.deinit();
 
-        _ = fba;
-
-        // blockhash_queue.last_hash_index: u64
-        try r.discardAll(8);
-        // blockhash_queue.last_hash: ?Hash
-        if (try readBool(r)) try r.discardAll(32);
-        // blockhash_queue.hash_infos: HashMap(Hash, { lamports_per_signature: u64, hash_index: u64, timestamp: u64 })
-        const hash_infos_len = try readInt(u64, r);
-        try r.discardAll(hash_infos_len * (32 + // key: Hash
-            8 + // lamports_per_signature: u64
-            8 + // hash_index: u64
-            8 // timestamp: u64
-        ));
-        // blockhash_queue.max_age: u64
-        try r.discardAll(8);
+        const blockhash_queue = try BlockHashQueue.read(fba, r);
 
         // _unused_ancestors: HashMap(Slot, u64)
         const ancestors_len = try readInt(u64, r);
@@ -247,21 +299,32 @@ pub const BankFields = struct {
 
         return .{
             .slot = slot,
+            .blockhash_queue = blockhash_queue,
         };
     }
 };
 
 pub const AccountsDbFields = struct {
     slot: u64,
-    account_file_map: AccountFileMap,
 
-    pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !AccountsDbFields {
+    pub fn read(_: *std.heap.FixedBufferAllocator, r: anytype) !AccountsDbFields {
         const zone = tracy.Zone.init(@src(), .{ .name = "AccountsDbFields.read" });
         defer zone.deinit();
 
         // account_file_map: HashMap(Slot, Vec(StorageEntry))
         // serialized as u64 len + n * { slot: u64, small_vec_size: u64, id: u64, length: u64 }
-        const account_file_map = try AccountFileMap.read(fba, r);
+        //
+        // NOTE: agave-built snapshots already have the file_len == tar_file.size for account files
+        // so we can avoid having to parse this out to get their true lengths.
+        // https://github.com/anza-xyz/agave/blob/v4.2/accounts-db/src/account_storage_reader.rs#L91
+        // https://github.com/anza-xyz/agave/blob/v4.2/snapshots/src/archive.rs#L179-L188
+        {
+            const len = try readInt(u64, r);
+            try r.discardAll(len * (8 + // slot: u64
+                8 + // small_vec.len: u64 == 1
+                16 // small_vec.data[{id: u64, file_len: u64}]
+            ));
+        }
 
         try r.discardAll(8); // _unused_write_version: u64
         const slot = try readInt(u64, r);
@@ -299,83 +362,17 @@ pub const AccountsDbFields = struct {
         }
 
         return .{
-            .account_file_map = account_file_map,
             .slot = slot,
         };
     }
-
-    /// Deserialize into custom HashMap that uses minimal memory with fast lookups.
-    /// Fast lookups is beneficial as its used to figure out account file lengths in SnapshotReader.
-    pub const AccountFileMap = struct {
-        entries: []Entry,
-        count: usize,
-
-        const HASH_MULT = 0x9E3779B97F4A7C15;
-        const Entry = packed struct(u128) {
-            id: u64,
-            length: u34, // 16GB max
-            slot: u30, // another 8yrs of 400ms slots after current mainnet
-            const empty: Entry = .{ .id = 0, .length = 0, .slot = 0 };
-        };
-
-        pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !AccountFileMap {
-            const zone = tracy.Zone.init(@src(), .{ .name = "AccountFileMap.read" });
-            defer zone.deinit();
-
-            // Consumes the equivalent:
-            //
-            // const file_map_len = try readInt(u64, r);
-            // try r.discardAll(file_map_len * (8 + // slot: Slot(u64)
-            //     8 + // small_vec_size: u64
-            //     8 + // id: u64
-            //     8 // length: u64
-            // ));
-
-            const n = std.math.cast(u32, try readInt(u64, r)) orelse return error.Overflow;
-            const cap = try std.math.ceilPowerOfTwo(u32, (n * 100) / 75); // .75 load factor
-            const entries = try fba.allocator().alloc(Entry, cap);
-            @memset(entries, .empty);
-
-            var bc_entry: extern struct {
-                slot: u64,
-                small_vec_len: u64,
-                id: u64,
-                length: u64,
-            } = undefined;
-            for (0..n) |_| {
-                try r.readSliceAll(std.mem.asBytes(&bc_entry));
-                if (bc_entry.small_vec_len != 1) return error.InvalidBincodeEntry;
-
-                var idx = (bc_entry.slot *% HASH_MULT) >> @intCast(@as(u7, 64) - @ctz(entries.len));
-                const e = while (true) {
-                    const e = &entries[idx];
-                    idx = (idx +% 1) & (entries.len - 1);
-                    if (@as(u128, @bitCast(e.*)) == @as(u128, @bitCast(Entry.empty))) break e;
-                };
-                e.* = .{
-                    .id = bc_entry.id,
-                    .length = std.math.cast(u34, bc_entry.length) orelse return error.Overflow,
-                    .slot = std.math.cast(u30, bc_entry.slot) orelse return error.Overflow,
-                };
-            }
-
-            return .{ .entries = entries, .count = n };
-        }
-
-        pub fn getPtr(self: *const AccountFileMap, slot: u64) ?*Entry {
-            const entries = self.entries;
-            var idx = (slot *% HASH_MULT) >> @intCast(@as(u7, 64) - @ctz(entries.len));
-            while (true) {
-                const e = &entries[idx];
-                idx = (idx +% 1) & (entries.len - 1);
-                if (e.slot == slot) return e;
-                if (@as(u128, @bitCast(e.*)) == @as(u128, @bitCast(Entry.empty))) return null;
-            }
-        }
-    };
 };
 
 pub const ExtraFields = struct {
+    /// - TowerBFT: the Merkle root of the last FEC set of the block
+    /// - Alpenglow: the "double Merkle root": a Merkle root computed over the
+    ///   sequence of per-FEC-set Merkle roots of the block's shreds.
+    block_id: Hash,
+
     pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !ExtraFields {
         const zone = tracy.Zone.init(@src(), .{ .name = "ExtraFields.read" });
         defer zone.deinit();
@@ -482,12 +479,19 @@ pub const ExtraFields = struct {
         }
 
         // block_id: NullOnEof(Hash)
-        r.discardAll(32) catch |err| switch (err) {
-            error.EndOfStream => {},
+        //
+        // in agave, this field is optional on the deserialize side, but it's
+        // actually always populated. we do not need to handle the null case,
+        // and it's actually not even possible for replay to work if this is
+        // null. so we treat this as a required field.
+        if (!try readBool(r)) return error.MissingBlockId; // optional discriminant
+        var block_id: Hash = undefined;
+        r.readSliceAll(&block_id.data) catch |err| switch (err) {
+            error.EndOfStream => return error.MissingBlockId,
             else => |e| return e,
         };
 
-        return .{};
+        return .{ .block_id = block_id };
     }
 };
 
@@ -589,20 +593,11 @@ pub fn SnapshotIter(comptime BufReader: type) type {
 
                 const slot = std.fmt.parseInt(u64, tar_file.name["accounts/".len..split], 10) catch
                     return error.InvalidAccountFileSlot;
-                const id = std.fmt.parseInt(u32, tar_file.name[split + 1 ..], 10) catch
-                    return error.InvalidAccountFileId;
                 if (slot > self.manifest.accounts_db_fields.slot)
                     return error.InvalidAccountFileSlot;
 
-                const info = self.manifest.accounts_db_fields.account_file_map.getPtr(slot) orelse
-                    return error.InvalidAccountFileSlot;
-                if (info.id != id)
-                    return error.InvalidAccountFileId;
-                if (info.length > tar_file.size)
-                    return error.InvalidAccountFileLength;
-
                 self.account_file_slot = slot;
-                self.account_file_len = info.length;
+                self.account_file_len = tar_file.size;
             }
 
             var header: extern struct { // little-endian
@@ -655,7 +650,7 @@ pub fn SnapshotIter(comptime BufReader: type) type {
 pub fn TarZstIter(comptime BufReader: type) type {
     lib.util.assertInterface(BufReader, struct {
         /// Get a slice of readable memory. Returns empty slice on EOF.
-        pub fn getBuffer(self: BufReader) ?[]const u8 {
+        pub fn getBuffer(self: BufReader) []const u8 {
             _ = .{self};
             return undefined;
         }
@@ -728,9 +723,9 @@ pub fn TarZstIter(comptime BufReader: type) type {
 
         fn read(self: *Self, maybe_buf: ?[*]u8, len: usize) usize {
             var n: usize = 0;
-            while (n < len) : (std.atomic.spinLoopHint()) {
-                const buf: []const u8 = self.buf_reader.getBuffer() orelse continue;
-                if (buf.len == 0) break;
+            while (n < len) {
+                const buf: []const u8 = self.buf_reader.getBuffer();
+                if (buf.len == 0) break; // EOF
 
                 const take = @min(buf.len, len - n);
                 if (maybe_buf) |b| @memcpy(b[n..][0..take], buf[0..take]);
@@ -745,6 +740,7 @@ pub fn TarZstIter(comptime BufReader: type) type {
 
 pub const ZstReader = struct {
     decompressor: Decompressor,
+    file_size: u64,
     file_reader: lib.fio.FileReader(.{
         .buffer_size = 64 * 1024 * 1024,
         .block_size = 1 * 1024 * 1024,
@@ -762,6 +758,8 @@ pub const ZstReader = struct {
 
         const file = try lib.fio.openDirect(dir, path, .read_only);
         errdefer file.close();
+
+        self.file_size = (try file.stat()).size;
 
         try self.file_reader.init(file);
         errdefer self.file_reader.deinit();
@@ -797,3 +795,115 @@ pub const ZstReader = struct {
         return n;
     }
 };
+
+// Inputs for this test were generated using https://github.com/Syndica/snapshot-generator
+//
+// Agave is used to construct and validate the snapshot and json. So the json is
+// a reliable source of truth for snapshot contents and can be used to validate
+// a snapshot deserializer.
+test "deserialized snapshot matches generated snapshot json" {
+    const allocator = std.testing.allocator;
+    const expectEqual = std.testing.expectEqual;
+    const expectEqualStrings = std.testing.expectEqualStrings;
+    const expect = std.testing.expect;
+
+    var hash_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
+    var pubkey_buf: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
+
+    const json_path = lib.test_data_dir ++ "test-snapshot-v4.2.0-beta.1.json";
+    const snapshot_path = lib.test_data_dir ++ "test-snapshot-v4.2.0-beta.1.tar.zst";
+
+    const json_bytes = try std.fs.cwd().readFileAlloc(allocator, json_path, 8 * 1024 * 1024);
+    defer allocator.free(json_bytes);
+
+    const parsed_json: std.json.Parsed(std.json.Value) =
+        try std.json.parseFromSlice(std.json.Value, allocator, json_bytes, .{});
+    defer parsed_json.deinit();
+    const merged = parsed_json.value.object.get("merged_fields").?.object;
+    const accounts = parsed_json.value.object.get("accounts").?.object;
+
+    const zst_reader = try allocator.create(ZstReader);
+    defer allocator.destroy(zst_reader);
+    try zst_reader.init(std.fs.cwd(), snapshot_path);
+    defer zst_reader.deinit();
+
+    const SnapshotBufReader = struct {
+        zst_reader: *ZstReader,
+        buf: [128 * 1024]u8 = undefined,
+        pos: usize = 0,
+        end: usize = 0,
+
+        pub fn getBuffer(self: *@This()) []const u8 {
+            if (self.pos == self.end) {
+                self.pos = 0;
+                self.end = self.zst_reader.read(.noop, &self.buf) catch |e|
+                    std.debug.panic("ZstReader.read failed: {t}", .{e});
+            }
+            return self.buf[self.pos..self.end];
+        }
+
+        pub fn advance(self: *@This(), n: usize) void {
+            self.pos += n;
+        }
+    };
+
+    var snapshot_reader: SnapshotBufReader = .{ .zst_reader = zst_reader };
+    const fba_buf = try allocator.alloc(u8, 8 * 1024 * 1024);
+    defer allocator.free(fba_buf);
+    var fba: std.heap.FixedBufferAllocator = .init(fba_buf);
+    var snapshot_iter = try SnapshotIter(*SnapshotBufReader).init(&fba, &snapshot_reader);
+
+    try expectEqual(jsonU64(merged.get("slot").?), snapshot_iter.manifest.bank_fields.slot);
+    try expectEqual(jsonU64(merged.get("slot").?), snapshot_iter.manifest.accounts_db_fields.slot);
+    try expectEqualStrings(
+        merged.get("block_id").?.string,
+        snapshot_iter.manifest.extra_fields.block_id.base58String(&hash_buf),
+    );
+
+    const blockhash_queue_json = merged.get("blockhash_queue").?.object;
+    try expectEqual(
+        jsonU64(blockhash_queue_json.get("max_age").?),
+        snapshot_iter.manifest.bank_fields.blockhash_queue.max_age,
+    );
+
+    const json_hashes = blockhash_queue_json.get("hashes").?.array.items;
+    const bhq_hashes = snapshot_iter.manifest.bank_fields.blockhash_queue.hashes;
+    try expectEqual(json_hashes.len, bhq_hashes.count);
+    for (bhq_hashes.array, json_hashes) |hash, json_hash| {
+        try expectEqualStrings(json_hash.object.get("hash").?.string, hash.base58String(&hash_buf));
+    }
+
+    const account_entries = accounts.get("entries").?.array.items;
+    try expectEqual(jsonU64(accounts.get("count").?), account_entries.len);
+
+    var account_index: usize = 0;
+    while (try snapshot_iter.next()) |account| : (account_index += 1) {
+        try expect(account_index < account_entries.len);
+        const a = account_entries[account_index].object;
+
+        try expectEqual(jsonU64(a.get("slot").?), account.slot);
+        try expectEqualStrings(a.get("pubkey").?.string, account.pubkey.base58String(&pubkey_buf));
+        try expectEqualStrings(a.get("owner").?.string, account.owner.base58String(&pubkey_buf));
+        try expectEqual(jsonU64(a.get("lamports").?), account.lamports);
+        try expectEqual(jsonU64(a.get("rent_epoch").?), account.rent_epoch);
+        try expectEqual(a.get("executable").?.bool, account.data.executable);
+        try expectEqual(jsonU64(a.get("data_len").?), account.data.len);
+
+        const data = try allocator.alloc(u8, account.data.len);
+        defer allocator.free(data);
+        try snapshot_iter.readSliceAll(data);
+
+        const data_hex = try allocator.alloc(u8, data.len * 2);
+        defer allocator.free(data_hex);
+        for (data, 0..) |byte, i| {
+            data_hex[i * 2] = std.fmt.hex_charset[byte >> 4];
+            data_hex[i * 2 + 1] = std.fmt.hex_charset[byte & 0x0f];
+        }
+        try expectEqualStrings(a.get("data_hex").?.string, data_hex);
+    }
+    try expectEqual(account_entries.len, account_index);
+}
+
+fn jsonU64(value: std.json.Value) u64 {
+    return @intCast(value.integer);
+}

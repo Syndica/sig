@@ -88,7 +88,6 @@ const tel = lib.telemetry;
 const replay = lib.replay;
 
 const Hash = lib.solana.Hash;
-const Slot = lib.solana.Slot;
 
 const Shred = lib.shred.Shred;
 const FecSetId = lib.shred.FecSetId;
@@ -110,15 +109,22 @@ var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
 
 const DeserialStates = [lib.replay.BlockPool.capacity]?BlockDeserialState;
 const BlockExecStates = [lib.replay.BlockPool.capacity]?BlockExecState;
+const BlockHashStates = [lib.replay.BlockPool.capacity]?Hash;
+
+const AccountRef = lib.accounts_db.AccountPool.AccountRef;
+const Pubkey = lib.solana.Pubkey;
 
 pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     rw.tel.signalReady();
 
-    var fba: std.heap.FixedBufferAllocator = .init(&scratch_memory);
+    var fba: std.heap.FixedBufferAllocator = .init(rw.scratch_memory);
     const allocator = fba.allocator();
 
     var forest: MerkleForest = try .init(allocator);
+
+    const unrooted: *Unrooted = try allocator.create(Unrooted);
+    unrooted.init();
 
     const deserial_states: *DeserialStates = try allocator.create(DeserialStates);
     @memset(deserial_states, null);
@@ -126,11 +132,24 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     const exec_states: *BlockExecStates = try allocator.create(BlockExecStates);
     @memset(exec_states, null);
 
+    const blockhash_states: *BlockHashStates = try allocator.create(BlockHashStates);
+    @memset(blockhash_states, null);
+
     var deshredded_iter = rw.deshredded_in.get(.reader);
     var exec_request_sender = rw.exec_req_response.request_ring.get(.writer);
     var exec_response_receiver = rw.exec_req_response.response_ring.get(.reader);
 
-    var first_slot: ?Slot = null; // this is a hack, remove it!
+    try bootstrap(
+        logger,
+        runner,
+        rw.snapshot_metadata_in,
+        &forest,
+        rw.block_pool,
+        exec_states,
+        blockhash_states,
+    );
+
+    // After the slot is supposedly populated, start shred recv (eventually Repair service) on it.
 
     task: switch (@as(enum { exec_response, fec_set, idle }, .idle)) {
         .idle => {
@@ -140,7 +159,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             const zone = tracy.Zone.init(@src(), .{ .name = "idle" });
             defer zone.deinit();
 
-            while (true) {
+            while (true) : (std.atomic.spinLoopHint()) {
                 if (exec_response_receiver.peek() != null) continue :task .exec_response;
                 if (deshredded_iter.peek() != null) continue :task .fec_set;
                 try runner.activity.signalIdleSpinning();
@@ -160,10 +179,17 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             std.debug.assert(response.request_kind == .txn_exec); // others unimplemented
             const response_data = response.data.txn_exec;
 
+            for (response_data.account_ref_buf[0..response_data.n_account_refs]) |account_ref| {
+                if (account_ref == .invalid) continue;
+
+                const account = rw.account_pool.getAccount(account_ref);
+                if (account.unref()) rw.account_pool.free(account_ref);
+            }
+
             defer rw.replay_transaction_pool.destroyId(response_data.tx_idx);
 
             const block_ref = response_data.block_idx;
-            const exec_state: *BlockExecState = &(exec_states[block_ref.index().?].?);
+            const exec_state: *BlockExecState = &(exec_states[block_ref.index()].?);
 
             // We previously used the transaction number within the block as our "task_id".
             // Asserting that we're receiving them back in order (we have single threaded exec).
@@ -173,7 +199,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 
             if (exec_state.finished()) {
                 logger.info().logf(
-                    "Slot {} ({}) complete! ({}/{})",
+                    "Slot {f} ({}) complete! ({}/{})",
                     .{
                         rw.block_pool.indexToPtr(block_ref).slot,
                         block_ref,
@@ -207,42 +233,6 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                 continue :task .idle;
             };
 
-            // This is an awful hack, we are treating the first received fec set as our root.
-            // We should instead insert the last fec set of the rooted slot, similarly allocate it
-            // a BlockRef, and call setChildTreeBlockRefs directly after.
-            if (first_slot == null) {
-                logger.info().logf("inserting first {f}", .{inserted});
-                std.debug.assert(first_slot == null);
-                first_slot = inserted.id.slot;
-
-                const rooted_slot = first_slot.? - 1;
-
-                std.debug.assert(inserted.block_ref == .null);
-
-                const rooted_block_ref = try rw.block_pool.createId();
-                const first_block_ref = try rw.block_pool.createId();
-
-                rooted_block_ref.ptr(rw.block_pool).?.* = .{
-                    .slot = rooted_slot,
-                    .child = first_block_ref,
-                };
-                first_block_ref.ptr(rw.block_pool).?.* = .{
-                    .slot = first_slot.?,
-                    .parent = rooted_block_ref,
-                };
-
-                exec_states[rooted_block_ref.index().?] = .{
-                    .n_transactions_requested = 0,
-                    .n_transactions_completed = 0,
-                    .all_transactions_requested = true,
-                };
-                std.debug.assert(exec_states[rooted_block_ref.index().?].?.finished());
-
-                inserted.block_ref = first_block_ref;
-
-                logger.info().logf("inserted first {f}", .{inserted});
-            }
-
             if (inserted.id.fec_set_idx == 0) {
                 logger.info().logf(
                     "received 0th fec set of slot {}",
@@ -258,26 +248,324 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 
             // NOTE: Currently we're doing nothing if we can't find a path from the inserted node to
             //       the root. We could deserialise early for prefetching.
-            if (inserted.block_ref == .null) {
+            const inserted_block_ref = inserted.block_ref.opt() orelse {
                 zone.text("null blockref");
                 continue :task .idle;
-            }
+            };
 
             try maybeContinueBlockExec(
                 logger,
                 inserted,
-                inserted.block_ref,
+                inserted_block_ref,
                 &forest.pool,
                 rw.block_pool,
                 rw.replay_transaction_pool,
                 exec_states,
                 deserial_states,
                 &exec_request_sender,
+
+                unrooted,
+                rw.account_pool,
+                rw.account_lookups,
             );
 
             continue :task .idle;
         },
     }
+}
+
+/// Reads all the RuntimeMetadata provided by accountsdb from the snapshot or
+/// its internal state. This bootstraps replay with information about its
+/// starting root slot, and some older info like the history of blockhashes.
+/// This data populates the block tree, some other structures indexed by
+/// BlockRef, and seeds the merkle forest with some minimal info about the last
+/// fec set in the rooted slot.
+///
+/// Currently some placeholder data is used, which is not accurate because it is
+/// impossible to derive from the snapshot. We must be very careful about how we
+/// use this:
+/// - slot number in the block tree for slots older than the starting root
+/// - fields in the final fec set of the starting root:
+///     - chained_merkle_root
+///     - fec_set_idx
+///     - payload_len
+fn bootstrap(
+    logger: tel.Logger("main"),
+    runner: lib.runner.Connection,
+    snapshot_metadata: *lib.accounts_db.RuntimeMetadata,
+    forest: *MerkleForest,
+    block_pool: *lib.replay.BlockPool,
+    exec_states: *BlockExecStates,
+    blockhash_states: *BlockHashStates,
+) !void {
+    var num_hashes: usize = 0;
+    // Drain the blockhash queue into the block tree. accountsdb writes into
+    // this ring blocks waiting for the reader (us).
+    var root_block = bhq: {
+        var blockhashes_in = snapshot_metadata.blockhash_queue.hashes.getView(.reader);
+        defer blockhashes_in.close();
+        var last_block: ?lib.replay.BlockRef = null;
+        while (true) {
+            const hashes = try blockhashes_in.getBufferBlocking(runner);
+            if (hashes.len == 0) break; // blockhashes_out closed their end
+            for (hashes) |*hash| {
+                const block = try block_pool.createId();
+                block.ptr(block_pool).* = .{
+                    .slot = .null, // cannot be determined from the snapshot
+                    .child = .null,
+                    .parent = .init(last_block),
+                };
+                if (last_block) |p| p.ptr(block_pool).child = .init(block);
+                blockhash_states[block.index()] = hash.*;
+                last_block = block;
+                num_hashes += 1;
+            }
+            blockhashes_in.advance(hashes.len);
+        }
+
+        const root_block = last_block orelse return error.NoBlockhashesInSnapshot;
+
+        break :bhq root_block;
+    };
+    logger.info().logf("loaded {} blockhashes from accountsdb snapshot data", .{num_hashes});
+
+    const root_slot = try snapshot_metadata.getSlotBlocking(runner);
+    root_block.ptr(block_pool).slot = .init(root_slot);
+    logger.info().logf("got the root slot from the snapshot: {}", .{root_slot});
+
+    // create a synthetic fec-set node that doesn't have all information about
+    // the fec set, but it is enough to get started processing the first block
+    // after the root
+    const root_node = try insertFecSet(logger, &.{
+        .merkle_root = snapshot_metadata.block_id,
+        .chained_merkle_root = .ZEROES, // cannot be determined from the snapshot
+        .id = .{
+            .slot = root_slot,
+            .fec_set_idx = 0, // cannot be determined from the snapshot
+        },
+        .data_complete = true,
+        .slot_complete = true,
+        .payload_len = 0, // cannot be determined from the snapshot
+        .payload_buf = undefined,
+    }, forest, block_pool) orelse unreachable;
+
+    root_node.block_ref = .init(root_block);
+
+    // Prevent the synthetic node from being interpreted as an orphan child of some future node
+    // whose `merkle_root` happens to equal `Hash.ZEROES`.
+    std.debug.assert(forest.orphan_map.swapRemoveAdapted(
+        &root_node.chained_merkle_root,
+        MerkleForest.OrphanContext{ .map = &forest.orphan_map },
+    ));
+
+    // Mark the root block as fully executed so `maybeContinueBlockExec` will immediately
+    // dispatch transactions for its first child.
+    exec_states[root_block.index()] = .{
+        .n_transactions_requested = 0,
+        .n_transactions_completed = 0,
+        .all_transactions_requested = true,
+    };
+    std.debug.assert(exec_states[root_block.index()].?.finished());
+
+    logger.info().logf(
+        "finished bootstrapping replay at slot {} (block_id={f})",
+        .{ root_slot, snapshot_metadata.block_id },
+    );
+}
+
+/// Holds the accounts mutated for each tracked Block.
+const Unrooted = extern struct {
+    seed: u64,
+    maps: [max_blocks]Map, // we could initialise with `= @splat(.{})`, but lld disagrees
+
+    // [firedancer] https://github.com/firedancer-io/firedancer/blob/c2050b9c7fb8787b1eaaf9e50cac421a7281f70f/src/flamenco/runtime/fd_cost_tracker.h#L78
+    // TODO: calculate this constant ourselves / keep it up to date
+    const max_mutations_per_block = 367_535;
+
+    const max_blocks = lib.replay.BlockPool.capacity;
+
+    const Map = extern struct {
+        len: u32 = 0, // only used to assert `max_mutations_per_block` holds true
+        data: [N]AccountRef = @splat(.invalid), // ~1.4MiB
+
+        // NOTE: might be a good idea to oversize this for performance reasons
+        const N = max_mutations_per_block;
+
+        fn EntryPtr(comptime SelfPtr: type) type {
+            return switch (SelfPtr) {
+                *Map => *AccountRef,
+                *const Map => *const AccountRef,
+                else => unreachable,
+            };
+        }
+
+        fn entry(
+            self: anytype,
+            seed: u64,
+            account_pool: *lib.accounts_db.AccountPool,
+            pubkey: *const Pubkey,
+        ) EntryPtr(@TypeOf(self)) {
+            var i: usize = @intCast(pubkey.hash(seed) % N);
+
+            while (true) : (i = (i + 1) % N) {
+                if (self.data[i] == .invalid)
+                    return &self.data[i];
+                if (pubkey.equals(&account_pool.getAccount(self.data[i]).pubkey))
+                    return &self.data[i];
+            }
+        }
+
+        fn get(
+            self: *const Map,
+            seed: u64,
+            account_pool: *lib.accounts_db.AccountPool,
+            pubkey: *const Pubkey,
+        ) AccountRef {
+            return self.entry(seed, account_pool, pubkey).*;
+        }
+
+        // The map takes a ref to the new account.
+        // Returns the replaced entry, which the caller is expected to unref/free.
+        // Entries are replaced when an account of the inserted pubkey already exists in the map.
+        // lint: allow_unused
+        fn put(
+            self: *Map,
+            seed: u64,
+            account_pool: *lib.accounts_db.AccountPool,
+            new_account_ref: AccountRef,
+        ) AccountRef {
+            const zone = tracy.Zone.init(@src(), .{ .name = "Map.put" });
+            defer zone.deinit();
+
+            std.debug.assert(new_account_ref != .invalid);
+            const new_account = account_pool.getAccount(new_account_ref);
+            const pubkey: *const Pubkey = &new_account.pubkey;
+
+            const found_entry: *AccountRef = self.entry(seed, account_pool, pubkey);
+
+            // don't "replace" an accountref with itself!
+            std.debug.assert(found_entry.* != new_account_ref);
+
+            const old_account_ref = found_entry.*;
+            if (old_account_ref != .invalid) {
+                zone.text("replace");
+
+                std.debug.assert(pubkey.equals(&account_pool.getAccount(old_account_ref).pubkey));
+            } else {
+                zone.text("insert");
+
+                self.len += 1;
+                if (self.len > max_mutations_per_block) @panic("max_mutations_per_block exceeded");
+            }
+
+            found_entry.* = new_account_ref;
+            new_account.ref();
+
+            return old_account_ref;
+        }
+    };
+
+    fn init(self: *Unrooted) void {
+        // TODO: create randomly + secretly at startup, to avoid performance degradation from
+        //       attackers using pre-made keys to cause bad clustering
+        self.seed = 123;
+        for (&self.maps) |*map| map.* = .{};
+    }
+
+    /// Get an account purely from the unrooted store.
+    /// For internal/testing usage only.
+    /// NOTE: caller is responsible for freeing the account
+    fn fetch(
+        self: *Unrooted,
+        key: *const lib.solana.Pubkey,
+
+        // current block + pool for ancestor lookups
+        block: lib.replay.BlockRef,
+        block_pool: *lib.replay.BlockPool,
+
+        // account storage
+        account_pool: *lib.accounts_db.AccountPool,
+    ) AccountRef {
+        const zone = tracy.Zone.init(@src(), .{ .name = "Unrooted.fetch" });
+        defer zone.deinit();
+
+        var current: ?*replay.Node = block.ptr(block_pool);
+        while (current) |ancestor_block| {
+            const current_map: *const Map =
+                &self.maps[block_pool.ptrToIndex(ancestor_block).index()];
+
+            const account_ref = current_map.get(self.seed, account_pool, key);
+            if (account_ref != .invalid) {
+                const account = account_pool.getAccount(account_ref);
+                account.ref();
+
+                zone.text("found");
+
+                return account_ref;
+            }
+            current = if (ancestor_block.parent.opt()) |p| p.ptr(block_pool) else null;
+        }
+
+        return .invalid;
+    }
+};
+
+// TODO:
+// 1) *never* block the replay thread (remove this function)
+// 2) introduce a basic transaction scheduler
+// 3) add a prefetcher
+/// Gets an account, trying the unrooted store before asking rooted.
+/// NOTE: caller is responsible for freeing the account
+fn fetchBlocking(
+    unrooted: *Unrooted,
+    key: *const lib.solana.Pubkey,
+
+    // current block + pool for ancestor lookups
+    block: lib.replay.BlockRef,
+    block_pool: *lib.replay.BlockPool,
+
+    // account storage
+    account_pool: *lib.accounts_db.AccountPool,
+
+    // ring buffer pair for rooted lookups
+    rooted_lookups: *lib.accounts_db.AccountLookups,
+) AccountRef {
+    const zone = tracy.Zone.init(@src(), .{ .name = "fetchBlocking" });
+    defer zone.deinit();
+
+    const unrooted_account = unrooted.fetch(key, block, block_pool, account_pool);
+    if (unrooted_account != .invalid) {
+        zone.text("unrooted");
+        return unrooted_account;
+    }
+
+    var requester = rooted_lookups.in.get(.writer);
+    var response_queue = rooted_lookups.out.get(.reader);
+
+    const request_buf = requester.next() orelse @panic("out of space");
+    request_buf.* = key.*;
+    requester.markUsed();
+
+    // blocking the thread - do not do this
+    while (response_queue.peek() == null) : (std.atomic.spinLoopHint()) {}
+
+    const response = response_queue.next().?;
+    defer response_queue.markUsed();
+
+    std.debug.assert(response.pubkey.equals(key));
+
+    if (response.account_index == .invalid) {
+        zone.text("account not found");
+        return response.account_index;
+    }
+
+    const account = account_pool.getAccount(response.account_index);
+
+    std.debug.assert(account.ref_count.load(.monotonic) > 0);
+    std.debug.assert(account.pubkey.equals(key));
+
+    zone.text("rooted");
+    return response.account_index;
 }
 
 /// Finds a node's parent, and attaches the new node to it.
@@ -325,14 +613,14 @@ fn attachParent(
             // insert at tail of the existing node's siblings
             var orphan_sibling_tail: ?*MerkleNode = orphan_map_result.value_ptr.*;
             while (orphan_sibling_tail) |tail_node| {
-                const next_sibling = tail_node.sibling.ptr(&forest.pool) orelse break;
+                const next_sibling = (tail_node.sibling.opt() orelse break).ptr(&forest.pool);
 
                 if (next_sibling.id.eql(&tail_node.id)) @panic("equivocation");
 
                 orphan_sibling_tail = next_sibling;
             }
             std.debug.assert(orphan_sibling_tail.?.sibling == .null);
-            orphan_sibling_tail.?.sibling = forest.pool.ptrToIndex(node);
+            orphan_sibling_tail.?.sibling = .init(forest.pool.ptrToIndex(node));
         } else {
             orphan_map_result.value_ptr.* = node; // TODO: double check this
         }
@@ -350,26 +638,26 @@ fn attachParent(
     // insert node into tree of parent
     {
         std.debug.assert(node.parent == .null);
-        node.parent = forest.pool.ptrToIndex(parent);
+        node.parent = .init(forest.pool.ptrToIndex(parent));
 
         if (parent.child == .null) {
             @branchHint(.likely); // no equivocation or forking
 
-            parent.child = forest.pool.ptrToIndex(node);
+            parent.child = .init(forest.pool.ptrToIndex(node));
             return parent;
         }
 
         std.debug.assert(parent.child != .null);
-        var last_child_of_parent: *MerkleNode = parent.child.ptr(&forest.pool).?;
+        var last_child_of_parent: *MerkleNode = parent.child.opt().?.ptr(&forest.pool);
         while (true) {
             // NOTE: We should get rid of this panic once we're confident that we're handling it
             //       correctly downstream.
             if (last_child_of_parent.id.eql(&node.id)) @panic("equivocation");
-            const next = last_child_of_parent.sibling.ptr(&forest.pool) orelse break;
+            const next = (last_child_of_parent.sibling.opt() orelse break).ptr(&forest.pool);
             last_child_of_parent = next;
         }
 
-        last_child_of_parent.sibling = forest.pool.ptrToIndex(node);
+        last_child_of_parent.sibling = .init(forest.pool.ptrToIndex(node));
         return parent;
     }
 }
@@ -393,11 +681,11 @@ fn attachChildren(node: *MerkleNode, forest: *MerkleForest) void {
         var maybe_child_node: ?*MerkleNode = children_head;
         while (maybe_child_node) |child_node| {
             std.debug.assert(child_node.parent == .null);
-            maybe_child_node = child_node.sibling.ptr(&forest.pool);
+            maybe_child_node = if (child_node.sibling.opt()) |s| s.ptr(&forest.pool) else null;
 
             if (node.id.mayFollowWith(&child_node.id)) {
                 @branchHint(.likely);
-                child_node.parent = forest.pool.ptrToIndex(node);
+                child_node.parent = .init(forest.pool.ptrToIndex(node));
 
                 continue;
             }
@@ -407,13 +695,13 @@ fn attachChildren(node: *MerkleNode, forest: *MerkleForest) void {
             // This node is illegal, let's remove it now.
 
             // Remove this node from the linked list of siblings
-            const next_node: ?*MerkleNode = child_node.sibling.ptr(&forest.pool);
+            const next_node = if (child_node.sibling.opt()) |s| s.ptr(&forest.pool) else null;
             const prev_node: ?*MerkleNode = node: {
                 if (child_node == children_head) break :node null;
 
                 var prev_node: ?*MerkleNode = children_head;
                 break :node while (prev_node) |n| {
-                    const next = n.sibling.ptr(&forest.pool);
+                    const next = if (n.sibling.opt()) |s| s.ptr(&forest.pool) else null;
                     if (next == child_node) break n;
                     prev_node = next.?;
                 } else unreachable; // either we're the head node, or we have a prev
@@ -421,7 +709,7 @@ fn attachChildren(node: *MerkleNode, forest: *MerkleForest) void {
 
             if (prev_node) |prev| {
                 prev.sibling = if (next_node) |next|
-                    forest.pool.ptrToIndex(next)
+                    .init(forest.pool.ptrToIndex(next))
                 else
                     .null;
             } else {
@@ -439,7 +727,7 @@ fn attachChildren(node: *MerkleNode, forest: *MerkleForest) void {
         }
     }
 
-    if (children_head) |c_h| node.child = forest.pool.ptrToIndex(c_h);
+    if (children_head) |c_h| node.child = .init(forest.pool.ptrToIndex(c_h));
 
     // NOTE: this 2nd map lookup could be removed (we looked up this entry earlier)
     const removed = forest.orphan_map.swapRemoveAdapted(&node.merkle_root, orphan_map_ctx);
@@ -458,32 +746,32 @@ fn setChildBlockRef(
     block_pool: *lib.replay.BlockPool,
 ) !void {
     std.debug.assert(child.block_ref == .null);
-    if (parent.block_ref == .null) return; // a)
+    const parent_block_ref = parent.block_ref.opt() orelse return; // a)
 
     // optionally allocate a new BlockRef
     child.block_ref = if (parent.id.slot != child.id.slot) ref: {
         // new slot, let's create a new BlockRef
         const new_block = try block_pool.create();
         new_block.* = .{
-            .parent = parent.block_ref,
-            .slot = child.id.slot,
+            .parent = .init(parent_block_ref),
+            .slot = .init(child.id.slot),
         };
 
-        break :ref block_pool.ptrToIndex(new_block); // b)
+        break :ref .init(block_pool.ptrToIndex(new_block)); // b)
     } else ref: {
         // treat the first child as the canonical path
-        if (forest_pool.ptrToIndex(child) == parent.child) {
-            break :ref parent.block_ref; // d)
-        }
+        if (parent.child.opt()) |child_id| if (child_id == forest_pool.ptrToIndex(child)) {
+            break :ref .init(parent_block_ref); // d)
+        };
 
         // forking/equivocation
         const new_block = try block_pool.create();
         new_block.* = .{
-            .parent = parent.block_ref,
-            .slot = child.id.slot,
+            .parent = .init(parent_block_ref),
+            .slot = .init(child.id.slot),
         };
 
-        break :ref block_pool.ptrToIndex(new_block); // c)
+        break :ref .init(block_pool.ptrToIndex(new_block)); // c)
 
     };
 }
@@ -506,10 +794,10 @@ fn setChildTreeBlockRefs(
     // recursively apply BlockRefs to reachable merkle nodes
     // NOTE: it is possible to do this without recursion *or* a stack, as a non-null block_ref can
     //       be used to mark a node as visited.
-    var maybe_child: ?*MerkleNode = child.child.ptr(forest_pool);
+    var maybe_child = if (child.child.opt()) |id| id.ptr(forest_pool) else null;
     while (maybe_child) |child_node| {
         try setChildTreeBlockRefs(child, child_node, forest_pool, block_pool);
-        maybe_child = child_node.sibling.ptr(forest_pool);
+        maybe_child = if (child_node.sibling.opt()) |id| id.ptr(forest_pool) else null;
     }
 }
 
@@ -586,26 +874,30 @@ fn maybeContinueBlockExec(
     // for sending exec requests
     // NOTE: we should instead be sending to the transaction scheduler (when it is implemented)
     exec_request_sender: *replay.ExecReqResponse.RequestRing.Iterator(.writer),
+
+    // for fetching accounts
+    unrooted: *Unrooted,
+    account_pool: *lib.accounts_db.AccountPool,
+    rooted_lookups: *lib.accounts_db.AccountLookups,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "maybeContinueBlockExec" });
     defer zone.deinit();
 
     {
-        std.debug.assert(block_ref != .null);
-        const block: *const replay.Node = block_ref.ptr(block_pool).?;
+        const block: *const replay.Node = block_ref.ptr(block_pool);
 
         // parentless blocks shouldn't ever reach this stage
-        std.debug.assert(block.parent != .null);
+        const block_parent = block.parent.opt().?;
 
         // parent state not initialised => parent not finished
         // parent not finished => can't start exec for child
         const parent_exec_state: *BlockExecState =
-            &(block_exec_states[block.parent.index().?] orelse return);
+            &(block_exec_states[block_parent.index()] orelse return);
         if (!parent_exec_state.all_transactions_requested) return;
     }
 
     const exec_state: *BlockExecState = blk: {
-        const current: *?BlockExecState = &block_exec_states[block_ref.index().?];
+        const current: *?BlockExecState = &block_exec_states[block_ref.index()];
         if (current.* == null) {
             if (node.id.fec_set_idx != 0) {
                 // This branch happens when the idx=0 node of a block wasn't allocated a BlockRef
@@ -615,10 +907,9 @@ fn maybeContinueBlockExec(
                 // Find the fec_set_idx=0 node by walking up the parent chain
                 var root = node;
                 while (root.id.fec_set_idx != 0) {
-                    root = root.parent.ptr(forest_pool) orelse
-                        // The current node has a BlockRef, therefore it must be possible to reach
-                        // an ancestor with idx=0
-                        unreachable;
+                    // The current node has a BlockRef, therefore it must be possible to reach
+                    // an ancestor with idx=0
+                    root = root.parent.opt().?.ptr(forest_pool);
                 }
 
                 // return after calling, as this call semantically "replaces" the current call
@@ -635,6 +926,10 @@ fn maybeContinueBlockExec(
                     block_exec_states,
                     block_deserial_states,
                     exec_request_sender,
+
+                    unrooted,
+                    account_pool,
+                    rooted_lookups,
                 );
             }
             current.* = .default;
@@ -643,7 +938,7 @@ fn maybeContinueBlockExec(
     };
 
     const block_deserial_state: *BlockDeserialState = blk: {
-        const current: *?BlockDeserialState = &block_deserial_states[block_ref.index().?];
+        const current: *?BlockDeserialState = &block_deserial_states[block_ref.index()];
         if (current.* == null) {
             std.debug.assert(node.id.fec_set_idx == 0);
             current.* = .init(node);
@@ -671,13 +966,107 @@ fn maybeContinueBlockExec(
         const tx_index: u32 = exec_state.n_transactions_requested;
         exec_state.n_transactions_requested += 1;
 
-        // send task to exec
+        // prepare transaction's accounts and send the task to exec
         // NOTE: in the future this should be "sent" to the transaction scheduler, not to exec
         // directly
         {
+            // TODO: replace this with something custom, this is slow - we only need to extract the
+            // accounts (including ALT accounts) here.
+            var deserialised_buf: [16 * 1024]u8 = undefined;
+            var deserial_fba: std.heap.FixedBufferAllocator = .init(&deserialised_buf);
+            var reader = std.io.Reader.fixed(tx);
+            const transaction: lib.solana.transaction.VersionedTransaction =
+                try lib.solana.bincode.read(
+                    &deserial_fba,
+                    &reader,
+                    lib.solana.transaction.VersionedTransaction,
+                );
+
+            var held_accounts_buf: [128]AccountRef = undefined;
+            var held_accounts: u8 = 0;
+
+            const account_keys: []const Pubkey = switch (transaction.message) {
+                inline else => |txn| txn.account_keys.items,
+            };
+
+            for (account_keys) |*k| {
+                held_accounts_buf[held_accounts] = fetchBlocking(
+                    unrooted,
+                    k,
+                    block_ref,
+                    block_pool,
+                    account_pool,
+                    rooted_lookups,
+                );
+                held_accounts += 1;
+            }
+
+            const address_lookups: []const lib.solana.transaction.AddressLookup =
+                switch (transaction.message) {
+                    .legacy => &.{},
+                    .v0 => |v0| v0.address_table_lookups.items,
+                };
+
+            const Pass = enum { write, read };
+
+            // looked up accounts are writable first, then readable
+            for (@as([]const Pass, &.{ .write, .read })) |pass| {
+                for (address_lookups) |lookup| {
+                    const account_ref = fetchBlocking(
+                        unrooted,
+                        &lookup.account_key,
+                        block_ref,
+                        block_pool,
+                        account_pool,
+                        rooted_lookups,
+                    );
+
+                    if (account_ref == .invalid)
+                        @panic("missing address lookup table / TODO: handle bad blocks");
+
+                    const ALT_account: *lib.accounts_db.AccountPool.Account =
+                        account_pool.getAccount(account_ref);
+
+                    defer if (ALT_account.unref()) account_pool.free(account_ref);
+
+                    // NOTE: this is *not* a conformant implementation of an Address Lookup Table
+                    // lookup; we need to respect the fields in the ALT account's header.
+                    // Here we are just skipping over the header (56 bytes), which means we could be
+                    // fetching accounts which are not yet active in the ALT.
+                    const ALT_data = ALT_account.getData();
+                    const header_len = 56;
+                    if (ALT_data.len < header_len or (ALT_data.len - header_len) % 32 != 0)
+                        @panic("invalid ALT / TODO: handle bad blocks");
+                    const ALT_pubkeys: []const Pubkey = @ptrCast(ALT_data[header_len..]);
+
+                    const indexes = switch (pass) {
+                        .write => lookup.writable_indexes.items,
+                        .read => lookup.readonly_indexes.items,
+                    };
+
+                    for (indexes) |account_idx| {
+                        if (account_idx >= ALT_pubkeys.len)
+                            @panic("bad ALT lookup / TODO: handle bad blocks");
+                        const account_pk: *const Pubkey = &ALT_pubkeys[account_idx];
+
+                        if (held_accounts >= held_accounts_buf.len)
+                            @panic("too many accounts for transaction / TODO: handle bad blocks");
+
+                        held_accounts_buf[held_accounts] = fetchBlocking(
+                            unrooted,
+                            account_pk,
+                            block_ref,
+                            block_pool,
+                            account_pool,
+                            rooted_lookups,
+                        );
+                        held_accounts += 1;
+                    }
+                }
+            }
+
             const request: *lib.replay.ExecRequest = exec_request_sender.next() orelse
                 @panic("no space");
-            defer exec_request_sender.markUsed();
             request.* = .{
                 .task_id = tx_index,
                 .request_kind = .txn_exec,
@@ -685,9 +1074,17 @@ fn maybeContinueBlockExec(
                     .txn_exec = .{
                         .block_idx = block_ref,
                         .tx_idx = tx_ref,
+                        .n_account_refs = held_accounts,
+                        .account_ref_buf = undefined,
                     },
                 },
             };
+            @memcpy(
+                request.data.txn_exec.account_ref_buf[0..held_accounts],
+                held_accounts_buf[0..held_accounts],
+            );
+
+            exec_request_sender.markUsed();
         }
     }
 
@@ -712,15 +1109,15 @@ fn maybeContinueBlockExec(
     exec_state.all_transactions_requested = true;
 
     logger.info().logf(
-        "requested all transactions for slot {} ({})",
-        .{ block_ref.ptr(block_pool).?.slot, block_ref },
+        "requested all transactions for slot {f} ({})",
+        .{ block_ref.ptr(block_pool).slot, block_ref },
     );
 
     if (exec_state.finished()) {
         logger.info().logf(
-            "Slot {} ({}) (already) complete! ({}/{})",
+            "Slot {f} ({}) (already) complete! ({}/{})",
             .{
-                block_ref.ptr(block_pool).?.slot,
+                block_ref.ptr(block_pool).slot,
                 block_ref,
                 exec_state.n_transactions_requested,
                 exec_state.n_transactions_completed,
@@ -729,21 +1126,28 @@ fn maybeContinueBlockExec(
     }
 
     // try to exec children
-    var maybe_child = block_deserial_state.pos_node.child.ptr(forest_pool);
+    var maybe_child = if (block_deserial_state.pos_node.child.opt()) |id|
+        id.ptr(forest_pool)
+    else
+        null;
     while (maybe_child) |child| {
         try maybeContinueBlockExec(
             logger,
             child,
-            child.block_ref,
+            child.block_ref.opt().?,
             forest_pool,
             block_pool,
             transaction_pool,
             block_exec_states,
             block_deserial_states,
             exec_request_sender,
+
+            unrooted,
+            account_pool,
+            rooted_lookups,
         );
 
-        maybe_child = child.sibling.ptr(forest_pool);
+        maybe_child = if (child.sibling.opt()) |id| id.ptr(forest_pool) else null;
     }
 }
 
@@ -764,6 +1168,7 @@ const BlockDeserialState = struct {
     const Reader = struct {
         deserial_state: *BlockDeserialState,
         merkle_pool: *const MerkleForest.NodePool,
+        bytes_consumed: usize = 0,
 
         fn currentReadableSlice(self: *Reader) []const u8 {
             return self.deserial_state.pos_node.payload()[self.deserial_state.pos_offset..];
@@ -789,6 +1194,7 @@ const BlockDeserialState = struct {
                     @memcpy(out, current_readable_slice[0..n_bytes]);
                 }
                 self.deserial_state.pos_offset += n_bytes;
+                self.bytes_consumed += n_bytes;
                 return;
             }
 
@@ -810,6 +1216,7 @@ const BlockDeserialState = struct {
             }
 
             std.debug.assert(offset == n_bytes); // no overshooting
+            self.bytes_consumed += n_bytes;
         }
 
         fn copyValue(self: *Reader, T: type) !T {
@@ -818,76 +1225,10 @@ const BlockDeserialState = struct {
             return tmp;
         }
 
-        fn readShortu16(self: *Reader) !u16 {
-            var val: u32 = 0;
-            for (0..3) |nth_byte| {
-                const b = try self.copyValue(u8);
-                if (b == 0 and nth_byte != 0) return error.AliasEncoding;
-                val |= @as(u32, b & 0x7f) << @intCast(nth_byte * 7);
-                if (b & 0x80 == 0) {
-                    return std.math.cast(u16, val) orelse return error.Overflow;
-                }
-                if (nth_byte == 2) return error.ByteThreeContinues;
-            }
-            unreachable;
-        }
-
-        fn skipBytes(self: *Reader, n_bytes: usize) !void {
-            try self.advanceBytes(.no_copy, {}, n_bytes);
-        }
-
-        fn skipTransaction(self: *Reader) !void {
-            const n_signatures = try self.readShortu16();
-            try self.skipBytes(64 * n_signatures);
-
-            const is_legacy: bool = blk: {
-                const first_byte = try self.copyValue(u8);
-
-                if (first_byte & (1 << 7) == 0) {
-                    break :blk true; // num_required_signatures
-                } else {
-                    const version: u8 = first_byte & 0x7f;
-                    if (version != 0) return error.InvalidVersion;
-
-                    try self.skipBytes(1); // num_required_signatures
-                    break :blk false;
-                }
-            };
-
-            try self.skipBytes(2); // num_readonly_signed + num_readonly_unsigned
-
-            const n_account_keys = try self.readShortu16();
-            try self.skipBytes(32 * n_account_keys);
-
-            try self.skipBytes(32); // recent blockhash
-
-            // ShortVec(CompiledInstruction)
-            const n_instructions = try self.readShortu16();
-            for (0..n_instructions) |_| {
-                try self.skipBytes(1); // program_id_index
-
-                const n_accounts = try self.readShortu16();
-                try self.skipBytes(n_accounts);
-
-                const data_len = try self.readShortu16();
-                try self.skipBytes(data_len);
-            }
-
-            if (!is_legacy) {
-                const n_address_table_lookups = try self.readShortu16();
-                for (0..n_address_table_lookups) |_| {
-                    try self.skipBytes(32); // table pubkey
-                    const n_writable_indexes = try self.readShortu16();
-                    try self.skipBytes(n_writable_indexes);
-                    const n_readonly_indices = try self.readShortu16();
-                    try self.skipBytes(n_readonly_indices);
-                }
-            }
-        }
-
         fn nextNode(self: *Reader) error{EndOfStream}!void {
-            const child = self.deserial_state.pos_node.child.constPtr(self.merkle_pool) orelse
+            const child_id = self.deserial_state.pos_node.child.opt() orelse
                 return error.EndOfStream;
+            const child = child_id.constPtr(self.merkle_pool);
 
             std.debug.assert(child.block_ref != .null);
             std.debug.assert(child.parent != .null);
@@ -897,6 +1238,26 @@ const BlockDeserialState = struct {
 
             self.deserial_state.pos_node = child;
             self.deserial_state.pos_offset = 0;
+        }
+
+        /// `parseTransaction` reader contract.
+        pub fn readByte(self: *Reader) error{EndOfStream}!u8 {
+            return self.copyValue(u8);
+        }
+
+        /// `parseTransaction` reader contract.
+        pub fn readSlice(self: *Reader, out: []u8) error{EndOfStream}!void {
+            try self.advanceBytes(.copy, out, {});
+        }
+
+        /// `parseTransaction` reader contract.
+        pub fn bytesConsumed(self: *const Reader) usize {
+            return self.bytes_consumed;
+        }
+
+        /// `parseTransaction` reader contract.
+        pub fn skipBytes(self: *Reader, n_bytes: usize) error{EndOfStream}!void {
+            try self.advanceBytes(.no_copy, {}, n_bytes);
         }
     };
 
@@ -919,24 +1280,6 @@ const BlockDeserialState = struct {
 
     fn getReader(self: *BlockDeserialState, merkle_pool: *const MerkleForest.NodePool) Reader {
         return .{ .deserial_state = self, .merkle_pool = merkle_pool };
-    }
-
-    fn diff(
-        before: BlockDeserialState,
-        after: BlockDeserialState,
-        merkle_pool: *const MerkleForest.NodePool,
-    ) usize {
-        if (before.pos_node == after.pos_node) return after.pos_offset - before.pos_offset;
-
-        const after_parent: *const MerkleNode = after.pos_node.parent.constPtr(merkle_pool) orelse
-            unreachable;
-
-        std.debug.assert(after_parent == before.pos_node);
-
-        const before_bytes_read = before.pos_node.payload_len - before.pos_offset;
-        const after_bytes_read = after.pos_offset;
-
-        return before_bytes_read + after_bytes_read;
     }
 
     fn nextTransaction(
@@ -1026,16 +1369,10 @@ const BlockDeserialState = struct {
 
                 var pre_state = self.*;
 
-                try reader.skipTransaction();
+                const tx_bytes_read = try lib.solana.transaction
+                    .VersionedTransaction.parse(&reader);
 
                 self.n_transactions_left.? -= 1;
-
-                const post_state = self.*;
-
-                const tx_bytes_read = diff(pre_state, post_state, merkle_pool);
-
-                // TODO: handle removing invalid blocks
-                if (tx_bytes_read > tx_buf.len) return error.TransactionTooLarge;
 
                 var tx_reader = pre_state.getReader(merkle_pool);
                 try tx_reader.advanceBytes(.copy, tx_buf[0..tx_bytes_read], {});
@@ -1072,9 +1409,9 @@ const BlockExecState = struct {
 /// NOTE: When used inside the Pool, these may be items in a free list. However such nodes should
 /// not be in either map or the tree.
 const MerkleNode = extern struct {
-    parent: MerkleForest.NodePool.ItemId = .null,
-    child: MerkleForest.NodePool.ItemId = .null,
-    sibling: MerkleForest.NodePool.ItemId = .null,
+    parent: MerkleForest.NodePool.ItemId.Optional = .null,
+    child: MerkleForest.NodePool.ItemId.Optional = .null,
+    sibling: MerkleForest.NodePool.ItemId.Optional = .null,
 
     merkle_root: Hash,
     chained_merkle_root: Hash,
@@ -1084,7 +1421,7 @@ const MerkleNode = extern struct {
 
     // allocated upon insertion of 1st fec set, copied down through children
     // TODO: eviction
-    block_ref: lib.replay.BlockRef,
+    block_ref: lib.replay.BlockRef.Optional,
 
     payload_len: u16,
 
@@ -1298,7 +1635,9 @@ test "MerkleForest tree put" {
     // give the ancestor block a BlockRef, so that it may propagate
     // NOTE: it is expected that the root-most fec set to be inserted first this way as a special
     //       case. In a real environment this would be the last fec set in the rooted slot.
-    a_inserted.block_ref = .fromInt(8053);
+    a_inserted.block_ref = .init(replay.BlockRef.fromInt(8053));
+
+    const expected_block_ref: replay.BlockRef.Optional = .init(replay.BlockRef.fromInt(8053));
 
     const d_inserted = (try insertFecSet(logger, &d, &tree, pool)).?;
     try std.testing.expect(d_inserted.parent == .null);
@@ -1308,20 +1647,20 @@ test "MerkleForest tree put" {
     const b_inserted = (try insertFecSet(logger, &b, &tree, pool)).?;
     try std.testing.expect(b_inserted.parent != .null);
     try std.testing.expect(b_inserted.child == .null);
-    try std.testing.expect(b_inserted.block_ref == replay.BlockRef.fromInt(8053));
+    try std.testing.expect(b_inserted.block_ref == expected_block_ref);
 
     const c_inserted = (try insertFecSet(logger, &c, &tree, pool)).?;
     try std.testing.expect(c_inserted.parent != .null);
     try std.testing.expect(c_inserted.child != .null);
-    try std.testing.expect(c_inserted.block_ref == replay.BlockRef.fromInt(8053));
-    try std.testing.expect(d_inserted.block_ref == replay.BlockRef.fromInt(8053));
+    try std.testing.expect(c_inserted.block_ref == expected_block_ref);
+    try std.testing.expect(d_inserted.block_ref == expected_block_ref);
 
     const e_inserted = (try insertFecSet(logger, &e, &tree, pool)).?;
     try std.testing.expect(e_inserted.parent != .null);
     try std.testing.expect(e_inserted.child == .null);
     // new slot => new BlockRef
     try std.testing.expect(e_inserted.block_ref != .null);
-    try std.testing.expect(e_inserted.block_ref != replay.BlockRef.fromInt(8053));
+    try std.testing.expect(e_inserted.block_ref != expected_block_ref);
 
     // We cannot insert duplicates
     try std.testing.expectEqual(null, try insertFecSet(logger, &a, &tree, pool));
@@ -1329,4 +1668,89 @@ test "MerkleForest tree put" {
     try std.testing.expectEqual(null, try insertFecSet(logger, &c, &tree, pool));
     try std.testing.expectEqual(null, try insertFecSet(logger, &d, &tree, pool));
     try std.testing.expectEqual(null, try insertFecSet(logger, &e, &tree, pool));
+}
+
+test "bootstrap creates root block and chains blockhashes" {
+    const allocator = std.testing.allocator;
+
+    var activity: lib.runner.Activity = .{};
+    var service_view = activity.serviceView();
+    const runner: lib.runner.Connection = .{ .activity = &service_view };
+
+    var metadata: lib.accounts_db.RuntimeMetadata = undefined;
+    metadata.init();
+    metadata.block_id = .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");
+
+    // Prefill the blockhash ring with N > 1 hashes as a single writer batch,
+    // then close the writer end so bootstrap's drain loop terminates.
+    const test_hashes = [_]Hash{
+        .parse("BMHr4knWhDp8JhqCYhA2K5DUYQsYUVXdy2zWahzt5jLd"),
+        .parse("2GyMeUytf6fcsfNP2QQ6F5e5qwAUoMtKUbnH6QU6bTNm"),
+        .parse("4UahX8LzYC7xnubvP9QzRHmPPYovtcNYo7rBXKpp3ADM"),
+        .parse("Hh8DjJdpQRGeZ6bUxYyt1PBktnFtNAwZoQuwZqGWLPfB"),
+    };
+    {
+        var writer = metadata.blockhash_queue.hashes.getView(.writer);
+        const buf = writer.getBuffer().?;
+        try std.testing.expect(buf.len >= test_hashes.len);
+        @memcpy(buf[0..test_hashes.len], &test_hashes);
+        writer.advance(test_hashes.len);
+        writer.close();
+    }
+
+    const root_slot: lib.solana.Slot = 100;
+    metadata.populateSlot(root_slot);
+
+    var pool_buf: [lib.replay.BlockPool.size()]u8 align(@alignOf(lib.replay.BlockPool)) = undefined;
+    const pool: *lib.replay.BlockPool = @ptrCast(&pool_buf);
+    pool.init();
+
+    var forest: MerkleForest = try .init(allocator);
+    defer forest.deinit(allocator);
+
+    const exec_states = try allocator.create(BlockExecStates);
+    defer allocator.destroy(exec_states);
+    @memset(exec_states, null);
+
+    const blockhash_states = try allocator.create(BlockHashStates);
+    defer allocator.destroy(blockhash_states);
+    @memset(blockhash_states, null);
+
+    const logger = tel.Logger("main").noop;
+
+    try bootstrap(logger, runner, &metadata, &forest, pool, exec_states, blockhash_states);
+
+    // find root in pool
+    var root_opt: ?lib.replay.BlockRef = null;
+    for (pool.buf(), 0..) |block, i| {
+        if (block.item.slot.opt()) |slot| if (slot == root_slot) {
+            try std.testing.expectEqual(null, root_opt);
+            root_opt = lib.replay.BlockRef.fromInt(@intCast(i));
+        };
+    }
+    const root = root_opt orelse return error.NoRoot;
+
+    try std.testing.expectEqual(root_slot, root.ptr(pool).slot.opt().?);
+    try std.testing.expect(exec_states[root.index()].?.finished());
+
+    // walk backwards from root, checking each block's hash, slot, and that the
+    // parent and child link properly.
+    var current: ?lib.replay.BlockRef = root;
+    var expected_child: ?lib.replay.BlockRef = null;
+    for (0..test_hashes.len) |i| {
+        const block_ref = current orelse return error.ParentNotSpecified;
+        const block = block_ref.ptr(pool);
+        try std.testing.expectEqual(
+            test_hashes[test_hashes.len - 1 - i],
+            blockhash_states[block_ref.index()].?,
+        );
+        try std.testing.expectEqual(
+            if (i == 0) root_slot else null,
+            block.slot.opt(),
+        );
+        try std.testing.expectEqual(expected_child, block.child.opt());
+        expected_child = block_ref;
+        current = block.parent.opt();
+    }
+    try std.testing.expectEqual(null, current);
 }

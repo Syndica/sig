@@ -1315,10 +1315,6 @@ fn isV3InstructionBlacklisted(
             .enable_bpf_loader_set_authority_checked_ix,
             slot,
         ),
-        .extend_program_checked => !feature_set.active(
-            .enable_extend_program_checked,
-            slot,
-        ),
         .close => false,
         else => true,
     };
@@ -2316,11 +2312,14 @@ test "updateCalleeAccount: data readonly" {
         );
 
         // growing resize
+        // Agave v4.2's can_data_be_resized no longer returns AccountDataSizeChanged;
+        // the writability/ownership check delegates to can_data_be_changed, which
+        // returns ExternalAccountDataModified for a foreign-owned account.
         var resize_data = "foobarbaz".*;
         (try caller_account.ref_to_len_in_vm.get(.mutable)).* = resize_data.len;
         caller_account.serialized_data = &resize_data;
         try std.testing.expectError(
-            InstructionError.AccountDataSizeChanged,
+            InstructionError.ExternalAccountDataModified,
             updateCalleeAccount(
                 allocator,
                 &ctx.ic,
@@ -2338,7 +2337,7 @@ test "updateCalleeAccount: data readonly" {
         (try caller_account.ref_to_len_in_vm.get(.mutable)).* = truncate_data.len;
         caller_account.serialized_data = &truncate_data;
         try std.testing.expectError(
-            InstructionError.AccountDataSizeChanged,
+            InstructionError.ExternalAccountDataModified,
             updateCalleeAccount(
                 allocator,
                 &ctx.ic,
@@ -2820,6 +2819,8 @@ test isV3InstructionBlacklisted {
     try std.testing.expect(!isV3InstructionBlacklisted(&.{7}, &all_enabled, 0));
     try std.testing.expect(!isV3InstructionBlacklisted(&.{3}, &all_disabled, 0));
     try std.testing.expect(isV3InstructionBlacklisted(&.{8}, &all_disabled, 0));
+    // Byte 9 (former extend_program_checked) is always blacklisted since the
+    // variant was removed — intToEnum fails and falls into catch return true.
     try std.testing.expect(isV3InstructionBlacklisted(&.{9}, &all_disabled, 0));
-    try std.testing.expect(!isV3InstructionBlacklisted(&.{9}, &all_enabled, 0));
+    try std.testing.expect(isV3InstructionBlacklisted(&.{9}, &all_enabled, 0));
 }
