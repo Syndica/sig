@@ -387,6 +387,8 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
             break :start_key start_key_buf[0..];
         } else null;
 
+        logger.info().logf("starting iteration: start_slot={?d} end_slot={?d}", .{ config.start_slot, config.end_slot });
+
         var slot_iter = blockstore.db.iterator(
             try blockstore.columnFamily(agave_cf_meta),
             .forward,
@@ -397,17 +399,31 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
         var err_data: ?rocks.Data = null;
         defer if (err_data) |err| err.deinit();
 
+        // Log the first entry to check if iterator produces anything
+        var iter_entries: u64 = 0;
+
         while (try slot_iter.next(&err_data)) |entry| {
             try runner.activity.checkCanceled();
+            iter_entries += 1;
 
             const slot = parseSlotKey(entry[0].data) catch |err| {
-                logger.err().logf("invalid meta key length: {d}", .{entry[0].data.len});
+                logger.err().logf("invalid meta key length: {d} (entry #{d})", .{ entry[0].data.len, iter_entries });
                 return err;
             };
-            if (config.pastEndSlot(slot)) break;
+
+            // Log first few entries regardless of selection to debug range issues
+            if (iter_entries <= 5) {
+                logger.info().logf("iter entry #{d}: slot={d} selected={}", .{ iter_entries, slot, config.slotSelected(slot) });
+            }
+
+            if (config.pastEndSlot(slot)) {
+                logger.info().logf("past end slot at {d}, stopping", .{slot});
+                break;
+            }
             if (!config.slotSelected(slot)) continue;
 
             stats.recordSlot();
+            logger.info().logf("streaming slot {d} (#{d})", .{ slot, stats.slots });
 
             // Stream data shreds for this slot
             try streamSlotShreds(
@@ -435,6 +451,8 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
                 );
             }
         }
+
+        logger.info().logf("iteration done: raw_entries={d} selected_slots={d}", .{ iter_entries, stats.slots });
     }
 
     // Final flush + close
