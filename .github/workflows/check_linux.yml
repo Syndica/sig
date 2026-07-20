@@ -249,6 +249,24 @@ jobs:
           cd src/rpc/webzockets
           zig build test --summary all
 
+      - uses: dtolnay/rust-toolchain@1.96.1 # keep version in sync with the cache key
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache snapshot-generator cargo artifacts
+        uses: actions/cache@v4
+        with:
+          key: snapshot-generator-${{ runner.os }}-rust-1.96.1-${{ hashFiles('scripts/snapshot-generator/Cargo.lock') }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            scripts/snapshot-generator/target
+
+      - name: Check snapshot-generator
+        run: |
+          cd scripts/snapshot-generator
+          ./check
+
   solana_conformance:
     runs-on: ubuntu-latest
     steps:
