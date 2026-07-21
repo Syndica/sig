@@ -427,7 +427,15 @@ const Tools = struct {
                 .root_module = module,
                 .use_llvm = config.use_llvm,
             }, .{});
-            for (&[_][]const u8{ "shred_streamer", "shred_receiver", "replay", "exec", "snapshot", "accounts_db", "telemetry" }) |service_name| {
+            for (&[_][]const u8{
+                "shred_streamer",
+                "shred_receiver",
+                "replay",
+                "exec",
+                "snapshot",
+                "accounts_db",
+                "telemetry",
+            }) |service_name| {
                 exe.compile.linkLibrary(for (sig.service_libs) |entry| {
                     if (std.mem.eql(u8, entry.name, service_name)) break entry.lib;
                 } else std.debug.panic("unknown service '{s}'", .{service_name}));
