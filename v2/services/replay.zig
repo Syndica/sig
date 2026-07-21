@@ -365,7 +365,10 @@ fn bootstrap(
             const block_ref = bhq_view.getBlockRefIfValidForAge(
                 &update.status_map_entry.hash,
                 max_age,
-            ).opt() orelse continue;
+            ).opt() orelse {
+                logger.err().logf("Snapshot blockhash queue inconsistent with status cache.", .{});
+                return error.InconsistentSnapshotData;
+            };
             try exec_registry.insert(block_ref, &update.status_map_entry.status.key_slice);
         }
 
