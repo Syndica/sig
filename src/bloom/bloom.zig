@@ -50,6 +50,7 @@ pub const Bloom = struct {
     }
 
     pub fn add(self: *Bloom, key: []const u8) void {
+        if (self.bits.capacity() == 0) return;
         for (self.keys.items) |hash_index| {
             const i = self.pos(key, hash_index);
             if (!self.bits.isSet(i)) {
@@ -60,6 +61,7 @@ pub const Bloom = struct {
     }
 
     pub fn contains(self: *const Bloom, key: []const u8) bool {
+        if (self.keys.items.len == 0 or self.bits.capacity() == 0) return false;
         for (self.keys.items) |hash_index| {
             const i = self.pos(key, hash_index);
             if (self.bits.isSet(i)) {
@@ -181,6 +183,41 @@ test "serialized bytes equal rust (one key)" {
     };
 
     try testing.expectEqualSlices(u8, &rust_bytes, bytes[0..bytes.len]);
+}
+
+test "zero-capacity filter does not divide by zero" {
+    var bloom = try Bloom.init(testing.allocator, 0, null);
+    defer bloom.deinit();
+
+    try bloom.addKey(1);
+    try testing.expect(!bloom.contains(&[_]u8{ 1, 2, 3 }));
+    bloom.add(&[_]u8{ 1, 2, 3 });
+}
+
+test "filter with no keys matches nothing" {
+    // capacity but no keys: the loop has nothing to check, so contains must
+    // report no match rather than falling through to true
+    var bloom = try Bloom.init(testing.allocator, 64, null);
+    defer bloom.deinit();
+
+    try testing.expect(!bloom.contains(&[_]u8{ 1, 2, 3 }));
+}
+
+test "deserialized zero-capacity filter does not divide by zero" {
+    // a filter with keys but a zero-length bit array encodes to capacity 0
+    var bloom = try Bloom.init(testing.allocator, 0, null);
+    defer bloom.deinit();
+    try bloom.addKey(1);
+
+    var buf: [10000]u8 = undefined;
+    const out = try bincode.writeToSlice(buf[0..], bloom, .{});
+
+    var deserialized: Bloom = try bincode.readFromSlice(testing.allocator, Bloom, out, .{});
+    defer bincode.free(testing.allocator, deserialized);
+
+    try testing.expectEqual(@as(usize, 0), deserialized.bits.capacity());
+    try testing.expect(!deserialized.contains(&[_]u8{ 1, 2, 3 }));
+    deserialized.add(&[_]u8{ 1, 2, 3 });
 }
 
 test "serialized bytes equal rust (multiple keys)" {
