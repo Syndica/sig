@@ -86,6 +86,38 @@ test "invalid ping is inert" {
     );
 }
 
+// Verifies every payload-less deprecated gossip value can be received and rejected as invalid.
+test "deprecated gossip messages are handled" {
+    const allocator = std.testing.allocator;
+    const now_ms = 1_000_000;
+    const remote_keypair = try testing.deterministicKeyPair(2);
+
+    var test_node = try TestNode.init(allocator, now_ms, 1, local_address, &.{});
+    defer test_node.deinit();
+
+    const deprecated_data = [_]lib.gossip.GossipData{
+        .legacy_contact_info,
+        .legacy_snapshot_hashes,
+        .account_hashes,
+        .legacy_version,
+        .version,
+        .node_instance,
+    };
+    for (deprecated_data) |data| {
+        var values = [_]lib.gossip.GossipValue{try testing.signedValue(&remote_keypair, data)};
+        try test_node.receiveMessage(
+            remote_address,
+            testing.pushMessage(remote_keypair.pubkey, &values),
+        );
+    }
+
+    const expected_invalid_messages: u64 = deprecated_data.len;
+    try std.testing.expectEqual(
+        expected_invalid_messages,
+        test_node.node.metrics.invalid_messages.get(error.InvalidTableValue),
+    );
+}
+
 const SnapshotDiscoveryOrder = enum {
     contact_first,
     snapshot_first,
