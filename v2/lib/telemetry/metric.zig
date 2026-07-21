@@ -243,11 +243,22 @@ pub const Appender = struct {
         return .fromRaw(raw);
     }
 
+    /// Every `LatencyHistogram` name must already carry the `_ns` unit suffix, so the exposition
+    /// layers can emit `Id.name` verbatim instead of synthesizing (and, on the protobuf path,
+    /// allocating) a suffixed family name. Both the plain-field and `VariantHistogram` paths in
+    /// `appendFields` funnel through here, so this single check covers them.
     pub fn appendLatencyHistogram(
         self: Appender,
-        id: Id,
+        comptime id: Id,
         comptime layout: tel.LatencyHistogram.Layout,
     ) tel.LatencyHistogram {
+        comptime if (!std.mem.endsWith(u8, id.name, "_ns")) @compileError(
+            std.fmt.comptimePrint(
+                "LatencyHistogram metric '{s}' must end in `_ns`: it records raw nanoseconds, " ++
+                    "and the unit is carried by the metric name.\n",
+                .{id.name},
+            ),
+        );
         const raw = self.appendLatencyHistogramRaw(id, layout);
         raw.init();
         return .fromRaw(layout, raw);
@@ -255,7 +266,7 @@ pub const Appender = struct {
 
     pub fn appendVariantHistogram(
         self: Appender,
-        name: []const u8,
+        comptime name: []const u8,
         comptime V: type,
         comptime Hist: type,
         comptime config: if (Hist == tel.LatencyHistogram)
@@ -266,13 +277,13 @@ pub const Appender = struct {
         const Vh = tel.VariantHistogram(V, Hist);
         var vh: Vh = .{ .histograms = @splat(undefined) };
 
-        for (&vh.histograms, 0..) |*hist_ptr, tag_index| {
-            const tag = Vh.Indexer.keyForIndex(tag_index);
-            const id: Id = .{
+        inline for (&vh.histograms, 0..) |*hist_ptr, tag_index| {
+            const tag = comptime Vh.Indexer.keyForIndex(tag_index);
+            const id: Id = comptime .{
                 .name = name,
                 .label_count = 1,
                 .labels = switch (tag) {
-                    inline else => |itag| comptime labels: {
+                    inline else => |itag| labels: {
                         const str = "variant=\"" ++ @tagName(itag) ++ "\"";
                         const no_sentinel: [str.len]u8 = str.*;
                         break :labels &no_sentinel ++ [_:'}']u8{};
@@ -634,7 +645,7 @@ test "variant histogram: appendVariantHistogram registers one latency series per
     defer gpa.free(buf);
 
     const vh = region.metricAppender().appendVariantHistogram(
-        "req_latency_seconds",
+        "req_latency_ns",
         Method,
         tel.LatencyHistogram,
         .{ .schema = 2, .min_ns = 512, .octaves = 4 },
@@ -655,7 +666,7 @@ test "variant histogram: appendVariantHistogram registers one latency series per
 
     var seen: usize = 0;
     for (metrics.keys(), metrics.values()) |id, any| {
-        if (!std.mem.eql(u8, id.name, "req_latency_seconds")) continue;
+        if (!std.mem.eql(u8, id.name, "req_latency_ns")) continue;
         seen += 1;
         try std.testing.expectEqual(@as(usize, 1), id.label_count);
         try std.testing.expectEqual(Kind.latency_histogram, std.meta.activeTag(any));
@@ -716,7 +727,7 @@ test "variant histogram: appendFields registers latency and bounds variants" {
     const Method = enum { get, put };
     const Outcome = enum { ok, err };
     const Metrics = struct {
-        latency: tel.VariantHistogram(Method, tel.LatencyHistogram),
+        latency_ns: tel.VariantHistogram(Method, tel.LatencyHistogram),
         sizes: tel.VariantHistogram(Outcome, tel.Histogram),
     };
 
@@ -726,11 +737,11 @@ test "variant histogram: appendFields registers latency and bounds variants" {
     const metrics_struct = region.metricAppender().appendFields(Metrics, .{
         .prefix = "svc",
         .fields = .{
-            .latency = .{ .layout = .{ .schema = 2, .min_ns = 512, .octaves = 4 } },
+            .latency_ns = .{ .layout = .{ .schema = 2, .min_ns = 512, .octaves = 4 } },
             .sizes = .{ .id_override = null, .upper_bounds = &.{ 1, 10, 100 } },
         },
     });
-    metrics_struct.latency.observe(.get, 700);
+    metrics_struct.latency_ns.observe(.get, 700);
     metrics_struct.sizes.observe(.ok, 50);
 
     var metrics = try testCollect(gpa, region);
@@ -739,7 +750,7 @@ test "variant histogram: appendFields registers latency and bounds variants" {
     var latency_series: usize = 0;
     var sizes_series: usize = 0;
     for (metrics.keys(), metrics.values()) |id, any| {
-        if (std.mem.eql(u8, id.name, "svc_latency")) {
+        if (std.mem.eql(u8, id.name, "svc_latency_ns")) {
             latency_series += 1;
             try std.testing.expectEqual(Kind.latency_histogram, std.meta.activeTag(any));
         } else if (std.mem.eql(u8, id.name, "svc_sizes")) {

@@ -160,28 +160,12 @@ fn writeFamily(
     const fw = &fam.writer;
 
     // write bytes field
-    switch (anys[0]) {
-        .latency_histogram => {
-            // Native histograms drop the classic `_bucket`/`_sum`/`_count` split into one series; we
-            // keep the `_ns` suffix to flag the nanosecond unit (see `prometheus.zig`).
-            const fam_name = try std.fmt.allocPrint(gpa, "{s}_ns", .{ids[0].name});
-            defer gpa.free(fam_name);
-            try writeBytesField(fw, MetricFamily.name, fam_name);
-        },
-        else => {
-            try writeBytesField(fw, MetricFamily.name, ids[0].name);
-        },
-    }
-
+    try writeBytesField(fw, MetricFamily.name, ids[0].name);
     // write varint field
-    switch (anys[0]) {
-        .gauge_int, .gauge_float => {
-            try writeVarintField(fw, MetricFamily.kind, MetricType.untyped);
-        },
-        .histogram, .latency_histogram => {
-            try writeVarintField(fw, MetricFamily.kind, MetricType.histogram);
-        },
-    }
+    try writeVarintField(fw, MetricFamily.kind, switch (anys[0]) {
+        .gauge_int, .gauge_float => MetricType.untyped,
+        .histogram, .latency_histogram => MetricType.histogram,
+    });
 
     // write corresponding metric
     for (ids, anys) |id, any| switch (any) {
@@ -521,7 +505,7 @@ test "prometheus_proto: native histogram round-trips through the wire" {
 
     var metrics: Map = .empty;
     defer metrics.deinit(gpa);
-    try metrics.put(gpa, .initNameOnly("net_recv_packet_latency"), .{ .latency_histogram = hist });
+    try metrics.put(gpa, .initNameOnly("net_recv_packet_latency_ns"), .{ .latency_histogram = hist });
 
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();

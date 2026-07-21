@@ -30,12 +30,12 @@ pub fn serviceMain(
     const metrics = metric_appender.appendFields(Metrics, .{
         .prefix = @tagName(name),
         .fields = .{
-            .recv_packet_latency = .{ .layout = .{
+            .recv_packet_latency_ns = .{ .layout = .{
                 .schema = 2,
                 .min_ns = 512,
                 .octaves = 12,
             } },
-            .send_packet_latency = .{ .layout = .{
+            .send_packet_latency_ns = .{ .layout = .{
                 .schema = 2,
                 .min_ns = 512,
                 .octaves = 12,
@@ -53,8 +53,8 @@ pub fn serviceMain(
 }
 
 const Metrics = struct {
-    recv_packet_latency: tel.LatencyHistogram,
-    send_packet_latency: tel.LatencyHistogram,
+    recv_packet_latency_ns: tel.LatencyHistogram,
+    send_packet_latency_ns: tel.LatencyHistogram,
 };
 
 const MAX_SOCKETS = 10;
@@ -108,7 +108,7 @@ fn mainInner(
                     p.addr.getOsSockLen(),
                 );
                 std.debug.assert(bytes == p.len);
-                metrics.send_packet_latency.observe(timer.read());
+                metrics.send_packet_latency_ns.observe(timer.read());
             }
         }
 
@@ -132,7 +132,7 @@ fn mainInner(
                     else => |e| return e,
                 });
                 _ = it.next();
-                metrics.recv_packet_latency.observe(timer.read());
+                metrics.recv_packet_latency_ns.observe(timer.read());
             }
         }
     }
