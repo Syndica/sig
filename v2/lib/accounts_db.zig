@@ -42,71 +42,43 @@ pub const AccountLookups = extern struct {
     }
 };
 
-/// How to consume this struct:
-/// 1. read all ring buffers in the correct order (specify the correct order
-///    here if more are added, currently there is only one: the blockhash queue)
-/// 2. call getSlotBlocking
-/// 3. read other fields
-pub const RuntimeMetadata = extern struct {
+/// A deserialized snapshot Manifest + StatusCache.
+///
+/// All variable-sized data (blockhash queue is fixed at 300 entries inline;
+/// pubkey maps, vote-account chains, etc.) points into the trailing `memory` (manifestBase)
+/// VLA via `snapshot.RelativeSlice` / `snapshot.RelativeOffset`.
+///
+/// Before a consumer reads the fields, it must call `getSlotBlocking()`.
+/// The producer that sets the fields will call `populateSlot()` to mark them as consumable.
+pub const SnapshotMetadata = extern struct {
     slot: std.atomic.Value(u64),
-    /// The merkle root of the last fec set (tower) or the root of roots (alpenglow)
-    block_id: Hash,
-    blockhash_queue: extern struct {
-        /// read after consuming all of hashes
-        max_age: u64,
-        /// Accountsdb blocks until enough hashes are read from here to make
-        /// room for accountsdb to write all of its block hashes here.
-        hashes: lib.ipc.Ring(256, Hash),
-    },
-    epoch_deltas: lib.ipc.Ring(256, EpochDelta),
-
-    pub const EpochDelta = extern struct {
-        info: packed struct(u8) {
-            op: enum(u2) {
-                diff_start,
-                diff_stop,
-                upsert_voter,
-                remove_voter,
-            },
-            has_authorized_voter: bool = false,
-            _unused: u5 = 0,
-        },
-        data: extern union {
-            diff_start: Epoch,
-            diff_stop: void,
-            upsert_voter: extern struct {
-                pubkey: Pubkey,
-                stake: u64, // lamports
-                node_owner: Pubkey,
-                authorized_voter: Pubkey, // valid if `info.has_authorized_voter`
-            },
-            remove_voter: Pubkey,
-        },
-    };
+    manifest: lib.solana.snapshot.Manifest,
+    status_cache: lib.solana.snapshot.StatusCache,
+    memory_len: usize,
+    memory: [0]u8 align(16), // VLA for [0..memory_len]
 
     // 0 may be a valid slot, so use something that will never be reached.
     const invalid_slot = std.math.maxInt(Slot);
 
-    pub fn init(self: *RuntimeMetadata) void {
+    pub fn init(self: *SnapshotMetadata) void {
         self.slot = .init(invalid_slot);
+    }
 
-        self.blockhash_queue.max_age = 0;
-        self.blockhash_queue.hashes.init();
-
-        self.epoch_deltas.init();
+    /// Returns the base pointer used to resolve `RelativeSlice`/`RelativeOffset`
+    /// values inside `manifest` / `status_cache`.
+    pub fn manifestBase(self: *SnapshotMetadata) [*]u8 {
+        return @ptrCast(&self.memory);
     }
 
     /// Unblocks all getSlotBlocking() callers with the given slot value.
     /// Can be called only once.
-    /// Should also only call after all other RuntimeMetadata fields are populated.
-    pub fn populateSlot(self: *RuntimeMetadata, slot: Slot) void {
+    /// Should also only call after all other SnapshotMetadata fields are populated.
+    pub fn populateSlot(self: *SnapshotMetadata, slot: Slot) void {
         std.debug.assert(slot != invalid_slot);
         std.debug.assert(self.slot.swap(slot, .release) == invalid_slot);
     }
 
-    /// Accountsdb writes the slot last, so you need to empty all the ring
-    /// buffers before calling this.
-    pub fn getSlotBlocking(self: *RuntimeMetadata, runner: lib.runner.Connection) !Slot {
+    pub fn getSlotBlocking(self: *SnapshotMetadata, runner: lib.runner.Connection) !Slot {
         while (true) {
             const slot = self.slot.load(.acquire);
             if (slot != invalid_slot) {

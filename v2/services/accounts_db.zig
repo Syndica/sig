@@ -5,8 +5,6 @@ const services = @import("services");
 
 const tel = lib.telemetry;
 
-const SnapshotIter = lib.solana.snapshot.SnapshotIter;
-
 const Rooted = lib.accounts_db.Rooted;
 const AccountPool = lib.accounts_db.AccountPool;
 
@@ -29,14 +27,12 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     logger.info().logf("accounts_db started into file: {s}", .{file_path});
 
     const Global = struct {
-        var fba_memory: [1 * 1024 * 1024 * 1024]u8 = undefined;
         var rooted: Rooted = undefined;
     };
 
     const rooted = &Global.rooted;
     try rooted.init(
         .from(logger),
-        runner,
         std.fs.cwd(),
         file_path,
         rw.config.memory[0..].ptr[0..rw.config.memory_len],
@@ -72,19 +68,16 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             }
         };
 
-        var fba = std.heap.FixedBufferAllocator.init(&Global.fba_memory);
-        var snapshot_iter = try SnapshotIter(SnapshotBufReader).init(&fba, .{
-            .in_ = &in,
-            .runner_ = runner,
-            .completion_ = &rw.ready_snapshot_in.completion,
-        });
-
         logger.info().logf("reading snapshot accounts", .{});
         try rooted.loadSnapshot(
             .from(logger),
             runner,
-            &snapshot_iter,
             rw.snapshot_metadata_out,
+            SnapshotBufReader{
+                .in_ = &in,
+                .runner_ = runner,
+                .completion_ = &rw.ready_snapshot_in.completion,
+            },
         );
     }
 

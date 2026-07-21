@@ -11,6 +11,75 @@ const Hash = lib.solana.Hash;
 const EpochSchedule = lib.solana.EpochSchedule;
 const Inflation = lib.solana.Inflation;
 
+/// A slice into a shared-memory region, expressed as an offset from a base pointer
+/// plus a length. Position-independent so it can live inside an extern struct that is
+/// mmap'd at different virtual addresses across processes.
+pub fn RelativeSlice(comptime T: type) type {
+    return extern struct {
+        offset: u32 = 0,
+        len: u32 = 0,
+
+        const Self = @This();
+
+        pub fn fromSlice(base: [*]const u8, s: []const T) Self {
+            const start = @intFromPtr(s.ptr) - @intFromPtr(base);
+            std.debug.assert(start <= std.math.maxInt(u32));
+            std.debug.assert(s.len <= std.math.maxInt(u32));
+            return .{ .offset = @intCast(start), .len = @intCast(s.len) };
+        }
+
+        pub fn slice(self: Self, base: [*]u8) []T {
+            const raw = base + self.offset;
+            std.debug.assert(@intFromPtr(raw) % @alignOf(T) == 0);
+            const ptr: [*]T = @ptrCast(@alignCast(raw));
+            return ptr[0..self.len];
+        }
+
+        pub fn sliceConst(self: Self, base: [*]const u8) []const T {
+            const raw = base + self.offset;
+            std.debug.assert(@intFromPtr(raw) % @alignOf(T) == 0);
+            const ptr: [*]const T = @ptrCast(@alignCast(raw));
+            return ptr[0..self.len];
+        }
+    };
+}
+
+/// A single-pointer variant of `RelativeSlice`. `offset == 0` is the null sentinel;
+/// callers must guarantee no valid allocation lands at offset 0 (see `Rooted.loadSnapshot`
+/// which reserves the first byte of its FBA for exactly this purpose).
+pub fn RelativeOffset(comptime T: type) type {
+    return extern struct {
+        offset: u32 = 0,
+
+        const Self = @This();
+
+        pub fn from(base: [*]const u8, ptr: *const T) Self {
+            const o = @intFromPtr(ptr) - @intFromPtr(base);
+            std.debug.assert(o != 0);
+            std.debug.assert(o <= std.math.maxInt(u32));
+            return .{ .offset = @intCast(o) };
+        }
+
+        pub fn isNull(self: Self) bool {
+            return self.offset == 0;
+        }
+
+        pub fn pointer(self: Self, base: [*]u8) *T {
+            std.debug.assert(self.offset != 0);
+            const raw = base + self.offset;
+            std.debug.assert(@intFromPtr(raw) % @alignOf(T) == 0);
+            return @ptrCast(@alignCast(raw));
+        }
+
+        pub fn pointerConst(self: Self, base: [*]const u8) *const T {
+            std.debug.assert(self.offset != 0);
+            const raw = base + self.offset;
+            std.debug.assert(@intFromPtr(raw) % @alignOf(T) == 0);
+            return @ptrCast(@alignCast(raw));
+        }
+    };
+}
+
 fn readInt(Int: type, r: anytype) !u64 {
     var buf: [@sizeOf(Int)]u8 = undefined;
     try r.readSliceAll(&buf);
@@ -24,7 +93,12 @@ fn readBool(r: anytype) !bool {
     return buf[0] > 0;
 }
 
-pub const StatusCache = struct {
+pub const StatusCache = extern struct {
+    /// Placeholder — the deserialized contents are currently discarded. Kept as an
+    /// extern struct so it can live inline in `SnapshotMetadata` and be persisted
+    /// alongside the `Manifest` in the rooted DB blob.
+    _reserved: u8 = 0,
+
     pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !StatusCache {
         const zone = tracy.Zone.init(@src(), .{ .name = "StatusCache.read" });
         defer zone.deinit();
@@ -91,7 +165,7 @@ pub const StatusCache = struct {
     }
 };
 
-pub const Manifest = struct {
+pub const Manifest = extern struct {
     bank_fields: BankFields,
     accounts_db_fields: AccountsDbFields,
     extra_fields: ExtraFields,
@@ -109,12 +183,12 @@ pub const Manifest = struct {
 };
 
 fn PubkeyMap(comptime Value: type) type {
-    return struct {
-        entries: []Entry,
-        len: usize = 0,
+    return extern struct {
+        entries: RelativeSlice(Entry) = .{},
+        len: u32 = 0,
 
         const Self = @This();
-        const Entry = struct {
+        pub const Entry = extern struct {
             pubkey: Pubkey,
             value: Value,
         };
@@ -123,17 +197,23 @@ fn PubkeyMap(comptime Value: type) type {
             const cap = try std.math.ceilPowerOfTwo(u64, len);
             const entries = try fba.allocator().alloc(Entry, cap);
             @memset(entries, .{ .pubkey = .ZEROES, .value = undefined });
-            return .{ .entries = entries };
+            return .{ .entries = .fromSlice(fba.buffer.ptr, entries) };
         }
 
-        pub fn insert(self: *Self, pubkey: *const Pubkey, value: *const Value) void {
+        pub fn insert(
+            self: *Self,
+            base: [*]u8,
+            pubkey: *const Pubkey,
+            value: *const Value,
+        ) void {
             // This uses the zero-pubkey to indicate empty
             std.debug.assert(!pubkey.isZeroed());
 
-            const mask = self.entries.len - 1;
+            const entries = self.entries.slice(base);
+            const mask = entries.len - 1;
             var i = pubkey.hash(0) & mask;
             while (true) {
-                const e = &self.entries[i];
+                const e = &entries[i];
                 i = (i + 1) & mask;
                 if (e.pubkey.equals(pubkey) or e.pubkey.isZeroed()) {
                     self.len += @intFromBool(e.pubkey.isZeroed());
@@ -143,22 +223,23 @@ fn PubkeyMap(comptime Value: type) type {
             }
         }
 
-        pub fn find(self: *const Self, pubkey: *const Pubkey) ?*Entry {
+        pub fn find(self: *const Self, base: [*]u8, pubkey: *const Pubkey) ?*Entry {
             // This uses the zero-pubkey to indicate empty
             std.debug.assert(!pubkey.isZeroed());
 
-            const mask = self.entries.len - 1;
+            const entries = self.entries.slice(base);
+            const mask = entries.len - 1;
             var i = pubkey.hash(0) & mask;
             while (true) {
-                const e = &self.entries[i];
+                const e = &entries[i];
                 i = (i + 1) & mask;
                 if (e.pubkey.equals(pubkey)) return e;
                 if (e.pubkey.isZeroed()) return null;
             }
         }
 
-        pub fn iterator(self: *const Self) Iterator {
-            return .{ .entries = self.entries };
+        pub fn iterator(self: *const Self, base: [*]u8) Iterator {
+            return .{ .entries = self.entries.slice(base) };
         }
 
         pub const Iterator = struct {
@@ -176,12 +257,12 @@ fn PubkeyMap(comptime Value: type) type {
     };
 }
 
-pub const BankFields = struct {
+pub const BankFields = extern struct {
     slot: Slot,
     blockhash_queue: BlockHashQueue,
     epoch_schedule: EpochSchedule,
     inflation: Inflation,
-    stakes: struct {
+    stakes: extern struct {
         epoch: Epoch,
         delegations: PubkeyMap(Delegation),
     },
@@ -194,13 +275,15 @@ pub const BankFields = struct {
         deactivation_epoch: Epoch,
     };
 
-    pub const BlockHashQueue = struct {
-        last_hash: ?Hash,
+    pub const BlockHashQueue = extern struct {
+        /// Agave's MAX_RECENT_BLOCKHASHES and the current `Rooted.Journal.blockhash_max_age`.
+        /// [agave] https://github.com/anza-xyz/solana-sdk/blob/clock%40v3.1.1/clock/src/lib.rs#L95
+        pub const MAX_RECENT_BLOCKHASHES: u32 = 300;
+
+        last_hash: Hash,
         max_age: u64,
-        hashes: struct {
-            array: []Hash,
-            count: usize,
-        },
+        hashes: [MAX_RECENT_BLOCKHASHES]Hash,
+        hashes_count: u32,
 
         pub const Entry = extern struct {
             hash: Hash,
@@ -216,7 +299,6 @@ pub const BankFields = struct {
             };
 
             const n_hash_infos = try readInt(u64, r);
-            const hashes = try fba.allocator().alloc(Hash, n_hash_infos);
 
             const BlockhashEntry = extern struct {
                 hash: Hash,
@@ -238,21 +320,24 @@ pub const BankFields = struct {
                 }
             }.lessThan);
 
-            // then add only the live ones by max_age to the hashes
-            var count: usize = 0;
+            var out: BlockHashQueue = .{
+                .last_hash = maybe_last_hash orelse .ZEROES,
+                .max_age = max_age,
+                .hashes = @splat(.ZEROES),
+                .hashes_count = 0,
+            };
+
+            // then add only the live ones by max_age
             for (entries) |*e| {
                 const age = last_hash_index - e.hash_index;
                 if (age <= max_age) {
-                    hashes[count] = e.hash;
-                    count += 1;
+                    if (out.hashes_count >= MAX_RECENT_BLOCKHASHES) return error.TooManyBlockhashes;
+                    out.hashes[out.hashes_count] = e.hash;
+                    out.hashes_count += 1;
                 }
             }
 
-            return .{
-                .last_hash = maybe_last_hash,
-                .max_age = max_age,
-                .hashes = .{ .array = hashes, .count = count },
-            };
+            return out;
         }
     };
 
@@ -371,7 +456,7 @@ pub const BankFields = struct {
                     if (e.delegation.voter_pubkey.isZeroed())
                         return error.InvalidDelegationVoterPubkey;
 
-                    stake_delegations.insert(&e.pubkey, &e.delegation);
+                    stake_delegations.insert(fba.buffer.ptr, &e.pubkey, &e.delegation);
                 }
             }
         }
@@ -417,7 +502,7 @@ pub const BankFields = struct {
     }
 };
 
-pub const AccountsDbFields = struct {
+pub const AccountsDbFields = extern struct {
     slot: u64,
 
     pub fn read(_: *std.heap.FixedBufferAllocator, r: anytype) !AccountsDbFields {
@@ -480,14 +565,14 @@ pub const AccountsDbFields = struct {
     }
 };
 
-pub const ExtraFields = struct {
-    versioned_epoch_stakes: []VersionedEpochStakes,
+pub const ExtraFields = extern struct {
+    versioned_epoch_stakes: RelativeSlice(VersionedEpochStakes) = .{},
     /// - TowerBFT: the Merkle root of the last FEC set of the block
     /// - Alpenglow: the "double Merkle root": a Merkle root computed over the
     ///   sequence of per-FEC-set Merkle roots of the block's shreds.
     block_id: Hash,
 
-    pub const VersionedEpochStakes = struct {
+    pub const VersionedEpochStakes = extern struct {
         epoch: Epoch,
         total_stake: u64,
         // maps pubkey to vote account + its stake + its node membership
@@ -498,12 +583,13 @@ pub const ExtraFields = struct {
         epoch_authorized_voters: EpochAuthorizedVoters,
 
         // Maps vote_account -> stake & node membership list
-        const VoteAccountMap = PubkeyMap(VoteAccount);
-        const VoteAccount = extern struct {
+        pub const VoteAccountMap = PubkeyMap(VoteAccount);
+        pub const VoteAccount = extern struct {
             stake: u64,
             // A vote account lives in its PubkeyMap and is optionally linked to other entries
-            // in the map who share the same node owner.
-            next: ?*VoteAccount = null,
+            // in the map who share the same node owner. `next.offset == 0` means unlinked
+            // (Rooted.loadSnapshot reserves offset 0 in the FBA so no real entry lands there).
+            next: RelativeOffset(VoteAccountMap.Entry) = .{},
             node: Pubkey = .ZEROES,
         };
 
@@ -534,7 +620,7 @@ pub const ExtraFields = struct {
                 );
 
                 if (vote_entry.key.isZeroed()) return error.InvalidVoteAccount;
-                vote_accounts.insert(&vote_entry.key, &.{
+                vote_accounts.insert(fba.buffer.ptr, &vote_entry.key, &.{
                     .stake = vote_entry.stake,
                 });
             }
@@ -572,8 +658,8 @@ pub const ExtraFields = struct {
             return vote_accounts;
         }
 
-        const NodeToVoteAccountList = PubkeyMap(struct {
-            head: ?*VoteAccount,
+        pub const NodeToVoteAccountList = PubkeyMap(extern struct {
+            head: RelativeOffset(VoteAccountMap.Entry) = .{},
             total_stake: u64,
         });
 
@@ -583,6 +669,7 @@ pub const ExtraFields = struct {
             r: anytype,
             vote_accounts: *VoteAccountMap,
         ) !NodeToVoteAccountList {
+            const base = fba.buffer.ptr;
             // HashMap.len: u64
             const len = try readInt(u64, r);
             var list: NodeToVoteAccountList = try .init(fba, len);
@@ -600,8 +687,8 @@ pub const ExtraFields = struct {
                 }
 
                 // link up vote accounts in epoch_stakes mapped to by this node
-                var head_entry: ?*VoteAccount = null;
-                var tail_entry: ?*VoteAccount = null;
+                var head_offset: RelativeOffset(VoteAccountMap.Entry) = .{};
+                var tail_entry: ?*VoteAccountMap.Entry = null;
 
                 // read pubkeys in chunks to amortize r.readSliceAll calls.
                 var n_pubkeys = header.num_vote_accounts;
@@ -613,28 +700,31 @@ pub const ExtraFields = struct {
                     try r.readSliceAll(std.mem.sliceAsBytes(pubkey_chunk));
 
                     for (pubkey_chunk) |*vote_pubkey| {
-                        const vote_entry = vote_accounts.find(vote_pubkey) orelse
+                        const vote_entry = vote_accounts.find(base, vote_pubkey) orelse
                             return error.MissingVoteAccount;
 
                         const vote_account = &vote_entry.value;
-                        if (vote_account.next != null) {
+                        if (!vote_account.next.isNull()) {
                             return error.VoteAccountOwnedByMultipleNodes;
                         }
 
+                        const entry_offset: RelativeOffset(VoteAccountMap.Entry) =
+                            .from(base, vote_entry);
+
                         // a node in a list either points to next, or points to itself (tail)
-                        vote_account.next = vote_account;
+                        vote_account.next = entry_offset;
                         vote_account.node = header.node_pubkey;
 
                         // track link list.
-                        if (head_entry == null) head_entry = vote_account;
-                        if (tail_entry) |tail| tail.next = vote_account;
-                        tail_entry = vote_account;
+                        if (head_offset.isNull()) head_offset = entry_offset;
+                        if (tail_entry) |tail| tail.value.next = entry_offset;
+                        tail_entry = vote_entry;
                     }
                 }
 
                 const total_stake = try readInt(u64, r);
-                list.insert(&header.node_pubkey, &.{
-                    .head = head_entry,
+                list.insert(base, &header.node_pubkey, &.{
+                    .head = head_offset,
                     .total_stake = total_stake,
                 });
             }
@@ -642,12 +732,13 @@ pub const ExtraFields = struct {
             return list;
         }
 
-        const EpochAuthorizedVoters = PubkeyMap(Pubkey);
+        pub const EpochAuthorizedVoters = PubkeyMap(Pubkey);
 
         fn readEpochAuthorizedVoters(
             fba: *std.heap.FixedBufferAllocator,
             r: anytype,
         ) !EpochAuthorizedVoters {
+            const base = fba.buffer.ptr;
             var len = try readInt(u64, r);
             var map = try EpochAuthorizedVoters.init(fba, len);
 
@@ -661,7 +752,7 @@ pub const ExtraFields = struct {
                 try r.readSliceAll(std.mem.sliceAsBytes(chunks));
                 for (chunks) |*entry| {
                     if (entry.voter_key.isZeroed()) return error.InvalidAuthorizedVoter;
-                    map.insert(&entry.voter_key, &entry.auth_key);
+                    map.insert(base, &entry.voter_key, &entry.auth_key);
                 }
             }
 
@@ -701,30 +792,33 @@ pub const ExtraFields = struct {
 
         pub fn getVoteAccounts(
             self: *const NodeToVoteAccountList,
+            base: [*]u8,
             node_pubkey: *const Pubkey,
         ) ?VoteAccountIterator {
-            const node_entry = self.map.find(node_pubkey) orelse return null;
+            const node_entry = self.find(base, node_pubkey) orelse return null;
             return .{
+                .base = base,
                 .total_stake = node_entry.value.total_stake,
-                .entry = node_entry.value.head,
+                .cursor = node_entry.value.head,
             };
         }
 
         pub const VoteAccountIterator = struct {
+            base: [*]u8,
             total_stake: u64,
-            entry: ?*VoteAccount,
+            /// Offset of the next Entry to yield; `.isNull()` means iteration is done.
+            cursor: RelativeOffset(VoteAccountMap.Entry),
 
             pub fn next(self: *VoteAccountIterator) ?*VoteAccountMap.Entry {
-                const vote_acc = self.entry orelse return null;
-                self.entry = vote_acc.next orelse {
-                    @panic("unlinked vote account in node map");
-                };
-                // last entry points to itself.
-                if (self.entry == vote_acc) self.entry = null;
+                if (self.cursor.isNull()) return null;
 
-                // the vote_acc lives in an EpochStakes.vote_accounts map.
-                // That entry includes its pubkey, so return that + its value.
-                return @alignCast(@fieldParentPtr("value", vote_acc));
+                const entry = self.cursor.pointer(self.base);
+                const next_off = entry.value.next;
+                if (next_off.isNull()) @panic("unlinked vote account in node map");
+
+                // last entry points to itself.
+                self.cursor = if (next_off.offset == self.cursor.offset) .{} else next_off;
+                return entry;
             }
         };
     };
@@ -764,24 +858,26 @@ pub const ExtraFields = struct {
         }
 
         // versioned_epoch_stakes: NullOnEof(Vec({ epoch: u64, value: union(enum(u32)) { current: ... } }))
-        var versioned_epoch_stakes: []VersionedEpochStakes = &.{};
+        var versioned_epoch_stakes: RelativeSlice(VersionedEpochStakes) = .{};
         {
             const len = readInt(u64, r) catch |err| switch (err) {
                 error.EndOfStream => 0,
                 else => |e| return e,
             };
 
-            versioned_epoch_stakes = try fba.allocator().alloc(VersionedEpochStakes, len);
-            for (versioned_epoch_stakes) |*versioned_epoch_stake| {
+            const slice = try fba.allocator().alloc(VersionedEpochStakes, len);
+            for (slice) |*versioned_epoch_stake| {
                 versioned_epoch_stake.* = try .read(fba, r);
             }
 
             // sort them by the epoch to make it easier for rooted to store deltas
-            std.mem.sortUnstable(VersionedEpochStakes, versioned_epoch_stakes, {}, struct {
+            std.mem.sortUnstable(VersionedEpochStakes, slice, {}, struct {
                 fn lessThan(_: void, a: VersionedEpochStakes, b: VersionedEpochStakes) bool {
                     return a.epoch < b.epoch;
                 }
             }.lessThan);
+
+            versioned_epoch_stakes = .fromSlice(fba.buffer.ptr, slice);
         }
 
         // accounts_lt_hash: NullOnEof(?LtHash)
@@ -815,20 +911,25 @@ pub const ExtraFields = struct {
 
 pub fn SnapshotIter(comptime BufReader: type) type {
     return struct {
-        // public fields instantiated using the fba from init()
-        status_cache: StatusCache,
-        manifest: Manifest,
-
         tar_iter: TarZstIter(BufReader),
         account_file_len: usize,
         account_file_slot: Slot,
         account_data_len: usize,
         account_data_padding: usize,
+        /// Cached from the just-parsed Manifest so `next()` can validate account file
+        /// slots without holding a pointer into snapshot_metadata (which lives in
+        /// another module and is passed as `anytype` at init time).
+        accounts_db_slot: Slot,
 
         const Self = @This();
 
+        /// `snapshot_metadata` is passed as `anytype` to avoid an import cycle with
+        /// `v2/lib/accounts_db.zig`. It must be `*SnapshotMetadata` — the Manifest and
+        /// StatusCache are written in place there, and the FBA is expected to live
+        /// inside `snapshot_metadata.memory`.
         pub fn init(
             fba: *std.heap.FixedBufferAllocator,
+            snapshot_metadata: anytype,
             buf_reader: BufReader,
         ) !Self {
             var self: Self = undefined;
@@ -848,16 +949,17 @@ pub fn SnapshotIter(comptime BufReader: type) type {
             {
                 const tar_file = (try self.tar_iter.next()) orelse return error.MissingMetadata;
                 if (std.mem.eql(u8, tar_file.name, "snapshots/status_cache")) {
-                    self.status_cache = try StatusCache.read(fba, &self.tar_iter);
+                    snapshot_metadata.status_cache = try StatusCache.read(fba, &self.tar_iter);
                     _ = (try self.tar_iter.next()) orelse return error.MissingMetadata;
-                    self.manifest = try Manifest.read(fba, &self.tar_iter);
+                    snapshot_metadata.manifest = try Manifest.read(fba, &self.tar_iter);
                 } else {
-                    self.manifest = try Manifest.read(fba, &self.tar_iter);
+                    snapshot_metadata.manifest = try Manifest.read(fba, &self.tar_iter);
                     _ = (try self.tar_iter.next()) orelse return error.MissingMetadata;
-                    self.status_cache = try StatusCache.read(fba, &self.tar_iter);
+                    snapshot_metadata.status_cache = try StatusCache.read(fba, &self.tar_iter);
                 }
             }
 
+            self.accounts_db_slot = snapshot_metadata.manifest.accounts_db_fields.slot;
             self.account_file_len = 0;
             self.account_file_slot = 0;
             self.account_data_len = 0;
@@ -890,7 +992,7 @@ pub fn SnapshotIter(comptime BufReader: type) type {
 
                 const slot = std.fmt.parseInt(u64, tar_file.name["accounts/".len..split], 10) catch
                     return error.InvalidAccountFileSlot;
-                if (slot > self.manifest.accounts_db_fields.slot)
+                if (slot > self.accounts_db_slot)
                     return error.InvalidAccountFileSlot;
 
                 self.account_file_slot = slot;
@@ -1092,3 +1194,37 @@ pub const ZstReader = struct {
         return n;
     }
 };
+
+test "RelativeSlice/PubkeyMap round-trip after memcpy" {
+    const testing = std.testing;
+
+    var src_buf: [16 * 1024]u8 align(16) = undefined;
+    var src_fba = std.heap.FixedBufferAllocator.init(&src_buf);
+
+    // Reserve offset 0 the way Rooted.loadSnapshot will, so no valid entry lands there.
+    _ = try src_fba.allocator().alloc(u8, 1);
+
+    var map = try PubkeyMap(Pubkey).init(&src_fba, 8);
+
+    var keys: [8]Pubkey = undefined;
+    var vals: [8]Pubkey = undefined;
+    for (0..8) |i| {
+        keys[i] = .ZEROES;
+        keys[i].data[0] = @intCast(i + 1);
+        vals[i] = .ZEROES;
+        vals[i].data[31] = @intCast(i + 1);
+        map.insert(src_fba.buffer.ptr, &keys[i], &vals[i]);
+    }
+    try testing.expectEqual(@as(u32, 8), map.len);
+
+    // Copy the *entire* fba buffer to a differently-addressed destination.
+    var dst_buf: [16 * 1024]u8 align(16) = undefined;
+    @memcpy(dst_buf[0..src_buf.len], src_buf[0..]);
+
+    // The same `map` value re-interpreted against a new base must still find every key.
+    for (0..8) |i| {
+        const entry = map.find(&dst_buf, &keys[i]) orelse
+            return error.EntryNotFoundAfterRelocation;
+        try testing.expect(entry.value.equals(&vals[i]));
+    }
+}
