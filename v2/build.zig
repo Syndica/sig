@@ -327,10 +327,13 @@ const Sig = struct {
                     .{ .name = "start_service", .module = start_service },
                     .{ .name = "tracy", .module = deps.tracy },
                     .{ .name = "services", .module = services_mod },
-                    .{ .name = "rocksdb", .module = deps.rocksdb },
-                    .{ .name = "rocksdb-c", .module = deps.rocksdb_c },
                 },
             });
+            // Only shred_streamer needs rocksdb (for reading Agave ledger).
+            if (comptime std.mem.eql(u8, service.name, "shred_streamer")) {
+                service_mod.addImport("rocksdb", deps.rocksdb);
+                service_mod.addImport("rocksdb-c", deps.rocksdb_c);
+            }
             unit_tests.add(service.name, service_mod);
 
             const service_lib = b.addLibrary(.{
@@ -338,7 +341,11 @@ const Sig = struct {
                 .root_module = service_mod,
                 .use_llvm = config.use_llvm,
             });
-            sig_init.linkLibrary(service_lib);
+            // shred_streamer is test-only (used by shred-stream-replay); don't
+            // link it into the main sig-init binary to avoid pulling in rocksdb.
+            if (!comptime std.mem.eql(u8, service.name, "shred_streamer")) {
+                sig_init.linkLibrary(service_lib);
+            }
 
             service_lib_entry.* = .{
                 .name = service.name,
@@ -420,7 +427,7 @@ const Tools = struct {
                 .root_module = module,
                 .use_llvm = config.use_llvm,
             }, .{});
-            for (&[_][]const u8{ "shred_streamer", "shred_receiver", "telemetry" }) |service_name| {
+            for (&[_][]const u8{ "shred_streamer", "shred_receiver", "replay", "exec", "snapshot", "accounts_db", "telemetry" }) |service_name| {
                 exe.compile.linkLibrary(for (sig.service_libs) |entry| {
                     if (std.mem.eql(u8, entry.name, service_name)) break entry.lib;
                 } else std.debug.panic("unknown service '{s}'", .{service_name}));
