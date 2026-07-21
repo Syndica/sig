@@ -159,47 +159,71 @@ fn writeFamily(
     defer fam.deinit();
     const fw = &fam.writer;
 
+    // write bytes field
     switch (anys[0]) {
-        .gauge_int, .gauge_float => {
-            try writeBytesField(fw, MetricFamily.name, ids[0].name);
-            try writeVarintField(fw, MetricFamily.kind, MetricType.untyped);
-            for (ids, anys) |id, any| try writeGaugeMetric(gpa, fw, id, any);
-        },
-        .histogram => |histogram| {
-            try writeBytesField(fw, MetricFamily.name, ids[0].name);
-            try writeVarintField(fw, MetricFamily.kind, MetricType.histogram);
-            var snap = histogram.swapOutSnapshot();
-            defer snap.release();
-            try writeHistogramMetric(gpa, fw, ids[0], classicHistogramWriter(gpa, &snap));
-        },
-        .latency_histogram => |latency_histogram| {
+        .latency_histogram => {
             // Native histograms drop the classic `_bucket`/`_sum`/`_count` split into one series; we
             // keep the `_ns` suffix to flag the nanosecond unit (see `prometheus.zig`).
             const fam_name = try std.fmt.allocPrint(gpa, "{s}_ns", .{ids[0].name});
             defer gpa.free(fam_name);
             try writeBytesField(fw, MetricFamily.name, fam_name);
-            try writeVarintField(fw, MetricFamily.kind, MetricType.histogram);
-            try writeLatencyHistogramMetric(gpa, fw, ids[0], latency_histogram);
+        },
+        else => {
+            try writeBytesField(fw, MetricFamily.name, ids[0].name);
         },
     }
+
+    // write varint field
+    switch (anys[0]) {
+        .gauge_int, .gauge_float => {
+            try writeVarintField(fw, MetricFamily.kind, MetricType.untyped);
+        },
+        .histogram, .latency_histogram => {
+            try writeVarintField(fw, MetricFamily.kind, MetricType.histogram);
+        },
+    }
+
+    // write corresponding metric
+    for (ids, anys) |id, any| switch (any) {
+        .gauge_int => |g| try writeGaugeIntMetric(gpa, fw, id, g),
+        .gauge_float => |g| try writeGaugeFloatMetric(gpa, fw, id, g),
+        .histogram => |h| try writeClassicHistogramMetric(gpa, fw, id, h),
+        .latency_histogram => |lh| try writeLatencyHistogramMetric(gpa, fw, id, lh),
+    };
 
     const bytes = fam.written();
     try writeVarint(w, bytes.len);
     try w.writeAll(bytes);
 }
 
+fn writeGaugeIntMetric(
+    gpa: std.mem.Allocator,
+    fw: *std.Io.Writer,
+    id: Id,
+    g: *const std.atomic.Value(u64),
+) Error!void {
+    const value: f64 = @floatFromInt(g.load(.monotonic));
+
+    try writeGaugeMetric(gpa, fw, id, value);
+}
+
+fn writeGaugeFloatMetric(
+    gpa: std.mem.Allocator,
+    fw: *std.Io.Writer,
+    id: Id,
+    g: *const std.atomic.Value(f64),
+) Error!void {
+    const value: f64 = g.load(.monotonic);
+
+    try writeGaugeMetric(gpa, fw, id, value);
+}
+
 fn writeGaugeMetric(
     gpa: std.mem.Allocator,
     fw: *std.Io.Writer,
     id: Id,
-    any: Any,
+    value: f64,
 ) Error!void {
-    const value: f64 = switch (any) {
-        .gauge_int => |g| @floatFromInt(g.load(.monotonic)),
-        .gauge_float => |g| g.load(.monotonic),
-        else => return, // malformed: same name mixing gauges and histograms; skip.
-    };
-
     var m: std.Io.Writer.Allocating = .init(gpa);
     defer m.deinit();
     try writeLabels(gpa, &m.writer, id);
@@ -210,6 +234,20 @@ fn writeGaugeMetric(
     try writeBytesField(&m.writer, Metric.untyped, untyped.written());
 
     try writeBytesField(fw, MetricFamily.metric, m.written());
+}
+
+/// Snapshots a float-bounds `Histogram` and appends it as one `Metric` to `fw`. Mirrors
+/// `writeLatencyHistogramMetric` so the snapshot's `release()` is scoped to a single entry, letting
+/// the caller loop over every series in a family (see `writeFamily`).
+fn writeClassicHistogramMetric(
+    gpa: std.mem.Allocator,
+    fw: *std.Io.Writer,
+    id: Id,
+    hist: tel.Histogram,
+) Error!void {
+    var snap = hist.swapOutSnapshot();
+    defer snap.release();
+    try writeHistogramMetric(gpa, fw, id, classicHistogramWriter(gpa, &snap));
 }
 
 fn writeLatencyHistogramMetric(
@@ -317,7 +355,13 @@ const NativeHistogramWriter = struct {
 
     fn write(self: NativeHistogramWriter, hw: *std.Io.Writer) Error!void {
         const bucket_count: usize = @intCast(self.layout.bucketCount());
-        const counts = try self.gpa.alloc(u64, bucket_count);
+        // One extra slot for above-window observations. The classic path leans on Prometheus deriving
+        // an implicit `+Inf` bucket from `sample_count`, but a native histogram has no `+Inf`: every
+        // observation must sit in an explicit bucket, or `sample_count` won't equal the bucket sum and
+        // Prometheus rejects the *entire* scrape ("observation count should equal the number of
+        // observations found in the buckets"). We fold the overflow into the native bucket just above
+        // the window (`bucket_count`), the tightest index we can assign from the count alone.
+        const counts = try self.gpa.alloc(u64, bucket_count + 1);
         defer self.gpa.free(counts);
 
         const total_count = self.snap.count;
@@ -330,6 +374,11 @@ const NativeHistogramWriter = struct {
             counts[idx] = b.cumulative_count - prev_cumulative;
             prev_cumulative = b.cumulative_count;
         }
+        // `count` is bumped last in `observe` (after the bucket) and the snapshot drains all in-flight
+        // writers, so it is always >= the in-window bucket sum; the remainder is the above-window
+        // overflow. `-|` is belt-and-suspenders against a future regression of that invariant.
+        std.debug.assert(total_count >= prev_cumulative);
+        counts[bucket_count] = @as(u64, total_count) -| prev_cumulative;
 
         try writeSint32Field(hw, Histogram.schema, @intCast(self.layout.schema));
         try writeDoubleField(hw, Histogram.zero_threshold, 0.0);
@@ -449,6 +498,14 @@ fn unzigzag64(u: u64) i64 {
     return @bitCast((u >> 1) ^ (~(u & 1) +% 1));
 }
 
+/// Test helper: builds the `}`-sentinel label slice that `metric.Id.labels` requires from a plain
+/// `key="value"` string (see the labeled-gauge test for the same idiom, inline).
+fn testLabels(comptime s: []const u8) [s.len:'}']u8 {
+    var arr: [s.len:'}']u8 = undefined;
+    for (s, 0..) |c, i| arr[i] = c;
+    return arr;
+}
+
 test "prometheus_proto: native histogram round-trips through the wire" {
     const gpa = testing.allocator;
     const Layout = tel.LatencyHistogram.Layout;
@@ -460,7 +517,7 @@ test "prometheus_proto: native histogram round-trips through the wire" {
     hist.observe(512); // bucket 0 (global native index 36)
     hist.observe(513); // bucket 1 (global native index 37)
     hist.observe(700); // bucket 2 (global native index 38)
-    hist.observe(2000); // +Inf (unstored, still counted)
+    hist.observe(2000); // above the ~1.7us window top -> overflow bucket (storage index 8)
 
     var metrics: Map = .empty;
     defer metrics.deinit(gpa);
@@ -534,12 +591,105 @@ test "prometheus_proto: native histogram round-trips through the wire" {
     }
 
     try testing.expectEqual(@as(i64, 2), schema); // schema 2
-    try testing.expectEqual(@as(u64, 4), sample_count); // 4 observations total (incl. +Inf)
+    try testing.expectEqual(@as(u64, 4), sample_count); // 4 observations total (incl. the overflow)
     try testing.expectEqual(@as(f64, 512 + 513 + 700 + 2000), sample_sum);
     try testing.expectEqual(@as(i64, 36), span_offset); // base_index 36, first populated bucket 0
-    try testing.expectEqual(@as(u64, 3), span_length); // buckets 0,1,2 populated
-    // Per-bucket populations 1,1,1 -> deltas 1,0,0.
-    try testing.expectEqualSlices(i64, &.{ 1, 0, 0 }, deltas.items);
+    try testing.expectEqual(@as(u64, 9), span_length); // buckets 0..8 (2000 lands in overflow bucket 8)
+
+    // Reconstruct per-bucket populations from the delta stream. The key invariant Prometheus enforces
+    // for native histograms: sample_count must equal the sum of bucket populations (no implicit +Inf).
+    var pop_sum: u64 = 0;
+    var acc: i64 = 0;
+    var populated_at_8: u64 = 0;
+    for (deltas.items, 0..) |d, k| {
+        acc += d;
+        pop_sum += @intCast(acc);
+        if (k == 8) populated_at_8 = @intCast(acc);
+    }
+    try testing.expectEqual(sample_count, pop_sum); // 512,513,700 in-window + 2000 overflow = 4
+    try testing.expectEqual(@as(u64, 1), populated_at_8); // the 2000 observation, not dropped
+}
+
+test "prometheus_proto: a histogram family emits every series, not just the first" {
+    // Regression: the histogram branches once encoded only `ids[0]`, dropping all other series in a
+    // family. A `VariantHistogram` (e.g. shred_receiver's per-outcome `process_packet_elapsed`)
+    // collects into one name with many `variant` labels, so only the first variant reached
+    // Prometheus over the protobuf path while the text path showed them all.
+    const gpa = testing.allocator;
+    const Layout = tel.LatencyHistogram.Layout;
+    const layout: Layout = .{ .schema = 2, .min_ns = 512, .octaves = 2 };
+
+    const h1: tel.LatencyHistogram = try .initForTest(gpa, layout);
+    defer h1.deinitForTest(gpa);
+    h1.observe(512);
+    const h2: tel.LatencyHistogram = try .initForTest(gpa, layout);
+    defer h2.deinitForTest(gpa);
+    h2.observe(700);
+
+    const name = "shred_receiver_process_packet_elapsed_ns";
+    const l1 = testLabels("variant=\"fec_set_finished\"");
+    const l2 = testLabels("variant=\"shred_already_seen\"");
+    const id1: Id = .{ .name = name, .label_count = 1, .labels = &l1 };
+    const id2: Id = .{ .name = name, .label_count = 1, .labels = &l2 };
+
+    var metrics: Map = .empty;
+    defer metrics.deinit(gpa);
+    // Same name, adjacent (as `metric.collect` sorts them) -> one family, two series.
+    try metrics.put(gpa, id1, .{ .latency_histogram = h1 });
+    try metrics.put(gpa, id2, .{ .latency_histogram = h2 });
+
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    try writeBody(gpa, &out.writer, &metrics);
+
+    // Exactly one MetricFamily, carrying one Metric per series.
+    var r: TestReader = .{ .buf = out.written() };
+    var fr: TestReader = .{ .buf = r.bytes() };
+    try testing.expect(r.atEnd());
+
+    var metric_count: usize = 0;
+    var seen_full = false;
+    var seen_early = false;
+    while (!fr.atEnd()) {
+        const t = fr.tag();
+        if (t.field == MetricFamily.metric) {
+            metric_count += 1;
+            var mr: TestReader = .{ .buf = fr.bytes() };
+            while (!mr.atEnd()) {
+                const mt = mr.tag();
+                switch (mt.field) {
+                    Metric.label => {
+                        var lr: TestReader = .{ .buf = mr.bytes() };
+                        var lname: []const u8 = "";
+                        var lvalue: []const u8 = "";
+                        while (!lr.atEnd()) {
+                            const lt = lr.tag();
+                            switch (lt.field) {
+                                LabelPair.name => lname = lr.bytes(),
+                                LabelPair.value => lvalue = lr.bytes(),
+                                else => _ = lr.bytes(),
+                            }
+                        }
+                        if (std.mem.eql(u8, lname, "variant")) {
+                            if (std.mem.eql(u8, lvalue, "fec_set_finished")) seen_full = true;
+                            if (std.mem.eql(u8, lvalue, "shred_already_seen")) seen_early = true;
+                        }
+                    },
+                    else => _ = mr.bytes(),
+                }
+            }
+        } else switch (t.wire) {
+            // Skip name (len), kind (varint), etc. by wire type — `bytes()` on a varint desyncs.
+            wire_varint => _ = fr.varint(),
+            wire_len => _ = fr.bytes(),
+            wire_i64 => _ = fr.fixed64(),
+            else => unreachable,
+        }
+    }
+
+    try testing.expectEqual(@as(usize, 2), metric_count); // both series, not just ids[0]
+    try testing.expect(seen_full);
+    try testing.expect(seen_early);
 }
 
 test "prometheus_proto: gauge renders as an untyped metric" {
