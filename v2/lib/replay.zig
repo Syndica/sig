@@ -88,8 +88,13 @@ pub const TxExecResult = extern struct {
     tx_hash: solana.Hash,
 };
 
+/// Stores hashes of transactions that have been recently executed.
+///
 /// Represents a minimal subset of what is known as `StatusCache` in agave.
-/// Stores the status of all active transactions that are potentially/recently executed across relevant forks.
+///
+/// Transactions are organized according to the block they specify as their
+/// recent blockhash. Transactions can appear in multiple blocks when there are forks.
+/// When a block is evicted, all the associated transaction hashes are as well.
 pub const ExecutionRegistry = extern struct {
     blocks: [BlockPool.capacity]Entry,
     tx_segment_pool: TxSegmentPool,
