@@ -96,7 +96,8 @@ const Pool = lib.collections.Pool;
 
 const Unrooted = lib.accounts_db.Unrooted;
 
-const AccountResolver = replay.account_resolve.AccountResolver;
+const AccountResolver = replay.AccountResolver;
+const BankContext = replay.BankContext;
 
 comptime {
     _ = start;
@@ -133,6 +134,18 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     const unrooted: *Unrooted = try allocator.create(Unrooted);
     unrooted.init();
 
+    const account_resolver = try allocator.create(AccountResolver);
+    account_resolver.* = AccountResolver.init(
+        rw.account_pool,
+        rw.account_lookups,
+        rw.block_pool,
+        rw.replay_transaction_pool,
+        unrooted,
+    );
+
+    const resolve_order = try allocator.create(ResolveOrder);
+    resolve_order.* = .{};
+
     const deserial_states: *DeserialStates = try allocator.create(DeserialStates);
     @memset(deserial_states, null);
 
@@ -156,11 +169,40 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         blockhash_states,
     );
 
+    var drained = false;
+    var driven = false;
+    var head_progress: ResolveHeadProgress = .none;
+
     // After the slot is supposedly populated, start shred recv (eventually Repair service) on it.
 
     task: switch (@as(enum { exec_response, fec_set, idle }, .idle)) {
         .idle => {
             if (exec_response_receiver.peek() != null) continue :task .exec_response;
+
+            drained = account_resolver.drainRootedResults();
+            head_progress = driveResolveHead(
+                logger,
+                account_resolver,
+                resolve_order,
+                rw.replay_transaction_pool,
+                rw.block_pool,
+                exec_states,
+                &exec_request_sender,
+                unrooted,
+                rw.account_pool,
+                rw.account_lookups,
+            );
+
+            driven = if (head_progress == .hold_resolver)
+                false
+            else
+                account_resolver.drivePendingLookups();
+
+            if (drained or head_progress == .progressed or driven) {
+                try runner.activity.signalActive();
+                continue :task .idle;
+            }
+
             if (deshredded_iter.peek() != null) continue :task .fec_set;
 
             const zone = tracy.Zone.init(@src(), .{ .name = "idle" });
@@ -168,6 +210,30 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 
             while (true) : (std.atomic.spinLoopHint()) {
                 if (exec_response_receiver.peek() != null) continue :task .exec_response;
+
+                drained = account_resolver.drainRootedResults();
+                head_progress = driveResolveHead(
+                    logger,
+                    account_resolver,
+                    resolve_order,
+                    rw.replay_transaction_pool,
+                    rw.block_pool,
+                    exec_states,
+                    &exec_request_sender,
+                    unrooted,
+                    rw.account_pool,
+                    rw.account_lookups,
+                );
+                driven = if (head_progress == .hold_resolver)
+                    false
+                else
+                    account_resolver.drivePendingLookups();
+
+                if (drained or head_progress == .progressed or driven) {
+                    try runner.activity.signalActive();
+                    continue :task .idle;
+                }
+
                 if (deshredded_iter.peek() != null) continue :task .fec_set;
                 try runner.activity.signalIdleSpinning();
             }
@@ -274,6 +340,9 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                 unrooted,
                 rw.account_pool,
                 rw.account_lookups,
+
+                account_resolver,
+                resolve_order,
             );
 
             continue :task .idle;
@@ -380,6 +449,35 @@ fn bootstrap(
     );
 }
 
+// TODO: replace this with something better.
+fn bankContextForBlock(
+    block_ref: lib.replay.BlockRef,
+    block_pool: *const lib.replay.BlockPool,
+) BankContext {
+    return .{
+        .current_slot = block_ref.constPtr(block_pool).slot.opt() orelse
+            unreachable,
+
+        // TODO: This is not conformant for recently deactivated ALTs.
+        // Proper SlotHashes state must be retained per Bank/fork.
+        .slot_hashes = &.{},
+    };
+}
+
+fn markTransactionCompleted(
+    block_ref: lib.replay.BlockRef,
+    transaction_index: u32,
+    exec_states: *BlockExecStates,
+) void {
+    const exec_state = &(exec_states[block_ref.index()].?);
+
+    std.debug.assert(
+        transaction_index == exec_state.n_transactions_completed,
+    );
+
+    exec_state.n_transactions_completed += 1;
+}
+
 /// Very simple FIFO queue for tracking the order in which transactions were submitted to the `AccountResolver`.
 ///
 /// For now it's used to maintain the current FIFO order of transaction execution the current replay implementation has,
@@ -394,6 +492,7 @@ const ResolveOrder = struct {
     const Entry = struct {
         request_id: AccountResolver.RequestId,
         block_ref: lib.replay.BlockRef,
+        tx_ref: lib.replay.TransactionPool.ItemId,
         transaction_idx: u32,
 
         state: enum {
@@ -402,8 +501,12 @@ const ResolveOrder = struct {
         } = .resolving_alts,
     };
 
+    pub fn isFull(self: *ResolveOrder) bool {
+        return self.count == self.entries.len;
+    }
+
     fn push(self: *ResolveOrder, entry: Entry) void {
-        std.debug.assert(self.count < self.entries.len);
+        std.debug.assert(!self.isFull());
 
         const index = (self.head + self.count) % self.entries.len;
         self.entries[index] = entry;
@@ -421,6 +524,176 @@ const ResolveOrder = struct {
         self.count -= 1;
     }
 };
+
+const ResolveHeadProgress = enum {
+    none,
+    progressed,
+
+    /// The FIFO head is complete, so do not submit additional Rooted ALT
+    /// requests while waiting to dispatch it through the temporary blocking
+    /// Phase 2 path.
+    /// TODO: we should refactor replay a bit to play nicer with resolver.
+    hold_resolver,
+};
+
+fn driveResolveHead(
+    logger: tel.Logger("main"),
+    account_resolver: *AccountResolver,
+    resolve_order: *ResolveOrder,
+    transaction_pool: *lib.replay.TransactionPool,
+    block_pool: *lib.replay.BlockPool,
+    exec_states: *BlockExecStates,
+    exec_request_sender: *lib.replay.ExecReqResponse.RequestRing.Iterator(.writer),
+    unrooted: *Unrooted,
+    account_pool: *lib.accounts_db.AccountPool,
+    rooted_lookups: *lib.accounts_db.AccountLookups,
+) ResolveHeadProgress {
+    const ordered = resolve_order.peek() orelse return .none;
+
+    if (ordered.state == .executing)
+        return .none;
+
+    const completion =
+        account_resolver.peekCompletion(ordered.request_id) orelse
+        return .none;
+
+    switch (completion.result) {
+        .needs_serialization => {
+            // Because this is the replay FIFO head and no transaction is
+            // executing, every earlier transaction has completed and committed.
+            account_resolver.retryAlts(ordered.request_id);
+            return .progressed;
+        },
+
+        .failed => |err| {
+            logger.warn().logf(
+                "transaction {} in block {} failed ALT resolution: {}",
+                .{ ordered.transaction_idx, ordered.block_ref, err },
+            );
+
+            account_resolver.consumeCompletion(ordered.request_id);
+            transaction_pool.destroyId(ordered.tx_ref);
+
+            markTransactionCompleted(
+                ordered.block_ref,
+                ordered.transaction_idx,
+                exec_states,
+            );
+
+            resolve_order.pop();
+            return .progressed;
+        },
+
+        .resolved => {
+            // fetchBlocking must be the only AccountLookups consumer.
+            if (account_resolver.hasInFlightReads())
+                return .hold_resolver;
+
+            const request = exec_request_sender.next() orelse
+                return .hold_resolver;
+
+            const loaded = loadResolvedAccountsBlocking(
+                &completion.transaction,
+                transaction_pool,
+                block_pool,
+                unrooted,
+                account_pool,
+                rooted_lookups,
+            );
+
+            request.* = .{
+                .task_id = ordered.transaction_idx,
+                .request_kind = .txn_exec,
+                .data = .{
+                    .txn_exec = .{
+                        .block_idx = ordered.block_ref,
+                        .tx_idx = ordered.tx_ref,
+                        .n_account_refs = loaded.count,
+                        .account_ref_buf = undefined,
+                    },
+                },
+            };
+
+            @memcpy(
+                request.data.txn_exec.account_ref_buf[0..loaded.count],
+                loaded.refs[0..loaded.count],
+            );
+
+            ordered.state = .executing;
+
+            // Dynamic addresses have been consumed and AccountRefs are now
+            // owned by the execution request.
+            account_resolver.consumeCompletion(ordered.request_id);
+
+            exec_request_sender.markUsed();
+            return .progressed;
+        },
+    }
+}
+
+const LoadedAccounts = struct {
+    refs: [MAX_ACCOUNT_ADDRESSES]AccountRef = undefined,
+    count: u8,
+};
+
+// TODO: make these async too if possible?
+fn loadResolvedAccountsBlocking(
+    resolved: *const lib.replay.ResolvedTransaction,
+    transaction_pool: *const lib.replay.TransactionPool,
+    block_pool: *lib.replay.BlockPool,
+    unrooted: *Unrooted,
+    account_pool: *lib.accounts_db.AccountPool,
+    rooted_lookups: *lib.accounts_db.AccountLookups,
+) LoadedAccounts {
+    const transaction = resolved.tx_ref
+        .constPtr(transaction_pool)
+        .view();
+
+    var loaded: LoadedAccounts = .{
+        .count = @intCast(transaction.totalAccountCount()),
+    };
+
+    var index: usize = 0;
+
+    for (transaction.staticAccountKeys()) |*key| {
+        loaded.refs[index] = fetchBlocking(
+            unrooted,
+            key,
+            resolved.block_ref,
+            block_pool,
+            account_pool,
+            rooted_lookups,
+        );
+        index += 1;
+    }
+
+    for (resolved.writableAddresses(transaction_pool)) |*key| {
+        loaded.refs[index] = fetchBlocking(
+            unrooted,
+            key,
+            resolved.block_ref,
+            block_pool,
+            account_pool,
+            rooted_lookups,
+        );
+        index += 1;
+    }
+
+    for (resolved.readonlyAddresses(transaction_pool)) |*key| {
+        loaded.refs[index] = fetchBlocking(
+            unrooted,
+            key,
+            resolved.block_ref,
+            block_pool,
+            account_pool,
+            rooted_lookups,
+        );
+        index += 1;
+    }
+
+    std.debug.assert(index == loaded.count);
+    return loaded;
+}
 
 // TODO:
 // 1) *never* block the replay thread (remove this function)
@@ -792,6 +1065,8 @@ fn maybeContinueBlockExec(
     unrooted: *Unrooted,
     account_pool: *lib.accounts_db.AccountPool,
     rooted_lookups: *lib.accounts_db.AccountLookups,
+    account_resolver: *AccountResolver,
+    resolve_order: *ResolveOrder,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "maybeContinueBlockExec" });
     defer zone.deinit();
@@ -843,6 +1118,8 @@ fn maybeContinueBlockExec(
                     unrooted,
                     account_pool,
                     rooted_lookups,
+                    account_resolver,
+                    resolve_order,
                 );
             }
             current.* = .default;
@@ -861,6 +1138,11 @@ fn maybeContinueBlockExec(
 
     // Read transactions until we can't anymore, sending to exec as we go
     while (true) {
+        if (!account_resolver.canSubmit() or resolve_order.isFull()) {
+            block_deserial_state.blocked_on_resolver = true;
+            break;
+        }
+
         const tx_ref = try transaction_pool.createId();
         errdefer transaction_pool.destroyId(tx_ref);
 
@@ -877,7 +1159,29 @@ fn maybeContinueBlockExec(
 
         // index within the block
         const tx_index: u32 = exec_state.n_transactions_requested;
+
+        // Submit the transaction to the resolver.
+        const req_id = try account_resolver.submit(
+            block_ref,
+            tx_ref,
+            bankContextForBlock(block_ref, block_pool),
+        );
+
+        // Track that we've submitted this transaction to the resolver.
+        // NOTE: we track the submissions in a FIFO queue for now since replay currently
+        // executes transactions in FIFO (block-specified) order
+        resolve_order.push(.{
+            .request_id = req_id,
+            .block_ref = block_ref,
+            .tx_ref = tx_ref,
+            .transaction_idx = tx_index,
+        });
+
         exec_state.n_transactions_requested += 1;
+
+        // We have submitted a transaction to the resolver, so we are no longer blocked on it.
+        // TODO: do we still need this?
+        block_deserial_state.blocked_on_resolver = false;
 
         // prepare transaction's accounts and send the task to exec
         // NOTE: in the future this should be "sent" to the transaction scheduler, not to exec
@@ -1066,6 +1370,9 @@ fn maybeContinueBlockExec(
             unrooted,
             account_pool,
             rooted_lookups,
+
+            account_resolver,
+            resolve_order,
         );
 
         maybe_child = if (child.sibling.opt()) |id| id.ptr(forest_pool) else null;
@@ -1083,6 +1390,8 @@ const BlockDeserialState = struct {
 
     // set to false when there's no entries left
     start_of_batch: bool,
+
+    blocked_on_resolver: bool = false,
 
     const NextRead = enum { n_entries, num_hashes, hash, n_transactions, transaction };
 

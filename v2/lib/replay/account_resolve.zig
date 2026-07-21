@@ -58,27 +58,29 @@ pub const AccountResolver = struct {
     /// request user-data.
     pub const MAX_PENDING_TRANSACTIONS: usize = AccountLookups.capacity;
 
-    pub const InitParams = struct {
+    pub const SubmitError = error{Full};
+
+    pub fn init(
         account_pool: *lib.accounts_db.AccountPool,
         account_lookups: *AccountLookups,
         block_pool: *lib.replay.BlockPool,
         transaction_pool: *lib.replay.TransactionPool,
         unrooted: *lib.accounts_db.Unrooted,
-    };
-
-    pub const SubmitError = error{Full};
-
-    pub fn init(params: InitParams) AccountResolver {
+    ) AccountResolver {
         return AccountResolver{
-            .account_pool = params.account_pool,
-            .account_lookups = params.account_lookups,
-            .block_pool = params.block_pool,
-            .transaction_pool = params.transaction_pool,
-            .unrooted = params.unrooted,
+            .account_pool = account_pool,
+            .account_lookups = account_lookups,
+            .block_pool = block_pool,
+            .transaction_pool = transaction_pool,
+            .unrooted = unrooted,
 
             .pending = @splat(.empty()),
             .pending_count = 0,
         };
+    }
+
+    pub fn canSubmit(self: *const AccountResolver) bool {
+        return self.pending_count < self.pending.len;
     }
 
     /// Queues one transaction for ALT resolution.
@@ -174,6 +176,15 @@ pub const AccountResolver = struct {
         }
 
         unreachable;
+    }
+
+    pub fn hasInFlightReads(self: *const AccountResolver) bool {
+        for (self.pending) |pending| {
+            if (pending.status != .free and pending.in_flight_lookups > 0)
+                return true;
+        }
+
+        return false;
     }
 
     pub fn getPendingMut(
@@ -301,7 +312,7 @@ pub const AccountResolver = struct {
 
             /// Speculative ALT resolution failed. The caller must establish a serialization
             /// boundary and retry with `retryAlts()`.
-            needs_serialization: LookupError,
+            needs_serialization: ResolveError,
 
             /// Terminal failure that cannot be retried.
             failed: ResolveError,
@@ -365,7 +376,7 @@ pub const AccountResolver = struct {
 
         const LookupFailure = struct {
             lookup_index: u8,
-            err: LookupError,
+            err: ResolveError,
         };
 
         const AltAttempt = enum {
@@ -449,7 +460,7 @@ pub const AccountResolver = struct {
         return drained or driven;
     }
 
-    fn drainRootedResults(self: *AccountResolver) bool {
+    pub fn drainRootedResults(self: *AccountResolver) bool {
         var reader = self.account_lookups.out.get(.reader);
         var consumed: usize = 0;
 
@@ -467,7 +478,7 @@ pub const AccountResolver = struct {
     }
 
     // TODO: Refactor this code to show the unrooted -> rooted flow more clearly.
-    fn drivePendingLookups(self: *AccountResolver) bool {
+    pub fn drivePendingLookups(self: *AccountResolver) bool {
         // TODO: store writer on AccountResolver struct.
         var writer = self.account_lookups.in.get(.writer);
 
@@ -477,7 +488,7 @@ pub const AccountResolver = struct {
 
         defer if (submitted_count != 0) writer.markUsed();
 
-        for (&self.pending_count, 0..) |*pending, pending_idx| {
+        for (&self.pending, 0..) |*pending, pending_idx| {
             if (pending.status != .resolving)
                 continue;
 
@@ -844,14 +855,16 @@ pub const AccountResolver = struct {
 };
 
 // TODO: is there a better way to consolidate the error states and helper fn below?
-pub const LookupError = error{
+pub const ResolveError = error{
     LookupTableNotFound,
     InvalidLookupTableOwner,
     InvalidLookupTableData,
     InvalidLookupTableIndex,
-};
 
-pub const ResolveError = LookupError || error{AccountLoadedTwice};
+    // fatal/terminal errors below
+
+    AccountLoadedTwice,
+};
 
 fn isLookupError(err: ResolveError) bool {
     return switch (err) {
@@ -1122,13 +1135,13 @@ const Fixture = struct {
     }
 
     fn resolver(self: *Fixture) AccountResolver {
-        return AccountResolver.init(.{
-            .account_pool = self.account_pool,
-            .account_lookups = self.account_lookups,
-            .block_pool = self.block_pool,
-            .transaction_pool = self.transaction_pool,
-            .unrooted = self.unrooted,
-        });
+        return AccountResolver.init(
+            self.account_pool,
+            self.account_lookups,
+            self.block_pool,
+            self.transaction_pool,
+            self.unrooted,
+        );
     }
 
     fn bankContextForSlot(_: *const Fixture, slot: lib.solana.Slot) BankContext {
