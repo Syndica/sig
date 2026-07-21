@@ -34,7 +34,7 @@ const Pubkey = lib.solana.Pubkey;
 const AccountLookups = lib.accounts_db.AccountLookups;
 const AccountPool = lib.accounts_db.AccountPool;
 
-pub const AccountResolver = struct {
+pub const ALTResolver = struct {
     account_pool: *lib.accounts_db.AccountPool,
     account_lookups: *AccountLookups,
     block_pool: *lib.replay.BlockPool,
@@ -66,8 +66,8 @@ pub const AccountResolver = struct {
         block_pool: *lib.replay.BlockPool,
         transaction_pool: *lib.replay.TransactionPool,
         unrooted: *lib.accounts_db.Unrooted,
-    ) AccountResolver {
-        return AccountResolver{
+    ) ALTResolver {
+        return ALTResolver{
             .account_pool = account_pool,
             .account_lookups = account_lookups,
             .block_pool = block_pool,
@@ -79,7 +79,7 @@ pub const AccountResolver = struct {
         };
     }
 
-    pub fn canSubmit(self: *const AccountResolver) bool {
+    pub fn canSubmit(self: *const ALTResolver) bool {
         return self.pending_count < self.pending.len;
     }
 
@@ -102,7 +102,7 @@ pub const AccountResolver = struct {
     /// TODO: The resolver should retain a bank/fork context reference rather than
     /// borrowing unrelated slices and pool IDs independently.
     pub fn submit(
-        self: *AccountResolver,
+        self: *ALTResolver,
         block_ref: lib.replay.BlockRef,
         tx_ref: lib.replay.TransactionPool.ItemId,
         bank_context: BankContext,
@@ -166,7 +166,7 @@ pub const AccountResolver = struct {
     }
 
     // TODO: use a free list instead.
-    fn findFreePendingIndex(self: *const AccountResolver) ?usize {
+    fn findFreePendingIndex(self: *const ALTResolver) ?usize {
         if (self.pending_count == self.pending.len)
             return null;
 
@@ -178,7 +178,7 @@ pub const AccountResolver = struct {
         unreachable;
     }
 
-    pub fn hasInFlightReads(self: *const AccountResolver) bool {
+    pub fn hasInFlightReads(self: *const ALTResolver) bool {
         for (self.pending) |pending| {
             if (pending.status != .free and pending.in_flight_lookups > 0)
                 return true;
@@ -188,7 +188,7 @@ pub const AccountResolver = struct {
     }
 
     pub fn getPendingMut(
-        self: *AccountResolver,
+        self: *ALTResolver,
         request_id: RequestId,
     ) *PendingTransaction {
         const pending = &self.pending[request_id.pending_index];
@@ -198,7 +198,7 @@ pub const AccountResolver = struct {
     }
 
     pub fn getPendingConst(
-        self: *const AccountResolver,
+        self: *const ALTResolver,
         request_id: RequestId,
     ) *const PendingTransaction {
         const pending = &self.pending[request_id.pending_index];
@@ -214,7 +214,7 @@ pub const AccountResolver = struct {
     ///
     /// TODO: we should return a batch of completions instead of one at a time.
     pub fn peekCompletion(
-        self: *const AccountResolver,
+        self: *const ALTResolver,
         request_id: RequestId,
     ) ?*const Completion {
         const pending = self.getPendingConst(request_id);
@@ -230,7 +230,7 @@ pub const AccountResolver = struct {
     /// This invalidates any pointer previously return for that completion.
     /// It does not destroy the `TransactionPool.ItemId`, ownership of `tx_ref` remains with the caller.
     pub fn consumeCompletion(
-        self: *AccountResolver,
+        self: *ALTResolver,
         request_id: RequestId,
     ) void {
         const pending = self.getPendingMut(request_id);
@@ -242,7 +242,7 @@ pub const AccountResolver = struct {
         self.pending_count -= 1;
     }
 
-    /// Restarts ALT expansion for the requested transaction.
+    /// Restarts ALT expansion for the requested transaction, returning an updated `RequestId` for the retry.
     ///
     /// The initial expansion may be speculative: replay can parse ahead of earlier
     /// transactions that create or extend a referenced lookup table. The caller
@@ -265,20 +265,20 @@ pub const AccountResolver = struct {
     /// [fd](Authoritative execution-time ALT reload right before exec):
     /// * https://github.com/firedancer-io/firedancer/blob/0c9b9cc9d0e6c36a500bade630e66c8304c3e0a0/src/flamenco/runtime/fd_executor.c#L877.
     /// NOTE: replay/scheduler must ensure that all prior transactions have completed and commited their writes.
-    pub fn retryAlts(self: *AccountResolver, request_id: RequestId) void {
+    pub fn retryAlts(
+        self: *ALTResolver,
+        request_id: RequestId,
+    ) RequestId {
         const pending = self.getPendingMut(request_id);
+
         switch (pending.completion.result) {
-            .needs_serialization => {},
+            .needs_serialization => |_| {},
             else => unreachable,
         }
 
         std.debug.assert(pending.status == .complete);
         std.debug.assert(pending.in_flight_lookups == 0);
-        std.debug.assert(pending.completion.result == .failed);
         std.debug.assert(pending.alt_attempt == .speculative);
-
-        const err = pending.completion.result.failed;
-        std.debug.assert(isLookupError(err));
 
         pending.gen = nextGeneration(pending.gen);
         pending.status = .resolving;
@@ -287,6 +287,11 @@ pub const AccountResolver = struct {
         pending.failure = null;
         pending.alt_attempt = .authoritative;
         pending.completion.result = undefined;
+
+        return .{
+            .pending_index = request_id.pending_index,
+            .generation = pending.gen,
+        };
     }
 
     pub const RequestId = packed struct(u32) {
@@ -312,7 +317,7 @@ pub const AccountResolver = struct {
 
             /// Speculative ALT resolution failed. The caller must establish a serialization
             /// boundary and retry with `retryAlts()`.
-            needs_serialization: ResolveError,
+            needs_serialization: LookupError,
 
             /// Terminal failure that cannot be retried.
             failed: ResolveError,
@@ -376,7 +381,7 @@ pub const AccountResolver = struct {
 
         const LookupFailure = struct {
             lookup_index: u8,
-            err: ResolveError,
+            err: LookupError,
         };
 
         const AltAttempt = enum {
@@ -454,13 +459,13 @@ pub const AccountResolver = struct {
         unreachable; // target_index is guaranteed to be valid by the caller
     }
 
-    pub fn poll(self: *AccountResolver) bool {
+    pub fn poll(self: *ALTResolver) bool {
         const drained = self.drainRootedResults();
         const driven = self.drivePendingLookups();
         return drained or driven;
     }
 
-    pub fn drainRootedResults(self: *AccountResolver) bool {
+    pub fn drainRootedResults(self: *ALTResolver) bool {
         var reader = self.account_lookups.out.get(.reader);
         var consumed: usize = 0;
 
@@ -478,7 +483,7 @@ pub const AccountResolver = struct {
     }
 
     // TODO: Refactor this code to show the unrooted -> rooted flow more clearly.
-    pub fn drivePendingLookups(self: *AccountResolver) bool {
+    pub fn drivePendingLookups(self: *ALTResolver) bool {
         // TODO: store writer on AccountResolver struct.
         var writer = self.account_lookups.in.get(.writer);
 
@@ -582,7 +587,7 @@ pub const AccountResolver = struct {
     }
 
     fn processRootedResult(
-        self: *AccountResolver,
+        self: *ALTResolver,
         result: AccountLookups.Result,
     ) void {
         const ticket: LookupTicket = @bitCast(result.req_user_data);
@@ -643,7 +648,7 @@ pub const AccountResolver = struct {
         }
 
         // TODO: re-write this bit
-        const maybe_error: ?ResolveError =
+        const maybe_error: ?LookupError =
             if (result.account_index == .invalid)
                 error.LookupTableNotFound
             else blk: {
@@ -666,11 +671,11 @@ pub const AccountResolver = struct {
     }
 
     fn resolveLookupAccount(
-        self: *AccountResolver,
+        self: *ALTResolver,
         pending: *PendingTransaction,
         lookup_index: u8,
         account_ref: AccountPool.AccountRef,
-    ) ResolveError!void {
+    ) LookupError!void {
         std.debug.assert(account_ref != .invalid);
 
         const resolved = &pending.completion.transaction;
@@ -736,7 +741,7 @@ pub const AccountResolver = struct {
     fn recordLookupFailure(
         pending: *PendingTransaction,
         lookup_index: u8,
-        err: ResolveError,
+        err: LookupError,
     ) void {
         // NOTE: We track the lowest-index failure we've seen so far. This is to match
         // expected validator behavior.
@@ -761,7 +766,7 @@ pub const AccountResolver = struct {
     }
 
     fn maybeCompletePending(
-        self: *AccountResolver,
+        self: *ALTResolver,
         pending: *PendingTransaction,
     ) bool {
         if (pending.in_flight_lookups != 0)
@@ -842,7 +847,7 @@ pub const AccountResolver = struct {
     }
 
     fn releaseAccount(
-        self: *AccountResolver,
+        self: *ALTResolver,
         account_ref: AccountPool.AccountRef,
     ) void {
         if (account_ref == .invalid)
@@ -855,16 +860,14 @@ pub const AccountResolver = struct {
 };
 
 // TODO: is there a better way to consolidate the error states and helper fn below?
-pub const ResolveError = error{
+pub const LookupError = error{
     LookupTableNotFound,
     InvalidLookupTableOwner,
     InvalidLookupTableData,
     InvalidLookupTableIndex,
-
-    // fatal/terminal errors below
-
-    AccountLoadedTwice,
 };
+
+pub const ResolveError = LookupError || error{AccountLoadedTwice};
 
 fn isLookupError(err: ResolveError) bool {
     return switch (err) {
@@ -912,7 +915,7 @@ pub const ResolvedTransaction = struct {
 fn decodeLookupTableAccount(
     owner: *const Pubkey,
     data: []const u8,
-) ResolveError!alt.AddressLookupTable {
+) LookupError!alt.AddressLookupTable {
     if (!owner.equals(&alt.ID))
         return error.InvalidLookupTableOwner;
 
@@ -930,7 +933,7 @@ fn resolveTableLookup(
     deactivation_slot_is_recent: bool,
     writable_out: []Pubkey,
     readonly_out: []Pubkey,
-) ResolveError!void {
+) LookupError!void {
     const active =
         table.meta.deactivation_slot == std.math.maxInt(lib.solana.Slot) or
         table.meta.deactivation_slot == current_slot or
@@ -1134,8 +1137,8 @@ const Fixture = struct {
         return tx_ref;
     }
 
-    fn resolver(self: *Fixture) AccountResolver {
-        return AccountResolver.init(
+    fn resolver(self: *Fixture) ALTResolver {
+        return ALTResolver.init(
             self.account_pool,
             self.account_lookups,
             self.block_pool,
@@ -1184,11 +1187,14 @@ test "AccountResolver: no-ALT legacy transaction completes at submit()" {
     const pending = resolver.getPendingConst(req);
 
     // Nothing was sent to Rooted, so nothing should be in flight.
-    try std.testing.expectEqual(AccountResolver.PendingTransaction.Status.complete, pending.status);
+    try std.testing.expectEqual(ALTResolver.PendingTransaction.Status.complete, pending.status);
     try std.testing.expectEqual(@as(u8, 0), pending.in_flight_lookups);
 
     // Initial submission is always speculative
-    try std.testing.expectEqual(AccountResolver.PendingTransaction.AltAttempt.speculative, pending.alt_attempt);
+    try std.testing.expectEqual(
+        ALTResolver.PendingTransaction.AltAttempt.speculative,
+        pending.alt_attempt,
+    );
 
     // No Rooted requests should have been queued: no ALTs means no lookups.
     var rooted_reader = fx.account_lookups.in.get(.reader);
@@ -1201,7 +1207,7 @@ test "AccountResolver: no-ALT legacy transaction completes at submit()" {
     // Slot is back to .free; the RequestId is now dangling and must not be
     // peeked at (peekCompletion would trip the getPendingConst() assert).
     try std.testing.expectEqual(
-        AccountResolver.PendingTransaction.Status.free,
+        ALTResolver.PendingTransaction.Status.free,
         resolver.pending[req.pending_index].status,
     );
 }

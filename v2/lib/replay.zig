@@ -4,11 +4,13 @@ const collections = @import("collections.zig");
 const ipc = @import("ipc.zig");
 const util = @import("util.zig");
 const accounts_db = @import("accounts_db.zig");
-const account_resolve = @import("replay/account_resolve.zig");
+const alt_resolve = @import("replay/alt_resolve.zig");
+const scheduler = @import("replay/scheduler.zig");
 
 comptime {
     if (@import("builtin").is_test) {
-        _ = @import("replay/account_resolve.zig");
+        _ = @import("replay/alt_resolve.zig");
+        _ = @import("replay/scheduler.zig");
     }
 }
 
@@ -21,7 +23,11 @@ pub const TransactionPool = collections.SharedPool(TransactionRecord, 10_000);
 
 pub const BlockPool = collections.SharedPool(Node, 1024);
 
-pub const AccountResolver = account_resolve.AccountResolver;
+pub const AccountResolver = alt_resolve.ALTResolver;
+pub const ResolvedTransaction = alt_resolve.ResolvedTransaction;
+pub const BankContext = alt_resolve.BankContext;
+
+pub const FIFOScheduler = scheduler.FIFOScheduler;
 
 /// Transaction bytes plus their validated wire layout.
 ///
