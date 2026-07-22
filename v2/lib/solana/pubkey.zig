@@ -28,7 +28,7 @@ pub const Pubkey = extern struct {
     pub fn initRandom(random: std.Random) Pubkey {
         var bytes: [SIZE]u8 = undefined;
         random.bytes(&bytes);
-        return .{ .data = Edwards25519.fromUniform(bytes).toBytes() };
+        return .{ .data = bytes };
     }
 
     // Port of https://github.com/ogxd/gxhash/

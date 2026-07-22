@@ -377,7 +377,7 @@ const testHelpers = struct {
 
         var buf: [RepairMessage.MAX_SERIALIZED_SIZE]u8 = undefined;
         const serialized = try bincode.writeToSlice(&buf, msg, .{});
-        try std.testing.expect(std.mem.eql(u8, expected, serialized));
+        try std.testing.expectEqualSlices(u8, expected, serialized);
 
         switch (msg) {
             .pong => |_| try msg.verify(serialized, undefined, 0),
