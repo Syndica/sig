@@ -338,6 +338,7 @@ fn bootstrap(
             .slot = root_slot,
             .fec_set_idx = 0, // cannot be determined from the snapshot
         },
+        .parent_offset = 0, // cannot be determined from the snapshot
         .data_complete = true,
         .slot_complete = true,
         .payload_len = 0, // cannot be determined from the snapshot

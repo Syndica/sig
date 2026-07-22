@@ -112,6 +112,7 @@ pub const MerkleNode = extern struct {
     merkle_root: Hash,
     chained_merkle_root: Hash,
     id: FecSetId,
+    parent_offset: u16,
     data_complete: bool,
     slot_complete: bool,
 
@@ -507,6 +508,7 @@ pub fn insertFecSet(
             .merkle_root = deshredded_node.merkle_root,
             .chained_merkle_root = deshredded_node.chained_merkle_root,
             .id = deshredded_node.id,
+            .parent_offset = deshredded_node.parent_offset,
             .data_complete = deshredded_node.data_complete,
             .slot_complete = deshredded_node.slot_complete,
 
@@ -546,6 +548,7 @@ test "MerkleForest tree put" {
 
         .id = .{ .slot = 409284941, .fec_set_idx = 0 },
 
+        .parent_offset = 1,
         .data_complete = true,
         .slot_complete = false,
 
@@ -559,6 +562,7 @@ test "MerkleForest tree put" {
 
         .id = .{ .slot = 409284941, .fec_set_idx = 32 },
 
+        .parent_offset = 1,
         .data_complete = true,
         .slot_complete = false,
 
@@ -572,6 +576,7 @@ test "MerkleForest tree put" {
 
         .id = .{ .slot = 409284941, .fec_set_idx = 64 },
 
+        .parent_offset = 1,
         .data_complete = true,
         .slot_complete = false,
 
@@ -585,6 +590,7 @@ test "MerkleForest tree put" {
 
         .id = .{ .slot = 409284941, .fec_set_idx = 96 },
 
+        .parent_offset = 1,
         .data_complete = true,
         .slot_complete = true,
 
@@ -599,6 +605,7 @@ test "MerkleForest tree put" {
 
         .id = .{ .slot = 409284942, .fec_set_idx = 0 },
 
+        .parent_offset = 1,
         .data_complete = true,
         .slot_complete = true,
 

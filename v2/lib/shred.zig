@@ -103,6 +103,9 @@ pub const DeshreddedFecSet = extern struct {
     chained_merkle_root: Hash,
     /// set to a meaningless value for the bootstrap root
     id: FecSetId,
+    /// `slot - parent_slot`. Identical across a FEC set's data shreds
+    /// (merkle-hashed DataHeader field).
+    parent_offset: u16,
     data_complete: bool,
     slot_complete: bool,
     /// empty for the bootstrap root

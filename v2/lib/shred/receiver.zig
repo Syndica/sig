@@ -434,6 +434,11 @@ pub const Receiver = struct {
                 .merkle_root = fec_set_ctx.merkle_root,
                 .chained_merkle_root = fec_set_ctx.chained_merkle_root,
                 .id = fec_set_id,
+                // All data shreds carry the same parent_offset; index 0 is
+                // populated by RS recovery above if the wire shred was missing.
+                .parent_offset = Shred.fromBufferUnchecked(
+                    &fec_set_ctx.data_shreds_buf[0],
+                ).code_or_data.data.parent_offset,
                 .data_complete = data_complete,
                 .slot_complete = slot_complete,
                 .payload_len = total_payload_len,
