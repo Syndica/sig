@@ -198,6 +198,10 @@ pub const Receiver = struct {
                 // equivocation problem.
                 return error.MismatchedMerkleRoot;
 
+            // All shreds in a FEC set carry the same chained_merkle_root (SIMD-0340).
+            if (!shred.chainedMerkleRoot().eql(&fec_set_ctx.chained_merkle_root))
+                return error.MismatchedChainedMerkleRoot;
+
             break :existing_set fec_set_ctx;
         } else new_set: {
             // fec set is not currently being built (likely finished already)
@@ -269,6 +273,7 @@ pub const Receiver = struct {
                     shred.variant.swapType(),
 
                 .merkle_root = shred_merkle_root,
+                .chained_merkle_root = shred.chainedMerkleRoot().*,
 
                 .data_shreds_received = .initEmpty(),
                 .code_shreds_received = .initEmpty(),
@@ -427,7 +432,7 @@ pub const Receiver = struct {
 
             finished.* = .{
                 .merkle_root = fec_set_ctx.merkle_root,
-                .chained_merkle_root = shred.chainedMerkleRoot().*,
+                .chained_merkle_root = fec_set_ctx.chained_merkle_root,
                 .id = fec_set_id,
                 .data_complete = data_complete,
                 .slot_complete = slot_complete,
@@ -448,7 +453,12 @@ pub const Receiver = struct {
             std.debug.assert(bytes_written == total_payload_len);
         }
 
-        state.done.setDone(&shred.signature, fec_set_id);
+        state.done.setDone(
+            &shred.signature,
+            fec_set_id,
+            &fec_set_ctx.merkle_root,
+            &fec_set_ctx.chained_merkle_root,
+        );
         state.in_progress.removeFinishedSet(fec_set_ctx);
 
         tracy.frameMarkNamed("finished FEC sets");
@@ -465,6 +475,12 @@ pub const Receiver = struct {
         fec_set_already_finished,
         shred_already_seen,
     };
+};
+
+/// The two roots pinned for a completed FEC set.
+pub const FecSetRoots = struct {
+    merkle_root: Hash,
+    chained_merkle_root: Hash,
 };
 
 /// Represents a FEC (Forward Error Correction) set which has yet to be reconstructed.
@@ -485,6 +501,8 @@ pub const FecSetCtx = extern struct {
 
     // we store the first seen, and make sure later shreds have the same one
     merkle_root: Hash,
+    // Merkle root of the previous FEC set (SIMD-0340). First-seen wins.
+    chained_merkle_root: Hash,
 
     // https://github.com/firedancer-io/firedancer/blob/ecd2d6d8f5b9f926d0b9aa9360efe36ea1550ad6/src/ballet/reedsol/fd_reedsol.h#L23
     // https://github.com/solana-foundation/specs/blob/main/p2p/shred.md
@@ -1013,7 +1031,13 @@ const DoneSets = struct {
 
     // This signature+id must not be inside DoneSet already - any shred inside DoneSets should be
     // dropped early, so setDone should be unreachable in this case.
-    fn setDone(self: *DoneSets, signature: *const Signature, id: FecSetId) void {
+    fn setDone(
+        self: *DoneSets,
+        signature: *const Signature,
+        id: FecSetId,
+        merkle_root: *const Hash,
+        chained_merkle_root: *const Hash,
+    ) void {
         const done_ctx: DoneContext = .{ .done_map = &self.done_map };
 
         self.assertCounts();
@@ -1036,7 +1060,12 @@ const DoneSets = struct {
         };
 
         const new_done: *DoneItem = self.done_pool.indexToPtr(new_pool_id);
-        new_done.* = .{ .id = id, .signature_hashed = hashSignature(signature) };
+        new_done.* = .{
+            .id = id,
+            .signature_hashed = hashSignature(signature),
+            .merkle_root = merkle_root.*,
+            .chained_merkle_root = chained_merkle_root.*,
+        };
         self.eviction.add(new_pool_id) catch unreachable;
         const entry = self.done_map.getOrPutAssumeCapacityAdapted(&id, done_ctx);
         std.debug.assert(!entry.found_existing);
@@ -1058,12 +1087,27 @@ const DoneSets = struct {
             .mismatching_signature;
     }
 
+    /// Roots pinned for a completed FEC set, or null if `id` is unknown.
+    fn getRoots(self: *const DoneSets, id: FecSetId) ?FecSetRoots {
+        const done_ctx: DoneContext = .{ .done_map = &self.done_map };
+        const entry = self.done_map.getAdapted(&id, done_ctx) orelse return null;
+        return .{
+            .merkle_root = entry.merkle_root,
+            .chained_merkle_root = entry.chained_merkle_root,
+        };
+    }
+
     fn assertCounts(self: *const DoneSets) void {
         std.debug.assert(self.eviction.items.len == self.done_map.count());
         tracy.plot(u32, "done FEC sets", @intCast(self.eviction.items.len));
     }
 
-    const DoneItem = extern struct { signature_hashed: u32, id: FecSetId };
+    const DoneItem = extern struct {
+        signature_hashed: u32,
+        id: FecSetId,
+        merkle_root: Hash,
+        chained_merkle_root: Hash,
+    };
     const Eviction = std.PriorityQueue(Pool.ItemId, QueueContext, QueueContext.order);
     const Pool = lib.collections.Pool(DoneItem, u32);
     const DoneMap = std.ArrayHashMapUnmanaged(void, *DoneItem, DoneContext, true);
@@ -1111,19 +1155,19 @@ test "DoneSets basic usage" {
     const id_2: FecSetId = .{ .slot = 2, .fec_set_idx = 0 };
     const id_3: FecSetId = .{ .slot = 3, .fec_set_idx = 0 };
 
-    done_sets.setDone(&sig_1, id_1);
+    done_sets.setDone(&sig_1, id_1, &Hash.ZEROES, &Hash.ZEROES);
 
     try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_1, &sig_1));
     try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_2, &sig_2));
     try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_3, &sig_3));
 
-    done_sets.setDone(&sig_2, id_2);
+    done_sets.setDone(&sig_2, id_2, &Hash.ZEROES, &Hash.ZEROES);
 
     try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_1, &sig_1));
     try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
     try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_3, &sig_3));
 
-    done_sets.setDone(&sig_3, id_3);
+    done_sets.setDone(&sig_3, id_3, &Hash.ZEROES, &Hash.ZEROES);
 
     try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_1, &sig_1)); // 1 was evicted
     try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
@@ -1146,8 +1190,8 @@ test "DoneSets reset clears state without freeing" {
     const id_1: FecSetId = .{ .slot = 1, .fec_set_idx = 0 };
     const id_2: FecSetId = .{ .slot = 2, .fec_set_idx = 0 };
 
-    done_sets.setDone(&sig_1, id_1);
-    done_sets.setDone(&sig_2, id_2);
+    done_sets.setDone(&sig_1, id_1, &Hash.ZEROES, &Hash.ZEROES);
+    done_sets.setDone(&sig_2, id_2, &Hash.ZEROES, &Hash.ZEROES);
     try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_1, &sig_1));
     try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
 
@@ -1159,8 +1203,35 @@ test "DoneSets reset clears state without freeing" {
 
     // Capacity is retained — refilling to the original size must not allocate
     // (eviction.allocator is the testing failing allocator after init).
-    done_sets.setDone(&sig_1, id_1);
-    done_sets.setDone(&sig_2, id_2);
+    done_sets.setDone(&sig_1, id_1, &Hash.ZEROES, &Hash.ZEROES);
+    done_sets.setDone(&sig_2, id_2, &Hash.ZEROES, &Hash.ZEROES);
     try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_1, &sig_1));
     try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
+}
+
+test "DoneSets.getRoots returns the pinned roots" {
+    const allocator = std.testing.allocator;
+
+    var done_sets: DoneSets = try .init(allocator, 4);
+    defer done_sets.deinit(allocator);
+
+    const sig_1: Signature = .ZEROES;
+    const id_1: FecSetId = .{ .slot = 7, .fec_set_idx = 0 };
+
+    const merkle: Hash = .{ .data = @splat(0xAA) };
+    const chained: Hash = .{ .data = @splat(0xBB) };
+
+    try std.testing.expectEqual(null, done_sets.getRoots(id_1));
+
+    done_sets.setDone(&sig_1, id_1, &merkle, &chained);
+
+    const got = done_sets.getRoots(id_1) orelse return error.TestUnexpectedNull;
+    try std.testing.expect(got.merkle_root.eql(&merkle));
+    try std.testing.expect(got.chained_merkle_root.eql(&chained));
+
+    // Unknown id still misses.
+    try std.testing.expectEqual(
+        null,
+        done_sets.getRoots(.{ .slot = 7, .fec_set_idx = 32 }),
+    );
 }
