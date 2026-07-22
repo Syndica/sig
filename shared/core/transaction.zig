@@ -31,15 +31,20 @@ pub const Transaction = struct {
     /// MAX_ACCOUNTS is the maximum number of accounts that can be loaded by a transaction.
     pub const MAX_ACCOUNTS: u16 = 128;
 
-    /// MAX_INSTRUCTIONS is the maximum number of instructions that can be executed by a transaction.
+    /// MAX_INSTRUCTIONS is the maximum number of instructions that can be executed by a
+    /// transaction.
     pub const MAX_INSTRUCTIONS: u8 = 64;
 
-    /// MAX_ADDRESS_LOOKUP_TABLES is the maximum number of address lookup tables that can be used by a transaction.
+    /// MAX_ADDRESS_LOOKUP_TABLES is the maximum number of address lookup tables that can be used by
+    /// a transaction.
     pub const MAX_ADDRESS_LOOKUP_TABLES: u16 = 127;
 
-    /// VERSION_PREFIX is used to differentiate between legacy and versioned transactions. If the first byte after the
-    /// signatures has its high bit set, then the transaction is versioned and the remaining bits represent the version.
-    /// Otherwise, the transaction is legacy and the first byte after the signatures is the first byte of the message.
+    /// VERSION_PREFIX is used to differentiate between legacy and versioned transactions. If the
+    /// first byte after the
+    /// signatures has its high bit set, then the transaction is versioned and the remaining bits
+    /// represent the version.
+    /// Otherwise, the transaction is legacy and the first byte after the signatures is the first
+    /// byte of the message.
     pub const VERSION_PREFIX: u8 = 0x80;
 
     pub const @"!bincode-config": sig.bincode.FieldConfig(Transaction) = .{
@@ -148,7 +153,8 @@ pub const Transaction = struct {
         const signatures = try allocator.alloc(Signature, message.signature_count);
         errdefer allocator.free(signatures);
 
-        // NOTE: The current only usecase is when we send votes, which *does* sign the same message twice.
+        // NOTE: The current only usecase is when we send votes, which *does* sign the same message
+        // twice.
         const signing_keys = message.account_keys[0..message.signature_count];
         for (signing_keys, 0..) |key, i| {
             for (keypairs) |kp| {
@@ -229,7 +235,8 @@ pub const Transaction = struct {
         ) catch return error.SignatureVerificationFailed;
     }
 
-    /// Count the number of accounts in the slice of transactions, including accounts from lookup tables
+    /// Count the number of accounts in the slice of transactions, including accounts from lookup
+    /// tables
     pub fn numAccounts(transactions: []const Transaction) usize {
         var total_accounts: usize = 0;
         for (transactions) |transaction| {
@@ -242,10 +249,12 @@ pub const Transaction = struct {
         return total_accounts;
     }
 
-    /// Run some sanity checks on the signature counts and message to ensure the internal data has consistency.
+    /// Run some sanity checks on the signature counts and message to ensure the internal data has
+    /// consistency.
     ///
     /// Does *not* verify signatures. Call `verify` to verify signatures.
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/42711325c40b314dafe3d5a41eb5b19af49cf1dc/transaction/src/versioned/mod.rs#L120
+    /// [agave]
+    /// https://github.com/anza-xyz/solana-sdk/blob/4271132/transaction/src/versioned/mod.rs#L120
     pub fn validate(self: Transaction) !void {
         switch (std.math.order(self.msg.signature_count, self.signatures.len)) {
             .lt => return error.TooManySignatures,
@@ -522,8 +531,10 @@ pub const Message = struct {
 
     /// Run some sanity checks on the message to ensure the internal data has consistency.
     ///
-    /// V0 - [agave] https://github.com/anza-xyz/solana-sdk/blob/42711325c40b314dafe3d5a41eb5b19af49cf1dc/message/src/versions/v0/mod.rs#L104
-    /// Legacy - [agave] https://github.com/anza-xyz/solana-sdk/blob/42711325c40b314dafe3d5a41eb5b19af49cf1dc/message/src/legacy.rs#L97
+    /// V0 - [agave]
+    /// https://github.com/anza-xyz/solana-sdk/blob/4271132/message/src/versions/v0/mod.rs#L104
+    /// Legacy - [agave]
+    /// https://github.com/anza-xyz/solana-sdk/blob/4271132/message/src/legacy.rs#L97
     pub fn validate(self: *const Message) !void {
         // signing area and read-only non-signing area should not overlap
         if (self.signature_count +| self.readonly_unsigned_count > self.account_keys.len)

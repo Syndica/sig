@@ -166,8 +166,10 @@ fn handleTransactions(self: *Service, allocator: Allocator, quic_sender: *Channe
 }
 
 /// Receive transactions from the receiver channel into the transaction pool for `timeout` duration.
-/// If the transaction pool is empty, it will wait until a transaction is received before starting the `timeout` countdown.
-/// If the transaction pool is or becomes full, it will wait the remaining `timeout` duration before returning.
+/// If the transaction pool is empty, it will wait until a transaction is received before starting
+/// the `timeout` countdown.
+/// If the transaction pool is or becomes full, it will wait the remaining `timeout` duration before
+/// returning.
 fn receiveTransactions(
     self: *Service,
     txn_pool: *std.AutoArrayHashMapUnmanaged(Signature, TransactionInfo),

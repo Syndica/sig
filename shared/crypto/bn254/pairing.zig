@@ -1,4 +1,5 @@
-//! Mostly copied from https://github.com/firedancer-io/firedancer/blob/9068496fbf7d211a01b535039e876ffbf84fcc6e/src/ballet/bn254/fd_bn254_pairing.c#L68
+//! Mostly copied from
+//! https://github.com/firedancer-io/firedancer/blob/9068496/src/ballet/bn254/fd_bn254_pairing.c#L68
 
 const std = @import("std");
 const bn254 = @import("lib.zig");

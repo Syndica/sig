@@ -266,7 +266,7 @@ pub const LookupTableAccounts = struct {
     readonly: []const Pubkey,
 };
 
-/// https://github.com/anza-xyz/solana-sdk/blob/5ff67c1a53c10e16689e377f98a92ba3afd6bb7c/message/src/versions/v0/loaded.rs#L118-L150
+/// https://github.com/anza-xyz/solana-sdk/blob/5ff67c1/message/src/versions/v0/loaded.rs#L118-L150
 pub fn isWritable(
     message: core.transaction.Message,
     index: usize,
@@ -319,7 +319,7 @@ pub fn isWritable(
     return !(is_reserved or demote_program_id);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/6dcc39fcba90fbb5c924c71a1ef287c234f56c17/accounts-db/src/accounts.rs#L105
+// [agave] https://github.com/anza-xyz/agave/blob/6dcc39f/accounts-db/src/accounts.rs#L105
 fn resolveLookupTableAccounts(
     allocator: Allocator,
     account_reader: SlotAccountReader,
@@ -348,7 +348,10 @@ fn resolveLookupTableAccounts(
         const table = try getLookupTable(allocator, account_reader, lookup.table_address);
         defer allocator.free(table.addresses);
 
-        // [agave] https://github.com/anza-xyz/solana-sdk/blob/9521b39a20e62c5b58c07e29865e930db4627dc5/address-lookup-table-interface/src/state.rs#L201
+        // [agave]
+        // sig fmt: off
+        // https://github.com/anza-xyz/solana-sdk/blob/9521b39/address-lookup-table-interface/src/state.rs#L201
+        // sig fmt: on
         if (table.meta.status(slot, slot_hashes) == .Deactivated) {
             return error.AddressLookupTableNotFound;
         }
@@ -506,7 +509,7 @@ fn getLookupTable(
     // NOTE: deactivated lookup tables are allowed to be used,
     // according to agave's implementation. see here, where agave
     // discards the value:
-    // https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank/address_lookup_table.rs#L36
+    // https://github.com/anza-xyz/agave/blob/161fc19/runtime/src/bank/address_lookup_table.rs#L36
     return table;
 }
 

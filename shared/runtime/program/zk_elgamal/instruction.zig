@@ -190,7 +190,8 @@ pub const ProofInstruction = enum(u8) {
     ///   2. `[]` (Optional) The proof context account owner
     ///
     /// The instruction expects either:
-    ///   i. `BatchedGroupedCiphertext2HandlesValidityProofData` if proof is provided as instruction data
+    /// i. `BatchedGroupedCiphertext2HandlesValidityProofData` if proof is provided as instruction
+    /// data
     ///   ii. `u32` byte offset if proof is provided as an account
     ///
     verify_batched_grouped_ciphertext2_handles_validity,

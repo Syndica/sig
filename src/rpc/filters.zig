@@ -134,10 +134,14 @@ pub const Memcmp = struct {
         const decoded: []const u8 = switch (bytes_val) {
             .string => |bytes_str| switch (encoding) {
                 // [agave] String + `encoding: "bytes"` deserializes to Base58.
+                // sig fmt: off
                 // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/filter.rs#L108-L113
+                // sig fmt: on
                 .base58, .bytes => blk: {
                     // [agave] Base58 variants use the base58 encoded-length cap.
+                    // sig fmt: off
                     // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/filter.rs#L27-L37
+                    // sig fmt: on
                     if (bytes_str.len > MAX_DATA_BASE58_SIZE) return error.LengthMismatch;
                     const max_decoded_len = base58.decodedMaxSize(bytes_str.len);
                     const buf = try allocator.alloc(u8, max_decoded_len);
@@ -147,7 +151,10 @@ pub const Memcmp = struct {
                     break :blk try allocator.dupe(u8, buf[0..decoded_len]);
                 },
                 .base64 => blk: {
-                    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/filter.rs#L38-L48
+                    // [agave]
+                    // sig fmt: off
+                    // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/filter.rs#L38-L48
+                    // sig fmt: on
                     if (bytes_str.len > MAX_DATA_BASE64_SIZE) return error.LengthMismatch;
                     const decoded_len = std.base64.standard.Decoder.calcSizeForSlice(bytes_str) catch
                         return error.InvalidCharacter;
@@ -160,7 +167,10 @@ pub const Memcmp = struct {
                 },
             },
             .array => |bytes_array| blk: {
-                // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/filter.rs#L49-L54
+                // [agave]
+                // sig fmt: off
+                // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/filter.rs#L49-L54
+                // sig fmt: on
                 if (bytes_array.items.len > MAX_DATA_SIZE) return error.LengthMismatch;
                 const result = try allocator.alloc(u8, bytes_array.items.len);
                 errdefer allocator.free(result);
@@ -314,7 +324,8 @@ test "rpc.filters" {
         try testing.expect(!(RpcFilterType{ .tokenAccountState = {} }).allows(&d1));
     }
 
-    // allows: tokenAccountState accepts Token-2022 extended account (170 bytes with correct discriminator)
+    // allows: tokenAccountState accepts Token-2022 extended account (170 bytes with correct
+    // discriminator)
     {
         var data = [_]u8{0} ** 170;
         data[108] = 1; // Initialized

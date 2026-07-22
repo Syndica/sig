@@ -70,7 +70,7 @@ const agave_meta = struct {
 
 /// This format may not be stable! You may want to check that this schema matches the one in the
 /// version of Agave that you're using.
-/// [agave] https://github.com/anza-xyz/agave/blob/93df4052e311fc1417cb90575836c5030c5e37d6/ledger/src/blockstore_db.rs#L176
+/// [agave] https://github.com/anza-xyz/agave/blob/93df405/ledger/src/blockstore_db.rs#L176
 const agave_schema = struct {
     /// Information about the slot, including how many shreds we have received for the slot, and
     /// whether we've processed data from any of the adjacent slots

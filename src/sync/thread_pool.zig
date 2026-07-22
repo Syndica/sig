@@ -44,7 +44,8 @@ pub const ThreadPool = struct {
             /// There is a "waking thread" among us.
             /// No other thread should be woken up until the waking thread transitions the state.
             waking,
-            /// The thread pool was terminated. Start decremented `spawned` so that it can be joined.
+            /// The thread pool was terminated. Start decremented `spawned` so that it can be
+            /// joined.
             shutdown,
         } = .pending,
     };
@@ -590,7 +591,8 @@ pub const ThreadPool = struct {
         thread.join_event.wait();
 
         // After receiving the shutdown signal, shutdown the next thread in the pool.
-        // We have to do that without touching the thread pool itself since it's memory is invalidated by now.
+        // We have to do that without touching the thread pool itself since it's memory is
+        // invalidated by now.
         // So just follow our .next link.
         const next_thread = thread.next orelse return;
         next_thread.join_event.notify();
@@ -696,13 +698,15 @@ pub const ThreadPool = struct {
                 const target = self.target orelse thread_pool.threads.load(.acquire).?;
                 self.target = target.next;
 
-                // Try to steal from their queue first to avoid contention (the target steal's from queue last).
+                // Try to steal from their queue first to avoid contention (the target steal's from
+                // queue last).
                 if (self.run_buffer.consume(&target.run_queue)) |stole| {
                     return stole;
                 }
 
                 // Skip stealing from the buffer if we're the target.
-                // We still steal from our own queue above given it may have just been locked the first time we tried.
+                // We still steal from our own queue above given it may have just been locked the
+                // first time we tried.
                 if (target == self) {
                     continue;
                 }
@@ -736,8 +740,10 @@ pub const ThreadPool = struct {
 
             while (true) {
                 // If we're shutdown then exit early.
-                // Acquire barrier to ensure operations before the shutdown() are seen after the wait().
-                // Shutdown is rare so it's better to have an Acquire barrier here instead of on CAS failure + load which are common.
+                // Acquire barrier to ensure operations before the shutdown() are seen after the
+                // wait().
+                // Shutdown is rare so it's better to have an Acquire barrier here instead of on CAS
+                // failure + load which are common.
                 if (state == SHUTDOWN) {
                     _ = self.state.load(.acquire);
                     return;
@@ -755,7 +761,8 @@ pub const ThreadPool = struct {
                     continue;
                 }
 
-                // There is no notification to consume, we should wait on the event by ensuring its WAITING.
+                // There is no notification to consume, we should wait on the event by ensuring its
+                // WAITING.
                 if (state != WAITING) blk: {
                     state = self.state.cmpxchgWeak(
                         state,
@@ -768,11 +775,15 @@ pub const ThreadPool = struct {
 
                 // Wait on the event until a notify() or shutdown().
                 // If we wake up to a notification, we must acquire it with WAITING instead of EMPTY
-                // since there may be other threads sleeping on the Futex who haven't been woken up yet.
+                // since there may be other threads sleeping on the Futex who haven't been woken up
+                // yet.
                 //
-                // Acquiring to WAITING will make the next notify() or shutdown() wake a sleeping futex thread
-                // who will either exit on SHUTDOWN or acquire with WAITING again, ensuring all threads are awoken.
-                // This unfortunately results in the last notify() or shutdown() doing an extra futex wake but that's fine.
+                // Acquiring to WAITING will make the next notify() or shutdown() wake a sleeping
+                // futex thread
+                // who will either exit on SHUTDOWN or acquire with WAITING again, ensuring all
+                // threads are awoken.
+                // This unfortunately results in the last notify() or shutdown() doing an extra
+                // futex wake but that's fine.
                 Futex.wait(&self.state, WAITING);
                 state = self.state.load(.monotonic);
                 acquire_with = WAITING;
@@ -788,8 +799,10 @@ pub const ThreadPool = struct {
 
             while (true) {
                 // If we're shutdown then exit early.
-                // Acquire barrier to ensure operations before the shutdown() are seen after the wait().
-                // Shutdown is rare so it's better to have an Acquire barrier here instead of on CAS failure + load which are common.
+                // Acquire barrier to ensure operations before the shutdown() are seen after the
+                // wait().
+                // Shutdown is rare so it's better to have an Acquire barrier here instead of on CAS
+                // failure + load which are common.
                 if (state == SHUTDOWN) {
                     _ = self.state.load(.acquire);
                     return;
@@ -807,7 +820,8 @@ pub const ThreadPool = struct {
                     continue;
                 }
 
-                // There is no notification to consume, we should wait on the event by ensuring its WAITING.
+                // There is no notification to consume, we should wait on the event by ensuring its
+                // WAITING.
                 if (state != WAITING) blk: {
                     state = self.state.cmpxchgWeak(
                         state,
@@ -820,11 +834,15 @@ pub const ThreadPool = struct {
 
                 // Wait on the event until a notify() or shutdown().
                 // If we wake up to a notification, we must acquire it with WAITING instead of EMPTY
-                // since there may be other threads sleeping on the Futex who haven't been woken up yet.
+                // since there may be other threads sleeping on the Futex who haven't been woken up
+                // yet.
                 //
-                // Acquiring to WAITING will make the next notify() or shutdown() wake a sleeping futex thread
-                // who will either exit on SHUTDOWN or acquire with WAITING again, ensuring all threads are awoken.
-                // This unfortunately results in the last notify() or shutdown() doing an extra futex wake but that's fine.
+                // Acquiring to WAITING will make the next notify() or shutdown() wake a sleeping
+                // futex thread
+                // who will either exit on SHUTDOWN or acquire with WAITING again, ensuring all
+                // threads are awoken.
+                // This unfortunately results in the last notify() or shutdown() doing an extra
+                // futex wake but that's fine.
                 Futex.wait(&self.state, WAITING);
                 state = self.state.load(.monotonic);
                 acquire_with = WAITING;
@@ -844,8 +862,10 @@ pub const ThreadPool = struct {
         }
 
         fn wake(self: *Event, release_with: u32, wake_threads: u32) void {
-            // Update the Event to notify it with the new `release_with` state (either NOTIFIED or SHUTDOWN).
-            // Release barrier to ensure any operations before this are this to happen before the wait() in the other threads.
+            // Update the Event to notify it with the new `release_with` state (either NOTIFIED or
+            // SHUTDOWN).
+            // Release barrier to ensure any operations before this are this to happen before the
+            // wait() in the other threads.
             const state = self.state.swap(release_with, .release);
 
             // Only wake threads sleeping in futex if the state is WAITING.
@@ -891,7 +911,8 @@ pub const ThreadPool = struct {
                     assert(new_stack & ~PTR_MASK == 0);
                     new_stack |= (stack & ~PTR_MASK);
 
-                    // Push to the stack with a release barrier for the consumer to see the proper list links.
+                    // Push to the stack with a release barrier for the consumer to see the proper
+                    // list links.
                     stack = self.stack.cmpxchgWeak(
                         stack,
                         new_stack,
@@ -909,15 +930,18 @@ pub const ThreadPool = struct {
                     if (stack & (HAS_CACHE | PTR_MASK) == 0)
                         return error.Empty; // The queue is empty when there's nothing cached and nothing in the stack.
 
-                    // When we acquire the consumer, also consume the pushed stack if the cache is empty.
+                    // When we acquire the consumer, also consume the pushed stack if the cache is
+                    // empty.
                     var new_stack = stack | HAS_CACHE | IS_CONSUMING;
                     if (stack & HAS_CACHE == 0) {
                         assert(stack & PTR_MASK != 0);
                         new_stack &= ~PTR_MASK;
                     }
 
-                    // Acquire barrier on getting the consumer to see cache/Node updates done by previous consumers
-                    // and to ensure our cache/Node updates in pop() happen after that of previous consumers.
+                    // Acquire barrier on getting the consumer to see cache/Node updates done by
+                    // previous consumers
+                    // and to ensure our cache/Node updates in pop() happen after that of previous
+                    // consumers.
                     stack = self.stack.cmpxchgWeak(
                         stack,
                         new_stack,
@@ -928,14 +952,17 @@ pub const ThreadPool = struct {
             }
 
             fn releaseConsumer(noalias self: *Queue, noalias consumer: ?*Node) void {
-                // Stop consuming and remove the HAS_CACHE bit as well if the consumer's cache is empty.
-                // When HAS_CACHE bit is zeroed, the next consumer will acquire the pushed stack nodes.
+                // Stop consuming and remove the HAS_CACHE bit as well if the consumer's cache is
+                // empty.
+                // When HAS_CACHE bit is zeroed, the next consumer will acquire the pushed stack
+                // nodes.
                 var remove = IS_CONSUMING;
                 if (consumer == null)
                     remove |= HAS_CACHE;
 
                 // Release the consumer with a release barrier to ensure cache/node accesses
-                // happen before the consumer was released and before the next consumer starts using the cache.
+                // happen before the consumer was released and before the next consumer starts using
+                // the cache.
                 self.cache = consumer;
                 const stack = self.stack.fetchSub(remove, .release);
                 assert(stack & remove != 0);
@@ -955,7 +982,8 @@ pub const ThreadPool = struct {
                     return null;
                 }
 
-                // Nodes have been pushed to the stack, grab then with an Acquire barrier to see the Node links.
+                // Nodes have been pushed to the stack, grab then with an Acquire barrier to see the
+                // Node links.
                 stack = self.stack.swap(HAS_CACHE | IS_CONSUMING, .acquire);
                 assert(stack & IS_CONSUMING != 0);
                 assert(stack & PTR_MASK != 0);
@@ -994,24 +1022,30 @@ pub const ThreadPool = struct {
                             const node = nodes orelse break;
                             nodes = node.next;
 
-                            // array written atomically with weakest ordering since it could be getting atomically read by steal().
+                            // array written atomically with weakest ordering since it could be
+                            // getting atomically read by steal().
                             self.array[tail % capacity].store(node, .release);
                             tail +%= 1;
                         }
 
-                        // Release barrier synchronizes with Acquire loads for steal()ers to see the array writes.
+                        // Release barrier synchronizes with Acquire loads for steal()ers to see the
+                        // array writes.
                         self.tail.store(tail, .release);
 
-                        // Update the list with the nodes we pushed to the buffer and try again if there's more.
+                        // Update the list with the nodes we pushed to the buffer and try again if
+                        // there's more.
                         list.head = nodes orelse return;
                         std.atomic.spinLoopHint();
                         head = self.head.load(.monotonic);
                         continue;
                     }
 
-                    // Try to steal/overflow half of the tasks in the buffer to make room for future push()es.
-                    // Migrating half amortizes the cost of stealing while requiring future pops to still use the buffer.
-                    // Acquire barrier to ensure the linked list creation after the steal only happens after we successfully steal.
+                    // Try to steal/overflow half of the tasks in the buffer to make room for future
+                    // push()es.
+                    // Migrating half amortizes the cost of stealing while requiring future pops to
+                    // still use the buffer.
+                    // Acquire barrier to ensure the linked list creation after the steal only
+                    // happens after we successfully steal.
                     var migrate = size / 2;
                     head = self.head.cmpxchgWeak(
                         head,
@@ -1027,7 +1061,8 @@ pub const ThreadPool = struct {
                             prev.next = self.array[head % capacity].load(.acquire);
                         }
 
-                        // Append the list that was supposed to be pushed to the end of the migrated Nodes
+                        // Append the list that was supposed to be pushed to the end of the migrated
+                        // Nodes
                         const last = self.array[(head -% 1) % capacity].load(.acquire);
                         last.next = list.head;
                         list.tail.next = null;
@@ -1095,7 +1130,8 @@ pub const ThreadPool = struct {
                 };
 
                 // Update the array tail with the nodes we pushed to it.
-                // Release barrier to synchronize with Acquire barrier in steal()'s to see the written array Nodes.
+                // Release barrier to synchronize with Acquire barrier in steal()'s to see the
+                // written array Nodes.
                 if (pushed > 0) self.tail.store(tail +% pushed, .release);
                 return Stole{
                     .node = node,
@@ -1115,22 +1151,26 @@ pub const ThreadPool = struct {
                     const buffer_head = buffer.head.load(.acquire);
                     const buffer_tail = buffer.tail.load(.acquire);
 
-                    // Overly large size indicates the the tail was updated a lot after the head was loaded.
+                    // Overly large size indicates the the tail was updated a lot after the head was
+                    // loaded.
                     // Reload both and try again.
                     const buffer_size = buffer_tail -% buffer_head;
                     if (buffer_size > capacity) {
                         continue;
                     }
 
-                    // Try to steal half (divCeil) to amortize the cost of stealing from other threads.
+                    // Try to steal half (divCeil) to amortize the cost of stealing from other
+                    // threads.
                     const steal_size = buffer_size - (buffer_size / 2);
                     if (steal_size == 0) {
                         return null;
                     }
 
                     // Copy the nodes we will steal from the target's array to our own.
-                    // Atomically load from the target buffer array as it may be pushing and atomically storing to it.
-                    // Atomic store to our array as other steal() threads may be atomically loading from it as above.
+                    // Atomically load from the target buffer array as it may be pushing and
+                    // atomically storing to it.
+                    // Atomic store to our array as other steal() threads may be atomically loading
+                    // from it as above.
                     var i: Index = 0;
                     while (i < steal_size) : (i += 1) {
                         const node = buffer.array[(buffer_head +% i) % capacity].load(.acquire);
@@ -1138,9 +1178,12 @@ pub const ThreadPool = struct {
                     }
 
                     // Try to commit the steal from the target buffer using:
-                    // - an Acquire barrier to ensure that we only interact with the stolen Nodes after the steal was committed.
-                    // - a Release barrier to ensure that the Nodes are copied above prior to the committing of the steal
-                    //   because if they're copied after the steal, the could be getting rewritten by the target's push().
+                    // - an Acquire barrier to ensure that we only interact with the stolen Nodes
+                    // after the steal was committed.
+                    // - a Release barrier to ensure that the Nodes are copied above prior to the
+                    // committing of the steal
+                    // because if they're copied after the steal, the could be getting rewritten by
+                    // the target's push().
                     _ = buffer.head.cmpxchgStrong(
                         buffer_head,
                         buffer_head +% steal_size,
@@ -1152,7 +1195,8 @@ pub const ThreadPool = struct {
                         const node = self.array[(tail +% pushed) % capacity].load(.acquire);
 
                         // Update the array tail with the nodes we pushed to it.
-                        // Release barrier to synchronize with Acquire barrier in steal()'s to see the written array Nodes.
+                        // Release barrier to synchronize with Acquire barrier in steal()'s to see
+                        // the written array Nodes.
                         if (pushed > 0) self.tail.store(tail +% pushed, .release);
                         return Stole{
                             .node = node,

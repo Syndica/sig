@@ -246,11 +246,17 @@ pub const SubReqKey = struct {
                         .block = .{
                             .filter = p.filter,
                             .commitment = cfg.commitment orelse .finalized,
-                            // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc_pubsub.rs#L558
+                            // [agave]
+                            // sig fmt: off
+                            // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc_pubsub.rs#L558
+                            // sig fmt: on
                             .encoding = cfg.encoding orelse .base64,
                             .transaction_details = cfg.transactionDetails orelse .full,
                             .max_supported_transaction_version = cfg.maxSupportedTransactionVersion,
-                            // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc_pubsub.rs#L569
+                            // [agave]
+                            // sig fmt: off
+                            // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc_pubsub.rs#L569
+                            // sig fmt: on
                             .show_rewards = cfg.showRewards orelse false,
                         },
                     },
@@ -636,8 +642,10 @@ pub const TransactionLogsEntry = struct {
     }
 };
 
-/// A batch of full transaction metadata for a single slot, streamed from the Committer at commit time. Carries
-/// everything needed to build block, log, and future transaction notifications from cache (no ledger read).
+/// A batch of full transaction metadata for a single slot, streamed from the Committer at commit
+/// time. Carries
+/// everything needed to build block, log, and future transaction notifications from cache (no
+/// ledger read).
 /// Owns all referenced data through an arena allocator.
 pub const SlotTransactionBatch = struct {
     /// Slot this batch belongs to.
@@ -660,22 +668,31 @@ pub const SlotTransactionBatch = struct {
     }
 };
 
-/// Full per-transaction metadata, arena-owned inside a `SlotTransactionBatch`. Contains everything previously
-/// spread across `TransactionStatusMeta`, the transaction itself, vote flag, and log-subscribe filter keys.
+/// Full per-transaction metadata, arena-owned inside a `SlotTransactionBatch`. Contains everything
+/// previously
+/// spread across `TransactionStatusMeta`, the transaction itself, vote flag, and log-subscribe
+/// filter keys.
 ///
-/// Fields mirror `TransactionStatusMeta` + identity data so both `blockSubscribe` and `logSubscribe` (and future
+/// Fields mirror `TransactionStatusMeta` + identity data so both `blockSubscribe` and
+/// `logSubscribe` (and future
 /// `transactionSubscribe`) can be served from this single cached structure.
 pub const TransactionEntry = struct {
     // Identity
     signature: Signature,
-    /// Full transaction (signatures + versioned message). Arena-owned; the `Transaction` itself does NOT own
+    /// Full transaction (signatures + versioned message). Arena-owned; the `Transaction` itself
+    /// does NOT own
     /// the inner slices, the batch arena does.
     transaction: Transaction,
     is_vote: bool,
 
-    /// Global position of this transaction within the slot (across all entries). Used to restore canonical ordering
-    /// in `buildConfirmedBlock` when transactions are committed out-of-order by the async replay path.
-    /// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/ledger/src/blockstore_processor.rs#L1497
+    /// Global position of this transaction within the slot (across all entries). Used to restore
+    /// canonical ordering
+    /// in `buildConfirmedBlock` when transactions are committed out-of-order by the async replay
+    /// path.
+    /// [agave]
+    // sig fmt: off
+    /// https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/ledger/src/blockstore_processor.rs#L1497
+    // sig fmt: on
     transaction_index: usize,
 
     // Execution result

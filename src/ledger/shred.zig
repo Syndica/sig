@@ -41,7 +41,7 @@ fn ShredTypeConfig() bincode.FieldConfig(ShredType) {
     };
 }
 
-/// Analogous to [Shred](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/ledger/src/shred.rs#L245)
+/// Analogous to [Shred](https://github.com/anza-xyz/agave/blob/8c5a33a/ledger/src/shred.rs#L245)
 pub const Shred = union(ShredType) {
     code: CodeShred,
     data: DataShred,
@@ -169,7 +169,8 @@ pub const Shred = union(ShredType) {
     }
 };
 
-/// Analogous to [ShredCode](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/shred/merkle.rs#L74)
+/// Analogous to [ShredCode](
+/// https://github.com/anza-xyz/agave/blob/7a9317f/ledger/src/shred/merkle.rs#L74)
 pub const CodeShred = struct {
     common: CommonHeader,
     custom: CodeHeader,
@@ -304,7 +305,8 @@ pub const CodeShred = struct {
     }
 };
 
-/// Analogous to [ShredData](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/shred/merkle.rs#L61)
+/// Analogous to [ShredData](
+/// https://github.com/anza-xyz/agave/blob/7a9317f/ledger/src/shred/merkle.rs#L61)
 pub const DataShred = struct {
     common: CommonHeader,
     custom: DataHeader,
@@ -442,7 +444,8 @@ pub const DataShred = struct {
     }
 };
 
-/// Analogous to [Shred trait](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/ledger/src/shred/traits.rs#L6)
+/// Analogous to [Shred trait](
+/// https://github.com/anza-xyz/agave/blob/8c5a33a/ledger/src/shred/traits.rs#L6)
 fn GenericShred(shred_type: ShredType) type {
     const Self = switch (shred_type) {
         .data => DataShred,
@@ -456,15 +459,18 @@ fn GenericShred(shred_type: ShredType) type {
 
     return struct {
         fn fromPayload(allocator: Allocator, payload: []const u8) !Self {
-            // NOTE(x19): is it ok if payload.len > constants.payload_size? the test_data_shred is 1207 bytes
+            // NOTE(x19): is it ok if payload.len > constants.payload_size? the test_data_shred is
+            // 1207 bytes
             if (payload.len < constants.payload_size) {
                 return error.InvalidPayloadSize;
             }
             const owned_payload = try allocator.alloc(u8, constants.payload_size);
             errdefer allocator.free(owned_payload);
 
-            // TODO: It would be nice to find a way to get the payload in here without coping the entire thing.
-            // The challenge is that the input payload is owned by the original packet list which was read
+            // TODO: It would be nice to find a way to get the payload in here without coping the
+            // entire thing.
+            // The challenge is that the input payload is owned by the original packet list which
+            // was read
             // from the socket, and that list may be cluttered with a lot of garbage data.
             // So a copy like this may be needed somewhere. but it's worth some more thought.
             @memcpy(owned_payload, payload[0..constants.payload_size]);
@@ -677,7 +683,8 @@ fn getMerkleNodeAt(shred: []const u8, start: usize, end: usize) !Hash {
     return Hash.initMany(&.{ MERKLE_HASH_PREFIX_LEAF, shred[start..end] });
 }
 
-/// [get_merkle_root](https://github.com/anza-xyz/agave/blob/ed500b5afc77bc78d9890d96455ea7a7f28edbf9/ledger/src/shred/merkle.rs#L702)
+/// [get_merkle_root](
+/// https://github.com/anza-xyz/agave/blob/ed500b5/ledger/src/shred/merkle.rs#L702)
 fn calculateMerkleRoot(start_index: usize, start_node: Hash, proof: MerkleProofEntryList) !Hash {
     var index = start_index;
     var node = start_node;
@@ -760,7 +767,7 @@ pub fn makeMerkleProof(
     }
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/f7f2f5f5acfdf83c2ee2fbc16da998acc06146ff/ledger/src/shred/merkle_tree.rs#L78
+/// [agave] https://github.com/anza-xyz/agave/blob/f7f2f5f/ledger/src/shred/merkle_tree.rs#L78
 fn joinNodes(lhs: []const u8, rhs: []const u8) Hash {
     return .initMany(&.{
         MERKLE_HASH_PREFIX_NODE,
@@ -776,7 +783,8 @@ fn proofOffset(constants: ShredConstants, variant: ShredVariant) !usize {
         if (variant.chained) SIZE_OF_MERKLE_ROOT else 0;
 }
 
-/// Analogous to [get_chained_merkle_root_offset](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/shred/merkle.rs#L364)
+/// Analogous to [get_chained_merkle_root_offset](
+/// https://github.com/anza-xyz/agave/blob/7a9317f/ledger/src/shred/merkle.rs#L364)
 pub fn getChainedMerkleRootOffset(variant: ShredVariant) !usize {
     const constants = variant.constants();
     if (!variant.chained) {
@@ -1164,7 +1172,8 @@ pub const layout = struct {
         return getInt(u16, shred, 83);
     }
 
-    /// Analogous to [get_chained_merkle_root](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/shred.rs#L740)
+    /// Analogous to [get_chained_merkle_root](
+    /// https://github.com/anza-xyz/agave/blob/7a9317f/ledger/src/shred.rs#L740)
     pub fn getChainedMerkleRoot(shred: []const u8) ?Hash {
         const variant = getShredVariant(shred) orelse return null;
         const offset = getChainedMerkleRootOffset(variant) catch return null;

@@ -140,7 +140,7 @@ pub const MemoryMap = union(enum) {
         };
     }
 
-    // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L782
+    // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd/src/memory_region.rs#L782
     pub fn vmap(
         self: MemoryMap,
         comptime state: MemoryState,
@@ -166,7 +166,8 @@ pub const MemoryMap = union(enum) {
         };
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/mod.rs#L604
+    /// [agave]
+    /// https://github.com/anza-xyz/agave/blob/359d7eb/programs/bpf_loader/src/syscalls/mod.rs#L604
     pub fn translate(
         memory_map: *const MemoryMap,
         comptime state: MemoryState,
@@ -177,7 +178,8 @@ pub const MemoryMap = union(enum) {
         return @intFromPtr(slice.ptr);
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/mod.rs#L616
+    /// [agave]
+    /// https://github.com/anza-xyz/agave/blob/359d7eb/programs/bpf_loader/src/syscalls/mod.rs#L616
     pub fn translateType(
         memory_map: *const MemoryMap,
         comptime T: type,
@@ -202,7 +204,8 @@ pub const MemoryMap = union(enum) {
         }
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/mod.rs#L647
+    /// [agave]
+    /// https://github.com/anza-xyz/agave/blob/359d7eb/programs/bpf_loader/src/syscalls/mod.rs#L647
     pub fn translateSlice(
         memory_map: *const MemoryMap,
         comptime T: type,
@@ -267,7 +270,7 @@ const HostMemory = union(MemoryState) {
     }
 };
 
-// [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L54
+// [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd/src/memory_region.rs#L54
 pub const Region = struct {
     host_memory: HostMemory,
     vm_addr_start: u64,
@@ -492,7 +495,7 @@ pub const AlignedMemoryMap = struct {
         return std.mem.readInt(T, slice[0..@sizeOf(T)], .little);
     }
 
-    // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L628
+    // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd/src/memory_region.rs#L628
     fn vmap(
         self: *const AlignedMemoryMap,
         comptime state: MemoryState,
@@ -534,7 +537,7 @@ fn accessViolation(
         error.AccessViolation;
 }
 
-// [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L183
+// [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd/src/memory_region.rs#L183
 /// Memory mapping based on eytzinger search.
 const UnalignedMemoryMap = struct {
     regions: []Region,
@@ -554,7 +557,7 @@ const UnalignedMemoryMap = struct {
     // Cache of the last `MappingCache::SIZE` vm_addr => region_index lookups
     //cache: MappingCache,
 
-    // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L241
+    // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd/src/memory_region.rs#L241
     fn init(
         allocator: std.mem.Allocator,
         regions: []const Region,
@@ -599,7 +602,7 @@ const UnalignedMemoryMap = struct {
         allocator.free(self.region_addresses);
     }
 
-    // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L218
+    // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd/src/memory_region.rs#L218
     fn constructEytzingerOrder(
         self: UnalignedMemoryMap,
         ascending_regions: []Region,
@@ -629,7 +632,7 @@ const UnalignedMemoryMap = struct {
         );
     }
 
-    // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L293
+    // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd/src/memory_region.rs#L293
     // NOTE: agave-like cache unimplemented. Does not seem necessary.
     fn findRegion(self: *const UnalignedMemoryMap, vm_addr: u64) !*Region {
         var index: usize = 1;
@@ -726,7 +729,7 @@ const UnalignedMemoryMap = struct {
         return err;
     }
 
-    // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L323
+    // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd/src/memory_region.rs#L323
     fn vmap(
         self: *const UnalignedMemoryMap,
         comptime access_type: MemoryState,
@@ -779,8 +782,10 @@ fn hasTranslatableRepresentation(comptime T: type) bool {
     };
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/mod.rs#L235-L247
-/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L609-L623
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/04fd7a0/programs/bpf_loader/src/syscalls/mod.rs#L235-L247
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/04fd7a0/programs/bpf_loader/src/syscalls/cpi.rs#L609-L623
 pub const VmSlice = extern struct {
     ptr: u64,
     len: u64,
@@ -856,7 +861,7 @@ test "aligned vmap" {
     );
 }
 
-// [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L1240
+// [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd/src/memory_region.rs#L1240
 test "aligned region" {
     var program_mem: [4]u8 = @splat(0xFF);
     var stack_mem: [4]u8 = @splat(0xDD);
@@ -904,7 +909,7 @@ test "invalid memory region" {
     );
 }
 
-// [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L1073
+// [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd/src/memory_region.rs#L1073
 test "unaligned map overlap" {
     const allocator = std.testing.allocator;
     const config: exe.Config = .{};
@@ -937,7 +942,7 @@ test "unaligned map overlap" {
     defer map.deinit(allocator);
 }
 
-// [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L1100
+// [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd/src/memory_region.rs#L1100
 test "unaligned map" {
     const allocator = std.testing.allocator;
     const config: exe.Config = .{};
@@ -976,7 +981,7 @@ test "unaligned map" {
     );
 }
 
-// [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L1180
+// [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd/src/memory_region.rs#L1180
 test "unaligned region" {
     const allocator = std.testing.allocator;
     const config: exe.Config = .{

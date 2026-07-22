@@ -53,7 +53,8 @@ pub const ReplayResult = struct {
 /// 1. Replays transactions from all the slots that need to be replayed.
 /// 2. Store the replay results into the relevant data structures.
 ///
-/// Analogous to [replay_active_banks](https://github.com/anza-xyz/agave/blob/3f68568060fd06f2d561ad79e8d8eb5c5136815a/core/src/replay_stage.rs#L3356)
+/// Analogous to [replay_active_banks](
+/// https://github.com/anza-xyz/agave/blob/3f68568/core/src/replay_stage.rs#L3356)
 pub fn replayActiveSlots(state: *ReplayState) ![]const ReplayResult {
     const can_multi_thread = state.thread_pool.max_threads > 1;
     return if (can_multi_thread)
@@ -180,7 +181,8 @@ pub const ReplaySlotParams = struct {
 
     /// Global transaction index offset for this batch of entries within the slot.
     /// Mirrors Agave's `progress.num_txs` at the start of each `confirm_slot_entries` invocation.
-    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/ledger/src/blockstore_processor.rs#L1726
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/ledger/src/blockstore_processor.rs#L1726
     base_transaction_index: usize,
 
     pub fn deinit(self: ReplaySlotParams, allocator: Allocator) void {
@@ -232,7 +234,8 @@ pub fn replaySlotSync(
     var svm_gateway = params.svm_gateway;
 
     // Running transaction counter mirrors Agave's `progress.num_txs`.
-    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/ledger/src/blockstore_processor.rs#L1726
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/ledger/src/blockstore_processor.rs#L1726
     for (params.transactions, 0..) |transaction, tx_index| {
         var exit = Atomic(bool).init(false);
 
@@ -299,7 +302,8 @@ pub fn replayBatch(
     transactions: []const ResolvedTransaction,
     /// Mirrors Agave's `ReplayEntry.starting_index`: the global transaction
     /// index at which this batch starts within the slot.
-    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/ledger/src/blockstore_processor.rs#L92
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/ledger/src/blockstore_processor.rs#L92
     base_transaction_index: usize,
     exit: *Atomic(bool),
 ) !BatchResult {
@@ -327,7 +331,8 @@ pub fn replayBatch(
     var populated_count: usize = 0;
     defer {
         // Only deinit elements that were actually populated
-        // TODO Better way to do this? Instead of tracking populated count. Maybe switch to array list?
+        // TODO Better way to do this? Instead of tracking populated count. Maybe switch to array
+        // list?
         for (results[0..populated_count]) |*result| {
             result.*[1].deinit(tmp_allocator);
         }
@@ -382,8 +387,10 @@ const PreparedSlot = union(enum) {
 
     /// The slot was previously marked as dead (not this time), which means we
     /// don't need to do anything. see here that agave also does nothing:
-    /// - [replay_active_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L3005-L3007)
-    /// - [process_replay_results](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L3088-L3091)
+    /// - [replay_active_bank](
+    /// https://github.com/anza-xyz/agave/blob/161fc19/core/src/replay_stage.rs#L3005-L3007)
+    /// - [process_replay_results](
+    /// https://github.com/anza-xyz/agave/blob/161fc19/core/src/replay_stage.rs#L3088-L3091)
     dead,
 
     /// This validator is the leader for the slot, so there is nothing to
@@ -409,9 +416,12 @@ const PreparedSlot = union(enum) {
 /// the slot. So, where agave's `confirm_slot` calls `confirm_slot_entries`,
 /// at that point, we just return all the prepared data, which can be passed
 /// into replaySlot or replaySlotSync.
-/// - [replay_active_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L2979)
-/// - [replay_blockstore_into_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/replay_stage.rs#L2232)
-/// - [confirm_slot](https://github.com/anza-xyz/agave/blob/d79257e5f4afca4d092793f7a1e854cd5ccd6be9/ledger/src/blockstore_processor.rs#L1486)
+/// - [replay_active_bank](
+/// https://github.com/anza-xyz/agave/blob/161fc19/core/src/replay_stage.rs#L2979)
+/// - [replay_blockstore_into_bank](
+/// https://github.com/anza-xyz/agave/blob/161fc19/core/src/replay_stage.rs#L2232)
+/// - [confirm_slot](
+/// https://github.com/anza-xyz/agave/blob/d79257e/ledger/src/blockstore_processor.rs#L1486)
 fn prepareSlot(
     state: *ReplayState,
     slot_tracker: *SlotTracker,
@@ -605,7 +615,8 @@ pub const VerifyTicksParams = struct {
 };
 
 /// Verify that a segment of entries has the correct number of ticks and hashes
-/// analogous to [verify_ticks](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/ledger/src/blockstore_processor.rs#L1097)
+/// analogous to [verify_ticks](
+/// https://github.com/anza-xyz/agave/blob/161fc19/ledger/src/blockstore_processor.rs#L1097)
 pub fn verifyTicks(
     logger: Logger,
     entries: []const Entry,
@@ -644,7 +655,8 @@ pub fn verifyTicks(
     return null;
 }
 
-/// Analogous to [BlockstoreProcessorError](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/ledger/src/blockstore_processor.rs#L779)
+/// Analogous to [BlockstoreProcessorError](
+/// https://github.com/anza-xyz/agave/blob/161fc19/ledger/src/blockstore_processor.rs#L779)
 pub const ReplaySlotError = union(enum) {
     /// Payload is a statically lived string that provides some context on the
     /// failure to load entries, normally the name of an error.

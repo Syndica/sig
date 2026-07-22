@@ -89,7 +89,10 @@ pub fn commitTransactions(
 
     for (transactions, tx_results, 0..) |transaction, *result, local_index| {
         // Expand per-batch starting index to per-transaction global index.
-        // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/ledger/src/blockstore_processor.rs#L559
+        // [agave]
+        // sig fmt: off
+        // https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/ledger/src/blockstore_processor.rs#L559
+        // sig fmt: on
         const global_index = base_transaction_index + local_index;
         const message_hash = &result.@"0";
         const tx_result = &result.@"1";
@@ -436,7 +439,8 @@ fn writeTransactionStatus(
     };
 
     // Compute post-token balances by reading all transaction accounts.
-    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/transaction_processor.rs#L532-L533
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/transaction_processor.rs#L532-L533
     const post_raw_token_balances = try collectPostTokenBalances(
         allocator,
         transaction,
@@ -648,7 +652,8 @@ fn buildTransactionEntry(
         mint_reader,
     );
 
-    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/transaction_processor.rs#L532-L533
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/transaction_processor.rs#L532-L533
     const post_raw = try collectPostTokenBalances(
         temp_allocator,
         transaction,
@@ -708,8 +713,10 @@ fn buildTransactionEntry(
     };
 }
 
-/// Write transaction status to the ledger using data from a previously built `TransactionEntry`. Constructs a
-/// borrowing `TransactionStatusMeta` from the entry's arena-owned fields, no extra allocations needed for
+/// Write transaction status to the ledger using data from a previously built `TransactionEntry`.
+/// Constructs a
+/// borrowing `TransactionStatusMeta` from the entry's arena-owned fields, no extra allocations
+/// needed for
 /// the metadata itself.
 fn writeTransactionStatusFromEntry(
     temp_allocator: Allocator,
@@ -761,7 +768,8 @@ fn writeTransactionStatusFromEntry(
         .pre_token_balances = entry.pre_token_balances,
         .post_token_balances = entry.post_token_balances,
         // Per-transaction rewards are always empty in Agave.
-        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/rpc/src/transaction_status_service.rs#L190
+        // [agave]
+        // https://github.com/anza-xyz/agave/blob/v3.1.2/rpc/src/transaction_status_service.rs#L190
         .rewards = &.{},
         .loaded_addresses = entry.loaded_addresses,
         .return_data = entry.return_data,
@@ -853,7 +861,8 @@ fn collectPostTokenBalances(
         if (!spl_token.isTokenProgram(owner_pubkey)) continue;
 
         // Parse SPL Token account state.
-        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/transaction_balances.rs#L101-L105
+        // [agave]
+        // https://github.com/anza-xyz/agave/blob/v3.1.2/svm/src/transaction_balances.rs#L101-L105
         const parsed = spl_token.ParsedTokenAccount.parse(
             &data_buf,
         ) orelse continue;

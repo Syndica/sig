@@ -1,5 +1,9 @@
-//! [fd](https://github.com/firedancer-io/firedancer/blob/33538d35a623675e66f38f77d7dc86c1ba43c935/src/flamenco/runtime/program/zksdk/instructions/fd_zksdk_pubkey_validity.c)
-//! [agave](https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/pubkey_validity.rs)
+//! [fd](
+// sig fmt: off
+//! https://github.com/firedancer-io/firedancer/blob/33538d3/src/flamenco/runtime/program/zksdk/instructions/fd_zksdk_pubkey_validity.c)
+//! [agave](
+//! https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/pubkey_validity.rs)
+// sig fmt: on
 
 const std = @import("std");
 const sig = @import("../../lib.zig");
@@ -68,7 +72,10 @@ pub const Proof = struct {
         defer session.finish();
 
         // Setup
-        // [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/pubkey_validity.rs#L102-L104
+        // [agave]
+        // sig fmt: off
+        // https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/pubkey_validity.rs#L102-L104
+        // sig fmt: on
         try transcript.append(&session, .validate_pubkey, "pubkey", pubkey.*);
         transcript.appendDomSep(&session, .@"pubkey-proof");
 

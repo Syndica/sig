@@ -287,7 +287,8 @@ pub fn parseUiInnerInstructions(
 
 /// Try to parse a compiled instruction into a structured parsed instruction.
 /// Falls back to partially decoded representation on failure.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_instruction.rs#L95
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_instruction.rs#L95
 pub fn parseInstruction(
     arena: Allocator,
     program_id: Pubkey,
@@ -406,7 +407,7 @@ pub fn parseInstruction(
 }
 
 /// Fallback decoded representation of a compiled instruction
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L96
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/lib.rs#L96
 pub fn makeUiPartiallyDecodedInstruction(
     arena: Allocator,
     instruction: sig.ledger.transaction_status.CompiledInstruction,
@@ -440,7 +441,8 @@ pub fn makeUiPartiallyDecodedInstruction(
 }
 
 /// Parse an SPL Memo instruction. The data is simply UTF-8 text.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_instruction.rs#L131
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_instruction.rs#L131
 fn parseMemoInstruction(arena: Allocator, data: []const u8) !JsonValue {
     // Validate UTF-8
     if (!std.unicode.utf8ValidateSlice(data)) return error.InvalidUtf8;
@@ -450,7 +452,7 @@ fn parseMemoInstruction(arena: Allocator, data: []const u8) !JsonValue {
 }
 
 /// Parse a vote instruction into a JSON Value.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_vote.rs#L11
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_vote.rs#L11
 fn parseVoteInstruction(
     arena: Allocator,
     instruction: sig.ledger.transaction_status.CompiledInstruction,
@@ -805,7 +807,10 @@ fn parseVoteInstruction(
         },
         .initialize_account_v2 => return error.ParseError,
         // TODO: .updateComissionBps for SIMD-0291
-        // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/transaction-status/src/parse_vote.rs#L292
+        // [agave]
+        // sig fmt: off
+        // https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/transaction-status/src/parse_vote.rs#L292
+        // sig fmt: on
         .update_commission_collector => |kind| {
             try checkNumVoteAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(arena);
@@ -969,7 +974,8 @@ fn lockoutsToValue(
 }
 
 /// Parse a system instruction into a JSON Value.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_system.rs#L11
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_system.rs#L11
 fn parseSystemInstruction(
     arena: Allocator,
     instruction: sig.ledger.transaction_status.CompiledInstruction,
@@ -1235,7 +1241,10 @@ fn checkNumSystemAccounts(accounts: []const u8, num: usize) !void {
 }
 
 /// Parse an address lookup table instruction into a JSON Value.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_address_lookup_table.rs#L11
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_address_lookup_table.rs#L11
+// sig fmt: on
 fn parseAddressLookupTableInstruction(
     arena: Allocator,
     instruction: sig.ledger.transaction_status.CompiledInstruction,
@@ -1371,7 +1380,7 @@ fn parseAddressLookupTableInstruction(
 }
 
 /// Parse a stake instruction into a JSON Value.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_stake.rs#L11
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_stake.rs#L11
 fn parseStakeInstruction(
     arena: Allocator,
     instruction: sig.ledger.transaction_status.CompiledInstruction,
@@ -1850,7 +1859,8 @@ fn lockupArgsToValue(arena: Allocator, lockup_args: StakeLockupArgs) !JsonValue 
 }
 
 /// Parse a BPF upgradeable loader instruction into a JSON Value.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_bpf_loader.rs#L48
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_bpf_loader.rs#L48
 fn parseBpfUpgradeableLoaderInstruction(
     arena: Allocator,
     instruction: sig.ledger.transaction_status.CompiledInstruction,
@@ -2131,7 +2141,8 @@ fn checkNumAccounts(
 }
 
 /// Parse a BPF Loader v2 instruction into a JSON Value.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_bpf_loader.rs#L13
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_bpf_loader.rs#L13
 fn parseBpfLoaderInstruction(
     arena: Allocator,
     instruction: sig.ledger.transaction_status.CompiledInstruction,
@@ -2187,7 +2198,10 @@ fn parseBpfLoaderInstruction(
 }
 
 /// Parse an Associated Token Account instruction into a JSON Value.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_associated_token.rs#L11
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_associated_token.rs#L11
+// sig fmt: on
 fn parseAssociatedTokenInstruction(
     arena: Allocator,
     instruction: sig.ledger.transaction_status.CompiledInstruction,
@@ -2317,7 +2331,7 @@ fn checkNumAssociatedTokenAccounts(accounts: []const u8, num: usize) !void {
 }
 
 /// SPL Token instruction tag (first byte)
-/// [agave] https://github.com/solana-program/token/blob/f403c97ed4522469c2e320b8b4a2941f24c40a5e/interface/src/instruction.rs#L478
+/// [agave] https://github.com/solana-program/token/blob/f403c97/interface/src/instruction.rs#L478
 const TokenInstructionTag = enum(u8) {
     initializeMint = 0,
     initializeAccount = 1,
@@ -2368,7 +2382,8 @@ const TokenInstructionTag = enum(u8) {
 };
 
 /// Authority type for SetAuthority instruction
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_token.rs#L730
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_token.rs#L730
 const TokenAuthorityType = enum(u8) {
     mintTokens = 0,
     freezeAccount = 1,
@@ -2390,7 +2405,7 @@ const TokenAuthorityType = enum(u8) {
 };
 
 /// Parse an SPL Token instruction into a JSON Value.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_token.rs#L30
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_token.rs#L30
 fn parseTokenInstruction(
     arena: Allocator,
     instruction: sig.ledger.transaction_status.CompiledInstruction,
@@ -3323,7 +3338,10 @@ fn readCOptionPubkey(data: []const u8, offset: usize) !struct { pubkey: ?Pubkey,
 }
 
 /// Parse a TransferFee extension sub-instruction.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_token/extension/transfer_fee.rs
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_token/extension/transfer_fee.rs
+// sig fmt: on
 fn parseTransferFeeExtension(
     arena: Allocator,
     ext_data: []const u8,
@@ -3515,7 +3533,10 @@ fn parseTransferFeeExtension(
 }
 
 /// Parse a ConfidentialTransfer extension sub-instruction.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_token/extension/confidential_transfer.rs
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_token/extension/confidential_transfer.rs
+// sig fmt: on
 fn parseConfidentialTransferExtension(
     arena: Allocator,
     ext_data: []const u8,
@@ -3594,7 +3615,8 @@ fn parseConfidentialTransferExtension(
                 "mint",
                 try pubkeyToValue(arena, account_keys.get(@intCast(accounts[1])).?),
             );
-            // ConfigureAccountInstructionData: decryptable_zero_balance(36) + max_pending(8) + proof_offset(1)
+            // ConfigureAccountInstructionData: decryptable_zero_balance(36) + max_pending(8) +
+            // proof_offset(1)
             if (ext_data.len >= 46) {
                 try info.put("decryptableZeroBalance", try base64ToValue(arena, ext_data[1..37]));
                 const max_pending = std.mem.readInt(u64, ext_data[37..45], .little);
@@ -3776,7 +3798,8 @@ fn parseConfidentialTransferExtension(
                 "mint",
                 try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?),
             );
-            // WithdrawInstructionData: amount(8) + decimals(1) + new_decryptable(36) + eq_proof_offset(1) + range_proof_offset(1)
+            // WithdrawInstructionData: amount(8) + decimals(1) + new_decryptable(36) +
+            // eq_proof_offset(1) + range_proof_offset(1)
             if (ext_data.len >= 48) {
                 const amount = std.mem.readInt(u64, ext_data[1..9], .little);
                 try info.put("amount", .{ .integer = @intCast(amount) });
@@ -3848,7 +3871,8 @@ fn parseConfidentialTransferExtension(
                 "destination",
                 try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?),
             );
-            // TransferInstructionData: new_source_decryptable(36) + eq_proof_offset(1) + ct_validity_offset(1) + range_offset(1)
+            // TransferInstructionData: new_source_decryptable(36) + eq_proof_offset(1) +
+            // ct_validity_offset(1) + range_offset(1)
             if (ext_data.len >= 40) {
                 try info.put(
                     "newSourceDecryptableAvailableBalance",
@@ -3933,7 +3957,8 @@ fn parseConfidentialTransferExtension(
                 "account",
                 try pubkeyToValue(arena, account_keys.get(@intCast(accounts[0])).?),
             );
-            // ApplyPendingBalanceData: new_decryptable_available_balance(36) + expected_pending_balance_credit_counter(8)
+            // ApplyPendingBalanceData: new_decryptable_available_balance(36) +
+            // expected_pending_balance_credit_counter(8)
             if (ext_data.len >= 45) {
                 try info.put(
                     "newDecryptableAvailableBalance",
@@ -4019,7 +4044,8 @@ fn parseConfidentialTransferExtension(
                 "destination",
                 try pubkeyToValue(arena, account_keys.get(@intCast(accounts[2])).?),
             );
-            // TransferWithFeeInstructionData: new_source_decryptable(36) + eq_proof(1) + transfer_ct_validity(1) + fee_ct_validity(1) + fee_sigma(1) + range(1)
+            // TransferWithFeeInstructionData: new_source_decryptable(36) + eq_proof(1) +
+            // transfer_ct_validity(1) + fee_ct_validity(1) + fee_sigma(1) + range(1)
             if (ext_data.len >= 42) {
                 try info.put(
                     "newSourceDecryptableAvailableBalance",
@@ -4155,7 +4181,10 @@ fn parseConfidentialTransferExtension(
 }
 
 /// Parse a DefaultAccountState extension sub-instruction.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_token/extension/default_account_state.rs
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_token/extension/default_account_state.rs
+// sig fmt: on
 fn parseDefaultAccountStateExtension(
     arena: Allocator,
     ext_data: []const u8,
@@ -4216,7 +4245,10 @@ fn parseDefaultAccountStateExtension(
 }
 
 /// Parse a MemoTransfer extension sub-instruction.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_token/extension/memo_transfer.rs
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_token/extension/memo_transfer.rs
+// sig fmt: on
 fn parseMemoTransferExtension(
     arena: Allocator,
     ext_data: []const u8,
@@ -4260,7 +4292,10 @@ fn parseMemoTransferExtension(
 }
 
 /// Parse an InterestBearingMint extension sub-instruction.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_token/extension/interest_bearing_mint.rs
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_token/extension/interest_bearing_mint.rs
+// sig fmt: on
 fn parseInterestBearingMintExtension(
     arena: Allocator,
     ext_data: []const u8,
@@ -4329,7 +4364,10 @@ fn parseInterestBearingMintExtension(
 }
 
 /// Parse a CpiGuard extension sub-instruction.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_token/extension/cpi_guard.rs
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_token/extension/cpi_guard.rs
+// sig fmt: on
 fn parseCpiGuardExtension(
     arena: Allocator,
     ext_data: []const u8,
@@ -4373,7 +4411,10 @@ fn parseCpiGuardExtension(
 }
 
 /// Parse a TransferHook extension sub-instruction.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_token/extension/transfer_hook.rs
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_token/extension/transfer_hook.rs
+// sig fmt: on
 fn parseTransferHookExtension(
     arena: Allocator,
     ext_data: []const u8,
@@ -4439,7 +4480,10 @@ fn parseTransferHookExtension(
 }
 
 /// Parse a ConfidentialTransferFee extension sub-instruction.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_token/extension/confidential_transfer_fee.rs
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_token/extension/confidential_transfer_fee.rs
+// sig fmt: on
 fn parseConfidentialTransferFeeExtension(
     arena: Allocator,
     ext_data: []const u8,
@@ -4460,7 +4504,8 @@ fn parseConfidentialTransferFeeExtension(
                 arena,
                 account_keys.get(@intCast(accounts[0])).?,
             ));
-            // InitializeConfidentialTransferFeeConfigData: authority(32) + withdraw_withheld_authority_elgamal_pubkey(32)
+            // InitializeConfidentialTransferFeeConfigData: authority(32) +
+            // withdraw_withheld_authority_elgamal_pubkey(32)
             if (ext_data.len >= 33) {
                 if (readOptionalNonZeroPubkey(ext_data, 1)) |pk| {
                     try info.put("authority", try pubkeyToValue(arena, pk));
@@ -4487,7 +4532,8 @@ fn parseConfidentialTransferFeeExtension(
                 arena,
                 account_keys.get(@intCast(accounts[1])).?,
             ));
-            // WithdrawWithheldTokensFromMintData: proof_instruction_offset(1) + new_decryptable_available_balance(36)
+            // WithdrawWithheldTokensFromMintData: proof_instruction_offset(1) +
+            // new_decryptable_available_balance(36)
             if (ext_data.len >= 38) {
                 const proof_offset: i8 = @bitCast(ext_data[1]);
                 try info.put("proofInstructionOffset", .{ .integer = @intCast(proof_offset) });
@@ -4543,7 +4589,8 @@ fn parseConfidentialTransferFeeExtension(
                 arena,
                 account_keys.get(@intCast(accounts[1])).?,
             ));
-            // WithdrawWithheldTokensFromAccountsData: proof_instruction_offset(1) + num_token_accounts(1) + new_decryptable_available_balance(36)
+            // WithdrawWithheldTokensFromAccountsData: proof_instruction_offset(1) +
+            // num_token_accounts(1) + new_decryptable_available_balance(36)
             if (ext_data.len >= 39) {
                 const proof_offset: i8 = @bitCast(ext_data[1]);
                 const num_token_accounts: u8 = ext_data[2];
@@ -4659,7 +4706,10 @@ fn parseConfidentialTransferFeeExtension(
 }
 
 /// Parse a MetadataPointer extension sub-instruction.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_token/extension/metadata_pointer.rs
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_token/extension/metadata_pointer.rs
+// sig fmt: on
 fn parseMetadataPointerExtension(
     arena: Allocator,
     ext_data: []const u8,
@@ -4725,7 +4775,10 @@ fn parseMetadataPointerExtension(
 }
 
 /// Parse a GroupPointer extension sub-instruction.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_token/extension/group_pointer.rs
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_token/extension/group_pointer.rs
+// sig fmt: on
 fn parseGroupPointerExtension(
     arena: Allocator,
     ext_data: []const u8,
@@ -4791,7 +4844,10 @@ fn parseGroupPointerExtension(
 }
 
 /// Parse a GroupMemberPointer extension sub-instruction.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_token/extension/group_member_pointer.rs
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_token/extension/group_member_pointer.rs
+// sig fmt: on
 fn parseGroupMemberPointerExtension(
     arena: Allocator,
     ext_data: []const u8,
@@ -4857,7 +4913,10 @@ fn parseGroupMemberPointerExtension(
 }
 
 /// Parse a ConfidentialMintBurn extension sub-instruction.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_token/extension/confidential_mint_burn.rs
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_token/extension/confidential_mint_burn.rs
+// sig fmt: on
 fn parseConfidentialMintBurnExtension(
     arena: Allocator,
     ext_data: []const u8,
@@ -4894,7 +4953,8 @@ fn parseConfidentialMintBurnExtension(
                 arena,
                 account_keys.get(@intCast(accounts[0])).?,
             ));
-            // RotateSupplyElGamalPubkeyData: new_supply_elgamal_pubkey(32) + proof_instruction_offset(1)
+            // RotateSupplyElGamalPubkeyData: new_supply_elgamal_pubkey(32) +
+            // proof_instruction_offset(1)
             if (ext_data.len >= 34) {
                 try info.put("newSupplyElGamalPubkey", try base64ToValue(arena, ext_data[1..33]));
                 const proof_offset: i8 = @bitCast(ext_data[33]);
@@ -4943,7 +5003,8 @@ fn parseConfidentialMintBurnExtension(
                 arena,
                 account_keys.get(@intCast(accounts[1])).?,
             ));
-            // MintInstructionData: new_decryptable_supply(36) + eq_proof_offset(1) + ct_validity_offset(1) + range_offset(1)
+            // MintInstructionData: new_decryptable_supply(36) + eq_proof_offset(1) +
+            // ct_validity_offset(1) + range_offset(1)
             if (ext_data.len >= 40) {
                 try info.put("newDecryptableSupply", try base64ToValue(arena, ext_data[1..37]));
                 const eq_offset: i8 = @bitCast(ext_data[37]);
@@ -5026,7 +5087,8 @@ fn parseConfidentialMintBurnExtension(
                 arena,
                 account_keys.get(@intCast(accounts[1])).?,
             ));
-            // BurnInstructionData: new_decryptable_available_balance(36) + eq_proof_offset(1) + ct_validity_offset(1) + range_offset(1)
+            // BurnInstructionData: new_decryptable_available_balance(36) + eq_proof_offset(1) +
+            // ct_validity_offset(1) + range_offset(1)
             if (ext_data.len >= 40) {
                 try info.put("newDecryptableAvailableBalance", try base64ToValue(
                     arena,
@@ -5116,7 +5178,10 @@ fn parseConfidentialMintBurnExtension(
 }
 
 /// Parse a ScaledUiAmount extension sub-instruction.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_token/extension/scaled_ui_amount.rs
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_token/extension/scaled_ui_amount.rs
+// sig fmt: on
 fn parseScaledUiAmountExtension(
     arena: Allocator,
     ext_data: []const u8,
@@ -5199,7 +5264,10 @@ fn parseScaledUiAmountExtension(
 }
 
 /// Parse a Pausable extension sub-instruction.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_token/extension/pausable.rs
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_token/extension/pausable.rs
+// sig fmt: on
 fn parsePausableExtension(
     arena: Allocator,
     ext_data: []const u8,
@@ -5277,7 +5345,8 @@ fn parsePausableExtension(
 }
 
 /// Parse signers for SPL Token instructions.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_token.rs#L850
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_token.rs#L850
 fn parseSigners(
     arena: Allocator,
     info: *ObjectMap,
@@ -5795,7 +5864,8 @@ test "parseTransferFeeExtension: initializeTransferFeeConfig" {
     const static_keys = [_]Pubkey{ mint, auth1, auth2 };
     const account_keys = AccountKeys.init(&static_keys, null);
 
-    // Build data: sub_tag=0, COption<Pubkey>(1, auth1), COption<Pubkey>(1, auth2), u16 basis_points, u64 max_fee
+    // Build data: sub_tag=0, COption<Pubkey>(1, auth1), COption<Pubkey>(1, auth2), u16
+    // basis_points, u64 max_fee
     var payload: [82]u8 = undefined;
     // COption tag=1 (Some) for auth1
     std.mem.writeInt(u32, payload[0..4], 1, .little);
@@ -7065,7 +7135,8 @@ test "readCOptionPubkey: Some but insufficient data for pubkey" {
 }
 
 // ── SIMD-0232: UpdateCommissionCollector RPC parse tests ────────
-// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/transaction-status/src/parse_vote.rs#L1140
+// [agave]
+// https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/transaction-status/src/parse_vote.rs#L1140
 
 test "parse_vote update_commission_collector inflation_rewards" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);

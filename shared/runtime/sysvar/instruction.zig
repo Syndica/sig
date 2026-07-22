@@ -5,14 +5,14 @@ const Instruction = sig.core.Instruction;
 
 pub const ID: Pubkey = .parse("Sysvar1nstructions1111111111111111111111111");
 
-// [agave] https://github.com/anza-xyz/solana-sdk/blob/0fbfb7d1467c1ab0c35e1a3b905b8ba0ac0bf538/instructions-sysvar/src/lib.rs#L77
+// [agave] https://github.com/anza-xyz/solana-sdk/blob/0fbfb7d/instructions-sysvar/src/lib.rs#L77
 pub const InstructionsSysvarAccountMeta = packed struct(u8) {
     is_signer: bool,
     is_writable: bool,
     _: u6 = 0, // padding
 };
 
-// [agave] https://github.com/anza-xyz/solana-sdk/blob/0fbfb7d1467c1ab0c35e1a3b905b8ba0ac0bf538/instructions-sysvar/src/lib.rs#L99
+// [agave] https://github.com/anza-xyz/solana-sdk/blob/0fbfb7d/instructions-sysvar/src/lib.rs#L99
 // First encode the number of instructions:
 // [0..2 - num_instructions
 //
@@ -69,7 +69,8 @@ pub fn serializeInstructions(
 }
 
 // (does not test deserialisation - not implemented yet)
-// [agave] https://github.com/anza-xyz/agave/blob/a00f1b5cdea9a7d5a70f8d24b86ea3ae66feff11/sdk/program/src/sysvar/instructions.rs#L520
+// [agave]
+// https://github.com/anza-xyz/agave/blob/a00f1b5/sdk/program/src/sysvar/instructions.rs#L520
 test serializeInstructions {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);

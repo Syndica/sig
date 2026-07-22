@@ -37,7 +37,8 @@ pub const BenchmarkLedger = struct {
     pub const max_iterations = 1_000;
     pub const name = "Ledger";
 
-    /// Analogous to [bench_write_small](https://github.com/anza-xyz/agave/blob/cfd393654f84c36a3c49f15dbe25e16a0269008d/ledger/benches/blockstore.rs#L59)
+    /// Analogous to [bench_write_small](
+    /// https://github.com/anza-xyz/agave/blob/cfd3936/ledger/benches/blockstore.rs#L59)
     ///
     /// There is a notable difference from agave: This does not measure the
     /// creation of shreds from entries. But even if you remove that from
@@ -69,7 +70,8 @@ pub const BenchmarkLedger = struct {
         return timer.read();
     }
 
-    /// Analogous to [bench_serialize_write_bincode](https://github.com/anza-xyz/agave/blob/9c2098450ca7e5271e3690277992fbc910be27d0/ledger/benches/protobuf.rs#L88)
+    /// Analogous to [bench_serialize_write_bincode](
+    /// https://github.com/anza-xyz/agave/blob/9c20984/ledger/benches/protobuf.rs#L88)
     pub fn @"Database.put Rewards"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         var state = try initTestLedger(allocator, @src(), .noop);
@@ -86,7 +88,8 @@ pub const BenchmarkLedger = struct {
         return timer.read();
     }
 
-    /// Analogous to [bench_read_bincode](https://github.com/anza-xyz/agave/blob/9c2098450ca7e5271e3690277992fbc910be27d0/ledger/benches/protobuf.rs#L100)
+    /// Analogous to [bench_read_bincode](
+    /// https://github.com/anza-xyz/agave/blob/9c20984/ledger/benches/protobuf.rs#L100)
     pub fn @"Database.get Rewards"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         var state = try initTestLedger(allocator, @src(), .noop);
@@ -105,7 +108,8 @@ pub const BenchmarkLedger = struct {
 
     /// Benchmarks for LedgerReader.
     ///
-    /// Analogous to [bench_read_sequential]https://github.com/anza-xyz/agave/blob/cfd393654f84c36a3c49f15dbe25e16a0269008d/ledger/benches/blockstore.rs#L78
+    /// Analogous to [bench_read_sequential]
+    /// https://github.com/anza-xyz/agave/blob/cfd3936/ledger/benches/blockstore.rs#L78
     pub fn @"LedgerReader.getDataShred - Sequential"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         var state = try initTestLedger(allocator, @src(), .noop);
@@ -138,7 +142,8 @@ pub const BenchmarkLedger = struct {
         return timer.read();
     }
 
-    /// Analogous to [bench_read_random]https://github.com/anza-xyz/agave/blob/92eca1192b055d896558a78759d4e79ab4721ff1/ledger/benches/blockstore.rs#L103
+    /// Analogous to [bench_read_random]
+    /// https://github.com/anza-xyz/agave/blob/92eca11/ledger/benches/blockstore.rs#L103
     pub fn @"LedgerReader.getDataShred - Random"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         var state = try initTestLedger(allocator, @src(), .noop);
@@ -290,7 +295,8 @@ pub const BenchmarkLedger = struct {
 
     /// Benchmarks for LedgerResultWriter.
     ///
-    /// Analogous to [bench_write_transaction_status]https://github.com/anza-xyz/agave/blob/ff1b22007c34669768c5b676cac491f580b39e0b/ledger/benches/blockstore.rs#L206
+    /// Analogous to [bench_write_transaction_status]
+    /// https://github.com/anza-xyz/agave/blob/ff1b220/ledger/benches/blockstore.rs#L206
     pub fn @"LedgerResultWriter.writeTransactionStatus"() !sig.time.Duration {
         const allocator = std.heap.c_allocator;
         const Signature = sig.core.Signature;

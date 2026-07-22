@@ -18,7 +18,8 @@ const SystemProgramError = system_program.Error;
 const RecentBlockhashes = sig.runtime.sysvar.RecentBlockhashes;
 const Rent = sig.runtime.sysvar.Rent;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L300
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L300
 pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -26,12 +27,17 @@ pub fn execute(
     const zone = tracy.Zone.init(@src(), .{ .name = "system: execute" });
     defer zone.deinit();
 
-    // Default compute units for the system program are applied via the declare_process_instruction macro
-    // [agave] https://github.com/anza-xyz/agave/blob/v2.0.22/programs/system/src/system_processor.rs#L298
+    // Default compute units for the system program are applied via the declare_process_instruction
+    // macro
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/v2.0.22/programs/system/src/system_processor.rs#L298
     try ic.tc.consumeCompute(system_program.COMPUTE_UNITS);
 
     // Deserialize the instruction and dispatch to the appropriate handler
-    // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L304-L308
+    // [agave]
+    // sig fmt: off
+    // https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L304-L308
+    // sig fmt: on
     const instruction = try ic.ixn_info.deserializeInstruction(
         allocator,
         SystemProgramInstruction,
@@ -121,7 +127,8 @@ pub fn execute(
     };
 }
 
-//// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L315-L334
+//// [agave]
+///https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L315-L334
 fn executeCreateAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -145,7 +152,8 @@ fn executeCreateAccount(
     );
 }
 
-//// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L343-L362
+//// [agave]
+///https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L343-L362
 fn executeCreateAccountWithSeed(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -179,7 +187,8 @@ fn executeCreateAccountWithSeed(
     );
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L530-L563
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L530-L563
 fn executeCreateAccountAllowPrefund(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -218,7 +227,8 @@ fn executeCreateAccountAllowPrefund(
     }
 }
 
-//// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L365-L375
+//// [agave]
+///https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L365-L375
 fn executeAssign(
     ic: *InstructionContext,
     owner: Pubkey,
@@ -237,7 +247,8 @@ fn executeAssign(
     );
 }
 
-//// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L378-L386
+//// [agave]
+///https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L378-L386
 fn executeTransfer(
     ic: *InstructionContext,
     lamports: u64,
@@ -254,7 +265,8 @@ fn executeTransfer(
     );
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L393-L404
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L393-L404
 fn executeTransferWithSeed(
     ic: *InstructionContext,
     lamports: u64,
@@ -295,7 +307,8 @@ fn executeTransferWithSeed(
     );
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L407-L423
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L407-L423
 fn executeAdvanceNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -318,7 +331,8 @@ fn executeAdvanceNonceAccount(
     try advanceNonceAccount(allocator, ic, &account);
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L426-L443
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L426-L443
 fn executeWithdrawNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -336,7 +350,8 @@ fn executeWithdrawNonceAccount(
     return withdrawNonceAccount(allocator, ic, lamports, rent);
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L446-L463
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L446-L463
 fn executeInitializeNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -368,7 +383,8 @@ fn executeInitializeNonceAccount(
     );
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L466-L469
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L466-L469
 fn executeAuthorizeNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -390,7 +406,8 @@ fn executeAuthorizeNonceAccount(
     );
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L472-L485
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L472-L485
 fn executeUpgradeNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -415,7 +432,8 @@ fn executeUpgradeNonceAccount(
     );
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L488-L498
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L488-L498
 fn executeAllocate(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -432,7 +450,8 @@ fn executeAllocate(
     try allocate(allocator, ic, &account, space, account.pubkey);
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L506-L523
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L506-L523
 fn executeAllocateWithSeed(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -462,7 +481,8 @@ fn executeAllocateWithSeed(
     try assign(ic, &account, owner, base);
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L526-L536
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L526-L536
 fn executeAssignWithSeed(
     ic: *InstructionContext,
     base: Pubkey,
@@ -489,7 +509,8 @@ fn executeAssignWithSeed(
     try assign(ic, &account, owner, base);
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L145
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L145
 fn createAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -528,7 +549,8 @@ fn createAccount(
     );
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L112
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L112
 fn assign(
     ic: *InstructionContext,
     account: *BorrowedAccount,
@@ -548,7 +570,8 @@ fn assign(
     try account.setOwner(owner);
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L214
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L214
 fn transfer(
     ic: *InstructionContext,
     from_index: u16,
@@ -571,7 +594,8 @@ fn transfer(
     );
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L182
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L182
 fn transferVerified(
     ic: *InstructionContext,
     from_index: u16,
@@ -606,7 +630,8 @@ fn transferVerified(
     try to_account.addLamports(lamports);
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_instruction.rs#L20
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_instruction.rs#L20
 fn advanceNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -671,7 +696,8 @@ fn checkWithdrawNonceSigner(
     }
 }
 
-//// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_instruction.rs#L73-L74
+//// [agave]
+///https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_instruction.rs#L73-L74
 fn withdrawNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -754,7 +780,8 @@ fn withdrawNonceAccount(
     try to_account.addLamports(lamports);
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_instruction.rs#L155
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_instruction.rs#L155
 fn initializeNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -802,7 +829,8 @@ fn initializeNonceAccount(
     }
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_instruction.rs#L203
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_instruction.rs#L203
 pub fn authorizeNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -850,7 +878,8 @@ pub fn authorizeNonceAccount(
     }
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#70
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#70
 fn allocate(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -881,7 +910,8 @@ fn allocate(
     try account.setDataLength(allocator, &ic.tc.accounts_resize_delta, @intCast(space));
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L47-L58
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L47-L58
 fn checkSeedAddress(
     ic: *InstructionContext,
     expected: Pubkey,

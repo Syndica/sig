@@ -30,7 +30,8 @@ pub const ParseError = error{
 pub const AccountEncoding = enum {
     /// Legacy, deprecated alias for base58. Retained for RPC backwards compatibility.
     /// Serializes as a plain string instead of the `[data, encoding]` array tuple.
-    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder-client-types/src/lib.rs#L72
+    /// [agave]
+    /// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder-client-types/src/lib.rs#L72
     binary,
     base58,
     base64,
@@ -64,7 +65,8 @@ pub const AccountData = union(enum) {
 
     /// Legacy binary encoding (deprecated). Serializes as a plain base58-encoded string,
     /// NOT as an `[data, encoding]` array tuple.
-    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder-client-types/src/lib.rs#L39
+    /// [agave]
+    /// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder-client-types/src/lib.rs#L39
     legacy_binary: []const u8,
 
     pub fn deinit(self: AccountData, allocator: std.mem.Allocator) void {
@@ -94,7 +96,10 @@ pub const AccountData = union(enum) {
                 try jw.write(.{ str, AccountEncoding.base64 });
             },
             // Legacy binary: plain string, not an array tuple
-            // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder-client-types/src/lib.rs#L39
+            // [agave]
+            // sig fmt: off
+            // https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder-client-types/src/lib.rs#L39
+            // sig fmt: on
             .legacy_binary => |str| {
                 try jw.write(str);
             },
@@ -263,9 +268,11 @@ fn encodeAccountData(
             const data_len = end - start;
 
             if (data_len > MAX_BASE58_INPUT_LEN) {
-                // [agave] Returns "error: data too large for bs58 encoding" string instead of error:
+                // [agave] Returns "error: data too large for bs58 encoding" string instead of
+                // error:
                 // https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/lib.rs#L44-L47
-                // We return an error here since returning a fake "error" string would be misleading.
+                // We return an error here since returning a fake "error" string would be
+                // misleading.
                 return error.Base58DataTooLarge;
             }
 
@@ -302,7 +309,8 @@ fn encodeAccountData(
             // TODO: recommOutSize is usually 128KiB. We could stack allocate this or re-use
             // buffer set in AccountHookContext instead of allocating it on each call
             // since the server is single-threaded. Unfortunately, the zstd lib's doesn't give us a
-            // comptime-known size to use for stack allocation. Instead of assuming, just allocate for now.
+            // comptime-known size to use for stack allocation. Instead of assuming, just allocate
+            // for now.
             const zstd_out_buf = try arena.alloc(
                 u8,
                 zstd.Compressor.recommOutSize(),
@@ -413,7 +421,8 @@ pub fn JsonString(comptime max_len: usize) type {
 
         const Self = @This();
 
-        // stack allocate the buffer and initialize len to 0. The caller can then use appendSliceAssumeCapacity
+        // stack allocate the buffer and initialize len to 0. The caller can then use
+        // appendSliceAssumeCapacity
         pub fn init() Self {
             return .{ .inner = undefined, .len = 0 };
         }
@@ -498,7 +507,8 @@ pub fn JsonArray(comptime T: type, comptime max_len: usize) type {
 }
 
 /// The result of parsing account data for jsonParsed encoding.
-/// [agave] https://github.com/anza-xyz/agave/blob/master/account-decoder-client-types/src/lib.rs#L101-L104
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/master/account-decoder-client-types/src/lib.rs#L101-L104
 pub const ParsedAccount = struct {
     program: []const u8,
     parsed: ParsedContent,
@@ -535,7 +545,8 @@ pub const ParsedContent = union(enum) {
 };
 
 /// Enum of programs that support jsonParsed.
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_account_data.rs#L68
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_account_data.rs#L68
 const ParsableAccount = enum {
     vote,
     stake,
@@ -550,14 +561,21 @@ const ParsableAccount = enum {
     pub fn fromProgramId(program_id: Pubkey) ?ParsableAccount {
         if (program_id.equals(&sig.runtime.program.vote.ID)) return .vote;
         if (program_id.equals(&sig.runtime.program.stake.ID)) return .stake;
-        // Nonce accounts are owned by the system program, so we check the program ID against the system program ID.
-        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_account_data.rs#L36
+        // Nonce accounts are owned by the system program, so we check the program ID against the
+        // system program ID.
+        // [agave]
+        // sig fmt: off
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_account_data.rs#L36
+        // sig fmt: on
         if (program_id.equals(&sig.runtime.program.system.ID)) return .nonce;
         if (program_id.equals(&sig.runtime.program.address_lookup_table.ID))
             return .address_lookup_table;
         if (program_id.equals(&sig.runtime.program.bpf_loader.v3.ID)) return .bpf_upgradeable_loader;
         // Sysvar accounts are owned by the sysvar program.
-        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_account_data.rs#L48
+        // [agave]
+        // sig fmt: off
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_account_data.rs#L48
+        // sig fmt: on
         if (program_id.equals(&sig.runtime.sysvar.OWNER_ID)) return .sysvar;
         if (program_id.equals(&sig.runtime.program.config.ID)) return .config;
         if (program_id.equals(&sig.runtime.ids.TOKEN_PROGRAM_ID)) return .token;
@@ -567,8 +585,12 @@ const ParsableAccount = enum {
 
     pub fn programName(self: ParsableAccount) []const u8 {
         // NOTE: use kebab-case names to match Agave
-        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_account_data.rs#L67
-        // Agave converts enum variant names (e.g. AddressLookupTable) to kebab-case via .to_kebab_case()
+        // [agave]
+        // sig fmt: off
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_account_data.rs#L67
+        // sig fmt: on
+        // Agave converts enum variant names (e.g. AddressLookupTable) to kebab-case via
+        // .to_kebab_case()
         return switch (self) {
             .vote => "vote",
             .stake => "stake",
@@ -585,7 +607,10 @@ const ParsableAccount = enum {
 
 /// Additional data needed for parsing certain account types.
 /// For SPL Token accounts, this includes mint decimals and interest-bearing/scaled config.
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_account_data.rs#L101-L106
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_account_data.rs#L101-L106
+// sig fmt: on
 pub const AdditionalAccountData = struct {
     spl_token: ?parse_token.SplTokenAdditionalData = null,
 };
@@ -627,7 +652,8 @@ pub fn parseAccount(
         },
         .sysvar => {
             // Sysvar parsing dispatches by the account's pubkey, not its owner.
-            // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_sysvar.rs#L24
+            // [agave]
+            // https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_sysvar.rs#L24
             const sysvar_parsed = try parse_sysvar.parseSysvar(
                 arena,
                 pubkey,

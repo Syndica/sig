@@ -18,7 +18,7 @@ pub const BASE_64_ENCODER =
 /// "Program <address> invoke [<depth>]"
 /// ```
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/stable_log.rs#L20
+/// [agave] https://github.com/anza-xyz/agave/blob/a705c76/program-runtime/src/stable_log.rs#L20
 pub fn programInvoke(
     tc: *TransactionContext,
     program_id: Pubkey,
@@ -43,7 +43,7 @@ pub fn programInvoke(
 ///
 /// That is, any program-generated output is guaranteed to be prefixed by "Program log: "
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/stable_log.rs#L42
+/// [agave] https://github.com/anza-xyz/agave/blob/a705c76/program-runtime/src/stable_log.rs#L42
 pub fn programLog(tc: *TransactionContext, comptime fmt: []const u8, args: anytype) !void {
     if (tc.log_collector) |*lc| {
         try lc.log(tc.allocator, "Program log: " ++ fmt, args);
@@ -60,7 +60,7 @@ pub fn programLog(tc: *TransactionContext, comptime fmt: []const u8, args: anyty
 ///
 /// That is, any program-generated output is guaranteed to be prefixed by "Program data: "
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/stable_log.rs#L55
+/// [agave] https://github.com/anza-xyz/agave/blob/a705c76/program-runtime/src/stable_log.rs#L55
 pub fn programData(
     tc: *TransactionContext,
     data: []const []const u8,
@@ -95,7 +95,7 @@ pub fn programData(
 ///
 /// That is, any program-generated output is guaranteed to be prefixed by "Program return: "
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/stable_log.rs#L73
+/// [agave] https://github.com/anza-xyz/agave/blob/a705c76/program-runtime/src/stable_log.rs#L73
 pub fn programReturn(
     tc: *TransactionContext,
     program_id: Pubkey,
@@ -122,7 +122,7 @@ pub fn programReturn(
 /// "Program <address> success"
 /// ```
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/stable_log.rs#L93
+/// [agave] https://github.com/anza-xyz/agave/blob/a705c76/program-runtime/src/stable_log.rs#L93
 pub fn programSuccess(tc: *TransactionContext, program_id: Pubkey) !void {
     if (tc.log_collector) |*lc| {
         try lc.log(tc.allocator, "Program {f} success", .{program_id});
@@ -137,7 +137,7 @@ pub fn programSuccess(tc: *TransactionContext, program_id: Pubkey) !void {
 /// "Program <address> failed: <program error details>"
 /// ```
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/stable_log.rs#L104
+/// [agave] https://github.com/anza-xyz/agave/blob/a705c76/program-runtime/src/stable_log.rs#L104
 pub fn programFailure(
     tc: *TransactionContext,
     program_id: Pubkey,

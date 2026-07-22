@@ -32,7 +32,10 @@ const VOTE_CREDITS_GRACE_SLOTS = state.VOTE_CREDITS_GRACE_SLOTS;
 const VOTE_CREDITS_MAXIMUM_PER_SLOT = state.VOTE_CREDITS_MAXIMUM_PER_SLOT;
 const BLS_PUBLIC_KEY_COMPRESSED_SIZE = state.BLS_PUBLIC_KEY_COMPRESSED_SIZE;
 
-/// SIMD-0185: https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0185-vote-account-v4.md
+/// SIMD-0185:
+// sig fmt: off
+/// https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0185-vote-account-v4.md
+// sig fmt: on
 pub const VoteStateV4 = struct {
     /// The validator identity that signs the votes in this account.
     node_pubkey: Pubkey,
@@ -92,10 +95,12 @@ pub const VoteStateV4 = struct {
         .last_timestamp = .{ .slot = 0, .timestamp = 0 },
     };
 
-    /// Integer percentage (0-100) for backward compatibility; inflation_rewards_commission_bps / 100.
+    /// Integer percentage (0-100) for backward compatibility; inflation_rewards_commission_bps /
+    /// 100.
     /// Matches Agave's `CommissionView::commission_percent`, which saturates at `u8::MAX`
     /// rather than panicking when the stored basis-points value exceeds 25,500.
-    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/vote/src/vote_state_view/field_frames.rs
+    /// [agave]
+    /// https://github.com/anza-xyz/agave/blob/v3.1.8/vote/src/vote_state_view/field_frames.rs
     pub fn commission(self: *const VoteStateV4) u8 {
         return @intCast(@min(self.inflation_rewards_commission_bps / 100, std.math.maxInt(u8)));
     }
@@ -451,7 +456,8 @@ pub const VoteStateV4 = struct {
         return null;
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L709
+    /// [agave]
+    /// https://github.com/anza-xyz/solana-sdk/blob/fb8a9a0/vote-interface/src/state/mod.rs#L709
     pub fn processNextVoteSlot(
         self: *VoteStateV4,
         allocator: Allocator,
@@ -485,7 +491,8 @@ pub const VoteStateV4 = struct {
         try self.doubleLockouts();
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L939
+    /// [agave]
+    /// https://github.com/anza-xyz/solana-sdk/blob/fb8a9a0/vote-interface/src/state/mod.rs#L939
     ///
     /// Pop all recent votes that are not locked out at the next vote slot.
     /// This allows validators to switch forks once their votes for another fork have
@@ -501,7 +508,8 @@ pub const VoteStateV4 = struct {
         }
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L949
+    /// [agave]
+    /// https://github.com/anza-xyz/solana-sdk/blob/fb8a9a0/vote-interface/src/state/mod.rs#L949
     pub fn doubleLockouts(self: *VoteStateV4) !void {
         const stack_depth = self.votes.items.len;
 
@@ -515,7 +523,8 @@ pub const VoteStateV4 = struct {
         }
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L963
+    /// [agave]
+    /// https://github.com/anza-xyz/solana-sdk/blob/fb8a9a0/vote-interface/src/state/mod.rs#L963
     pub fn processTimestamp(
         self: *VoteStateV4,
         slot: Slot,
@@ -535,7 +544,8 @@ pub const VoteStateV4 = struct {
         return null;
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/a0717a15d349dc5e0c30384bee6d039377b92167/programs/vote/src/vote_state/mod.rs#L618
+    /// [agave]
+    /// https://github.com/anza-xyz/agave/blob/a0717a1/programs/vote/src/vote_state/mod.rs#L618
     pub fn processVote(
         self: *VoteStateV4,
         allocator: Allocator,
@@ -577,7 +587,8 @@ pub const VoteStateV4 = struct {
         );
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/a0717a15d349dc5e0c30384bee6d039377b92167/programs/vote/src/vote_state/mod.rs#L603
+    /// [agave]
+    /// https://github.com/anza-xyz/agave/blob/a0717a1/programs/vote/src/vote_state/mod.rs#L603
     pub fn processVoteUnfiltered(
         self: *VoteStateV4,
         allocator: Allocator,
@@ -688,7 +699,8 @@ pub const VoteStateV4 = struct {
         // 2) Conversely, `slot_hashes` is sorted from newest/largest vote to
         // the oldest/smallest vote
         //
-        // We check every proposed lockout because have to ensure that every slot is actually part of
+        // We check every proposed lockout because have to ensure that every slot is actually part
+        // of
         // the history, not just the most recent ones
         while (proposed_lockouts_index < proposed_lockouts.items.len and slot_hashes_index > 0) {
             const proposed_vote_slot: Slot = if (root_to_check) |root|
@@ -709,7 +721,8 @@ pub const VoteStateV4 = struct {
             switch (std.math.order(proposed_vote_slot, ancestor_slot)) {
                 .lt => {
                     if (slot_hashes_index == slot_hash_entries.len) {
-                        // The vote slot does not exist in the SlotHashes history because it's too old,
+                        // The vote slot does not exist in the SlotHashes history because it's too
+                        // old,
                         // i.e. older than the oldest slot in the history.
                         if (proposed_vote_slot >= earliest_slot_hash_in_history) {
                             return VoteError.assertion_failed;
@@ -731,7 +744,8 @@ pub const VoteStateV4 = struct {
                             std.debug.assert(new_proposed_root == proposed_vote_slot);
                             // 2. We know from the assert earlier in the function that
                             // `proposed_vote_slot < earliest_slot_hash_in_history`,
-                            // so from 1. we know that `new_proposed_root < earliest_slot_hash_in_history`.
+                            // so from 1. we know that `new_proposed_root <
+                            // earliest_slot_hash_in_history`.
                             if (new_proposed_root >= earliest_slot_hash_in_history) {
                                 return VoteError.assertion_failed;
                             }

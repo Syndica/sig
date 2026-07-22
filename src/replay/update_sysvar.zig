@@ -322,7 +322,8 @@ pub const UpdateSysvarAccountDeps = struct {
 /// account is loaded from the accounts database using the current ancestors and a new account is
 /// created which inherits the lamports and rent epoch from the old account if it exists. The new
 /// account lamports are then adjusted to ensure rent exemption. The new account is written back
-/// to accounts db, and the slot capitalization is updated to reflect the change in account lamports.
+/// to accounts db, and the slot capitalization is updated to reflect the change in account
+/// lamports.
 pub fn updateSysvarAccount(
     comptime Sysvar: type,
     allocator: Allocator,
@@ -847,7 +848,8 @@ test "update all sysvars" {
     defer allocator.free(account.data);
     try db.put(slot, SlotHistory.ID, account);
 
-    // NOTE: Putting accounts on the same slot is broken, so increment slot by 1 and add it to ancestors.
+    // NOTE: Putting accounts on the same slot is broken, so increment slot by 1 and add it to
+    // ancestors.
     slot = slot + 1;
     const update_sysvar_deps: UpdateSysvarAccountDeps = .{
         .slot_store = .{ .accounts_db = .{ db, slot, &ancestors } },

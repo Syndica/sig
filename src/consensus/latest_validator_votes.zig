@@ -14,7 +14,9 @@ const LatestVotes = std.AutoArrayHashMapUnmanaged(
     struct { slot: Slot, hashes: std.ArrayListUnmanaged(Hash) },
 );
 
-/// Analogous to [LatestValidatorVotesForFrozenBanks](https://github.com/anza-xyz/agave/blob/1f147b837a497194977dcd1ed6b5aa25e81de831/core/src/consensus/latest_validator_votes_for_frozen_banks.rs#L10)
+// sig fmt: off
+/// Analogous to [LatestValidatorVotesForFrozenBanks](https://github.com/anza-xyz/agave/blob/1f147b8/core/src/consensus/latest_validator_votes_for_frozen_banks.rs#L10)
+// sig fmt: on
 pub const LatestValidatorVotes = struct {
     max_gossip_frozen_votes: LatestVotes,
     max_replay_frozen_votes: LatestVotes,
@@ -64,7 +66,9 @@ pub const LatestValidatorVotes = struct {
     /// The vote won't be added, and false will be returned for case when there are newer votes
     /// for this validator compared to the vote being inserted.
     ///
-    /// Analogous to [check_add_vote](https://github.com/anza-xyz/agave/blob/fecc916333d376cbe2b1013c75f36b99bacae6c4/core/src/consensus/latest_validator_votes_for_frozen_banks.rs#L22)
+    // sig fmt: off
+    /// Analogous to [check_add_vote](https://github.com/anza-xyz/agave/blob/fecc916/core/src/consensus/latest_validator_votes_for_frozen_banks.rs#L22)
+    // sig fmt: on
     pub fn checkAddVote(
         self: *LatestValidatorVotes,
         allocator: std.mem.Allocator,

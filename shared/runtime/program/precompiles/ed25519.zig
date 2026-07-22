@@ -51,8 +51,10 @@ pub fn execute(_: std.mem.Allocator, ic: *InstructionContext) InstructionError!v
     };
 }
 
-// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L88
-// https://github.com/firedancer-io/firedancer/blob/af74882ffb2c24783a82718dbc5111a94e1b5f6f/src/flamenco/runtime/program/fd_precompiles.c#L118
+// https://github.com/anza-xyz/agave/blob/a8aef04/sdk/src/ed25519_instruction.rs#L88
+// sig fmt: off
+// https://github.com/firedancer-io/firedancer/blob/af74882/src/flamenco/runtime/program/fd_precompiles.c#L118
+// sig fmt: on
 pub fn verify(
     data: []const u8,
     all_instruction_datas: []const []const u8,
@@ -112,7 +114,7 @@ pub fn verify(
     }
 }
 
-// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L35
+// https://github.com/anza-xyz/agave/blob/a8aef04/sdk/src/ed25519_instruction.rs#L35
 pub fn newInstruction(
     allocator: std.mem.Allocator,
     signature: *const Ed25519.Signature,
@@ -161,7 +163,7 @@ pub fn newInstruction(
     };
 }
 
-// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L258
+// https://github.com/anza-xyz/agave/blob/a8aef04/sdk/src/ed25519_instruction.rs#L258
 fn testCase(
     num_signatures: u16,
     offsets: SignatureOffsets,
@@ -201,7 +203,7 @@ test "execute" {
     );
 }
 
-// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L279
+// https://github.com/anza-xyz/agave/blob/a8aef04/sdk/src/ed25519_instruction.rs#L279
 test "ed25519 invalid offsets" {
     const allocator = std.testing.allocator;
     var instruction_data = try std.ArrayListAligned(u8, .@"2").initCapacity(
@@ -250,7 +252,7 @@ test "ed25519 invalid offsets" {
     );
 }
 
-// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L326
+// https://github.com/anza-xyz/agave/blob/a8aef04/sdk/src/ed25519_instruction.rs#L326
 test "ed25519 message data offsets" {
     {
         const offsets: SignatureOffsets = .{
@@ -297,7 +299,7 @@ test "ed25519 message data offsets" {
     }
 }
 
-// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L369
+// https://github.com/anza-xyz/agave/blob/a8aef04/sdk/src/ed25519_instruction.rs#L369
 test "ed25519 pubkey offset" {
     {
         const offsets: SignatureOffsets = .{
@@ -320,7 +322,7 @@ test "ed25519 pubkey offset" {
     }
 }
 
-// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L389-L390
+// https://github.com/anza-xyz/agave/blob/a8aef04/sdk/src/ed25519_instruction.rs#L389-L390
 test "ed25519 signature offset" {
     {
         const offsets: SignatureOffsets = .{
@@ -343,7 +345,7 @@ test "ed25519 signature offset" {
     }
 }
 
-// https://github.com/anza-xyz/agave/blob/2d834361c096198176dbdc4524d5003bccf6c192/precompiles/src/ed25519.rs#L446
+// https://github.com/anza-xyz/agave/blob/2d83436/precompiles/src/ed25519.rs#L446
 test "ed25519_malleability" {
     const allocator = std.testing.allocator;
     {

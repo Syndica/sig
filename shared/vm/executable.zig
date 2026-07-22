@@ -931,7 +931,7 @@ pub const Registry = struct {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/sbpf/blob/bce8eed8df53595afb8770531cf4ca938e449cf7/src/vm.rs#L52
+/// [agave] https://github.com/anza-xyz/sbpf/blob/bce8eed/src/vm.rs#L52
 /// VM configuration settings
 pub const Config = struct {
     /// Maximum call depth
@@ -951,7 +951,7 @@ pub const Config = struct {
     /// accesses can resolve to that region. When false, slot 0 is
     /// unconditionally an access-violation and callers must not pass a
     /// slot-0 region.
-    /// [agave] https://github.com/anza-xyz/sbpf/blob/bce8eed8df53595afb8770531cf4ca938e449cf7/src/vm.rs#L142
+    /// [agave] https://github.com/anza-xyz/sbpf/blob/bce8eed/src/vm.rs#L142
     allow_memory_region_zero: bool = true,
     /// Use aligned memory mapping
     aligned_memory_mapping: bool = true,

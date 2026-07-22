@@ -490,7 +490,9 @@ fn insertFromSnapshotArchive(
                 ) catch return error.InvalidAccountFile;
 
                 // Header's hash is obsolete and always zero:
+                // sig fmt: off
                 // https://github.com/anza-xyz/agave/blob/v3.0/accounts-db/src/append_vec.rs#L1335-L1339
+                // sig fmt: on
                 if (!header.hash.eql(Hash.ZEROES)) {
                     return error.InvalidAccount;
                 }

@@ -195,7 +195,8 @@ pub const TowerConsensus = struct {
         };
     }
 
-    /// Analogous to [`initialize_progress_and_fork_choice_with_locked_bank_forks`](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L637)
+    /// Analogous to [`initialize_progress_and_fork_choice_with_locked_bank_forks`](
+    /// https://github.com/anza-xyz/agave/blob/0315eb6/core/src/replay_stage.rs#L637)
     pub fn initForkChoice(
         allocator: std.mem.Allocator,
         logger: Logger,
@@ -219,7 +220,10 @@ pub const TowerConsensus = struct {
         // Given a root and a list of `frozen_slots` sorted smallest to greatest by slot,
         // initialize a new HeaviestSubtreeForkChoice
         //
-        // Analogous to [`new_from_frozen_banks`](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/consensus/heaviest_subtree_fork_choice.rs#L235)
+        // Analogous to [`new_from_frozen_banks`](
+        // sig fmt: off
+        // https://github.com/anza-xyz/agave/blob/0315eb6/core/src/consensus/heaviest_subtree_fork_choice.rs#L235)
+        // sig fmt: on
         var heaviest_subtree_fork_choice: HeaviestSubtreeForkChoice = try .init(
             allocator,
             .from(logger),
@@ -565,7 +569,8 @@ pub const TowerConsensus = struct {
             const fork_stats = progress_map.getForkStats(slot_stat) orelse
                 return error.MissingSlotInForkStats;
             // Checking the duplicate confirmation status.
-            // Analogous to [ReplayStage::tower_duplicate_confirmed_forks](https://github.com/anza-xyz/agave/blob/47c0383f2301e5a739543c1af9992ae182b7e06c/core/src/replay_stage.rs#L3928)
+            // Analogous to [ReplayStage::tower_duplicate_confirmed_forks](
+            // https://github.com/anza-xyz/agave/blob/47c0383/core/src/replay_stage.rs#L3928)
             var duplicate_confirmed_forks: std.ArrayListUnmanaged(SlotAndHash) = .empty;
             defer duplicate_confirmed_forks.deinit(allocator);
             try duplicate_confirmed_forks.ensureTotalCapacity(
@@ -598,7 +603,8 @@ pub const TowerConsensus = struct {
                 }
             }
             // Update cluster with the duplicate confirmation status.
-            // Analogous to [ReplayStage::mark_slots_duplicate_confirmed](https://github.com/anza-xyz/agave/blob/47c0383f2301e5a739543c1af9992ae182b7e06c/core/src/replay_stage.rs#L3876)
+            // Analogous to [ReplayStage::mark_slots_duplicate_confirmed](
+            // https://github.com/anza-xyz/agave/blob/47c0383/core/src/replay_stage.rs#L3876)
             const root_slot = slot_tracker.consensus_root.load(.monotonic);
             for (duplicate_confirmed_forks.items) |duplicate_confirmed_fork| {
                 const slot, const frozen_hash = duplicate_confirmed_fork.tuple();
@@ -747,7 +753,8 @@ const LastVoteRefreshTime = struct {
     last_print_time: sig.time.Instant,
 };
 
-/// Determines whether to refresh and submit an updated version of the last vote based on several conditions.
+/// Determines whether to refresh and submit an updated version of the last vote based on several
+/// conditions.
 ///
 /// A vote refresh is performed when all of the following conditions are met:
 /// 1. Validator Status:
@@ -758,11 +765,14 @@ const LastVoteRefreshTime = struct {
 ///    - We've successfully landed at least one vote (`latest_landed_vote_slot`) on this fork
 /// 3. Vote Progress:
 ///    - Our latest vote attempt (`last_vote_slot`) is still tracked in the progress map
-///    - The latest landed vote is older than our last vote attempt (`latest_landed_vote_slot` < `last_vote_slot`)
+/// - The latest landed vote is older than our last vote attempt (`latest_landed_vote_slot` <
+/// `last_vote_slot`)
 /// 4. Block Progress:
-///    - The heaviest bank is sufficiently ahead of our last vote (by at least `REFRESH_VOTE_BLOCKHEIGHT` blocks)
+/// - The heaviest bank is sufficiently ahead of our last vote (by at least
+/// `REFRESH_VOTE_BLOCKHEIGHT` blocks)
 /// 5. Timing:
-///    - At least `MAX_VOTE_REFRESH_INTERVAL_MILLIS` milliseconds have passed since last refresh attempt
+/// - At least `MAX_VOTE_REFRESH_INTERVAL_MILLIS` milliseconds have passed since last refresh
+/// attempt
 ///
 /// If all conditions are satisfied:
 /// - Creates a new vote transaction for the same slot (`last_vote_slot`) with:
@@ -781,7 +791,8 @@ const LastVoteRefreshTime = struct {
 /// - Generates a new signature
 /// - Will be processed as a separate transaction by the network
 ///
-/// Analogous to [maybe_refresh_last_vote](https://github.com/anza-xyz/agave/blob/ccdcdbe9b6ff7dbd583d2101fe57b7cc41a6f863/core/src/replay_stage.rs#L2606)
+/// Analogous to [maybe_refresh_last_vote](
+/// https://github.com/anza-xyz/agave/blob/ccdcdbe/core/src/replay_stage.rs#L2606)
 fn maybeRefreshLastVote(
     replay_tower: *ReplayTower,
     progress: *const ProgressMap,
@@ -840,13 +851,16 @@ fn maybeRefreshLastVote(
     if (last_vote_refresh_time.last_refresh_time.elapsed().asMillis() <
         MAX_VOTE_REFRESH_INTERVAL_MILLIS)
     {
-        // This avoids duplicate refresh in case there are multiple forks descending from our last voted fork
-        // It also ensures that if the first refresh fails we will continue attempting to refresh at an interval no less
+        // This avoids duplicate refresh in case there are multiple forks descending from our last
+        // voted fork
+        // It also ensures that if the first refresh fails we will continue attempting to refresh at
+        // an interval no less
         // than MAX_VOTE_REFRESH_INTERVAL_MILLIS
         return false;
     }
 
-    // All criteria are met, refresh the last vote using the blockhash of `heaviest_bank_on_same_fork`
+    // All criteria are met, refresh the last vote using the blockhash of
+    // `heaviest_bank_on_same_fork`
     // Update timestamp for refreshed vote
     // AUDIT: Rest of code replaces Self::refresh_last_vote in Agave
     replay_tower.refreshLastVoteTimestamp(heaviest_bank_on_same_fork);
@@ -948,7 +962,8 @@ pub const GenerateVoteTxResult = union(enum) {
 /// Handles a votable bank by recording the vote, update commitment cache,
 /// potentially processing a new root, and pushing the vote.
 ///
-/// Analogous to [handle_votable_bank](https://github.com/anza-xyz/agave/blob/ccdcdbe9b6ff7dbd583d2101fe57b7cc41a6f863/core/src/replay_stage.rs#L2388)
+/// Analogous to [handle_votable_bank](
+/// https://github.com/anza-xyz/agave/blob/ccdcdbe/core/src/replay_stage.rs#L2388)
 fn handleVotableBank(
     logger: Logger,
     allocator: std.mem.Allocator,
@@ -989,7 +1004,8 @@ fn handleVotableBank(
     // - Updates the tower's last vote blockhash.
     // - Sends the vote operation to the voting sender.
     //
-    // Analogous to [push_vote](https://github.com/anza-xyz/agave/blob/ccdcdbe9b6ff7dbd583d2101fe57b7cc41a6f863/core/src/replay_stage.rs#L2775)
+    // Analogous to [push_vote](
+    // https://github.com/anza-xyz/agave/blob/ccdcdbe/core/src/replay_stage.rs#L2775)
     const vote_tx_result = try generateVoteTx(
         allocator,
         vote_account_pubkey,
@@ -1229,7 +1245,8 @@ fn sendVoteToGossip(
         .push_vote => |push_vote_data| blk: {
             const tower_last = push_vote_data.last_tower_slot orelse return;
             // Find the oldest crds vote by wallclock that has a lower slot than `tower`
-            // and recycle its vote-index. If the crds buffer is not full we instead add a new vote-index.
+            // and recycle its vote-index. If the crds buffer is not full we instead add a new
+            // vote-index.
             const vote_index: u8 =
                 findVoteIndexToEvict(gossip_table, my_pubkey, tower_last) orelse return;
             break :blk .initSigned(&my_keypair, .{
@@ -1330,7 +1347,8 @@ fn sendVote(
 /// TODO Investigate newly added &mut tracked_vote_transactions parameter in Agave
 /// Also the existing wait_to_vote_slot parameter
 ///
-/// Analogous to [generate_vote_tx](https://github.com/anza-xyz/agave/blob/8e696b9a6ec1dc84a9add834f25325b9e39cbcb4/core/src/replay_stage.rs#L2561)
+/// Analogous to [generate_vote_tx](
+/// https://github.com/anza-xyz/agave/blob/8e696b9/core/src/replay_stage.rs#L2561)
 fn generateVoteTx(
     allocator: std.mem.Allocator,
     maybe_vote_account_pubkey: ?Pubkey,
@@ -1577,14 +1595,17 @@ fn createVoteInstruction(
     };
 }
 
-/// Analogous to https://github.com/anza-xyz/agave/blob/234afe489aa20a04a51b810213b945e297ef38c7/core/src/replay_stage.rs#L1029-L1118
+/// Analogous to https://github.com/anza-xyz/agave/blob/234afe4/core/src/replay_stage.rs#L1029-L1118
 ///
 /// Handle fork resets in specific circumstances:
-/// - When a validator needs to switch to a different fork after voting on a fork that becomes invalid
+/// - When a validator needs to switch to a different fork after voting on a fork that becomes
+/// invalid
 /// - When a block producer needs to reset their fork choice after detecting a better fork
-/// - When handling cases where the validator's current fork becomes less optimal than an alternative fork
+/// - When handling cases where the validator's current fork becomes less optimal than an
+/// alternative fork
 ///
-/// TODO: Currently a placeholder function. Would be implemened when voting and producing blocks is supported.
+/// TODO: Currently a placeholder function. Would be implemened when voting and producing blocks is
+/// supported.
 fn resetFork(
     progress: *const ProgressMap,
     ledger: *const Ledger,
@@ -1601,7 +1622,8 @@ fn resetFork(
     _ = last_reset_bank_descendants;
 }
 
-/// Compute consensus inputs for frozen slots that haven't been processed yet (where fork_stats.computed = false).
+/// Compute consensus inputs for frozen slots that haven't been processed yet (where
+/// fork_stats.computed = false).
 /// The computed consensus inputs are needed for voting decisions and fork selection.
 ///
 /// Consensus inputs computed:
@@ -1614,7 +1636,8 @@ fn resetFork(
 ///
 /// Returns the list of slots that had their consensus inputs freshly computed.
 ///
-/// Analogous to [compute_bank_stats](https://github.com/anza-xyz/agave/blob/401ddc200b299a181b1437160189075958df49dd/core/src/replay_stage.rs#L3585)
+/// Analogous to [compute_bank_stats](
+/// https://github.com/anza-xyz/agave/blob/401ddc2/core/src/replay_stage.rs#L3585)
 fn computeConsensusInputs(
     allocator: std.mem.Allocator,
     logger: Logger,
@@ -1644,7 +1667,8 @@ fn computeConsensusInputs(
         const fork_stat = progress.getForkStats(slot) orelse return error.MissingSlot;
         if (!fork_stat.computed) {
             // TODO Self::adopt_on_chain_tower_if_behind
-            // Gather voting information from all vote accounts to understand the current consensus state.
+            // Gather voting information from all vote accounts to understand the current consensus
+            // state.
             const slot_info_for_stakes = slot_tracker.get(slot) orelse return error.MissingSlot;
             defer slot_info_for_stakes.release();
 
@@ -1666,7 +1690,8 @@ fn computeConsensusInputs(
                 );
             };
             // Update the fork choice tree with new votes discovered during collectClusterVoteState.
-            // This updates the internal state of fork_choice with the determined heaviest (best) fork to build on.
+            // This updates the internal state of fork_choice with the determined heaviest (best)
+            // fork to build on.
             try fork_choice.processLatestVotes(
                 allocator,
                 epoch_tracker,
@@ -1713,7 +1738,8 @@ fn computeConsensusInputs(
 ///
 /// These computed values are used in canVoteOnCandidateSlot during fork selection.
 ///
-/// Analogous to [cache_tower_stats](https://github.com/anza-xyz/agave/blob/3572983cc28393e3c39a971c274cdac9b2eb902a/core/src/replay_stage.rs#L3799)
+/// Analogous to [cache_tower_stats](
+/// https://github.com/anza-xyz/agave/blob/3572983/core/src/replay_stage.rs#L3799)
 fn cacheVotingSafetyChecks(
     allocator: std.mem.Allocator,
     progress: *ProgressMap,
@@ -5501,15 +5527,18 @@ test "vote accounts with landed votes populate bank stats" {
 //
 // States updated (setup):
 // - SlotHistory sysvar: created and added to accounts (required by consensus)
-// - SlotTracker: initialized with root slot 0 (constants, state with hash=Hash.ZEROES, blockhash_queue)
-// - SlotTracker: slots 1-31 added with constants (parent_slot, parent_hash, block_height, ancestors)
+// - SlotTracker: initialized with root slot 0 (constants, state with hash=Hash.ZEROES,
+// blockhash_queue)
+// - SlotTracker: slots 1-31 added with constants (parent_slot, parent_hash, block_height,
+// ancestors)
 //   and state (hash) before consensus init
 // - EpochTracker: initialized with epochs 0 and 1, each with validator stake=1000
 // - ProgressMap: initialized with root slot entry (fork_stats: computed=true)
 // - ProgressMap: slots 1-31 added with ForkProgress (fork_stats: computed=true, total_stake=1000)
 // - TowerConsensus: initialized with dependencies (builds fork_choice from frozen slots 1-31)
 // - Tower: pre-populated with 31 votes on slots 1-31 via recordBankVote (simulating past voting)
-// - ProgressMap: each of slots 1-31 has fork_stats.voted_stakes updated with single entry (slot, 1000)
+// - ProgressMap: each of slots 1-31 has fork_stats.voted_stakes updated with single entry (slot,
+// 1000)
 //   representing our validator's vote on that slot
 // - Slots 30-31: fork_stats marked computed=false, propagated_stats set (is_leader_slot=true,
 //   is_propagated=true), then processed via consensus.process() to sync internal state
@@ -5517,11 +5546,13 @@ test "vote accounts with landed votes populate bank stats" {
 //
 // States updated (via consensus.process for testing):
 // - Slot 32: added to SlotTracker (with ancestors) and ProgressMap (with fork_stats.computed=true,
-//   fork_stats.total_stake=1000, fork_stats.voted_stakes containing entries {1: 1000, 2: 1000, ..., 31: 1000},
+// fork_stats.total_stake=1000, fork_stats.voted_stakes containing entries {1: 1000, 2: 1000, ...,
+// 31: 1000},
 //   propagated_stats.is_leader_slot=true, propagated_stats.is_propagated=true),
 //   then processed via consensus.process()
 // - Slot 33: added to SlotTracker (with ancestors) and ProgressMap (with fork_stats.computed=true,
-//   fork_stats.total_stake=1000, fork_stats.voted_stakes containing entries {1: 1000, 2: 1000, ..., 32: 1000},
+// fork_stats.total_stake=1000, fork_stats.voted_stakes containing entries {1: 1000, 2: 1000, ...,
+// 32: 1000},
 //   propagated_stats.is_leader_slot=true, propagated_stats.is_propagated=true),
 //   then processed via consensus.process()
 //
@@ -6391,7 +6422,8 @@ test "detect and mark duplicate confirmed fork" {
     try std.testing.expect(consensus.slot_data.duplicate_confirmed_slots.get(1) == null);
 
     // Process slot 2 - should detect duplicate-confirmed condition for slot 1
-    // (When processing slot 2, the votes on slot 1 become nth(1) lockouts, which populates voted_stakes[1])
+    // (When processing slot 2, the votes on slot 1 become nth(1) lockouts, which populates
+    // voted_stakes[1])
     {
         const results = [_]ReplayResult{
             .{ .slot = 2, .output = .{ .last_entry_hash = slot2_hash } },
@@ -6430,7 +6462,8 @@ test "detect and mark duplicate confirmed fork" {
 }
 
 // Test case:
-// - Setup: A duplicate slot is detected (e.g., via shred verification, different hash for same slot)
+// - Setup: A duplicate slot is detected (e.g., via shred verification, different hash for same
+// slot)
 //   and sent to the duplicate_slots channel
 // - Action: Call consensus.process() which will read from the channel via processDuplicateSlots()
 //   and mark the slot as duplicate
@@ -6617,7 +6650,8 @@ test "detect and mark duplicate slot" {
 //
 // Setup:
 // - Root and sysvars:
-//   - root = 0, with genesis `SlotConstants` and frozen `SlotState(hash=ZEROES)` (recent blockhash queue seeded)
+// - root = 0, with genesis `SlotConstants` and frozen `SlotState(hash=ZEROES)` (recent blockhash
+// queue seeded)
 //   - SlotHistory sysvar account installed in the account store
 //
 // - Forks tracked in `SlotTracker`:

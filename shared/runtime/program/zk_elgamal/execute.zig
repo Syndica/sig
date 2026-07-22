@@ -17,7 +17,8 @@ pub fn execute(
     const tc = ic.tc;
     const instruction_data = ic.ixn_info.instruction_data;
 
-    // [agave](https://github.com/anza-xyz/agave/blob/v2.2/programs/zk-elgamal-proof/src/lib.rs#L175-L187)
+    // [agave](
+    // https://github.com/anza-xyz/agave/blob/v2.2/programs/zk-elgamal-proof/src/lib.rs#L175-L187)
     if (tc.feature_set.active(.disable_zk_elgamal_proof_program, tc.slot) and
         !tc.feature_set.active(.reenable_zk_elgamal_proof_program, tc.slot))
     {
@@ -143,7 +144,10 @@ fn processVerifyProof(
         };
         proof_data.verify() catch {
             // TODO: log error as well
-            // [fd] https://github.com/firedancer-io/firedancer/blob/e0de87d2f58547b69ba980b3c88f35094b34561e/src/flamenco/runtime/program/zksdk/fd_zksdk.c#L209-L210
+            // [fd]
+            // sig fmt: off
+            // https://github.com/firedancer-io/firedancer/blob/e0de87d/src/flamenco/runtime/program/zksdk/fd_zksdk.c#L209-L210
+            // sig fmt: on
             try tc.log("proof_verification failed", .{});
             return InstructionError.InvalidInstructionData;
         };
@@ -156,7 +160,10 @@ fn processVerifyProof(
         };
         proof_data.verify() catch {
             // TODO: log error as well
-            // [fd] https://github.com/firedancer-io/firedancer/blob/e0de87d2f58547b69ba980b3c88f35094b34561e/src/flamenco/runtime/program/zksdk/fd_zksdk.c#L209-L210
+            // [fd]
+            // sig fmt: off
+            // https://github.com/firedancer-io/firedancer/blob/e0de87d/src/flamenco/runtime/program/zksdk/fd_zksdk.c#L209-L210
+            // sig fmt: on
             try tc.log("proof_verification failed", .{});
             return InstructionError.InvalidInstructionData;
         };
@@ -209,7 +216,7 @@ fn processVerifyProof(
     }
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/93699947720534741b2b4d9b6e1696d81e386dcc/programs/zk-elgamal-proof/src/lib.rs#L129
+/// [agave] https://github.com/anza-xyz/agave/blob/9369994/programs/zk-elgamal-proof/src/lib.rs#L129
 fn processCloseContextState(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,

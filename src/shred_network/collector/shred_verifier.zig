@@ -9,7 +9,8 @@ const VariantCounter = sig.prometheus.VariantCounter;
 
 const VerifiedMerkleRoots = sig.utils.lru.LruCache(.non_locking, sig.core.Hash, void);
 
-/// Analogous to [verify_shred_cpu](https://github.com/anza-xyz/agave/blob/83e7d84bcc4cf438905d07279bc07e012a49afd9/ledger/src/sigverify_shreds.rs#L35)
+/// Analogous to [verify_shred_cpu](
+/// https://github.com/anza-xyz/agave/blob/83e7d84/ledger/src/sigverify_shreds.rs#L35)
 pub fn verifyShred(
     packet: *const Packet,
     leader_schedule: *const sig.core.leader_schedule.LeaderSchedules,

@@ -29,17 +29,20 @@ comptime {
 pub const SignatureOffsets = packed struct {
     /// Offset to 64-byte signature plus 1-byte recovery ID.
     signature_offset: u16 = 0,
-    /// Within the transaction, the index of the instruction whose instruction data contains the signature.
+    /// Within the transaction, the index of the instruction whose instruction data contains the
+    /// signature.
     signature_instruction_idx: u8 = 0,
     /// Offset to 20-byte Ethereum address.
     eth_address_offset: u16 = 0,
-    /// Within the transaction, the index of the instruction whose instruction data contains the address.
+    /// Within the transaction, the index of the instruction whose instruction data contains the
+    /// address.
     eth_address_instruction_idx: u8 = 0,
     /// Offset to start of message data.
     message_data_offset: u16 = 0,
     /// Size of message data in bytes.
     message_data_size: u16 = 0,
-    /// Within the transaction, the index of the instruction whose instruction data contains the message.
+    /// Within the transaction, the index of the instruction whose instruction data contains the
+    /// message.
     message_instruction_idx: u8 = 0,
 
     fn asBytes(self: *const SignatureOffsets) []const u8 {
@@ -56,8 +59,10 @@ pub fn execute(_: std.mem.Allocator, ic: *InstructionContext) InstructionError!v
     };
 }
 
-// https://github.com/firedancer-io/firedancer/blob/af74882ffb2c24783a82718dbc5111a94e1b5f6f/src/flamenco/runtime/program/fd_precompiles.c#L227
-// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L925
+// sig fmt: off
+// https://github.com/firedancer-io/firedancer/blob/af74882/src/flamenco/runtime/program/fd_precompiles.c#L227
+// sig fmt: on
+// https://github.com/anza-xyz/agave/blob/a8aef04/sdk/src/secp256k1_instruction.rs#L925
 pub fn verify(
     data: []const u8,
     all_instruction_datas: []const []const u8,
@@ -148,7 +153,7 @@ fn getInstructionData(
 }
 
 // https://docs.rs/libsecp256k1/0.6.0/src/libsecp256k1/lib.rs.html#764-770
-// https://github.com/firedancer-io/firedancer/blob/341bba05a3a7ca18d3d550d6b58c1b6a9207184f/src/ballet/secp256k1/fd_secp256k1.c#L7
+// https://github.com/firedancer-io/firedancer/blob/341bba0/src/ballet/secp256k1/fd_secp256k1.c#L7
 pub fn recoverSecp256k1Pubkey(
     message_hash: *const [Keccak256.digest_length]u8,
     signature: *const Ecdsa.Signature,
@@ -187,7 +192,7 @@ pub fn recoverSecp256k1Pubkey(
     return Ecdsa.PublicKey.fromSec1(&serialized_pubkey) catch return error.InvalidSignature;
 }
 
-/// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L903
+/// https://github.com/anza-xyz/agave/blob/a8aef04/sdk/src/secp256k1_instruction.rs#L903
 /// https://ethereum.org/en/developers/docs/accounts/#keyfiles
 /// > The public key is generated from the private key using
 ///   the Elliptic Curve Digital Signature Algorithm(opens in a
@@ -239,7 +244,7 @@ fn signRecoverable(
     return .{ recovery_id, Ecdsa.Signature.fromBytes(signature) };
 }
 
-// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L842
+// https://github.com/anza-xyz/agave/blob/a8aef04/sdk/src/secp256k1_instruction.rs#L842
 fn newSecp256k1Instruction(
     allocator: std.mem.Allocator,
     keypair: *const Ecdsa.KeyPair,
@@ -296,7 +301,7 @@ fn newSecp256k1Instruction(
     };
 }
 
-// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L1046
+// https://github.com/anza-xyz/agave/blob/a8aef04/sdk/src/secp256k1_instruction.rs#L1046
 fn testCase(
     num_signatures: u8,
     offsets: SignatureOffsets,
@@ -336,7 +341,7 @@ test "execute" {
     );
 }
 
-// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L1059
+// https://github.com/anza-xyz/agave/blob/a8aef04/sdk/src/secp256k1_instruction.rs#L1059
 test "secp256k1 invalid offsets" {
     {
         var instruction_data: [SECP256K1_DATA_START]u8 align(2) = undefined;
@@ -371,7 +376,7 @@ test "secp256k1 invalid offsets" {
     );
 }
 
-// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L1104
+// https://github.com/anza-xyz/agave/blob/a8aef04/sdk/src/secp256k1_instruction.rs#L1104
 test "secp256k1 message data offsets" {
     try std.testing.expectError(
         error.InvalidSignature,
@@ -406,7 +411,7 @@ test "secp256k1 message data offsets" {
     );
 }
 
-// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L1104
+// https://github.com/anza-xyz/agave/blob/a8aef04/sdk/src/secp256k1_instruction.rs#L1104
 test "secp256k1 eth offset" {
     try std.testing.expectError(
         error.InvalidSignature,
@@ -422,7 +427,7 @@ test "secp256k1 eth offset" {
     );
 }
 
-// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L1168
+// https://github.com/anza-xyz/agave/blob/a8aef04/sdk/src/secp256k1_instruction.rs#L1168
 test "secp256k1 signature offset" {
     try std.testing.expectError(
         error.InvalidSignature,
@@ -438,7 +443,7 @@ test "secp256k1 signature offset" {
     );
 }
 
-// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L1189
+// https://github.com/anza-xyz/agave/blob/a8aef04/sdk/src/secp256k1_instruction.rs#L1189
 test "secp256k1 count is zero but sig data exists" {
     var instruction_data: [SECP256K1_DATA_START]u8 align(2) = undefined;
     instruction_data[0] = 0; // n_signatures
@@ -458,7 +463,7 @@ test "secp256k1 count is zero but sig data exists" {
     );
 }
 
-// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L1206
+// https://github.com/anza-xyz/agave/blob/a8aef04/sdk/src/secp256k1_instruction.rs#L1206
 test "secp256k1" {
     const allocator = std.testing.allocator;
 
@@ -474,7 +479,7 @@ test "secp256k1" {
         const instruction_data = try allocator.dupe(u8, instruction.data);
         defer allocator.free(instruction_data);
 
-        // https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L1229
+        // https://github.com/anza-xyz/agave/blob/a8aef04/sdk/src/secp256k1_instruction.rs#L1229
         // agave uses unseeded random in this test for some reason, let's not do that.
         for (instruction_data) |*byte| {
             const old = byte.*;
@@ -616,7 +621,7 @@ test "flipped signature" {
     try std.testing.expectEqual(1, alt_recovery_id);
 }
 
-// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/secp256k1_instruction.rs#L1244
+// https://github.com/anza-xyz/agave/blob/a8aef04/sdk/src/secp256k1_instruction.rs#L1244
 test "secp256 malleability" {
     const allocator = std.testing.allocator;
 

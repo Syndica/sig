@@ -6,7 +6,7 @@ const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const Epoch = sig.core.Epoch;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/clock/src/lib.rs#L184
+/// [agave] https://github.com/anza-xyz/agave/blob/8db563d/sdk/clock/src/lib.rs#L184
 pub const Clock = extern struct {
     /// The current `Slot`.
     slot: Slot,

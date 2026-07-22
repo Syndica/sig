@@ -28,7 +28,8 @@ commitments: *CommitmentTracker,
 tx_svc_channel: *Channel(TransactionInfo),
 faucet_keypair: KeyPair,
 
-/// Requests an airdrop by creating and sending a system transfer transaction from the faucet account to the specified recipient.
+/// Requests an airdrop by creating and sending a system transfer transaction from the faucet
+/// account to the specified recipient.
 /// Returns the signature of the submitted transaction on success.
 /// NOTE: Rate limiting and faucet balance checks are not implemented. Consider implementing:
 /// - ip whitelist

@@ -64,7 +64,8 @@ pub const Cmd = struct {
 
     /// Returns the ledger directory path: `<validator-dir>/ledger`.
     ///
-    /// The returned path is **allocated** and must be freed by the caller using the same `allocator`.
+    /// The returned path is **allocated** and must be freed by the caller using the same
+    /// `allocator`.
     pub fn ledgerDir(self: Cmd, allocator: std.mem.Allocator) ![]const u8 {
         return try std.fs.path.join(allocator, &.{ self.validator_dir, "ledger" });
     }
@@ -128,7 +129,8 @@ pub const ShredNetwork = struct {
     }
 };
 
-/// Analogous to [AccountsDbConfig](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L597)
+/// Analogous to [AccountsDbConfig](
+/// https://github.com/anza-xyz/agave/blob/4c921ca/accounts-db/src/accounts_db.rs#L597)
 pub const AccountsDB = struct {
     /// where to load/save snapshots from - also where disk indexes and account files are stored
     snapshot_dir: []const u8 = sig.VALIDATOR_DIR ++ "accounts_db",
@@ -140,7 +142,8 @@ pub const AccountsDB = struct {
     force_unpack_snapshot: bool = false,
     /// minmum download speed in megabytes per second to download a snapshot from
     min_snapshot_download_speed_mbs: u64 = 20,
-    /// force download of new snapshot, even if one exists (usually to get a more up-to-date snapshot
+    /// force download of new snapshot, even if one exists (usually to get a more up-to-date
+    /// snapshot
     force_new_snapshot_download: bool = false,
     /// only load snapshot metadata when starting up
     snapshot_metadata_only: bool = false,
@@ -148,9 +151,12 @@ pub const AccountsDB = struct {
     max_number_of_snapshot_download_attempts: u64 = 1_000,
     /// skip the validation of the snapshot
     skip_snapshot_validation: bool = false,
-    /// when true, save/restore the initial accounts.db to/from accounts.db.init for fast debug cycles:
-    /// - first run (no accounts.db.init): loads snapshot normally, then copies accounts.db -> accounts.db.init
-    /// - subsequent runs (accounts.db.init exists): copies accounts.db.init -> accounts.db, skips db population
+    /// when true, save/restore the initial accounts.db to/from accounts.db.init for fast debug
+    /// cycles:
+    /// - first run (no accounts.db.init): loads snapshot normally, then copies accounts.db ->
+    /// accounts.db.init
+    /// - subsequent runs (accounts.db.init exists): copies accounts.db.init -> accounts.db, skips
+    /// db population
     dbg_db_init: bool = false,
     /// if enabled, an index is created on the `owner` column of accounts DB. This speeds up certain
     /// RPC calls that filter by owner at the cost of increased storage space and slower writes.

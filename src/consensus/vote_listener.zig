@@ -241,7 +241,8 @@ const GossipVoteReceptor = struct {
     }
 };
 
-/// NOTE: in the original agave code, this was an inline part of the `verifyVotes` function which took in a list
+/// NOTE: in the original agave code, this was an inline part of the `verifyVotes` function which
+/// took in a list
 /// of transactions to verify, and returned the same list with the unverified votes filtered out.
 /// We separate it out
 fn parseAndVerifyVoteTransaction(
@@ -661,14 +662,16 @@ const AtomicInterval = struct {
 
     pub const ZERO: AtomicInterval = .{ .last_update = std.atomic.Value(u64).init(0) };
 
-    /// true if 'interval_time_ms' has elapsed since last time we returned true as long as it has been 'interval_time_ms' since this struct was created
+    /// true if 'interval_time_ms' has elapsed since last time we returned true as long as it has
+    /// been 'interval_time_ms' since this struct was created
     inline fn should_update(self: AtomicInterval, interval_time_ms: u64) bool {
         return self.should_update_ext(interval_time_ms, true);
     }
 
     /// a primary use case is periodic metric reporting, potentially from different threads
     /// true if 'interval_time_ms' has elapsed since last time we returned true
-    /// except, if skip_first=false, false until 'interval_time_ms' has elapsed since this struct was created
+    /// except, if skip_first=false, false until 'interval_time_ms' has elapsed since this struct
+    /// was created
     inline fn should_update_ext(
         self: AtomicInterval,
         interval_time_ms: u64,
@@ -687,7 +690,8 @@ const BankNotification = union(enum) {
     optimistically_confirmed: Slot,
     frozen: if (false) sig.core.BankFields else noreturn,
     new_root_bank: if (false) sig.core.BankFields else noreturn,
-    /// The newly rooted slot chain including the parent slot of the oldest bank in the rooted chain.
+    /// The newly rooted slot chain including the parent slot of the oldest bank in the rooted
+    /// chain.
     new_rooted_chain: if (false) std.ArrayListUnmanaged(Slot) else noreturn,
 };
 
@@ -880,8 +884,10 @@ fn trackNewVotesAndNotifyConfirmations(
         if (slot < latest_vote_slot.*) {
             // Important that we filter after the `last_vote_slot` check, as even if this vote
             // is old, we still need to track optimistic confirmations.
-            // However it is fine to filter the rest of the slots for the propagated check tracking below,
-            // as the propagated check is able to roll up votes for descendants unlike optimistic confirmation.
+            // However it is fine to filter the rest of the slots for the propagated check tracking
+            // below,
+            // as the propagated check is able to roll up votes for descendants unlike optimistic
+            // confirmation.
             continue;
         }
 
@@ -902,16 +908,25 @@ fn trackNewVotesAndNotifyConfirmations(
         senders.subscriptions.notifyVote(vote_pubkey, vote, vote_transaction_signature);
 
         // Notify RPC websocket voteSubscribe subscribers.
-        // [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/cluster_info_vote_listener.rs#L595
+        // [agave]:
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/cluster_info_vote_listener.rs#L595
         //
-        // Sig emits more vote notifications than Agave. This is expected and not a bug: Agave's gossip consumer polls CRDS
-        // with a cursor every 100ms, coalescing intermediate vote replacements for the same label (vote_index, pubkey).
+        // Sig emits more vote notifications than Agave. This is expected and not a bug: Agave's
+        // gossip consumer polls CRDS
+        // with a cursor every 100ms, coalescing intermediate vote replacements for the same label
+        // (vote_index, pubkey).
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/gossip/src/crds.rs#L349-L360
-        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/cluster_info_vote_listener.rs#L252-L268
+        // [agave]
+        // sig fmt: off
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/cluster_info_vote_listener.rs#L252-L268
+        // sig fmt: on
         //
-        // Sig delivers votes via LocalMessageBroker.publish() on every successful CRDS insert (both new and replaced), so
-        // each intermediate tip-slot advance produces a notification. Every notification is accurate and unique, deduped by
-        // (slot, hash, pubkey) in trackOptimisticConfirmationVote. This leads to subscribers simply seeing finer-grained data.
+        // Sig delivers votes via LocalMessageBroker.publish() on every successful CRDS insert (both
+        // new and replaced), so
+        // each intermediate tip-slot advance produces a notification. Every notification is
+        // accurate and unique, deduped by
+        // (slot, hash, pubkey) in trackOptimisticConfirmationVote. This leads to subscribers simply
+        // seeing finer-grained data.
         //
         // The event sink takes ownership of the vote payload, and the runtime
         // later frees it via InboundEvent.deinit after dispatch.
@@ -937,7 +952,8 @@ fn trackNewVotesAndNotifyConfirmations(
         //
         // In Agave, verified votes are sent to RepairService (via verified_vote_receiver)
         // to prioritize repairing slots that validators are voting on.
-        // See: https://github.com/anza-xyz/agave/blob/a2e0bd9515c50f924ece55cd2793817801c43fca/core/src/repair/repair_service.rs#L529
+        // See:
+        // https://github.com/anza-xyz/agave/blob/a2e0bd9/core/src/repair/repair_service.rs#L529
         // const vote_slots_duped = try allocator.dupe(Slot, vote_slots);
         // senders.verified_vote.send(.{
         //     .key = vote_pubkey,
@@ -1153,7 +1169,7 @@ fn trackOptimisticConfirmationVote(
 }
 
 pub const vote_parser = struct {
-    //! Based on https://github.com/anza-xyz/agave/blob/182823ee353ee64fde230dbad96d8e24b6cd065a/vote/src/vote_parser.rs
+    //! Based on https://github.com/anza-xyz/agave/blob/182823e/vote/src/vote_parser.rs
     //! TODO: this is probably/definitely the wrong place for this code to be,
     //! but it's the only place it's needed right now, we can figure out a proper
     //! place for it later.
@@ -1212,7 +1228,8 @@ pub const vote_parser = struct {
     }
 
     /// Used for locally forwarding processed vote transactions to consensus
-    /// Analogous to [parse_sanitized_vote_transaction](https://github.com/anza-xyz/agave/blob/961953a6ffab132b9a32e22edcd4cfbdba52c6f8/vote/src/vote_parser.rs#L11)
+    /// Analogous to [parse_sanitized_vote_transaction](
+    /// https://github.com/anza-xyz/agave/blob/961953a/vote/src/vote_parser.rs#L11)
     pub fn parseSanitizedVoteTransaction(
         allocator: std.mem.Allocator,
         // TODO: Confirm if this is the correct type to use here
@@ -1709,7 +1726,8 @@ fn newTowerSyncTransaction(
     return tx;
 }
 
-// TODO: port applicable tests from https://github.com/anza-xyz/agave/blob/182823ee353ee64fde230dbad96d8e24b6cd065a/core/src/cluster_info_vote_listener.rs
+// TODO: port applicable tests from
+// https://github.com/anza-xyz/agave/blob/182823e/core/src/cluster_info_vote_listener.rs
 
 test "vote_parser.parseVoteTransaction" {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -1739,7 +1757,8 @@ test parseAndVerifyVoteTransaction {
 
     try std.testing.expectError(
         error.Unverified,
-        // TODO: consider making two separate APIs, one for the slot tracker, and one for the epoch tracker,
+        // TODO: consider making two separate APIs, one for the slot tracker, and one for the epoch
+        // tracker,
         // since it seems like there's little or no real data inter-dependency internally.
         // Argument against: whether the data is interdependent could change.
         parseAndVerifyVoteTransaction(allocator, .EMPTY, &epoch_tracker),
@@ -1937,7 +1956,8 @@ test "check trackers" {
         };
         expected_trackers.appendAssumeCapacity(.{ slot, try vst.clone(allocator) });
 
-        // -- send the transactions through gossip channel, matched up with each expected tracker -- //
+        // -- send the transactions through gossip channel, matched up with each expected tracker --
+        // //
         const wallclock = 100 + i;
         const from = Pubkey.fromPublicKey(&vote_kp.public_key);
 

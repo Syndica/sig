@@ -40,9 +40,11 @@ const getSysvarFromAccount = sig.replay.update_sysvar.getSysvarFromAccount;
 const resolveTransaction = sig.replay.resolve_lookup.resolveTransaction;
 const executeTransaction = sig.replay.svm_gateway.executeTransaction;
 
-/// Analogous to [MAX_BASE58_SIZE](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4341)
+/// Analogous to [MAX_BASE58_SIZE](
+/// https://github.com/anza-xyz/agave/blob/765ee54/rpc/src/rpc.rs#L4341)
 const MAX_BASE58_SIZE: usize = 1683;
-/// Analogous to [MAX_BASE64_SIZE](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4341)
+/// Analogous to [MAX_BASE64_SIZE](
+/// https://github.com/anza-xyz/agave/blob/765ee54/rpc/src/rpc.rs#L4341)
 const MAX_BASE64_SIZE: usize = 1644;
 const MAX_INSTRUCTION_TRACE_LENGTH = sig.runtime.transaction_context.MAX_INSTRUCTION_TRACE_LENGTH;
 const MAX_ACCOUNTS_PER_INSTRUCTION = sig.runtime.transaction_context.MAX_ACCOUNTS_PER_INSTRUCTION;
@@ -135,7 +137,8 @@ pub fn sendTransaction(
         }
     }
 
-    // NOTE: Agave returns the signature even if they fail to send the transaction to the pool for submission.
+    // NOTE: Agave returns the signature even if they fail to send the transaction to the pool for
+    // submission.
     // We intentially fail and return an RPC error instead.
     try self.tx_svc_channel.send(.initWithWire(
         unsanitized_tx,
@@ -219,7 +222,7 @@ pub fn simulateTransaction(
         try self.simulateRuntimeTransaction(arena, transaction, slot, &slot_ref);
 
     // Build accounts response if requested.
-    // [agave] https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4030-L4074
+    // [agave] https://github.com/anza-xyz/agave/blob/765ee54/rpc/src/rpc.rs#L4030-L4074
     const accounts: ?[]const ?GetAccountInfo.Response.Value =
         if (config.accounts) |accounts_config| blk: {
             const accounts_encoding = accounts_config.encoding orelse .base64;
@@ -258,7 +261,7 @@ pub fn simulateTransaction(
         } else null;
 
     // Convert inner instructions if requested.
-    // [agave] https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4076-L4080
+    // [agave] https://github.com/anza-xyz/agave/blob/765ee54/rpc/src/rpc.rs#L4076-L4080
     const inner_instructions = if (config.innerInstructions)
         if (simulation_result.inner_instructions) |iis|
             try GetBlock.Response.UiInnerInstructions.fromLedger(arena, iis)
@@ -313,7 +316,8 @@ pub fn simulateTransaction(
     };
 }
 
-/// Analogous to [decode_and_deserialize](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4343)
+/// Analogous to [decode_and_deserialize](
+/// https://github.com/anza-xyz/agave/blob/765ee54/rpc/src/rpc.rs#L4343)
 fn decodeAndDeserialize(
     arena: Allocator,
     encoded: []const u8,
@@ -364,7 +368,8 @@ fn decodeAndDeserialize(
     return .{ wire_transaction, wire_len, unsanitized_tx };
 }
 
-/// Analogous to [sanitize_transaction](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4405)
+/// Analogous to [sanitize_transaction](
+/// https://github.com/anza-xyz/agave/blob/765ee54/rpc/src/rpc.rs#L4405)
 fn sanitizeTransaction(
     arena: Allocator,
     tx: Transaction,
@@ -524,7 +529,7 @@ fn simulateRuntimeTransaction(
 
 /// Look up a post-simulation account by address, falling back to the bank state,
 /// and encode it for the RPC response.
-/// [agave] https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4042-L4072
+/// [agave] https://github.com/anza-xyz/agave/blob/765ee54/rpc/src/rpc.rs#L4042-L4072
 fn getSimulatedAccount(
     arena: Allocator,
     address: Pubkey,
@@ -566,8 +571,9 @@ fn getSimulatedAccount(
 }
 
 /// Extract loaded addresses (ALT-resolved writable/readonly) from the resolved transaction.
-/// The RuntimeTransaction accounts are ordered: [static keys] ++ [writable lookups] ++ [readonly lookups].
-/// [agave] https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/rpc/src/rpc.rs#L4102
+/// The RuntimeTransaction accounts are ordered: [static keys] ++ [writable lookups] ++ [readonly
+/// lookups].
+/// [agave] https://github.com/anza-xyz/agave/blob/765ee54/rpc/src/rpc.rs#L4102
 fn getLoadedAddresses(
     unsanitized_tx: Transaction,
     transaction: RuntimeTransaction,

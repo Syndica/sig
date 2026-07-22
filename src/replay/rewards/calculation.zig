@@ -303,8 +303,10 @@ fn storeVoteAccountsPartitioned(
             return error.MissingVoteAccount;
         defer account.deinit(allocator);
 
-        // NOTE: Cloning should not be necessary here. Check and store only uses the account data to deserialise
-        // the stake state and obtain the delegation and credits observed. This will be addressed during
+        // NOTE: Cloning should not be necessary here. Check and store only uses the account data to
+        // deserialise
+        // the stake state and obtain the delegation and credits observed. This will be addressed
+        // during
         // transition to using stakes delegations deltas, so is acceptable for now.
         var account_shared_data = try account_conversions.fromAccount(allocator, &account);
         defer account_shared_data.deinit(allocator);
@@ -470,7 +472,10 @@ fn calculateRewardPointsPartitioned(
     return if (points > 0) PointValue{ .rewards = rewards, .points = points } else null;
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank/partitioned_epoch_rewards/mod.rs#L284
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank/partitioned_epoch_rewards/mod.rs#L284
+// sig fmt: on
 ///
 /// Cached vote account state from different epoch boundaries, used to delay
 /// the effect of commission updates by at least one full epoch (SIMD-0249).
@@ -496,7 +501,10 @@ const VoteReward = struct {
     account: VoteAccount.MinimalAccount,
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank/partitioned_epoch_rewards/calculation.rs#L430
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank/partitioned_epoch_rewards/calculation.rs#L430
+// sig fmt: on
 fn calculateStakeVoteRewards(
     allocator: Allocator,
     stake_history: *const StakeHistory,
@@ -529,7 +537,10 @@ fn calculateStakeVoteRewards(
         const vote_account = distribution
             .getAccount(vote_pubkey) orelse continue;
 
-        // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank/partitioned_epoch_rewards/calculation.rs#L470
+        // [agave]
+        // sig fmt: off
+        // https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank/partitioned_epoch_rewards/calculation.rs#L470
+        // sig fmt: on
         // SIMD-0249: prefer the snapshot epoch's commission, then the
         // rewarded epoch's, falling back to the distribution epoch vote
         // account. `commissionBps` collapses the SIMD-0291 (bps vs
@@ -1572,7 +1583,7 @@ test calculateVoteAccountsToStore {
 }
 
 // The values in this test are derived from an Agave bank vote state rewards update test
-// [agave] https://github.com/anza-xyz/agave/blob/9e6bb8209d012e819e55ad90949dec17bc150fca/runtime/src/bank/tests.rs#L799-L802
+// [agave] https://github.com/anza-xyz/agave/blob/9e6bb82/runtime/src/bank/tests.rs#L799-L802
 test calculatePreviousEpochInflationRewards {
     const slot: Slot = 33;
     const epoch: Epoch = 1;

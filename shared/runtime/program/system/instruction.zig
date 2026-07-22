@@ -7,7 +7,7 @@ const Pubkey = sig.core.Pubkey;
 
 const SEED_FIELD_CONFIG = sig.runtime.program.SEED_FIELD_CONFIG;
 
-/// [agave] https://github.com/solana-program/system/blob/6185b40460c3e7bf8badf46626c60f4e246eb422/interface/src/instruction.rs#L80
+/// [agave] https://github.com/solana-program/system/blob/6185b40/interface/src/instruction.rs#L80
 pub const Instruction = union(enum) {
     /// Create a new account
     ///

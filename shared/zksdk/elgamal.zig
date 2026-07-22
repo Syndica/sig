@@ -1,11 +1,12 @@
 //! Twisted ElGamal encryption.
 //!
-//! https://github.com/anza-xyz/agave/blob/b11ca828cfc658b93cb86a6c5c70561875abe237/zk-sdk/src/encryption/elgamal.rs
+//! https://github.com/anza-xyz/agave/blob/b11ca82/zk-sdk/src/encryption/elgamal.rs
 //! https://spl.solana.com/assets/files/twisted_elgamal-2115c6b1e6c62a2bb4516891b8ae9ee0.pdf
 //!
 //! Similar to the ElGamal encryption scheme, twisted ElGamal encodes messages directly as
 //! a Pedersen commitment. Since the messages (scalars) are encrypted as scalar elements for
-//! Curve25519, you'd need to solve the discrete log problem to recover the original encrypted value.
+//! Curve25519, you'd need to solve the discrete log problem to recover the original encrypted
+//! value.
 //!
 //! (Taken from Agave comment):
 //! A twisted ElGamal ciphertext consists of two components:

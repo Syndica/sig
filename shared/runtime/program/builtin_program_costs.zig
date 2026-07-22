@@ -28,7 +28,8 @@ pub fn getMigrationFeatureId(index: usize) Feature {
 /// `bls_pubkey_management_in_vote_account` activates. Re-using the
 /// migration mechanism is how agave evicts vote from the builtin cost
 /// table; see
-/// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/builtins-default-costs/src/lib.rs#L94-L106
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/builtins-default-costs/src/lib.rs#L94-L106
 pub const MIGRATING_BUILTIN_COSTS = [_]struct { []const u8, BuiltinCost }{
     .{
         &programs.vote.ID.data,

@@ -96,7 +96,9 @@ pub const Fp = struct {
             };
             flags.* = @bitCast(input[offset]);
             // If both flags are set, return an error.
+            // sig fmt: off
             // https://github.com/arkworks-rs/algebra/blob/v0.4.2/ec/src/models/short_weierstrass/serialization_flags.rs#L75
+            // sig fmt: on
             if (flags.is_inf and flags.is_neg) return error.BothFlags;
         }
 
@@ -104,7 +106,8 @@ pub const Fp = struct {
             .big => byteSwap(input.*),
             .little => input.*,
         };
-        // NOTE: We perform the mask *after* the byteSwap, so we don't need to select the offset for the mask again.
+        // NOTE: We perform the mask *after* the byteSwap, so we don't need to select the offset for
+        // the mask again.
         if (maybe_flags != null) limbs[31] &= Flags.MASK;
 
         // Check that we've decoded a valid field element.
@@ -950,7 +953,9 @@ pub const Fp12 = struct {
 
     /// Raise `a` to `x^t mod q^12` where t is the generator of the curve.
     ///
+    // sig fmt: off
     /// https://github.com/Consensys/gnark-crypto/blob/v0.12.1/ecc/bn254/internal/fptower/e12_pairing.go#L16
+    // sig fmt: on
     pub fn powX(a: Fp12) Fp12 {
         // t3 = x^0x2
         var t3 = a.sqFast();

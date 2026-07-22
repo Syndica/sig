@@ -19,24 +19,26 @@ const MAX_PERMITTED_DATA_LENGTH = sig.runtime.program.system.MAX_PERMITTED_DATA_
 
 const INPUT_START = sig.vm.memory.INPUT_START;
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/program-entrypoint/src/lib.rs#L316
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4/program-entrypoint/src/lib.rs#L316
 /// `assert_eq(std::mem::align_of::<u128>(), 8)` is true for BPF but not for some host machines
 pub const BPF_ALIGN_OF_U128: usize = 8;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L29
-/// Alignment of the host memory buffer. Agave uses `AlignedMemory::<HOST_ALIGN>` with HOST_ALIGN=16.
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4/program-runtime/src/serialization.rs#L29
+/// Alignment of the host memory buffer. Agave uses `AlignedMemory::<HOST_ALIGN>` with
+/// HOST_ALIGN=16.
 pub const HOST_ALIGN: std.mem.Alignment = .@"16"; // 16 bytes
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/account-info/src/lib.rs#L17-L18
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4/account-info/src/lib.rs#L17-L18
 pub const MAX_PERMITTED_DATA_INCREASE: usize = 1_024 * 10;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L26
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4/program-runtime/src/serialization.rs#L26
 pub const SerializedAccount = union(enum) {
     account: struct { u16, BorrowedAccount },
     duplicate: u8,
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/invoke_context.rs#L182
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/108fcb4/program-runtime/src/invoke_context.rs#L182
 pub const SerializedAccountMeta = struct {
     /// Address of the first byte of the serialized account record (the
     /// `NON_DUP_MARKER`/duplicate-marker byte). Used by SIMD-0449 to emit
@@ -49,7 +51,7 @@ pub const SerializedAccountMeta = struct {
     vm_owner_addr: u64,
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L31
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4/program-runtime/src/serialization.rs#L31
 pub const Serializer = struct {
     allocator: std.mem.Allocator,
     buffer: std.ArrayListAlignedUnmanaged(u8, HOST_ALIGN),
@@ -88,19 +90,22 @@ pub const Serializer = struct {
         self.regions.deinit(self.allocator);
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L56-L57
+    /// [agave]
+    /// https://github.com/anza-xyz/agave/blob/01e50dc/program-runtime/src/serialization.rs#L56-L57
     pub fn write(self: *Serializer, comptime T: type, value: T) u64 {
         return self.writeBytes(std.mem.asBytes(&value));
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L77-L78
+    /// [agave]
+    /// https://github.com/anza-xyz/agave/blob/01e50dc/program-runtime/src/serialization.rs#L77-L78
     pub fn writeBytes(self: *Serializer, data: []const u8) u64 {
         const vaddr = (self.vaddr +| self.buffer.items.len) -| self.region_start;
         self.buffer.appendSliceAssumeCapacity(data);
         return vaddr;
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L91-L92
+    /// [agave]
+    /// https://github.com/anza-xyz/agave/blob/01e50dc/program-runtime/src/serialization.rs#L91-L92
     pub fn writeAccount(
         self: *Serializer,
         account: *const BorrowedAccount,
@@ -141,7 +146,8 @@ pub const Serializer = struct {
             );
         }
 
-        // TODO: Cow https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L134
+        // TODO: Cow
+        // https://github.com/anza-xyz/agave/blob/01e50dc/program-runtime/src/serialization.rs#L134
         const address_space = if (self.aligned)
             account.constAccountData().len +| MAX_PERMITTED_DATA_INCREASE
         else
@@ -153,7 +159,10 @@ pub const Serializer = struct {
             // the handler grows them on write; readonly account accesses past
             // their data length just produce an access violation that the
             // loader maps to AccountDataTooSmall / ReadonlyDataModified.
-            // [agave] https://github.com/anza-xyz/agave/blob/v4.0/program-runtime/src/serialization.rs#L28-L34
+            // [agave]
+            // sig fmt: off
+            // https://github.com/anza-xyz/agave/blob/v4.0/program-runtime/src/serialization.rs#L28-L34
+            // sig fmt: on
             const payload: ?u16 = if (account.checkDataIsMutable() == null)
                 index_in_transaction
             else
@@ -196,7 +205,10 @@ pub const Serializer = struct {
         return addr;
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L154-L155
+    /// [agave]
+    // sig fmt: off
+    /// https://github.com/anza-xyz/agave/blob/01e50dc/program-runtime/src/serialization.rs#L154-L155
+    // sig fmt: on
     pub fn pushRegion(self: *Serializer, is_writable: bool) error{OutOfMemory}!void {
         const range_size = self.buffer.items.len -| self.region_start;
 
@@ -213,7 +225,8 @@ pub const Serializer = struct {
         self.vaddr += range_size;
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L172
+    /// [agave]
+    /// https://github.com/anza-xyz/agave/blob/01e50dc/program-runtime/src/serialization.rs#L172
     pub fn finish(self: *Serializer) error{OutOfMemory}!struct {
         std.ArrayListAlignedUnmanaged(u8, HOST_ALIGN),
         std.ArrayListUnmanaged(Region),
@@ -227,7 +240,8 @@ pub const Serializer = struct {
     }
 
     pub fn getAccountDataRegionMemoryState(account: *const BorrowedAccount) vm.memory.MemoryState {
-        // TODO: Cow https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L608
+        // TODO: Cow
+        // https://github.com/anza-xyz/agave/blob/01e50dc/program-runtime/src/serialization.rs#L608
         if (account.checkDataIsMutable() != null) return .constant;
         return .mutable;
     }
@@ -245,7 +259,7 @@ const SerializeReturn = struct {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L188
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4/program-runtime/src/serialization.rs#L188
 pub fn serializeParameters(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -310,7 +324,7 @@ pub fn serializeParameters(
         );
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L282
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4/program-runtime/src/serialization.rs#L282
 fn serializeParametersUnaligned(
     allocator: std.mem.Allocator,
     accounts: []const SerializedAccount,
@@ -425,7 +439,7 @@ fn serializeParametersUnaligned(
     };
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L415
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4/program-runtime/src/serialization.rs#L415
 fn serializeParametersAligned(
     allocator: std.mem.Allocator,
     accounts: []const SerializedAccount,
@@ -521,7 +535,10 @@ fn serializeParametersAligned(
                     index_in_transaction,
                 );
 
-                // [agave] https://github.com/anza-xyz/agave/blob/cfcee8181f/program-runtime/src/serialization.rs#L484
+                // [agave]
+                // sig fmt: off
+                // https://github.com/anza-xyz/agave/blob/cfcee8181f/program-runtime/src/serialization.rs#L484
+                // sig fmt: on
                 _ = serializer.write(
                     u64,
                     std.mem.nativeToLittle(u64, std.math.maxInt(u64)),
@@ -572,7 +589,7 @@ fn serializeParametersAligned(
     };
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L251
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4/program-runtime/src/serialization.rs#L251
 pub fn deserializeParameters(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -615,7 +632,7 @@ pub fn deserializeParameters(
         );
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L360
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4/program-runtime/src/serialization.rs#L360
 fn deserializeParametersUnaligned(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -698,7 +715,7 @@ fn deserializeParametersUnaligned(
     }
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L501
+/// [agave] https://github.com/anza-xyz/agave/blob/108fcb4/program-runtime/src/serialization.rs#L501
 fn deserializeParametersAligned(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -814,7 +831,7 @@ fn deserializeParametersAligned(
     }
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L778
+// [agave] https://github.com/anza-xyz/agave/blob/108fcb4/program-runtime/src/serialization.rs#L778
 test serializeParameters {
     const AccountSharedData = sig.runtime.AccountSharedData;
     const createTransactionContext = sig.runtime.testing.createTransactionContext;
@@ -1033,8 +1050,12 @@ test serializeParameters {
         }
 
         // TODO: compare against entrypoint deserialize method once implemented
-        // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L981
-        // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/program-runtime/src/serialization.rs#L893-L894
+        // [agave]
+        // https://github.com/anza-xyz/agave/blob/01e50dc/program-runtime/src/serialization.rs#L981
+        // [agave]
+        // sig fmt: off
+        // https://github.com/anza-xyz/agave/blob/01e50dc/program-runtime/src/serialization.rs#L893-L894
+        // sig fmt: on
 
         try deserializeParameters(
             allocator,

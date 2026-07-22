@@ -1,4 +1,5 @@
-//! [agave] Analogous to https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L1
+//! [agave] Analogous to
+//! https://github.com/anza-xyz/solana-sdk/blob/9919546/vote-interface/src/state/mod.rs#L1
 const std = @import("std");
 const std14 = @import("std14");
 const sig = @import("../../../lib.zig");
@@ -23,17 +24,17 @@ pub const VoteStateV4 = state_v4.VoteStateV4;
 pub const createTestVoteStateV4 = state_v4.createTestVoteStateV4;
 
 /// Size of a BLS public key in a compressed point representation
-/// https://github.com/anza-xyz/solana-sdk/blob/00d056c4ce9def466ad5475533588713feebcb2c/vote-interface/src/state/mod.rs#L33
+/// https://github.com/anza-xyz/solana-sdk/blob/00d056c/vote-interface/src/state/mod.rs#L33
 pub const BLS_PUBLIC_KEY_COMPRESSED_SIZE: usize = 48;
 
 /// Size of a BLS proof-of-possession in a compressed point representation
 /// (G2). SIMD-0387.
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/00d056c4ce9def466ad5475533588713feebcb2c/vote-interface/src/state/mod.rs#L36
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/00d056c/vote-interface/src/state/mod.rs#L36
 pub const BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE: usize = 96;
 
 /// Compute unit cost of verifying a single BLS proof-of-possession.
 /// SIMD-0387.
-/// [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_processor.rs#L104
+/// [agave] https://github.com/anza-xyz/agave/blob/a64b635/programs/vote/src/vote_processor.rs#L104
 pub const BLS_PROOF_OF_POSSESSION_VERIFICATION_COMPUTE_UNITS: u64 = 34_500;
 
 /// Domain-separation prefix prepended to the BLS proof-of-possession message.
@@ -68,10 +69,12 @@ pub const INITIAL_LOCKOUT: usize = 2;
 // Maximum number of credits history to keep around
 pub const MAX_EPOCH_CREDITS_HISTORY: usize = 64;
 
-// Number of slots of grace period for which maximum vote credits are awarded - votes landing within this number of slots of the slot that is being voted on are awarded full credits.
+// Number of slots of grace period for which maximum vote credits are awarded - votes landing within
+// this number of slots of the slot that is being voted on are awarded full credits.
 pub const VOTE_CREDITS_GRACE_SLOTS: u8 = 2;
 
-// Maximum number of credits to award for a vote; this number of credits is awarded to votes on slots that land within the grace period. After that grace period, vote credits are reduced.
+// Maximum number of credits to award for a vote; this number of credits is awarded to votes on
+// slots that land within the grace period. After that grace period, vote credits are reduced.
 pub const VOTE_CREDITS_MAXIMUM_PER_SLOT: u8 = 16;
 
 /// Port of Rust's `slice::binary_search_by` searching `items` for an entry
@@ -100,7 +103,7 @@ pub fn rustBinarySearchSlot(comptime T: type, items: []const T, candidate_slot: 
     return items[base].lockout.slot == candidate_slot;
 }
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L357
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/9919546/vote-interface/src/state/mod.rs#L357
 pub const BlockTimestamp = struct {
     slot: Slot,
     timestamp: i64,
@@ -111,19 +114,21 @@ pub const BlockTimestamp = struct {
     };
 };
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L85
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/9919546/vote-interface/src/state/mod.rs#L85
 pub const Lockout = struct {
     slot: Slot,
     /// The count inclusive of this slot plus the number of
     /// slots voted on top of this slot.
     confirmation_count: u32,
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/0edbce2b461d368e3930fa5ceb9ecc2bd7ad157c/vote-interface/src/state/mod.rs#L117
+    /// [agave]
+    /// https://github.com/anza-xyz/solana-sdk/blob/0edbce2/vote-interface/src/state/mod.rs#L117
     pub fn isLockedOutAtSlot(self: *const Lockout, slot: Slot) bool {
         return self.lastLockedOutSlot() >= slot;
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/0edbce2b461d368e3930fa5ceb9ecc2bd7ad157c/vote-interface/src/state/mod.rs#L113
+    /// [agave]
+    /// https://github.com/anza-xyz/solana-sdk/blob/0edbce2/vote-interface/src/state/mod.rs#L113
     /// The last slot at which a vote is still locked out. Validators should not
     /// vote on a slot in another fork which is less than or equal to this slot
     /// to avoid having their stake slashed.
@@ -131,7 +136,8 @@ pub const Lockout = struct {
         return (self.slot +| (self.lockout()));
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/0edbce2b461d368e3930fa5ceb9ecc2bd7ad157c/vote-interface/src/state/mod.rs#L103
+    /// [agave]
+    /// https://github.com/anza-xyz/solana-sdk/blob/0edbce2/vote-interface/src/state/mod.rs#L103
     ///
     /// The number of slots for which this vote is locked
     pub fn lockout(self: *const Lockout) u64 {
@@ -151,16 +157,19 @@ pub const Lockout = struct {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L135
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/9919546/vote-interface/src/state/mod.rs#L135
 pub const LandedVote = struct {
-    // Latency is the difference in slot number between the slot that was voted on (lockout.slot) and the slot in
-    // which the vote that added this Lockout landed.  For votes which were cast before versions of the validator
+    // Latency is the difference in slot number between the slot that was voted on (lockout.slot)
+    // and the slot in
+    // which the vote that added this Lockout landed. For votes which were cast before versions of
+    // the validator
     // software which recorded vote latencies, latency is recorded as 0.
     latency: u8,
     lockout: Lockout,
 };
 
-/// [agave] Analogous tuple [(Pubkey, Epoch, Epoch)] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L444.
+/// [agave] Analogous tuple [(Pubkey, Epoch, Epoch)]
+/// https://github.com/anza-xyz/solana-sdk/blob/9919546/vote-interface/src/state/mod.rs#L444.
 pub const PriorVote = struct {
     /// authorized voter at the time of the vote.
     key: Pubkey,
@@ -170,14 +179,15 @@ pub const PriorVote = struct {
     end: Epoch,
 };
 
-/// [agave] Analogous tuple [(Epoch, u64, u64)] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L448
+/// [agave] Analogous tuple [(Epoch, u64, u64)]
+/// https://github.com/anza-xyz/solana-sdk/blob/9919546/vote-interface/src/state/mod.rs#L448
 pub const EpochCredit = struct {
     epoch: Epoch,
     credits: u64,
     prev_credits: u64,
 };
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L58
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a0/vote-interface/src/state/mod.rs#L58
 pub const Vote = struct {
     /// A stack of votes starting with the oldest vote
     slots: []const Slot,
@@ -205,7 +215,7 @@ pub const Vote = struct {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/state/mod.rs#L178
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d8063/vote-interface/src/state/mod.rs#L178
 pub const VoteStateUpdate = struct {
     /// The proposed tower
     lockouts: std.ArrayListUnmanaged(Lockout),
@@ -304,7 +314,7 @@ pub fn deserializeCompactVoteStateUpdate(
     };
 }
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/state/mod.rs#L232
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d8063/vote-interface/src/state/mod.rs#L232
 pub const TowerSync = struct {
     /// The proposed tower
     lockouts: std.ArrayListUnmanaged(Lockout),
@@ -419,7 +429,8 @@ pub fn deserializeTowerSync(
     };
 }
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/authorized_voters.rs#L11
+/// [agave]
+/// https://github.com/anza-xyz/solana-sdk/blob/52d8063/vote-interface/src/authorized_voters.rs#L11
 pub const AuthorizedVoters = struct {
     voters: SortedMap(Epoch, Pubkey),
 
@@ -447,7 +458,10 @@ pub const AuthorizedVoters = struct {
         return self.voters.count();
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L22
+    /// [agave]
+    // sig fmt: off
+    /// https://github.com/anza-xyz/solana-sdk/blob/4e30766/vote-interface/src/authorized_voters.rs#L22
+    // sig fmt: on
     pub fn getAuthorizedVoter(self: *AuthorizedVoters, epoch: Epoch) ?Pubkey {
         if (self.getOrCalculateAuthorizedVoterForEpoch(epoch)) |entry| {
             return entry[0];
@@ -456,7 +470,10 @@ pub const AuthorizedVoters = struct {
         }
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L27
+    /// [agave]
+    // sig fmt: off
+    /// https://github.com/anza-xyz/solana-sdk/blob/4e30766/vote-interface/src/authorized_voters.rs#L27
+    // sig fmt: on
     pub fn getAndCacheAuthorizedVoterForEpoch(
         self: *AuthorizedVoters,
         allocator: Allocator,
@@ -480,7 +497,10 @@ pub const AuthorizedVoters = struct {
         try self.voters.put(allocator, epoch, authorized_voter);
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L42
+    /// [agave]
+    // sig fmt: off
+    /// https://github.com/anza-xyz/solana-sdk/blob/4e30766/vote-interface/src/authorized_voters.rs#L42
+    // sig fmt: on
     pub fn purgeAuthorizedVoters(
         self: *AuthorizedVoters,
         allocator: Allocator,
@@ -569,7 +589,10 @@ pub const AuthorizedVoters = struct {
         return self.voters.contains(epoch);
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/authorized_voters.rs#L90
+    /// [agave]
+    // sig fmt: off
+    /// https://github.com/anza-xyz/solana-sdk/blob/4e30766/vote-interface/src/authorized_voters.rs#L90
+    // sig fmt: on
     ///
     /// Returns the authorized voter at the given epoch if the epoch is >= the
     /// current epoch, and a bool indicating whether the entry for this epoch
@@ -697,7 +720,10 @@ pub const CircBufV1 = struct {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/vote-interface@v6.0.0/vote-interface/src/state/vote_state_versions.rs#L18
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/solana-sdk/blob/vote-interface@v6.0.0/vote-interface/src/state/vote_state_versions.rs#L18
+// sig fmt: on
 /// [SIMD-0185] v4 added with discriminant 3.
 ///
 /// Variant 0 is a zero-sized `uninitialized` marker, mirroring how
@@ -717,7 +743,10 @@ pub const VoteStateVersions = union(enum(u32)) {
     v3: VoteStateV3,
     v4: VoteStateV4,
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L80
+    /// [agave]
+    // sig fmt: off
+    /// https://github.com/anza-xyz/solana-sdk/blob/4e30766/vote-interface/src/state/vote_state_versions.rs#L80
+    // sig fmt: on
     pub fn landedVotesFromLockouts(
         allocator: Allocator,
         lockouts: []const Lockout,
@@ -755,10 +784,12 @@ pub const VoteStateVersions = union(enum(u32)) {
     /// callers wanting the bare struct (e.g. RPC account parsing in `parse_vote.zig`) call this
     /// directly. Takes ownership of the contained vote state and will either free it or return it.
     ///
-    /// [SIMD-0185] Returns VoteStateV4 with default values for new fields when converting from older versions.
+    /// [SIMD-0185] Returns VoteStateV4 with default values for new fields when converting from
+    /// older versions.
     /// vote_pubkey: when provided, used as inflation_rewards_collector default for old versions.
     ///
-    /// [agave] Analogous to [try_convert_to_vote_state_v4](https://github.com/anza-xyz/agave/blob/v4.1/programs/vote/src/vote_state/handler.rs#L624)
+    /// [agave] Analogous to [try_convert_to_vote_state_v4](
+    /// https://github.com/anza-xyz/agave/blob/v4.1/programs/vote/src/vote_state/handler.rs#L624)
     pub fn convertToV4(
         self: VoteStateVersions,
         /// must be the allocator used to allocate self
@@ -829,7 +860,10 @@ pub const VoteStateVersions = union(enum(u32)) {
         return .{ .v4 = try self.convertToV4(allocator, vote_pubkey) };
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/vote-interface@v6.0.0/vote-interface/src/state/vote_state_versions.rs#L117
+    /// [agave]
+    // sig fmt: off
+    /// https://github.com/anza-xyz/solana-sdk/blob/vote-interface@v6.0.0/vote-interface/src/state/vote_state_versions.rs#L117
+    // sig fmt: on
     /// [SIMD-0185] v4 is never uninitialized.
     pub fn isUninitialized(self: VoteStateVersions) bool {
         switch (self) {
@@ -1294,7 +1328,10 @@ pub const VoteState = union(enum(u32)) {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_1_14_11.rs#L16
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/solana-sdk/blob/4e30766/vote-interface/src/state/vote_state_1_14_11.rs#L16
+// sig fmt: on
 pub const VoteState1_14_11 = struct {
     /// the node that votes in this account
     node_pubkey: Pubkey,
@@ -1331,7 +1368,8 @@ pub const VoteState1_14_11 = struct {
     /// when votes.len() is MAX_LOCKOUT_HISTORY.
     pub const MAX_VOTE_STATE_SIZE: usize = 3731;
 
-    // Offset of VoteState1_4_11::prior_voters, for determining initialization status without deserialization
+    // Offset of VoteState1_4_11::prior_voters, for determining initialization status without
+    // deserialization
     const DEFAULT_PRIOR_VOTERS_OFFSET: usize = 82;
 
     pub fn init(
@@ -1376,7 +1414,7 @@ pub const VoteState1_14_11 = struct {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L422
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/9919546/vote-interface/src/state/mod.rs#L422
 pub const VoteStateV3 = struct {
     /// The node that votes in this account.
     node_pubkey: Pubkey,
@@ -1404,7 +1442,8 @@ pub const VoteStateV3 = struct {
     /// when votes.len() is MAX_LOCKOUT_HISTORY.
     pub const MAX_VOTE_STATE_SIZE: usize = 3762;
 
-    // Offset of VoteStateV3::prior_voters, for determining initialization status without deserialization
+    // Offset of VoteStateV3::prior_voters, for determining initialization status without
+    // deserialization
     const DEFAULT_PRIOR_VOTERS_OFFSET: usize = 114;
 
     pub const DEFAULT: VoteStateV3 = .{
@@ -1502,7 +1541,10 @@ pub const VoteStateV3 = struct {
             0;
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/vote_state_versions.rs#L84
+    /// [agave]
+    // sig fmt: off
+    /// https://github.com/anza-xyz/solana-sdk/blob/4e30766/vote-interface/src/state/vote_state_versions.rs#L84
+    // sig fmt: on
     pub fn isUninitialized(self: VoteStateV3) bool {
         return self.voters.count() == 0;
     }
@@ -1512,7 +1554,8 @@ pub const VoteStateV3 = struct {
             !std.mem.allEqual(u8, data[4..][0..DEFAULT_PRIOR_VOTERS_OFFSET], 0);
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L862
+    /// [agave]
+    /// https://github.com/anza-xyz/solana-sdk/blob/4e30766/vote-interface/src/state/mod.rs#L862
     pub fn setNewAuthorizedVoter(
         self: *VoteStateV3,
         allocator: Allocator,
@@ -1555,7 +1598,8 @@ pub const VoteStateV3 = struct {
         return null;
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L922
+    /// [agave]
+    /// https://github.com/anza-xyz/solana-sdk/blob/4e30766/vote-interface/src/state/mod.rs#L922
     pub fn getAndUpdateAuthorizedVoter(
         self: *VoteStateV3,
         allocator: Allocator,
@@ -1586,7 +1630,8 @@ pub const VoteStateV3 = struct {
         return null;
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L777
+    /// [agave]
+    /// https://github.com/anza-xyz/solana-sdk/blob/fb8a9a0/vote-interface/src/state/mod.rs#L777
     ///
     /// Returns the credits to award for a vote at the given lockout slot index
     pub fn creditsForVoteAtIndex(self: *const VoteStateV3, index: usize) u64 {
@@ -1618,7 +1663,8 @@ pub const VoteStateV3 = struct {
         return VOTE_CREDITS_MAXIMUM_PER_SLOT - diff;
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L845
+    /// [agave]
+    /// https://github.com/anza-xyz/solana-sdk/blob/fb8a9a0/vote-interface/src/state/mod.rs#L845
     ///
     /// Number of "credits" owed to this account from the mining pool. Submit this
     /// VoteStateV3 to the Rewards program to trade credits for lamports.
@@ -1629,7 +1675,8 @@ pub const VoteStateV3 = struct {
             self.epoch_credits.getLast().credits;
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L743
+    /// [agave]
+    /// https://github.com/anza-xyz/solana-sdk/blob/fb8a9a0/vote-interface/src/state/mod.rs#L743
     ///
     /// increment credits, record credits for last epoch if new epoch
     pub fn incrementCredits(
@@ -1681,7 +1728,8 @@ pub const VoteStateV3 = struct {
         }
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/e17340519f792d97cf4af7b9eb81056d475c70f9/programs/vote/src/vote_state/mod.rs#L303
+    /// [agave]
+    /// https://github.com/anza-xyz/agave/blob/e173405/programs/vote/src/vote_state/mod.rs#L303
     ///
     // The goal is to check if each slot in vote_slots appears in slot_hashes with the correct hash.
     pub fn checkSlotsAreValid(
@@ -1769,7 +1817,8 @@ pub const VoteStateV3 = struct {
         return null;
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L709
+    /// [agave]
+    /// https://github.com/anza-xyz/solana-sdk/blob/fb8a9a0/vote-interface/src/state/mod.rs#L709
     pub fn processNextVoteSlot(
         self: *VoteStateV3,
         allocator: Allocator,
@@ -1803,7 +1852,8 @@ pub const VoteStateV3 = struct {
         try self.doubleLockouts();
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L939
+    /// [agave]
+    /// https://github.com/anza-xyz/solana-sdk/blob/fb8a9a0/vote-interface/src/state/mod.rs#L939
     ///
     /// Pop all recent votes that are not locked out at the next vote slot.
     /// This allows validators to switch forks once their votes for another fork have
@@ -1822,7 +1872,8 @@ pub const VoteStateV3 = struct {
         }
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L949
+    /// [agave]
+    /// https://github.com/anza-xyz/solana-sdk/blob/fb8a9a0/vote-interface/src/state/mod.rs#L949
     pub fn doubleLockouts(self: *VoteStateV3) !void {
         const stack_depth = self.votes.items.len;
 
@@ -1838,7 +1889,8 @@ pub const VoteStateV3 = struct {
         }
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L963
+    /// [agave]
+    /// https://github.com/anza-xyz/solana-sdk/blob/fb8a9a0/vote-interface/src/state/mod.rs#L963
     pub fn processTimestamp(
         self: *VoteStateV3,
         slot: Slot,
@@ -1858,7 +1910,8 @@ pub const VoteStateV3 = struct {
         return null;
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/a0717a15d349dc5e0c30384bee6d039377b92167/programs/vote/src/vote_state/mod.rs#L618
+    /// [agave]
+    /// https://github.com/anza-xyz/agave/blob/a0717a1/programs/vote/src/vote_state/mod.rs#L618
     pub fn processVote(
         self: *VoteStateV3,
         allocator: Allocator,
@@ -1900,7 +1953,8 @@ pub const VoteStateV3 = struct {
         );
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/a0717a15d349dc5e0c30384bee6d039377b92167/programs/vote/src/vote_state/mod.rs#L603
+    /// [agave]
+    /// https://github.com/anza-xyz/agave/blob/a0717a1/programs/vote/src/vote_state/mod.rs#L603
     pub fn processVoteUnfiltered(
         self: *VoteStateV3,
         allocator: Allocator,
@@ -1930,14 +1984,17 @@ pub const VoteStateV3 = struct {
         return null;
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L772
+    /// [agave]
+    /// https://github.com/anza-xyz/solana-sdk/blob/fb8a9a0/vote-interface/src/state/mod.rs#L772
     ///
-    /// Computes the vote latency for vote on voted_for_slot where the vote itself landed in current_slot
+    /// Computes the vote latency for vote on voted_for_slot where the vote itself landed in
+    /// current_slot
     pub fn computeVoteLatency(voted_for_slot: Slot, current_slot: Slot) u8 {
         return @min(current_slot -| voted_for_slot, std.math.maxInt(u8));
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/52d80637e13bca19ed65920fbda154993c37dbbe/vote-interface/src/state/mod.rs#L690
+    /// [agave]
+    /// https://github.com/anza-xyz/solana-sdk/blob/52d8063/vote-interface/src/state/mod.rs#L690
     ///
     /// Returns if the vote state contains a slot `candidate_slot`.
     ///
@@ -1951,7 +2008,8 @@ pub const VoteStateV3 = struct {
         return rustBinarySearchSlot(LandedVote, self.votes.items, candidate_slot);
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L1014
+    /// [agave]
+    /// https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L1014
     pub fn processTowerSync(
         self: *VoteStateV3,
         allocator: Allocator,
@@ -1985,7 +2043,8 @@ pub const VoteStateV3 = struct {
         );
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L964
+    /// [agave]
+    /// https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L964
     pub fn processVoteStateUpdate(
         self: *VoteStateV3,
         allocator: Allocator,
@@ -2019,7 +2078,8 @@ pub const VoteStateV3 = struct {
         );
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L63
+    /// [agave]
+    /// https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L63
     ///
     /// Checks the proposed vote state with the current and
     /// slot hashes, making adjustments to the root / filtering
@@ -2098,7 +2158,8 @@ pub const VoteStateV3 = struct {
         // 2) Conversely, `slot_hashes` is sorted from newest/largest vote to
         // the oldest/smallest vote
         //
-        // We check every proposed lockout because have to ensure that every slot is actually part of
+        // We check every proposed lockout because have to ensure that every slot is actually part
+        // of
         // the history, not just the most recent ones
         while (proposed_lockouts_index < proposed_lockouts.items.len and slot_hashes_index > 0) {
             const proposed_vote_slot: Slot = if (root_to_check) |root|
@@ -2119,7 +2180,8 @@ pub const VoteStateV3 = struct {
             switch (std.math.order(proposed_vote_slot, ancestor_slot)) {
                 .lt => {
                     if (slot_hashes_index == slot_hash_entries.len) {
-                        // The vote slot does not exist in the SlotHashes history because it's too old,
+                        // The vote slot does not exist in the SlotHashes history because it's too
+                        // old,
                         // i.e. older than the oldest slot in the history.
                         if (proposed_vote_slot >= earliest_slot_hash_in_history) {
                             return VoteError.assertion_failed;
@@ -2141,7 +2203,8 @@ pub const VoteStateV3 = struct {
                             std.debug.assert(new_proposed_root == proposed_vote_slot);
                             // 2. We know from the assert earlier in the function that
                             // `proposed_vote_slot < earliest_slot_hash_in_history`,
-                            // so from 1. we know that `new_proposed_root < earliest_slot_hash_in_history`.
+                            // so from 1. we know that `new_proposed_root <
+                            // earliest_slot_hash_in_history`.
                             if (new_proposed_root >= earliest_slot_hash_in_history) {
                                 return VoteError.assertion_failed;
                             }
@@ -2237,7 +2300,8 @@ pub const VoteStateV3 = struct {
         return null;
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L426
+    /// [agave]
+    /// https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L426
     ///
     /// Ensure `check_and_filter_proposed_vote_state(&)` runs on the slots in `new_state`
     /// before `process_new_vote_state()` is called
@@ -2316,9 +2380,9 @@ pub const VoteStateV3 = struct {
             } else if (new_root) |proposed_new_root| {
                 if (vote.lockout.slot <= proposed_new_root and
                     // This check is necessary because
-                    // https://github.com/ryoqun/solana/blob/df55bfb46af039cbc597cd60042d49b9d90b5961/core/src/consensus.rs#L120
+                    // https://github.com/ryoqun/solana/blob/df55bfb/core/src/consensus.rs#L120
                     // always sets a root for even empty towers, which is then hard unwrapped here
-                    // https://github.com/ryoqun/solana/blob/df55bfb46af039cbc597cd60042d49b9d90b5961/core/src/consensus.rs#L776
+                    // https://github.com/ryoqun/solana/blob/df55bfb/core/src/consensus.rs#L776
                     new_root != 0)
                 {
                     return VoteError.slot_smaller_than_root;
@@ -2349,7 +2413,8 @@ pub const VoteStateV3 = struct {
 
         if (new_root) |proposed_new_root| {
             for (self.votes.items) |current_vote| {
-                // Sum credits for all votes in current state that are now rooted. (ie <= proposed_new_root).
+                // Sum credits for all votes in current state that are now rooted. (ie <=
+                // proposed_new_root).
                 if (current_vote.lockout.slot <= proposed_new_root) {
                     earned_credits = std.math.add(
                         u64,
@@ -2367,21 +2432,29 @@ pub const VoteStateV3 = struct {
             }
         }
 
-        // For any slots newly added to the new vote state, the vote latency of that slot is not provided by the
+        // For any slots newly added to the new vote state, the vote latency of that slot is not
+        // provided by the
         // vote instruction contents, but instead is computed from the actual latency of the vote
-        // instruction. This prevents other validators from manipulating their own vote latencies within their vote states
-        // and forcing the rest of the cluster to accept these possibly fraudulent latency values.  If the
+        // instruction. This prevents other validators from manipulating their own vote latencies
+        // within their vote states
+        // and forcing the rest of the cluster to accept these possibly fraudulent latency values.
+        // If the
         // timly_vote_credits feature is not enabled then vote latency is set to 0 for new votes.
         //
-        // For any slot that is in both the new state and the current state, the vote latency of the new state is taken
+        // For any slot that is in both the new state and the current state, the vote latency of the
+        // new state is taken
         // from the current state.
         //
-        // Thus vote latencies are set here for any newly vote-on slots when a vote instruction is received.
+        // Thus vote latencies are set here for any newly vote-on slots when a vote instruction is
+        // received.
         // They are copied into the new vote state after every vote for already voted-on slots.
-        // And when voted-on slots are rooted, the vote latencies stored in the vote state of all the rooted slots is used
+        // And when voted-on slots are rooted, the vote latencies stored in the vote state of all
+        // the rooted slots is used
         // to compute credits earned.
-        // All validators compute the same vote latencies because all process the same vote instruction at the
-        // same slot, and the only time vote latencies are ever computed is at the time that their slot is first voted on;
+        // All validators compute the same vote latencies because all process the same vote
+        // instruction at the
+        // same slot, and the only time vote latencies are ever computed is at the time that their
+        // slot is first voted on;
         // after that, the latencies are retained unaltered until the slot is rooted.
 
         // All the votes in our current vote state that are missing from the new vote state
@@ -2437,8 +2510,10 @@ pub const VoteStateV3 = struct {
         // `new_vote_state` passed all the checks, finalize the change by rewriting
         // our state.
 
-        // Now set the vote latencies on new slots not in the current state.  New slots not in the current vote state will
-        // have had their latency initialized to 0 by the above loop.  Those will now be updated to their actual latency.
+        // Now set the vote latencies on new slots not in the current state. New slots not in the
+        // current vote state will
+        // have had their latency initialized to 0 by the above loop. Those will now be updated to
+        // their actual latency.
         for (new_state) |*new_vote| {
             if (new_vote.latency == 0) {
                 new_vote.latency = VoteStateV3.computeVoteLatency(
@@ -2449,8 +2524,10 @@ pub const VoteStateV3 = struct {
         }
 
         if (self.root_slot != new_root) {
-            // Award vote credits based on the number of slots that were voted on and have reached finality
-            // For each finalized slot, there was one voted-on slot in the new vote state that was responsible for
+            // Award vote credits based on the number of slots that were voted on and have reached
+            // finality
+            // For each finalized slot, there was one voted-on slot in the new vote state that was
+            // responsible for
             // finalizing it. Each of those votes is awarded 1 credit.
             try self.incrementCredits(allocator, epoch, earned_credits);
         }
@@ -3206,7 +3283,7 @@ test "state.VoteStateV3.lastVotedSlot" {
     }
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1275
+// [agave] https://github.com/anza-xyz/agave/blob/6679ac4/programs/vote/src/vote_state/mod.rs#L1275
 test "state.VoteStateV3.lastLockout extended" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -3241,7 +3318,7 @@ test "state.VoteStateV3.lastLockout extended" {
     try std.testing.expectEqual(top_vote, vote_state.root_slot);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1499
+// [agave] https://github.com/anza-xyz/agave/blob/6679ac4/programs/vote/src/vote_state/mod.rs#L1499
 test "state.VoteStateV3.lockout double lockout after expiration" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -3278,7 +3355,7 @@ test "state.VoteStateV3.lockout double lockout after expiration" {
     try checkLockouts(&vote_state);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1527
+// [agave] https://github.com/anza-xyz/agave/blob/6679ac4/programs/vote/src/vote_state/mod.rs#L1527
 test "state.VoteStateV3.lockout expire multiple votes" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -3322,7 +3399,7 @@ test "state.VoteStateV3.lockout expire multiple votes" {
     try std.testing.expectEqual(1, vote_state.votes.items[2].lockout.confirmation_count);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1558
+// [agave] https://github.com/anza-xyz/agave/blob/6679ac4/programs/vote/src/vote_state/mod.rs#L1558
 test "state.VoteStateV3.getCredits" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -3351,7 +3428,7 @@ test "state.VoteStateV3.getCredits" {
     try std.testing.expectEqual(3, vote_state.getCredits());
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1577
+// [agave] https://github.com/anza-xyz/agave/blob/6679ac4/programs/vote/src/vote_state/mod.rs#L1577
 test "state.VoteStateV3 duplicate vote" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -3375,7 +3452,7 @@ test "state.VoteStateV3 duplicate vote" {
     try std.testing.expectEqual(null, nthRecentLockout(&vote_state, 2));
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1589
+// [agave] https://github.com/anza-xyz/agave/blob/6679ac4/programs/vote/src/vote_state/mod.rs#L1589
 test "state.VoteStateV3 nth recent lockout" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -3406,7 +3483,7 @@ test "state.VoteStateV3 nth recent lockout" {
     );
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L1632
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L1632
 test "state.VoteStateV3.processVote process missed votes" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -3497,7 +3574,7 @@ test "state.VoteStateV3.processVote process missed votes" {
     }
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1659
+// [agave] https://github.com/anza-xyz/agave/blob/6679ac4/programs/vote/src/vote_state/mod.rs#L1659
 test "state.VoteStateV3.processVote skips old vote" {
     const allocator = std.testing.allocator;
 
@@ -3522,7 +3599,7 @@ test "state.VoteStateV3.processVote skips old vote" {
     try std.testing.expectEqual(VoteError.vote_too_old, result);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L2856
+// [agave] https://github.com/anza-xyz/agave/blob/6679ac4/programs/vote/src/vote_state/mod.rs#L2856
 test "state.VoteStateV3 filter old votes" {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     const random = prng.random();
@@ -3575,7 +3652,7 @@ test "state.VoteStateV3 filter old votes" {
     );
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1677
+// [agave] https://github.com/anza-xyz/agave/blob/6679ac4/programs/vote/src/vote_state/mod.rs#L1677
 test "state.VoteStateV3.processVote empty slot hashes" {
     const allocator = std.testing.allocator;
 
@@ -3594,7 +3671,7 @@ test "state.VoteStateV3.processVote empty slot hashes" {
     try std.testing.expectEqual(VoteError.vote_too_old, result);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1688
+// [agave] https://github.com/anza-xyz/agave/blob/6679ac4/programs/vote/src/vote_state/mod.rs#L1688
 test "state.VoteStateV3.checkSlotsAreValid new vote" {
     const allocator = std.testing.allocator;
 
@@ -3643,7 +3720,7 @@ test "state.VoteStateV3.checkSlotsAreValid bad timestamp" {
     );
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1700
+// [agave] https://github.com/anza-xyz/agave/blob/6679ac4/programs/vote/src/vote_state/mod.rs#L1700
 test "state.VoteStateV3.checkSlotsAreValid bad hash" {
     const allocator = std.testing.allocator;
 
@@ -3667,7 +3744,7 @@ test "state.VoteStateV3.checkSlotsAreValid bad hash" {
     try std.testing.expectEqual(VoteError.slot_hash_mismatch, result);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1712
+// [agave] https://github.com/anza-xyz/agave/blob/6679ac4/programs/vote/src/vote_state/mod.rs#L1712
 test "state.VoteStateV3.checkSlotsAreValid bad slot" {
     const allocator = std.testing.allocator;
 
@@ -3687,7 +3764,7 @@ test "state.VoteStateV3.checkSlotsAreValid bad slot" {
     try std.testing.expectEqual(VoteError.slots_mismatch, result);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1724
+// [agave] https://github.com/anza-xyz/agave/blob/6679ac4/programs/vote/src/vote_state/mod.rs#L1724
 test "state.VoteStateV3.checkSlotsAreValid duplicate vote" {
     const allocator = std.testing.allocator;
 
@@ -3710,7 +3787,7 @@ test "state.VoteStateV3.checkSlotsAreValid duplicate vote" {
     try std.testing.expectEqual(VoteError.vote_too_old, result);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1740
+// [agave] https://github.com/anza-xyz/agave/blob/6679ac4/programs/vote/src/vote_state/mod.rs#L1740
 test "state.VoteStateV3.checkSlotsAreValid next vote" {
     const allocator = std.testing.allocator;
 
@@ -3751,7 +3828,7 @@ test "state.VoteStateV3.checkSlotsAreValid next vote" {
     try std.testing.expectEqual(null, result);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1759
+// [agave] https://github.com/anza-xyz/agave/blob/6679ac4/programs/vote/src/vote_state/mod.rs#L1759
 test "state.VoteStateV3.checkSlotsAreValid next vote only" {
     const allocator = std.testing.allocator;
 
@@ -3792,7 +3869,7 @@ test "state.VoteStateV3.checkSlotsAreValid next vote only" {
     try std.testing.expectEqual(null, result);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/6679ac4f38640496c64d234fffa61729f1572ce1/programs/vote/src/vote_state/mod.rs#L1777
+// [agave] https://github.com/anza-xyz/agave/blob/6679ac4/programs/vote/src/vote_state/mod.rs#L1777
 test "state.VoteStateV3.processVote empty slots" {
     const allocator = std.testing.allocator;
 
@@ -3846,7 +3923,7 @@ test "state.VoteStateV3.contains_slot" {
     try std.testing.expect(!vote_state.containsSlot(0));
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2223
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L2223
 test "state.VoteStateV3 process new vote too many votes" {
     const allocator = std.testing.allocator;
 
@@ -3876,7 +3953,7 @@ test "state.VoteStateV3 process new vote too many votes" {
     try std.testing.expectEqual(VoteError.too_many_votes, maybe_error);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2249
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L2249
 test "state.VoteStateV3 process new vote state root rollback" {
     const allocator = std.testing.allocator;
 
@@ -3910,7 +3987,7 @@ test "state.VoteStateV3 process new vote state root rollback" {
     try std.testing.expectEqual(VoteError.root_roll_back, maybe_error);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2295
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L2295
 test "state.VoteStateV3 process new vote state zero confirmations" {
     const allocator = std.testing.allocator;
     var vote_state1: VoteStateV3 = .DEFAULT;
@@ -3951,7 +4028,7 @@ test "state.VoteStateV3 process new vote state zero confirmations" {
     try std.testing.expectEqual(VoteError.zero_confirmations, another_maybe_error);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2337
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L2337
 test "state.VoteStateV3 process new vote state confirmations too large" {
     const allocator = std.testing.allocator;
     var vote_state1: VoteStateV3 = .DEFAULT;
@@ -3993,7 +4070,7 @@ test "state.VoteStateV3 process new vote state confirmations too large" {
     try std.testing.expectEqual(VoteError.confirmation_too_large, another_maybe_error);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2379
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L2379
 test "state.VoteStateV3 process new vote state slot smaller than root" {
     const allocator = std.testing.allocator;
     var vote_state1: VoteStateV3 = .DEFAULT;
@@ -4034,7 +4111,7 @@ test "state.VoteStateV3 process new vote state slot smaller than root" {
     try std.testing.expectEqual(VoteError.slot_smaller_than_root, another_maybe_error);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2422
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L2422
 test "state.VoteStateV3 process new vote state slots not ordered" {
     const allocator = std.testing.allocator;
     var vote_state1: VoteStateV3 = .DEFAULT;
@@ -4073,7 +4150,7 @@ test "state.VoteStateV3 process new vote state slots not ordered" {
     try std.testing.expectEqual(VoteError.slots_not_ordered, another_maybe_error);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2464
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L2464
 test "state.VoteStateV3 process new vote state confirmations not ordered" {
     const allocator = std.testing.allocator;
     var vote_state1: VoteStateV3 = .DEFAULT;
@@ -4118,7 +4195,7 @@ test "state.VoteStateV3 process new vote state confirmations not ordered" {
     );
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2506
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L2506
 test "state.VoteStateV3 process new vote state lockout mismatch" {
     const allocator = std.testing.allocator;
     var vote_state1: VoteStateV3 = .DEFAULT;
@@ -4145,7 +4222,7 @@ test "state.VoteStateV3 process new vote state lockout mismatch" {
     );
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2532
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L2532
 test "state.VoteStateV3 process new vote state confirmation rollback" {
     const allocator = std.testing.allocator;
     var vote_state1: VoteStateV3 = .DEFAULT;
@@ -4190,7 +4267,7 @@ test "state.VoteStateV3 process new vote state confirmation rollback" {
     );
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2575
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L2575
 test "state.VoteStateV3 process new vote state root progress" {
     const allocator = std.testing.allocator;
     var vote_state1: VoteStateV3 = .DEFAULT;
@@ -4231,7 +4308,7 @@ test "state.VoteStateV3 process new vote state root progress" {
     }
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2610
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L2610
 test "state.VoteStateV3 process new vote state same slot but not common ancestor" {
     // It might be possible that during the switch from old vote instructions
     // to new vote instructions, new_state contains votes for slots LESS
@@ -4295,7 +4372,7 @@ test "state.VoteStateV3 process new vote state same slot but not common ancestor
     try std.testing.expectEqualDeep(vote_state1, vote_state2);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2668
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L2668
 test "state.VoteStateV3 process new vote state lockout violation" {
     // Construct on-chain vote state
     const allocator = std.testing.allocator;
@@ -4343,7 +4420,7 @@ test "state.VoteStateV3 process new vote state lockout violation" {
     try std.testing.expectEqual(VoteError.lockout_conflict, maybe_error);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2710
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L2710
 test "state.VoteStateV3 process new vote state lockout violation2" {
     // Construct on-chain vote state
     const allocator = std.testing.allocator;
@@ -4394,7 +4471,7 @@ test "state.VoteStateV3 process new vote state lockout violation2" {
     try std.testing.expectEqual(VoteError.lockout_conflict, maybe_error);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2753
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L2753
 test "state.VoteStateV3 process new vote state expired ancestor not removed" {
     // Construct on-chain vote state
     const allocator = std.testing.allocator;
@@ -4451,7 +4528,7 @@ test "state.VoteStateV3 process new vote state expired ancestor not removed" {
     try std.testing.expectEqualDeep(vote_state1.root_slot, vote_state2.root_slot);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2799
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L2799
 test "state.VoteStateV3 process new vote current state contains bigger slots" {
     const allocator = std.testing.allocator;
     var vote_state1: VoteStateV3 = .DEFAULT;
@@ -4521,7 +4598,7 @@ test "state.VoteStateV3 process new vote current state contains bigger slots" {
     }
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2916
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L2916
 test "state.VoteStateV3.checkAndFilterProposedVoteState empty" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -4572,7 +4649,7 @@ test "state.VoteStateV3.checkAndFilterProposedVoteState empty" {
     }
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L2948
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L2948
 test "state.VoteStateV3.checkAndFilterProposedVoteState too old" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -4636,7 +4713,7 @@ test "state.VoteStateV3.checkAndFilterProposedVoteState too old" {
     try std.testing.expectEqual(VoteError.vote_too_old, maybe_error);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3063
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L3063
 test "state.VoteStateV3.checkAndFilterProposedVoteState older than history root" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -4814,7 +4891,7 @@ test "state.VoteStateV3.checkAndFilterProposedVoteState older than history root"
     }
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3188
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L3188
 test "state.VoteStateV3.checkAndFilterProposedVoteState slots not ordered" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -4838,7 +4915,8 @@ test "state.VoteStateV3.checkAndFilterProposedVoteState slots not ordered" {
         @panic("Missing vote slot hash");
     };
 
-    // Test with a `TowerSync` where the slots are out of order with empty TowerSync, should return EmptySlots error
+    // Test with a `TowerSync` where the slots are out of order with empty TowerSync, should return
+    // EmptySlots error
     {
         var tower_sync = try testTowerSync(
             allocator,
@@ -4884,7 +4962,7 @@ test "state.VoteStateV3.checkAndFilterProposedVoteState slots not ordered" {
     }
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3228
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L3228
 test "state.VoteStateV3.checkAndFilterProposedVoteState older than history slots filtered" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -4960,7 +5038,7 @@ test "state.VoteStateV3.checkAndFilterProposedVoteState older than history slots
     try std.testing.expectEqual(null, another_maybe_error);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3284
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L3284
 test "state.VoteStateV3.checkAndFilterProposedVoteState older than history slots not filtered" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -5037,7 +5115,7 @@ test "state.VoteStateV3.checkAndFilterProposedVoteState older than history slots
     try std.testing.expectEqual(null, another_maybe_error);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3337
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L3337
 test "state.VoteStateV3.checkAndFilterProposedVoteState older history slots filtered/not filtered" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -5122,7 +5200,7 @@ test "state.VoteStateV3.checkAndFilterProposedVoteState older history slots filt
     try std.testing.expectEqual(null, another_maybe_error);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3404
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L3404
 test "state.VoteStateV3.checkAndFilterProposedVoteState slot not on fork" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -5198,7 +5276,7 @@ test "state.VoteStateV3.checkAndFilterProposedVoteState slot not on fork" {
     try std.testing.expectEqual(VoteError.slots_mismatch, another_maybe_error);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3459
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L3459
 test "state.VoteStateV3.checkAndFilterProposedVoteState root on different fork" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -5251,7 +5329,7 @@ test "state.VoteStateV3.checkAndFilterProposedVoteState root on different fork" 
     try std.testing.expectEqual(VoteError.root_on_different_fork, maybe_error);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3495
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L3495
 test "state.VoteStateV3.checkAndFilterProposedVoteState slot newer than slot history" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -5293,7 +5371,7 @@ test "state.VoteStateV3.checkAndFilterProposedVoteState slot newer than slot his
     try std.testing.expectEqual(VoteError.slots_mismatch, maybe_error);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3521
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L3521
 test "state.VoteStateV3.checkAndFilterProposedVoteState slot all slot hases in update ok" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -5366,7 +5444,7 @@ test "state.VoteStateV3.checkAndFilterProposedVoteState slot all slot hases in u
     try std.testing.expectEqual(null, another_maybe_error);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3574
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L3574
 test "state.VoteStateV3.checkAndFilterProposedVoteState some slot hashes in update ok" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -5438,7 +5516,7 @@ test "state.VoteStateV3.checkAndFilterProposedVoteState some slot hashes in upda
     try std.testing.expectEqual(VoteError.lockout_conflict, another_maybe_error);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3630
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L3630
 test "state.VoteStateV3.checkAndFilterProposedVoteState slot hashes mismatch" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);

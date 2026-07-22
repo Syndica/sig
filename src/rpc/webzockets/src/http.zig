@@ -264,7 +264,8 @@ pub fn validateResponse(buf: []const u8, expected_key: []const u8) HandshakeErro
 // --- Internal helpers ---
 
 /// Returns true if a comma-separated header value contains the given token
-/// (case-insensitive, trims whitespace from value items). E.g. "keep-alive, Upgrade" contains "upgrade".
+/// (case-insensitive, trims whitespace from value items). E.g. "keep-alive, Upgrade" contains
+/// "upgrade".
 fn headerContainsToken(value: []const u8, token: []const u8) bool {
     var it = std.mem.splitScalar(u8, value, ',');
     while (it.next()) |item| {

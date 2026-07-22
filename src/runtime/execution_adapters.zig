@@ -69,7 +69,10 @@ pub const StatusCacheStatusCheckerAdapter = struct {
         return .{ .ctx = self, .checkFn = check };
     }
 
-    /// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/runtime/src/bank/check_transactions.rs#L186
+    /// [agave]
+    // sig fmt: off
+    /// https://github.com/firedancer-io/agave/blob/403d23b/runtime/src/bank/check_transactions.rs#L186
+    // sig fmt: on
     fn check(
         ctx: *const anyopaque,
         msg_hash: *const Hash,

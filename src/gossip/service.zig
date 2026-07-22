@@ -114,7 +114,7 @@ const GOSSIP_PRNG_SEED = 19;
 /// `processMessages` ->
 ///         - receives from `verified_incoming_channel`
 ///         - processes the verified message it has received
-///         - depending on the type of message received, it may put something onto `packet_outgoing_channel`
+/// - depending on the type of message received, it may put something onto `packet_outgoing_channel`
 ///
 ///  `SocketThread.initSender` ->
 ///         - receives from `packet_outgoing_channel`
@@ -132,7 +132,8 @@ pub const GossipService = struct {
     gossip_data_allocator: std.mem.Allocator,
 
     gossip_socket: sig.net.UdpSocket,
-    /// This contact info is mutated by the buildMessages thread (specifically, .shred_version and .wallclock),
+    /// This contact info is mutated by the buildMessages thread (specifically, .shred_version and
+    /// .wallclock),
     /// so it must only be read by that thread, or it needs a synchronization mechanism.
     my_contact_info: ContactInfo,
     my_keypair: KeyPair,
@@ -158,8 +159,10 @@ pub const GossipService = struct {
     gossip_table_rw: RwMux(GossipTable),
     /// manages push message peers
     active_set_rw: RwMux(ActiveSet),
-    /// all gossip data pushed into this will have its wallclock overwritten during `drainPushQueueToGossipTable`.
-    /// NOTE: for all messages appended to this queue, the memory ownership is transfered to this struct.
+    /// all gossip data pushed into this will have its wallclock overwritten during
+    /// `drainPushQueueToGossipTable`.
+    /// NOTE: for all messages appended to this queue, the memory ownership is transfered to this
+    /// struct.
     push_msg_queue_mux: PushMessageQueue,
     /// hashes of failed gossip values from pull responses
     failed_pull_hashes_mux: Mux(HashTimeQueue),
@@ -626,7 +629,8 @@ pub const GossipService = struct {
 
         // keep waiting for new data until,
         // - `exit` isn't set,
-        // - there isn't any data to process in the input channel, in order to block the join until we've finished
+        // - there isn't any data to process in the input channel, in order to block the join until
+        // we've finished
         while (true) {
             self.verified_incoming_channel.waitToReceive(exit_condition) catch break;
 
@@ -867,7 +871,8 @@ pub const GossipService = struct {
 
     /// uses a read lock to first check if the gossip table should be trimmed,
     /// then acquires a write lock to perform the trim.
-    /// NOTE: in practice, trim is rare because the number of global validators is much <10k (the global constant
+    /// NOTE: in practice, trim is rare because the number of global validators is much <10k (the
+    /// global constant
     /// used is UNIQUE_PUBKEY_CAPACITY)
     pub fn attemptGossipTableTrim(self: *GossipService) !void {
         // first check with a read lock
@@ -1548,10 +1553,12 @@ pub const GossipService = struct {
 
     /// logic for handling a pull response message.
     /// successful inserted values, have their origin value timestamps updated.
-    /// failed inserts (ie, too old or duplicate values) are added to the failed pull hashes so that they can be
+    /// failed inserts (ie, too old or duplicate values) are added to the failed pull hashes so that
+    /// they can be
     /// included in the next pull request (so we dont receive them again).
     /// For all pull responses:
-    ///     - PullResponseMessage.gossip_values are inserted into the gossip table or added to failed pull hashes and freed
+    /// - PullResponseMessage.gossip_values are inserted into the gossip table or added to failed
+    /// pull hashes and freed
     fn handleBatchPullResponses(
         self: *GossipService,
         pull_response_messages: []const PullResponseMessage,
@@ -1639,7 +1646,8 @@ pub const GossipService = struct {
     }
 
     /// For each push messages:
-    ///     - PushMessage.gossip_values are filtered and then inserted into the gossip table, filtered values and failed inserts are freed
+    /// - PushMessage.gossip_values are filtered and then inserted into the gossip table, filtered
+    /// values and failed inserts are freed
     pub fn handleBatchPushMessages(
         self: *GossipService,
         batch_push_messages: []const PushMessage,
@@ -1807,7 +1815,8 @@ pub const GossipService = struct {
             // TODO: condition timeout on stake weight:
             // - values from nodes with non-zero stake: epoch duration
             // - values from nodes with zero stake:
-            //   - if all nodes have zero stake: epoch duration (TODO: this might be unreasonably large)
+            // - if all nodes have zero stake: epoch duration (TODO: this might be unreasonably
+            // large)
             //   - if any other nodes have non-zero stake: DATA_TIMEOUT (15s)
             const n_values_removed = try gossip_table.removeOldLabels(now, DEFAULT_EPOCH_DURATION.asMillis());
             self.metrics.table_old_values_removed.add(n_values_removed);
@@ -1932,7 +1941,8 @@ pub const GossipService = struct {
     /// an invalid gossip address.
     pub fn getThreadSafeGossipNodes(
         self: *GossipService,
-        /// the maximum number of nodes to return ( max_size == nodes.len but comptime for init of stack array)
+        /// the maximum number of nodes to return ( max_size == nodes.len but comptime for init of
+        /// stack array)
         comptime MAX_SIZE: usize,
         /// the output slice which will be filled with gossip nodes
         nodes: *[MAX_SIZE]ThreadSafeContactInfo,
@@ -2005,7 +2015,8 @@ pub const GossipService = struct {
             const gossip_value = &gossip_values[i];
             switch (gossip_value.data) {
                 // always allow contact info + node instance to update shred versions.
-                // this also allows us to know who *not* to send pull requests to, if the shred version
+                // this also allows us to know who *not* to send pull requests to, if the shred
+                // version
                 // doesnt match ours
                 .ContactInfo => {},
                 .LegacyContactInfo => {},

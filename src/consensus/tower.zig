@@ -181,7 +181,8 @@ pub const Tower = struct {
 
         for (copy.votes.constSlice()) |vote| {
             if (slot != vote.slot and
-                // This means the validator is trying to vote on a fork incompatible with previous votes.
+                // This means the validator is trying to vote on a fork incompatible with previous
+                // votes.
                 !ancestors.containsSlot(vote.slot))
             {
                 return true;

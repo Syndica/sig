@@ -1,5 +1,9 @@
-//! [fd](https://github.com/firedancer-io/firedancer/blob/33538d35a623675e66f38f77d7dc86c1ba43c935/src/flamenco/runtime/program/zksdk/instructions/fd_zksdk_grouped_ciphertext_3_handles_validity.c)
-//! [agave](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/zk-sdk/src/sigma_proofs/grouped_ciphertext_validity/handles_3.rs)
+//! [fd](
+// sig fmt: off
+//! https://github.com/firedancer-io/firedancer/blob/33538d3/src/flamenco/runtime/program/zksdk/instructions/fd_zksdk_grouped_ciphertext_3_handles_validity.c)
+//! [agave](
+//! https://github.com/anza-xyz/agave/blob/5a9906e/zk-sdk/src/sigma_proofs/grouped_ciphertext_validity/handles_3.rs)
+// sig fmt: on
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -201,7 +205,10 @@ pub const Proof = struct {
         };
     }
 
-    /// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/grouped_ciphertext_validity/handles_3.rs#L163
+    /// [agave]
+    // sig fmt: off
+    /// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/grouped_ciphertext_validity/handles_3.rs#L163
+    // sig fmt: on
     pub fn verify(
         self: Proof,
         first_pubkey: *const ElGamalPubkey,
@@ -231,7 +238,10 @@ pub const Proof = struct {
         }, {}, transcript);
     }
 
-    /// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/batched_grouped_ciphertext_validity/handles_3.rs#L111
+    /// [agave]
+    // sig fmt: off
+    /// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/batched_grouped_ciphertext_validity/handles_3.rs#L111
+    // sig fmt: on
     pub fn verifyBatched(
         self: Proof,
         first_pubkey: *const ElGamalPubkey,
@@ -298,7 +308,10 @@ pub const Proof = struct {
             };
     }
 
-    /// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/grouped_ciphertext_validity/handles_3.rs#L198
+    /// [agave]
+    // sig fmt: off
+    /// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/grouped_ciphertext_validity/handles_3.rs#L198
+    // sig fmt: on
     pub fn verifyDirect(
         self: Proof,
         comptime batched: bool,
@@ -703,7 +716,10 @@ pub const BatchedData = struct {
     }
 };
 
-// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/grouped_ciphertext_validity/handles_3.rs#L362
+// [agave]
+// sig fmt: off
+// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/grouped_ciphertext_validity/handles_3.rs#L362
+// sig fmt: on
 test "correctness" {
     const first_kp = ElGamalKeypair.random();
     const first_pubkey = first_kp.public;
@@ -743,7 +759,10 @@ test "correctness" {
     );
 }
 
-// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/grouped_ciphertext_validity/handles_3.rs#L410-L451
+// [agave]
+// sig fmt: off
+// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/grouped_ciphertext_validity/handles_3.rs#L410-L451
+// sig fmt: on
 test "first/second pubkey zeroed" {
     const first_pubkey = try ElGamalPubkey.fromBytes(@splat(0));
     const second_pubkey = try ElGamalPubkey.fromBytes(@splat(0));
@@ -783,7 +802,10 @@ test "first/second pubkey zeroed" {
     );
 }
 
-// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/grouped_ciphertext_validity/handles_3.rs#L453-L497
+// [agave]
+// sig fmt: off
+// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/grouped_ciphertext_validity/handles_3.rs#L453-L497
+// sig fmt: on
 test "zeroed ciphertext" {
     const first_kp = ElGamalKeypair.random();
     const first_pubkey = first_kp.public;
@@ -831,7 +853,10 @@ test "zeroed ciphertext" {
     );
 }
 
-// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/grouped_ciphertext_validity/handles_3.rs#L501
+// [agave]
+// sig fmt: off
+// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/grouped_ciphertext_validity/handles_3.rs#L501
+// sig fmt: on
 test "proof string" {
     const first_pubkey_string = "EAbHeljb89aEvbxaq2i3T8e7kEh1iZa55G67S4aPN2U=";
     const first_pubkey = try ElGamalPubkey.fromBase64(first_pubkey_string);
@@ -860,7 +885,10 @@ test "proof string" {
     );
 }
 
-// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/batched_grouped_ciphertext_validity/handles_3.rs#L222
+// [agave]
+// sig fmt: off
+// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/batched_grouped_ciphertext_validity/handles_3.rs#L222
+// sig fmt: on
 test "batched correctness" {
     const first_kp = ElGamalKeypair.random();
     const first_pubkey = first_kp.public;
@@ -911,7 +939,10 @@ test "batched correctness" {
     );
 }
 
-// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/batched_grouped_ciphertext_validity/handles_3.rs#L290
+// [agave]
+// sig fmt: off
+// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/batched_grouped_ciphertext_validity/handles_3.rs#L290
+// sig fmt: on
 test "batched proof string" {
     const first_pubkey_string = "mv/4oSby3PfTEG9gG4SDDlkN3b0YTpuyjdX9+40FKQY=";
     const first_pubkey = try ElGamalPubkey.fromBase64(first_pubkey_string);

@@ -1,5 +1,5 @@
 //! Implements much of Agave's AccountLoader functionality.
-//! [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L154
+//! [agave] https://github.com/anza-xyz/agave/blob/bb5a6e7/svm/src/account_loader.rs#L154
 const std = @import("std");
 const std14 = @import("std14");
 const sig = @import("../lib.zig");
@@ -21,20 +21,21 @@ const ComputeBudgetLimits = runtime.program.compute_budget.ComputeBudgetLimits;
 const RuntimeTransaction = runtime.transaction_execution.RuntimeTransaction;
 const TransactionResult = runtime.transaction_execution.TransactionResult;
 
-// [firedancer] https://github.com/firedancer-io/firedancer/blob/ddde57c40c4d4334c25bb32de17f833d4d79a889/src/ballet/txn/fd_txn.h#L116
+// [firedancer]
+// https://github.com/firedancer-io/firedancer/blob/ddde57c/src/ballet/txn/fd_txn.h#L116
 pub const MAX_TX_ACCOUNT_LOCKS = 128;
 
-// [agave] https://github.com/anza-xyz/agave/blob/7b0e13bc6fb4bfd84eb3cd0ace4bd86a451f1913/svm/src/account_loader.rs#L43
+// [agave] https://github.com/anza-xyz/agave/blob/7b0e13b/svm/src/account_loader.rs#L43
 /// Storage cost of the transaction account metadata.
 pub const TRANSACTION_ACCOUNT_BASE_SIZE = 64;
-// [agave] https://github.com/anza-xyz/agave/blob/7b0e13bc6fb4bfd84eb3cd0ace4bd86a451f1913/svm/src/account_loader.rs#L47
+// [agave] https://github.com/anza-xyz/agave/blob/7b0e13b/svm/src/account_loader.rs#L47
 /// Per SIMD-0186, resolved address lookup tables are assigned a base size of 8248
 /// bytes: 8192 bytes for the maximum table size plus 56 bytes for metadata.
 pub const ADDRESS_LOOKUP_TABLE_BASE_SIZE = 8248;
 
 pub const RentDebit = struct { rent_collected: u64, rent_balance: u64 };
 
-// [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L417
+// [agave] https://github.com/anza-xyz/agave/blob/bb5a6e7/svm/src/account_loader.rs#L417
 /// agave's LoadedTransactionAccounts contains a field "program indices". This has been omitted as
 /// it's a Vec<Vec<u8>> whose elements are either [program_id] or [] (when program_id is the native
 /// loader), which seems pointless.
@@ -60,7 +61,7 @@ pub const LoadedTransactionAccounts = struct {
         for (self.accounts.slice()) |account| account.deinit(allocator);
     }
 
-    // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L618
+    // [agave] https://github.com/anza-xyz/agave/blob/bb5a6e7/svm/src/account_loader.rs#L618
     pub fn increase(
         self: *LoadedTransactionAccounts,
         account_data_size: usize,
@@ -120,7 +121,10 @@ pub fn loadTransactionAccounts(
     var zone = tracy.Zone.init(@src(), .{ .name = "loadTransactionAccounts" });
     defer zone.deinit();
 
-    // [agave] https://github.com/anza-xyz/agave/commit/d5757e29aa - formalize_loaded_transaction_data_size hardcoded
+    // [agave]
+    // sig fmt: off
+    // https://github.com/anza-xyz/agave/commit/d5757e29aa - formalize_loaded_transaction_data_size hardcoded
+    // sig fmt: on
     const result = loadTransactionAccountsInner(
         account_reader,
         allocator,
@@ -204,7 +208,8 @@ fn loadTransactionAccountsInner(
             });
         }
 
-        // [agave] https://github.com/anza-xyz/agave/blob/7b0e13bc6fb4bfd84eb3cd0ace4bd86a451f1913/svm/src/account_loader.rs#L611-L635
+        // [agave]
+        // https://github.com/anza-xyz/agave/blob/7b0e13b/svm/src/account_loader.rs#L611-L635
 
         const owner = &prepared.account.owner;
         cont: {
@@ -226,7 +231,8 @@ fn loadTransactionAccountsInner(
                     if (programdata_address.equals(&key)) break :cont;
                 }
                 if (additional_loaded_accounts.contains(programdata_address)) break :cont;
-                // ...and the programdata account exists (if it doesn't, it is *not* a load failure)...
+                // ...and the programdata account exists (if it doesn't, it is *not* a load
+                // failure)...
                 if (try account_reader.get(allocator, programdata_address)) |programdata_account| {
                     defer programdata_account.deinit(allocator);
                     // ...count programdata toward this transaction's total size.
@@ -347,7 +353,7 @@ fn loadAccount(
     };
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/svm/src/account_loader.rs#L293
+// [agave] https://github.com/anza-xyz/agave/blob/bb5a6e7/svm/src/account_loader.rs#L293
 pub fn collectRentFromAccount(
     account: *AccountSharedData,
     rent_collector: *const RentCollector,
@@ -365,7 +371,7 @@ pub fn collectRentFromAccount(
     return CollectedInfo.NoneCollected;
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/996570bcbe7acc4dfd0a6931d024a11a3b4de7a3/svm/src/account_loader.rs#L784
+// [agave] https://github.com/anza-xyz/agave/blob/996570b/svm/src/account_loader.rs#L784
 fn constructInstructionsAccount(
     allocator: Allocator,
     transaction: *const RuntimeTransaction,
@@ -407,7 +413,8 @@ fn constructInstructionsAccount(
         });
     }
 
-    // [agave] https://github.com/anza-xyz/solana-sdk/blob/0fbfb7d1467c1ab0c35e1a3b905b8ba0ac0bf538/instructions-sysvar/src/lib.rs#L68
+    // [agave]
+    // https://github.com/anza-xyz/solana-sdk/blob/0fbfb7d/instructions-sysvar/src/lib.rs#L68
     var data = try runtime.sysvar.instruction.serializeInstructions(
         allocator,
         decompiled_instructions.items,
@@ -851,7 +858,8 @@ test "load accounts with simd 186 and loaderv3 program" {
     );
     defer loaded_accounts.deinit(allocator);
 
-    // fee payer: 64 + 1024 (passed directly), instruction: 64 + 17, program: 64 + bincode(State), programdata: 64 + 1024
+    // fee payer: 64 + 1024 (passed directly), instruction: 64 + 17, program: 64 + bincode(State),
+    // programdata: 64 + 1024
     try std.testing.expectEqual(2357, loaded_accounts.loaded_accounts_data_size);
     // Success path leaves `running_data_size_out` untouched.
     try std.testing.expectEqual(0, running_data_size);

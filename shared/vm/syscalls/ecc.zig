@@ -48,7 +48,7 @@ pub const GroupOp = enum(u64) {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/a3e2a62a942a497e00e4e091e888a1945dcdad53/syscalls/src/lib.rs#L978-L1111
+/// [agave] https://github.com/anza-xyz/agave/blob/a3e2a62/syscalls/src/lib.rs#L978-L1111
 pub fn curvePointValidation(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
@@ -137,7 +137,7 @@ pub fn curvePointValidation(
     registers.set(.r0, @intFromBool(is_error));
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/734a250745533616bd29e86bd69ac90dbc26f38c/syscalls/src/lib.rs#L1210-L1679
+/// [agave] https://github.com/anza-xyz/agave/blob/734a250/syscalls/src/lib.rs#L1210-L1679
 pub fn curveGroupOp(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
@@ -149,7 +149,7 @@ pub fn curveGroupOp(
         return SyscallError.InvalidAttribute;
 
     // Only allow the BLS12-381 syscalls if the feature gate is enabled.
-    // [agave] https://github.com/anza-xyz/agave/blob/734a250745533616bd29e86bd69ac90dbc26f38c/syscalls/src/lib.rs#L1239-L1246
+    // [agave] https://github.com/anza-xyz/agave/blob/734a250/syscalls/src/lib.rs#L1239-L1246
     if (!tc.feature_set.active(.enable_bls12_381_syscall, tc.slot)) {
         switch (curve_id) {
             .bls12_381_g1_be,
@@ -245,7 +245,8 @@ pub fn curveGroupOp(
                             };
                             // NOTE: We write the operation result into a temporary buffer `result`
                             // before copying it in. It's important to perform the operation before
-                            // the result memory access, as the former is a soft-error while the latter
+                            // the result memory access, as the former is a soft-error while the
+                            // latter
                             // will hard-error.
                             const result_ptr = try memory_map.translateType(
                                 [right_size]u8,
@@ -290,7 +291,7 @@ fn edwardsGroupOp(comptime T: type, group_op: GroupOp, left_bytes: [32]u8, right
     }
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/734a250745533616bd29e86bd69ac90dbc26f38c/syscalls/src/lib.rs#L1681-L1797
+/// [agave] https://github.com/anza-xyz/agave/blob/734a250/syscalls/src/lib.rs#L1681-L1797
 pub fn curveMultiscalarMul(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
@@ -423,7 +424,10 @@ const AltBn128GroupOp = packed struct(u8) {
                 },
                 .g2 => {
                     // Expecting 256-bytes (2 uncompressed points).
-                    // [agave] https://github.com/anza-xyz/solana-sdk/blob/bn254%40v3.2.1/bn254/src/addition.rs#L234-L236
+                    // [agave]
+                    // sig fmt: off
+                    // https://github.com/anza-xyz/solana-sdk/blob/bn254%40v3.2.1/bn254/src/addition.rs#L234-L236
+                    // sig fmt: on
                     if (input.len != 256) return error.InvalidLength;
                     try bn254.G2.addSyscall(out[0..128], input[0..256], endian);
                     return out[0..128];
@@ -442,15 +446,22 @@ const AltBn128GroupOp = packed struct(u8) {
                 },
                 .g2 => {
                     // Expecting 160-bytes (1 uncompressed G2 + 32-byte scalar)
-                    // [agave] https://github.com/anza-xyz/solana-sdk/blob/bn254%40v3.2.1/bn254/src/multiplication.rs#L248-L250
+                    // [agave]
+                    // sig fmt: off
+                    // https://github.com/anza-xyz/solana-sdk/blob/bn254%40v3.2.1/bn254/src/multiplication.rs#L248-L250
+                    // sig fmt: on
                     if (input.len != 160) return error.InvalidLength;
                     try bn254.G2.mulSyscall(out[0..128], input[0..160], endian);
                     return out[0..128];
                 },
             },
             .pairing => {
-                // [fd] https://github.com/firedancer-io/firedancer/blob/84a77882d57a9104de202d4bca09f6c369062cd5/src/ballet/bn254/fd_bn254.c#L305-L306
-                // [agave] https://github.com/anza-xyz/solana-sdk/blob/bn254%40v3.2.1/bn254/src/pairing.rs#L66-L69
+                // [fd]
+                // sig fmt: off
+                // https://github.com/firedancer-io/firedancer/blob/84a7788/src/ballet/bn254/fd_bn254.c#L305-L306
+                // [agave]
+                // https://github.com/anza-xyz/solana-sdk/blob/bn254%40v3.2.1/bn254/src/pairing.rs#L66-L69
+                // sig fmt: on
                 if (input.len % 192 != 0) return error.InvalidLength;
 
                 try bn254.pairingSyscall(out[0..32], input, endian);
@@ -462,7 +473,10 @@ const AltBn128GroupOp = packed struct(u8) {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/b11ca828cfc658b93cb86a6c5c70561875abe237/programs/bpf_loader/src/syscalls/mod.rs#L1687-L1789
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/b11ca82/programs/bpf_loader/src/syscalls/mod.rs#L1687-L1789
+// sig fmt: on
 pub fn altBn128GroupOp(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
@@ -491,7 +505,8 @@ pub fn altBn128GroupOp(
         return SyscallError.InvalidAttribute;
     }
 
-    // We've generalized the ID system, but this abstraction leaks one bit-pattern (degree == g2 && op == pairing).
+    // We've generalized the ID system, but this abstraction leaks one bit-pattern (degree == g2 &&
+    // op == pairing).
     // We simply catch it here, although we must be mindful of any future extensions, it may be
     // simpler to rewrite this to use a singular enum for all of the variants.
     if (group_op.op == .pairing and group_op.degree == .g2) {
@@ -791,7 +806,7 @@ pub fn curveDecompress(
     }
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/a3e2a62a942a497e00e4e091e888a1945dcdad53/syscalls/src/lib.rs#L1799-L1876
+/// [agave] https://github.com/anza-xyz/agave/blob/a3e2a62/syscalls/src/lib.rs#L1799-L1876
 pub fn curvePairingMap(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
@@ -804,7 +819,7 @@ pub fn curvePairingMap(
     const g2_points_addr = registers.get(.r4);
     const result_addr = registers.get(.r5);
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a3e2a62a942a497e00e4e091e888a1945dcdad53/syscalls/src/lib.rs#L1825
+    // [agave] https://github.com/anza-xyz/agave/blob/a3e2a62/syscalls/src/lib.rs#L1825
     const cost = tc.compute_budget.bls12_381_one_pair_cost +|
         (tc.compute_budget.bls12_381_additional_pair_cost *| (num_pairs -| 1));
     try tc.consumeCompute(cost);
@@ -819,7 +834,10 @@ pub fn curvePairingMap(
         u8,
         .constant,
         g1_points_addr,
-        // [fd] https://github.com/firedancer-io/firedancer/blob/f02626d7483e689e3724959b11e697406759a3b9/src/flamenco/vm/syscall/fd_vm_syscall_curve.c#L707
+        // [fd]
+        // sig fmt: off
+        // https://github.com/firedancer-io/firedancer/blob/f02626d/src/flamenco/vm/syscall/fd_vm_syscall_curve.c#L707
+        // sig fmt: on
         num_pairs *| 96, // Size of an uncompressed G1 point
         tc.getCheckAligned(),
     );
@@ -827,7 +845,10 @@ pub fn curvePairingMap(
         u8,
         .constant,
         g2_points_addr,
-        // [fd] https://github.com/firedancer-io/firedancer/blob/f02626d7483e689e3724959b11e697406759a3b9/src/flamenco/vm/syscall/fd_vm_syscall_curve.c#L710
+        // [fd]
+        // sig fmt: off
+        // https://github.com/firedancer-io/firedancer/blob/f02626d/src/flamenco/vm/syscall/fd_vm_syscall_curve.c#L710
+        // sig fmt: on
         num_pairs *| 192, // Size of an uncompressed G2 point
         tc.getCheckAligned(),
     );

@@ -1,5 +1,9 @@
-//! [fd](https://github.com/firedancer-io/firedancer/blob/33538d35a623675e66f38f77d7dc86c1ba43c935/src/flamenco/runtime/program/zksdk/instructions/fd_zksdk_zero_ciphertext.c)
-//! [agave](https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/zero_ciphertext.rs)
+//! [fd](
+// sig fmt: off
+//! https://github.com/firedancer-io/firedancer/blob/33538d3/src/flamenco/runtime/program/zksdk/instructions/fd_zksdk_zero_ciphertext.c)
+//! [agave](
+//! https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/zero_ciphertext.rs)
+// sig fmt: on
 
 const std = @import("std");
 const sig = @import("../../lib.zig");
@@ -83,9 +87,15 @@ pub const Proof = struct {
         comptime var session = Transcript.getSession(contract);
         defer session.finish();
 
-        // [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.1/zk-sdk/src/sigma_proofs/zero_ciphertext.rs#L104
+        // [agave]
+        // sig fmt: off
+        // https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.1/zk-sdk/src/sigma_proofs/zero_ciphertext.rs#L104
+        // sig fmt: on
         try transcript.append(&session, .validate_pubkey, "pubkey", pubkey.*);
-        // [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.1/zk-sdk/src/sigma_proofs/zero_ciphertext.rs#L105-L106
+        // [agave]
+        // sig fmt: off
+        // https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.1/zk-sdk/src/sigma_proofs/zero_ciphertext.rs#L105-L106
+        // sig fmt: on
         try transcript.append(&session, .validate_ciphertext, "ciphertext", ciphertext.*);
 
         transcript.appendDomSep(&session, .@"zero-ciphertext-proof");
@@ -242,7 +252,10 @@ pub const Data = struct {
     }
 };
 
-// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/zero_ciphertext.rs#L209
+// [agave]
+// sig fmt: off
+// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/zero_ciphertext.rs#L209
+// sig fmt: on
 test "sanity" {
     var kp = ElGamalKeypair.random();
 
@@ -270,7 +283,10 @@ test "sanity" {
 test "identity cases" {
     var kp = ElGamalKeypair.random();
 
-    // [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/zero_ciphertext.rs#L250-L258
+    // [agave]
+    // sig fmt: off
+    // https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/zero_ciphertext.rs#L250-L258
+    // sig fmt: on
     {
         var prover_transcript = Transcript.initTest("Test");
         var verifier_transcript = Transcript.initTest("Test");
@@ -285,7 +301,10 @@ test "identity cases" {
     }
 
     // invalid and proof verification should always reject it.
-    // [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/zero_ciphertext.rs#L260-L278
+    // [agave]
+    // sig fmt: off
+    // https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/zero_ciphertext.rs#L260-L278
+    // sig fmt: on
     {
         var prover_transcript = Transcript.initTest("Test");
         var verifier_transcript = Transcript.initTest("Test");
@@ -327,7 +346,10 @@ test "identity cases" {
     }
 
     // if the public key is zeroed, then the proof should always reject
-    // [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/zero_ciphertext.rs#L280-L292
+    // [agave]
+    // sig fmt: off
+    // https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/zero_ciphertext.rs#L280-L292
+    // sig fmt: on
     {
         var prover_transcript = Transcript.initTest("Test");
         var verifier_transcript = Transcript.initTest("Test");
@@ -343,7 +365,10 @@ test "identity cases" {
     }
 }
 
-// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/zero_ciphertext.rs#L296
+// [agave]
+// sig fmt: off
+// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/zero_ciphertext.rs#L296
+// sig fmt: on
 test "proof string" {
     const pubkey_string = "iKeujRa2kL82Az2fl7MXHYVMc0XJFoGZckD7LvPtSU8=";
     const pubkey = try ElGamalPubkey.fromBase64(pubkey_string);

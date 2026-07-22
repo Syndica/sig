@@ -35,7 +35,8 @@ const bp = sig.zksdk.bulletproofs;
 ///
 /// - Bulletproofs paper (Bünz et al., 2018): https://eprint.iacr.org/2017/1066
 /// - Dalek Bulletproofs implementation and docs: https://doc.dalek.rs/bulletproofs/
-/// - Agave IPP implementation: https://github.com/anza-xyz/agave/blob/93699947720534741b2b4d9b6e1696d81e386dcc/zk-sdk/src/range_proof/inner_product.rs
+/// - Agave IPP implementation:
+/// https://github.com/anza-xyz/agave/blob/9369994/zk-sdk/src/range_proof/inner_product.rs
 pub fn Proof(comptime bit_size: u64) type {
     const logn: u64 = std.math.log2_int(u64, bit_size);
     const max_elements =
@@ -65,7 +66,8 @@ pub fn Proof(comptime bit_size: u64) type {
             .{ .label = "n", .type = .u64 },
         } ++ (&triple) ** logn;
 
-        /// Modifies the mutable array pointers in undefined ways, so do not rely on the value of them after `init`.
+        /// Modifies the mutable array pointers in undefined ways, so do not rely on the value of
+        /// them after `init`.
         pub fn init(
             Q: Ristretto255,
             G_factors: *const [bit_size]Scalar,
@@ -368,7 +370,10 @@ fn batchInvert(comptime N: u32, scalars: *[N]Scalar) Scalar {
     return allinv;
 }
 
-// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/d789e2a811c3912a43c1c0a52a2ac1079ce85f6c/zk-sdk/src/range_proof/inner_product.rs#L474
+// [agave]
+// sig fmt: off
+// https://github.com/solana-program/zk-elgamal-proof/blob/d789e2a/zk-sdk/src/range_proof/inner_product.rs#L474
+// sig fmt: on
 test "basic correctness" {
     const n: u64 = 32;
 

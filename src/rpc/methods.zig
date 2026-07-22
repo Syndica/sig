@@ -274,10 +274,12 @@ pub const GetHealth = struct {
     /// The HTTP GET /health endpoint always returns 200 with "ok", "behind", or "unknown".
     ///
     /// See agave: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2806-L2818
-    /// See agave: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-api/src/custom_error.rs#L49-L50
+    /// See agave:
+    /// https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-api/src/custom_error.rs#L49-L50
     pub const Response = RpcHealthStatus;
 
-    /// JSON-RPC error code for NodeUnhealthy, matching agave's JSON_RPC_SERVER_ERROR_NODE_UNHEALTHY.
+    /// JSON-RPC error code for NodeUnhealthy, matching agave's
+    /// JSON_RPC_SERVER_ERROR_NODE_UNHEALTHY.
     /// See: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-api/src/custom_error.rs#L16
     pub const node_unhealthy_code: i64 = -32005;
 };
@@ -688,7 +690,8 @@ pub const GetBlock = struct {
         pub const UiInnerInstructions = struct {
             inner: []const parse_instruction.UiInnerInstructions = &.{},
 
-            /// Convert ledger InnerInstructions to RPC UiInnerInstructions (base58 encoding instruction data).
+            /// Convert ledger InnerInstructions to RPC UiInnerInstructions (base58 encoding
+            /// instruction data).
             pub fn fromLedger(
                 arena: std.mem.Allocator,
                 inner_instructions: []const sig.ledger.transaction_status.InnerInstructions,
@@ -747,7 +750,8 @@ pub const GetBlock = struct {
         pub const UiTransactionTokenBalances = struct {
             inner: []const UiTransactionTokenBalance = &.{},
 
-            /// Convert resolved TransactionTokenBalance slice to RPC UiTransactionTokenBalance wire format.
+            /// Convert resolved TransactionTokenBalance slice to RPC UiTransactionTokenBalance wire
+            /// format.
             pub fn fromLedger(
                 arena: std.mem.Allocator,
                 balances: []const sig.ledger.transaction_status.TransactionTokenBalance,
@@ -846,7 +850,8 @@ pub const GetBlock = struct {
             programId: Pubkey,
             data: struct { []const u8, enum { base64 } },
 
-            /// Convert ledger TransactionReturnData to RPC UiTransactionReturnData (base64 encoded).
+            /// Convert ledger TransactionReturnData to RPC UiTransactionReturnData (base64
+            /// encoded).
             pub fn fromLedger(
                 arena: std.mem.Allocator,
                 data: sig.ledger.transaction_status.TransactionReturnData,
@@ -1146,7 +1151,7 @@ pub const GetGenesisHash = struct {
 
 // TODO: getHealth
 
-/// [agave] https://github.com/anza-xyz/agave/blob/d70b1714b1153674c16e2b15b68790d274dfe953/rpc/src/rpc.rs#L3580-L3586
+/// [agave] https://github.com/anza-xyz/agave/blob/d70b171/rpc/src/rpc.rs#L3580-L3586
 pub const GetFeeForMessage = struct {
     /// Base64-encoded serialized VersionedMessage
     message: []const u8,
@@ -1271,7 +1276,8 @@ pub const GetLeaderSchedule = struct {
         identity: ?[]const u8 = null,
     };
 
-    /// [agave] RpcLeaderSchedule = HashMap<String, Vec<usize>>; returns null when epoch not in cache
+    /// [agave] RpcLeaderSchedule = HashMap<String, Vec<usize>>; returns null when epoch not in
+    /// cache
     pub const Response = ?LeaderScheduleValue;
 
     pub const LeaderScheduleValue = struct {
@@ -1455,7 +1461,8 @@ pub const GetSlotLeader = struct {
 
 /// Returns the slot leaders for a range of slots.
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L973-L1007
-/// [agave] MAX_GET_SLOT_LEADERS: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/request.rs#L151
+/// [agave] MAX_GET_SLOT_LEADERS:
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/request.rs#L151
 pub const GetSlotLeaders = struct {
     start_slot: Slot,
     limit: u64,
@@ -1539,7 +1546,8 @@ pub const GetTokenAccountsByOwner = struct {
     filter: TokenAccountsFilter,
     config: ?Config = null,
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/config.rs#L189-L192
+    /// [agave]
+    /// https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-types/src/config.rs#L189-L192
     pub const TokenAccountsFilter = union(enum) {
         mint: Pubkey,
         programId: Pubkey,
@@ -1653,7 +1661,8 @@ pub const GetTokenLargestAccounts = struct {
         address: Pubkey,
         ui_token_amount: account_codec.parse_token.UiTokenAmount,
 
-        // NOTE: re-implemented here due to UiTokenAmount needing to be flattened for this RPC method.
+        // NOTE: re-implemented here due to UiTokenAmount needing to be flattened for this RPC
+        // method.
         pub fn jsonStringify(self: TokenAccountBalancePair, jw: anytype) @TypeOf(jw.*).Error!void {
             try jw.beginObject();
             try jw.objectField("address");
@@ -1775,7 +1784,8 @@ pub const GetTransaction = struct {
             slot: Slot,
             /// Transaction object
             transaction: GetBlock.Response.EncodedTransactionWithStatusMeta,
-            /// estimated production time, as Unix timestamp (seconds since the Unix epoch) of when the transaction was processed. null if not available
+            /// estimated production time, as Unix timestamp (seconds since the Unix epoch) of when
+            /// the transaction was processed. null if not available
             block_time: ?i64,
 
             pub fn jsonStringify(self: @This(), jw: anytype) !void {
@@ -1859,11 +1869,11 @@ pub const GetVoteAccounts = struct {
 
     /// Limit the length of the `epoch_credits` array for each validator in a `get_vote_accounts`
     /// response.
-    /// See: https://github.com/anza-xyz/agave/blob/cd00ceb1fdf43f694caf7af23cb87987922fce2c/rpc-client-types/src/request.rs#L159
+    /// See: https://github.com/anza-xyz/agave/blob/cd00ceb/rpc-client-types/src/request.rs#L159
     pub const MAX_RPC_VOTE_ACCOUNT_INFO_EPOCH_CREDITS_HISTORY: usize = 5;
 
     /// Validators that are this number of slots behind are considered delinquent.
-    /// See: https://github.com/anza-xyz/agave/blob/cd00ceb1fdf43f694caf7af23cb87987922fce2c/rpc-client-types/src/request.rs#L162
+    /// See: https://github.com/anza-xyz/agave/blob/cd00ceb/rpc-client-types/src/request.rs#L162
     pub const DELINQUENT_VALIDATOR_SLOT_DISTANCE: u64 = 128;
 
     pub const Config = struct {
@@ -2139,7 +2149,8 @@ pub const common = struct {
 };
 
 /// Health check status for the RPC node.
-/// Analogous to [RpcHealthStatus](https://github.com/anza-xyz/agave/blob/8803776d/rpc/src/rpc_health.rs#L11-L16)
+/// Analogous to [RpcHealthStatus](
+/// https://github.com/anza-xyz/agave/blob/8803776d/rpc/src/rpc_health.rs#L11-L16)
 pub const RpcHealthStatus = union(enum) {
     /// Node is healthy
     ok,

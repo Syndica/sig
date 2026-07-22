@@ -38,7 +38,8 @@ const BPF_ALIGN_OF_U128 = serialize.BPF_ALIGN_OF_U128;
 /// Also doubles as the maximum possible size of any instruction.
 pub const MAX_DATA_LEN = 10_240;
 
-/// SIMD-0339 based calculation of AccountInfo translation byte size. Fixed size of **80 bytes** for each AccountInfo broken down as:
+/// SIMD-0339 based calculation of AccountInfo translation byte size. Fixed size of **80 bytes** for
+/// each AccountInfo broken down as:
 /// - 32 bytes for account address
 /// - 32 bytes for owner address
 /// - 8 bytes for lamport balance
@@ -53,8 +54,10 @@ const ACCOUNT_INFO_BYTE_SIZE = 80;
 /// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.1/program-runtime/src/cpi.rs#L139
 const MAX_CPI_ACCOUNT_INFOS: usize = 255;
 
-/// [agave] StableVec: https://github.com/anza-xyz/solana-sdk/blob/c54daf5355ad43448786cafdb66ff07d3add8be5/stable-layout/src/stable_vec.rs#L30
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/0666fa5999750153070e5c43d64813467bfdc38e/stable-layout/src/stable_instruction.rs#L33
+/// [agave] StableVec:
+/// https://github.com/anza-xyz/solana-sdk/blob/c54daf5/stable-layout/src/stable_vec.rs#L30
+/// [agave]
+/// https://github.com/anza-xyz/solana-sdk/blob/0666fa5/stable-layout/src/stable_instruction.rs#L33
 const StableInstructionRust = extern struct {
     // StableVec(AccountMetaRust)
     accounts_addr: u64,
@@ -68,7 +71,8 @@ const StableInstructionRust = extern struct {
     program_id: Pubkey,
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L577
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/04fd7a0/programs/bpf_loader/src/syscalls/cpi.rs#L577
 const StableInstructionC = extern struct {
     program_id_addr: u64,
     accounts_addr: u64,
@@ -77,7 +81,7 @@ const StableInstructionC = extern struct {
     data_len: u64,
 };
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/f7a6475ae883e0216eaeab42f525833f667965a0/instruction/src/account_meta.rs#L25
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/f7a6475/instruction/src/account_meta.rs#L25
 pub const AccountMetaRust = extern struct {
     /// An account's public key.
     pubkey: Pubkey,
@@ -87,14 +91,15 @@ pub const AccountMetaRust = extern struct {
     is_writable: u8,
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L588
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/04fd7a0/programs/bpf_loader/src/syscalls/cpi.rs#L588
 const AccountMetaC = extern struct {
     pubkey_addr: u64,
     is_writable: u8,
     is_signer: u8,
 };
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/ddf107050306fa07c714f7c37abcfab1d1edae26/account-info/src/lib.rs#L22
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/ddf1070/account-info/src/lib.rs#L22
 pub const AccountInfoRust = extern struct {
     key_addr: u64,
     lamports_addr: Rc(RefCell(u64)),
@@ -106,7 +111,10 @@ pub const AccountInfoRust = extern struct {
     executable: u8,
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/359d7eb2b68639443d750ffcec0c7e358f138975/bpf_loader/src/syscalls/cpi.rs#L597
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/04fd7a0/359d7eb2b68639443d750ffcec0c7e358f138975/bpf_loader/src/syscalls/cpi.rs#L597
+// sig fmt: on
 pub const AccountInfoC = extern struct {
     key_addr: u64,
     lamports_addr: u64,
@@ -122,7 +130,8 @@ pub const AccountInfoC = extern struct {
 const RC_VALUE_OFFSET = @sizeOf(usize) * 2;
 
 /// [rust] https://doc.rust-lang.org/src/alloc/rc.rs.html#281-289
-/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L2971
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/04fd7a0/programs/bpf_loader/src/syscalls/cpi.rs#L2971
 fn RcBox(comptime T: type) type {
     return extern struct {
         strong: usize = 0,
@@ -162,7 +171,8 @@ fn RefCell(comptime T: type) type {
     };
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L57
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/359d7eb/programs/bpf_loader/src/syscalls/cpi.rs#L57
 fn VmValue(comptime T: type) type {
     return union(enum) {
         vm_address: struct {
@@ -189,7 +199,8 @@ fn VmValue(comptime T: type) type {
     };
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L38
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/359d7eb/programs/bpf_loader/src/syscalls/cpi.rs#L38
 fn checkAccountInfoPtr(
     ic: *const InstructionContext,
     vm_addr: u64,
@@ -212,7 +223,8 @@ fn checkAccountInfoPtr(
 /// At the start of a CPI, this can be different from the data stored in the
 /// corresponding BorrowedAccount, and needs to be synched.
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L96
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/359d7eb/programs/bpf_loader/src/syscalls/cpi.rs#L96
 const CallerAccount = struct {
     lamports: *align(1) u64,
     owner: *Pubkey,
@@ -311,7 +323,10 @@ const CallerAccount = struct {
         // in vm space so they need to be translated.
         const lamports: *align(1) u64 = blk: {
             // Models the RefCell as_ptr() access here
-            // [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L151
+            // [agave]
+            // sig fmt: off
+            // https://github.com/anza-xyz/agave/blob/359d7eb/programs/bpf_loader/src/syscalls/cpi.rs#L151
+            // sig fmt: on
             const lamports_addr: u64 = @intFromPtr(account_info.lamports_addr.deref().asPtr());
 
             // Double translate lamports out of RefCell
@@ -532,7 +547,8 @@ const CallerAccount = struct {
 /// When true is returned, the caller account must be updated after CPI. This
 /// is only set for direct mapping when the pointer may have changed.
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L1201
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/04fd7a0/programs/bpf_loader/src/syscalls/cpi.rs#L1201
 fn updateCalleeAccount(
     allocator: std.mem.Allocator,
     ic: *const InstructionContext,
@@ -622,8 +638,10 @@ const TranslatedAccount = struct {
 /// Implements SyscallInvokeSigned::translate_accounts for both AccountInfoRust & AccountInfoC.
 /// Reads the AccountInfos from VM and converting them into CallerAccounts + metadata index.
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L498
-/// [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L725
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/359d7eb/programs/bpf_loader/src/syscalls/cpi.rs#L498
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/359d7eb/programs/bpf_loader/src/syscalls/cpi.rs#L725
 fn translateAccounts(
     comptime AccountType: type,
     allocator: std.mem.Allocator,
@@ -677,7 +695,8 @@ fn translateAccounts(
     // The account-info translation cost is consumed unconditionally — the
     // `increase_cpi_account_info_limit` feature gate was removed in agave
     // v4.1.0-beta.1.
-    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.1/program-runtime/src/cpi.rs#L1031-L1036
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/v4.1.0-beta.1/program-runtime/src/cpi.rs#L1031-L1036
     const account_info_bytes = account_infos.len *| ACCOUNT_INFO_BYTE_SIZE;
     try tc.consumeCompute(account_info_bytes / tc.compute_budget.cpi_bytes_per_unit);
 
@@ -807,8 +826,10 @@ fn translateAccounts(
 
 /// Converts a StableInstruction type in VM memory (depending on AccountInfoType) into Instruction.
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L438
-/// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L650
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/04fd7a0/programs/bpf_loader/src/syscalls/cpi.rs#L438
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/04fd7a0/programs/bpf_loader/src/syscalls/cpi.rs#L650
 fn translateInstruction(
     allocator: std.mem.Allocator,
     ic: *const InstructionContext,
@@ -866,7 +887,8 @@ fn translateInstruction(
 
     // The translation cost is consumed unconditionally — agave charges it after
     // check_instruction_size(), regardless of `loosen_cpi_size_restriction`.
-    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.1/program-runtime/src/cpi.rs#L572-L580
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/v4.1.0-beta.1/program-runtime/src/cpi.rs#L572-L580
     // The `increase_cpi_account_info_limit` feature gate was removed in agave
     // v4.1.0-beta.1, so the account-meta cost is now always charged.
     // NOTE: Agave uses the same size here (34 bytes) no matter which type it is.
@@ -908,13 +930,16 @@ fn translateInstruction(
     };
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/mod.rs#L81
+// [agave]
+// https://github.com/anza-xyz/agave/blob/04fd7a0/programs/bpf_loader/src/syscalls/mod.rs#L81
 const MAX_SIGNERS = 16;
 
 /// Reads a slice of seed slices from the VM and converts them into program address Pubkeys.
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L511
-/// [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L735
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/bb5a6e7/programs/bpf_loader/src/syscalls/cpi.rs#L511
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/bb5a6e7/programs/bpf_loader/src/syscalls/cpi.rs#L735
 fn translateSigners(
     ic: *const InstructionContext,
     memory_map: *const MemoryMap,
@@ -1015,7 +1040,8 @@ fn accountReallocRegion(
 /// This method updates caller_account so the CPI caller can see the callee's
 /// changes.
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/bb5a6e773d5f41388a962c5c4f96f5f2ef2209d0/programs/bpf_loader/src/syscalls/cpi.rs#L1335
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/bb5a6e7/programs/bpf_loader/src/syscalls/cpi.rs#L1335
 fn updateCallerAccount(
     ic: *const InstructionContext,
     memory_map: *const MemoryMap,
@@ -1143,7 +1169,8 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
                 ic.ixn_info.program_meta.pubkey,
             );
 
-            // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/cpi.rs#L193-L222
+            // [agave]
+            // https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/cpi.rs#L193-L222
             if (ids.NATIVE_LOADER_ID.equals(&instruction.program_id) or
                 bpf_loader_program.v1.ID.equals(&instruction.program_id) or
                 bpf_loader_program.v2.ID.equals(&instruction.program_id) or
@@ -1156,7 +1183,8 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
                     break :blk false;
                 }))
             {
-                // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/cpi.rs#L219
+                // [agave]
+                // https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/cpi.rs#L219
                 return SyscallError.ProgramNotSupported;
             }
 
@@ -1266,11 +1294,16 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
                                 else
                                     switch (region.host_memory) {
                                         // TODO: Fix this!!
-                                        // After `virtual_address_space_adjustments` memory regions may be switched between writable/non-writable
-                                        // during CPI. Given our current MemoryState and HostMemory couples the writability of a region to the slice type
-                                        // we are unable to promote a constant region to a mutable region. In practice during runtime all region host memory
-                                        // is allocated so constCast should okay however this is not something we should rely on. We need to rework our
-                                        // HostMemory and MemoryState implementation to decouple the writability of a region from the slice type.
+                                        // After `virtual_address_space_adjustments` memory regions
+                                        // may be switched between writable/non-writable
+                                        // during CPI. Given our current MemoryState and HostMemory
+                                        // couples the writability of a region to the slice type
+                                        // we are unable to promote a constant region to a mutable
+                                        // region. In practice during runtime all region host memory
+                                        // is allocated so constCast should okay however this is not
+                                        // something we should rely on. We need to rework our
+                                        // HostMemory and MemoryState implementation to decouple the
+                                        // writability of a region from the slice type.
                                         .constant => |slice| @constCast(slice),
                                         .mutable => |slice| slice,
                                     }[0..callee_account.account.data.len];
@@ -1282,7 +1315,10 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
                                 // modify_memory_region_of_account. CPI can
                                 // change an account's writability (e.g.,
                                 // assign), so the payload may need to flip.
-                                // [agave] https://github.com/anza-xyz/agave/blob/v4.0/program-runtime/src/serialization.rs#L28-L34
+                                // [agave]
+                                // sig fmt: off
+                                // https://github.com/anza-xyz/agave/blob/v4.0/program-runtime/src/serialization.rs#L28-L34
+                                // sig fmt: on
                                 region.access_violation_handler_payload =
                                     if (mutable) translated.index_in_transaction else null;
                             },
@@ -1412,7 +1448,8 @@ const TestAccount = struct {
     is_writable: bool,
     executable: bool,
 
-    // [agave] https://github.com/anza-xyz/agave/blob/359d7eb2b68639443d750ffcec0c7e358f138975/programs/bpf_loader/src/syscalls/cpi.rs#L2895
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/359d7eb/programs/bpf_loader/src/syscalls/cpi.rs#L2895
     fn intoAccountInfo(
         self: *const TestAccount,
         allocator: std.mem.Allocator,
@@ -1967,7 +2004,8 @@ test "translateSigners" {
     const derive_key, const bump_seed = pubkey_utils.findProgramAddress(&.{"foo"}, program_id).?;
 
     // mock_signers(&.{"foo", &.{bump_seed}}, vm_addr)
-    // [agave] https://github.com/anza-xyz/agave/blob/04fd7a006d8b400096e14a69ac16e10dc3f6018a/programs/bpf_loader/src/syscalls/cpi.rs#L2815
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/04fd7a0/programs/bpf_loader/src/syscalls/cpi.rs#L2815
     const signers: []const []const u8 = &.{ "foo", &.{bump_seed} };
     const total_size = @sizeOf(VmSlice) +
         (signers.len * @sizeOf(VmSlice)) +

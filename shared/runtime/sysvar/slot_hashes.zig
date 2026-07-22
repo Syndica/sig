@@ -9,7 +9,7 @@ const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/slot-hashes/src/lib.rs#L43
+/// [agave] https://github.com/anza-xyz/agave/blob/8db563d/sdk/slot-hashes/src/lib.rs#L43
 pub const SlotHashes = struct {
     entries: std14.BoundedArray(Entry, MAX_ENTRIES),
 
@@ -47,7 +47,8 @@ pub const SlotHashes = struct {
 
     pub fn add(self: *SlotHashes, slot: Slot, hash: Hash) void {
         const index = std.sort.lowerBound(Entry, self.entries.constSlice(), slot, Entry.searchCmp);
-        // If the slot is to old, do not insert. Otherwise if the entries are full, pop the last entry.
+        // If the slot is to old, do not insert. Otherwise if the entries are full, pop the last
+        // entry.
         if (index == MAX_ENTRIES) return;
 
         // If the entries are full, pop the last entry to make space for the new one.
@@ -57,7 +58,8 @@ pub const SlotHashes = struct {
         if (index < self.entries.len and self.entries.buffer[index].slot == slot) {
             self.entries.buffer[index].hash = hash;
         } else {
-            // SAFETY: entries has space for at least one more entry due to popping the last entry if it was full.
+            // SAFETY: entries has space for at least one more entry due to popping the last entry
+            // if it was full.
             self.entries.insert(index, .{ .slot = slot, .hash = hash }) catch unreachable;
         }
     }

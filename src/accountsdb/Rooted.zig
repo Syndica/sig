@@ -865,7 +865,8 @@ pub const LargestTracker = struct {
                 // NOTE: removeMin only runs on two unavoidable cases:
                 // * When removing the current min (lamports -> 0)
                 // * displacement (a new entry knocked the min entry out)
-                // Both cases require finding the second-smallest, which we don't track (just 20 entries).
+                // Both cases require finding the second-smallest, which we don't track (just 20
+                // entries).
                 self.removeMin();
                 self.put(pubkey, lamports);
                 self.recomputeMin();

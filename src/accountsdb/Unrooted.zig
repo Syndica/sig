@@ -256,7 +256,8 @@ pub fn getByOwnerOwned(
             if (!acc.owner.equals(&owner)) continue;
             if (acc.lamports == 0) continue;
 
-            // Same pubkey can appear in multiple unrooted slots; keep only the latest (highest slot).
+            // Same pubkey can appear in multiple unrooted slots; keep only the latest (highest
+            // slot).
             const gop = try map.getOrPut(allocator, pk);
             if (gop.found_existing and index.slot <= gop.value_ptr[0]) continue;
             if (gop.found_existing) gop.value_ptr[1].deinit(allocator);

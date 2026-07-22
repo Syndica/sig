@@ -63,7 +63,8 @@ const CompressedScalar = [32]u8;
 /// catch certain types of invalid signatures, incorrectly allowing them, thus breaking consensus
 /// with the rest of the network.
 ///
-/// Perhaps in the future we can move Solana over to using ed25519-zebra or move from a `verify_strict`
+/// Perhaps in the future we can move Solana over to using ed25519-zebra or move from a
+/// `verify_strict`
 /// loop to a `verify` one, allowing batched verification.
 pub fn verifyBatchOverSingleMessage(
     max: comptime_int,
@@ -160,6 +161,7 @@ pub fn affineEqual(a: Edwards25519, b: Edwards25519) bool {
 /// assumption that `a.Z == 1`.
 ///
 /// There are 8 points with an order <= 8:
+// sig fmt: off
 /// Order | Point                   | Serialize Point
 /// 1       (0,         1)            0100000000000000000000000000000000000000000000000000000000000000
 /// 2       (0,         2^255 - 20)   ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f
@@ -169,13 +171,14 @@ pub fn affineEqual(a: Edwards25519, b: Edwards25519) bool {
 /// 8       ...                       c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa
 /// 8       ...                       26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05
 /// 8       ...                       26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85
-///
+// sig fmt: on
 /// Since in this function we know that Z will be 1, we don't need to perform any
 /// normalization to cancel out the projective denominator, instead just directly performing
 /// checks on the x,y coordinates. You'll notice that low-order points when negated still
 /// retain their low-order nature, so there are 4 "pairs" of low order points. This means
-/// just checking a single coordinate of the point is enough to determine if it's in the blacklist,
-/// meaning we only need 4 equivalence checks to cover all of the pairs.
+/// just checking a single coordinate of the point is enough to
+/// determine if it's in the blacklist, meaning we only need 4
+/// equivalence checks to cover all of the pairs.
 ///
 pub fn affineLowOrder(a: Edwards25519) !void {
     // y coordinate of points 5 and 6
@@ -380,7 +383,10 @@ pub fn doubleBaseMul(a: CompressedScalar, A: Edwards25519, b: CompressedScalar) 
     return Q.toPoint();
 }
 
-/// Ported from: https://github.com/dalek-cryptography/curve25519-dalek/blob/c3a82a8a38a58aee500a20bde1664012fcfa83ba/curve25519-dalek/src/scalar.rs#L958
+/// Ported from:
+// sig fmt: off
+/// https://github.com/dalek-cryptography/curve25519-dalek/blob/c3a82a8/curve25519-dalek/src/scalar.rs#L958
+// sig fmt: on
 fn asNaf(a: CompressedScalar, w: comptime_int) [256]i8 {
     std.debug.assert(w >= 2);
     std.debug.assert(w <= 8);
@@ -427,7 +433,9 @@ fn asNaf(a: CompressedScalar, w: comptime_int) [256]i8 {
 }
 
 test asNaf {
-    // https://github.com/dalek-cryptography/curve25519-dalek/blob/c3a82a8a38a58aee500a20bde1664012fcfa83ba/curve25519-dalek/src/scalar.rs#L1495-L1513
+    // sig fmt: off
+    // https://github.com/dalek-cryptography/curve25519-dalek/blob/c3a82a8/curve25519-dalek/src/scalar.rs#L1495-L1513
+    // sig fmt: on
     const A_SCALAR: [32]u8 = .{
         0x1a, 0x0e, 0x97, 0x8a, 0x90, 0xf6, 0x62, 0x2d, 0x37, 0x47, 0x02, 0x3f, 0x8a, 0xd8,
         0x26, 0x4d, 0xa7, 0x58, 0xaa, 0x1b, 0x88, 0xe0, 0x40, 0xd1, 0x58, 0x9e, 0x7b, 0x7f,
@@ -481,7 +489,9 @@ test "wnaf reconstruction" {
 }
 
 test doubleBaseMul {
-    // https://github.com/dalek-cryptography/curve25519-dalek/blob/c3a82a8a38a58aee500a20bde1664012fcfa83ba/curve25519-dalek/src/edwards.rs#L1812-L1835
+    // sig fmt: off
+    // https://github.com/dalek-cryptography/curve25519-dalek/blob/c3a82a8/curve25519-dalek/src/edwards.rs#L1812-L1835
+    // sig fmt: on
     const A_TIMES_BASEPOINT: [32]u8 = .{
         0xea, 0x27, 0xe2, 0x60, 0x53, 0xdf, 0x1b, 0x59, 0x56, 0xf1, 0x4d, 0x5d, 0xec, 0x3c, 0x34,
         0xc3, 0x84, 0xa2, 0x69, 0xb7, 0x4c, 0xc3, 0x80, 0x3e, 0xa8, 0xe2, 0xe7, 0xc9, 0x42, 0x5e,

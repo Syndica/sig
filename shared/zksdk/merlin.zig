@@ -236,7 +236,10 @@ pub const Transcript = struct {
         grouped_3: zksdk.elgamal.GroupedElGamalCiphertext(3),
     };
 
-    /// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/lib.rs#L36
+    /// [agave]
+    // sig fmt: off
+    /// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/lib.rs#L36
+    // sig fmt: on
     const TRANSCRIPT_DOMAIN = "solana-zk-elgamal-proof-program-v1";
 
     pub fn init(comptime seperator: DomainSeperator) Transcript {
@@ -471,9 +474,11 @@ pub const Transcript = struct {
 
         pub inline fn finish(comptime self: *Session) void {
             // For performance, we have certain computations (specifically in `init` functions)
-            // which skip the last parts of transcript when they aren't needed (i.e ciphertext_ciphertext proof).
+            // which skip the last parts of transcript when they aren't needed (i.e
+            // ciphertext_ciphertext proof).
             //
-            // By performing this check, we still ensure that they do those extra computations when in Debug mode,
+            // By performing this check, we still ensure that they do those extra computations when
+            // in Debug mode,
             // but are allowed to skip them in a release build.
             if (builtin.mode == .Debug and !self.err and self.i != self.contract.len) {
                 @compileError("contract unfulfilled");

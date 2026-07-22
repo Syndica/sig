@@ -32,7 +32,8 @@ const BYTE_PER_GIB = 1024 * BYTE_PER_MIB;
 /// The scope for the logger used in this file.
 const Logger = sig.trace.Logger("accountsdb.download");
 
-/// Analogous to [PeerSnapshotHash](https://github.com/anza-xyz/agave/blob/f868aa38097094e4fb78a885b6fb27ce0e43f5c7/validator/src/bootstrap.rs#L342)
+/// Analogous to [PeerSnapshotHash](
+/// https://github.com/anza-xyz/agave/blob/f868aa3/validator/src/bootstrap.rs#L342)
 pub const PeerSnapshotHash = struct {
     contact_info: ThreadSafeContactInfo,
     full_snapshot: SlotAndHash,

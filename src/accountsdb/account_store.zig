@@ -414,7 +414,8 @@ pub const SlotAccountReader = union(enum) {
         token_owner: *const Pubkey,
     ) !OwnerIterator {
         return switch (self) {
-            // NOTE: either variant is fine here since both will allocate and copy out the accounts from Unrooted.
+            // NOTE: either variant is fine here since both will allocate and copy out the accounts
+            // from Unrooted.
             .accounts_db, .accounts_db_owned => |pair| {
                 const db, const ancestors = pair;
                 return .{ .accounts_db = try db.splTokenOwnerQuery(token_owner, ancestors) };

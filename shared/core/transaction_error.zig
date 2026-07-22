@@ -18,7 +18,8 @@ pub const TransactionError = union(enum(u32)) {
     /// Attempt to load a program that does not exist
     ProgramAccountNotFound,
 
-    /// The from `Pubkey` does not have sufficient balance to pay the fee to schedule the transaction
+    /// The from `Pubkey` does not have sufficient balance to pay the fee to schedule the
+    /// transaction
     InsufficientFundsForFee,
 
     /// This account may not be used to pay transaction fees
@@ -119,7 +120,8 @@ pub const TransactionError = union(enum(u32)) {
     /// Program execution is temporarily restricted on an account.
     ProgramExecutionTemporarilyRestricted: struct { account_index: u8 },
 
-    /// The total balance before the transaction does not equal the total balance after the transaction
+    /// The total balance before the transaction does not equal the total balance after the
+    /// transaction
     UnbalancedTransaction,
 
     /// Program cache hit max limit.

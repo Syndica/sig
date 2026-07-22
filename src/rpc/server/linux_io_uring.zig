@@ -463,7 +463,8 @@ fn handleRecvBody(
     switch (body.head_info.method) {
         .OPTIONS => {
             // CORS preflight response.
-            // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc_service.rs#L842-L845
+            // [agave]
+            // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc_service.rs#L842-L845
             entry_data.state = .{
                 .send_static_string = EntryState.SendStaticString.initRawString(
                     comptime EntryState.SendStaticString.statusLineStr(.no_content) ++

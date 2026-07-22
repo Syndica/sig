@@ -30,7 +30,8 @@ pub const MAX_SLOT: u64 = 1_000_000_000_000_000;
 pub const MAX_SLOT_PER_ENTRY: usize = 2048 * 8;
 pub const MAX_DUPLICATE_SHREDS: u16 = 512;
 
-/// Analogous to [VersionedCrdsValue](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds.rs#L122)
+/// Analogous to [VersionedCrdsValue](
+/// https://github.com/solana-labs/solana/blob/e0203f2/gossip/src/crds.rs#L122)
 pub const GossipVersionedData = struct {
     data: GossipData,
     metadata: GossipMetadata,
@@ -85,7 +86,8 @@ pub const GossipMetadata = struct {
     cursor_on_insertion: u64,
 };
 
-/// Analogous to [CrdsValue](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds_value.rs#L45)
+/// Analogous to [CrdsValue](
+/// https://github.com/solana-labs/solana/blob/e0203f2/gossip/src/crds_value.rs#L45)
 pub const SignedGossipData = struct {
     signature: Signature,
     data: GossipData,
@@ -108,8 +110,10 @@ pub const SignedGossipData = struct {
             error.IdentityElement => unreachable, // this would only be possible with a weak or invalid keypair, which is illegal
             error.WeakPublicKey => unreachable, // this would only be possible with a weak or invalid keypair, which is illegal
 
-            // TODO: inspecting the code reveals this error is never actually reached from this function, despite being part of the error set
-            // we should upstream a fix to zig's stdlib that amends this or documents why it's part of the error set at all.
+            // TODO: inspecting the code reveals this error is never actually reached from this
+            // function, despite being part of the error set
+            // we should upstream a fix to zig's stdlib that amends this or documents why it's part
+            // of the error set at all.
             error.NonCanonical => unreachable,
         };
         return .{
@@ -171,7 +175,8 @@ pub const SignedGossipData = struct {
     }
 };
 
-/// Analogous to [CrdsValueLabel](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds_value.rs#L500)
+/// Analogous to [CrdsValueLabel](
+/// https://github.com/solana-labs/solana/blob/e0203f2/gossip/src/crds_value.rs#L500)
 pub const GossipKey = union(GossipDataTag) {
     LegacyContactInfo: Pubkey,
     Vote: struct { u8, Pubkey },
@@ -225,7 +230,8 @@ pub const GossipDataTag = enum(u32) {
     }
 };
 
-/// Analogous to [CrdsData](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds_value.rs#L85)
+/// Analogous to [CrdsData](
+/// https://github.com/solana-labs/solana/blob/e0203f2/gossip/src/crds_value.rs#L85)
 pub const GossipData = union(GossipDataTag) {
     LegacyContactInfo: LegacyContactInfo,
     Vote: struct { u8, Vote },
@@ -488,7 +494,8 @@ pub const GossipData = union(GossipDataTag) {
     }
 };
 
-/// analogous to [LegactContactInfo](https://github.com/anza-xyz/agave/blob/0d34a1a160129c4293dac248e14231e9e773b4ce/gossip/src/legacy_contact_info.rs#L26)
+/// analogous to [LegactContactInfo](
+/// https://github.com/anza-xyz/agave/blob/0d34a1a/gossip/src/legacy_contact_info.rs#L26)
 pub const LegacyContactInfo = struct {
     id: Pubkey,
     /// gossip address
@@ -633,7 +640,8 @@ pub const Vote = struct {
         try sanitizeWallclock(self.wallclock);
         // Use the looser transaction sanitization rules for vote transactions within gossip
         // Matches Agave Transactions impl of the Sanitize trait.
-        // [solana-sdk] https://github.com/anza-xyz/solana-sdk/blob/6efc4078ab7652ab6a1a08754d5c324cb26746ea/transaction/src/lib.rs#L202
+        // [solana-sdk]
+        // https://github.com/anza-xyz/solana-sdk/blob/6efc407/transaction/src/lib.rs#L202
         if (self.transaction.msg.signature_count > self.transaction.signatures.len) {
             return error.NotEnoughSignatures;
         }
@@ -1180,14 +1188,16 @@ pub const SnapshotHashes = struct {
             return .{ .single = single };
         }
 
-        /// Responsibility to `.deinit` the returned snapshot list falls to the caller in order to free `list`, if `list` was allocated.
+        /// Responsibility to `.deinit` the returned snapshot list falls to the caller in order to
+        /// free `list`, if `list` was allocated.
         /// Asserts `list.len != 1`.
         pub fn initList(list: []const SlotAndHash) IncrementalSnapshotsList {
             assert(list.len != 1);
             return .{ .multiple = list };
         }
 
-        /// Responsibility to `.deinit` the returned snapshot collection with the specified allocator falls to the caller.
+        /// Responsibility to `.deinit` the returned snapshot collection with the specified
+        /// allocator falls to the caller.
         /// Accepts any `list.len`.
         pub fn initListCloned(allocator: std.mem.Allocator, list: []const SlotAndHash) !IncrementalSnapshotsList {
             if (list.len == 1) return initSingle(list[0]);
@@ -1243,9 +1253,11 @@ pub const SocketTag = enum(u8) {
     tpu_quic = 8,
     tpu_vote = 9,
     tpu_vote_quic = 12,
-    /// Analogous to [SOCKET_TAG_TVU](https://github.com/anza-xyz/agave/blob/d9683093ec5ce3138ab94332e248c524a2e60454/gossip/src/contact_info.rs#L38)
+    /// Analogous to [SOCKET_TAG_TVU](
+    /// https://github.com/anza-xyz/agave/blob/d968309/gossip/src/contact_info.rs#L38)
     turbine_recv = 10,
-    /// Analogous to [SOCKET_TAG_TVU_QUIC](https://github.com/anza-xyz/agave/blob/d9683093ec5ce3138ab94332e248c524a2e60454/gossip/src/contact_info.rs#L39)
+    /// Analogous to [SOCKET_TAG_TVU_QUIC](
+    /// https://github.com/anza-xyz/agave/blob/d968309/gossip/src/contact_info.rs#L39)
     turbine_recv_quic = 11,
     _,
 

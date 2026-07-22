@@ -184,10 +184,12 @@ pub const SvmGateway = struct {
             // it's actually not even possible to figure out what the next
             // slot's fee rate is going to be at this point, so this field seems
             // meaningless.
-            // https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank/check_transactions.rs#L94-L96
+            // sig fmt: off
+            // https://github.com/anza-xyz/agave/blob/161fc19/runtime/src/bank/check_transactions.rs#L94-L96
+            // sig fmt: on
             .next_lamports_per_signature = last_lamports_per_signature,
 
-            // https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank.rs#L2893-L2896
+            // https://github.com/anza-xyz/agave/blob/161fc19/runtime/src/bank.rs#L2893-L2896
             .last_lamports_per_signature = last_lamports_per_signature,
 
             .lamports_per_signature = self.params.lamports_per_signature,

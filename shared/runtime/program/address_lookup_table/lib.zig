@@ -13,16 +13,19 @@ pub const ID: Pubkey = .parse("AddressLookupTab1e1111111111111111111111111");
 
 // --- state types ---
 
-// [agave] https://github.com/anza-xyz/agave/blob/d300f3733f45d64a3b6b9fdb5a1157f378e181c2/sdk/program/src/address_lookup_table/state.rs#L30
+// [agave]
+// https://github.com/anza-xyz/agave/blob/d300f37/sdk/program/src/address_lookup_table/state.rs#L30
 /// The maximum number of addresses that a lookup table can hold
 pub const LOOKUP_TABLE_MAX_ADDRESSES: usize = 256;
 
-// [agave] https://github.com/anza-xyz/agave/blob/d300f3733f45d64a3b6b9fdb5a1157f378e181c2/sdk/program/src/address_lookup_table/state.rs#L33
+// [agave]
+// https://github.com/anza-xyz/agave/blob/d300f37/sdk/program/src/address_lookup_table/state.rs#L33
 /// The serialized size of lookup table metadata
 // note - this is actually the size of ProgramState?
 pub const LOOKUP_TABLE_META_SIZE: usize = 56;
 
-// [agave] https://github.com/anza-xyz/agave/blob/d300f3733f45d64a3b6b9fdb5a1157f378e181c2/sdk/program/src/address_lookup_table/state.rs#L125
+// [agave]
+// https://github.com/anza-xyz/agave/blob/d300f37/sdk/program/src/address_lookup_table/state.rs#L125
 /// Program account states
 pub const ProgramState = union(enum) {
     /// Account is not initialized.
@@ -38,13 +41,15 @@ pub const LookupTableStatus = union(enum) {
     Deactivated,
 };
 
-// [agave] https://github.com/anza-xyz/agave/blob/a00f1b5cdea9a7d5a70f8d24b86ea3ae66feff11/sdk/slot-hashes/src/lib.rs#L21
+// [agave] https://github.com/anza-xyz/agave/blob/a00f1b5/sdk/slot-hashes/src/lib.rs#L21
 pub const MAX_ENTRIES: usize = 512; // about 2.5 minutes to get your vote in
 
 const Deactivating = struct { remaining_blocks: usize };
 
-// [agave] https://github.com/anza-xyz/agave/blob/d300f3733f45d64a3b6b9fdb5a1157f378e181c2/sdk/program/src/address_lookup_table/state.rs#L46
-// [agave] https://github.com/anza-xyz/agave/blob/d300f3733f45d64a3b6b9fdb5a1157f378e181c2/sdk/program/src/address_lookup_table/state.rs#L66
+// [agave]
+// https://github.com/anza-xyz/agave/blob/d300f37/sdk/program/src/address_lookup_table/state.rs#L46
+// [agave]
+// https://github.com/anza-xyz/agave/blob/d300f37/sdk/program/src/address_lookup_table/state.rs#L66
 /// Address lookup table metadata
 pub const LookupTableMeta = struct {
     /// Lookup tables cannot be closed until the deactivation slot is
@@ -84,7 +89,10 @@ pub const LookupTableMeta = struct {
     }
 };
 
-// [agave] https://github.com/anza-xyz/agave/blob/d300f3733f45d64a3b6b9fdb5a1157f378e181c2/sdk/program/src/address_lookup_table/state.rs#L133-L134
+// [agave]
+// sig fmt: off
+// https://github.com/anza-xyz/agave/blob/d300f37/sdk/program/src/address_lookup_table/state.rs#L133-L134
+// sig fmt: on
 pub const AddressLookupTable = struct {
     meta: LookupTableMeta,
     addresses: []const Pubkey,
@@ -102,7 +110,10 @@ pub const AddressLookupTable = struct {
             return error.GenericError;
     }
 
-    // [agave] https://github.com/anza-xyz/agave/blob/d300f3733f45d64a3b6b9fdb5a1157f378e181c2/sdk/program/src/address_lookup_table/state.rs#L224
+    // [agave]
+    // sig fmt: off
+    // https://github.com/anza-xyz/agave/blob/d300f37/sdk/program/src/address_lookup_table/state.rs#L224
+    // sig fmt: on
     /// NOTE: This AddressLookupTable's 'addresses' slice will point to inside 'data' - consider
     /// if you need to clone the buffer (see deserializeOwned).
     pub fn deserialize(
@@ -139,7 +150,9 @@ pub const AddressLookupTable = struct {
 
 // --- instruction types ---
 
-// https://github.com/anza-xyz/agave/blob/7e8a1ddf86fa84b0ca4b64360af89399afd9de44/sdk/program/src/address_lookup_table/instruction.rs#L13
+// sig fmt: off
+// https://github.com/anza-xyz/agave/blob/7e8a1dd/sdk/program/src/address_lookup_table/instruction.rs#L13
+// sig fmt: on
 pub const Instruction = union(enum) {
     /// Create an address lookup table
     ///
@@ -185,7 +198,9 @@ pub const Instruction = union(enum) {
     CloseLookupTable,
 };
 
-// https://github.com/anza-xyz/agave/blob/7e8a1ddf86fa84b0ca4b64360af89399afd9de44/sdk/program/src/address_lookup_table/instruction.rs#L21
+// sig fmt: off
+// https://github.com/anza-xyz/agave/blob/7e8a1dd/sdk/program/src/address_lookup_table/instruction.rs#L21
+// sig fmt: on
 pub const CreateLookupTable = struct {
     /// A recent slot must be used in the derivation path
     /// for each initialized table. When closing table accounts,
@@ -199,7 +214,9 @@ pub const CreateLookupTable = struct {
     bump_seed: u8,
 };
 
-// https://github.com/anza-xyz/agave/blob/7e8a1ddf86fa84b0ca4b64360af89399afd9de44/sdk/program/src/address_lookup_table/instruction.rs#L51
+// sig fmt: off
+// https://github.com/anza-xyz/agave/blob/7e8a1dd/sdk/program/src/address_lookup_table/instruction.rs#L51
+// sig fmt: on
 pub const ExtendLookupTable = struct {
     new_addresses: []const Pubkey,
 };

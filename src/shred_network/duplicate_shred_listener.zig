@@ -69,7 +69,8 @@ const GossipDuplicateShredHandler = struct {
     // together the chunks into the original proof before anything useful is done.
     dup_buffer: std.AutoArrayHashMapUnmanaged(Key, BufferEntry),
     // Cached state: slots for which a duplicate proof is already ingested.
-    // This is synchronized with the blockstore during pruning to avoid redundant duplicate slot checks.
+    // This is synchronized with the blockstore during pruning to avoid redundant duplicate slot
+    // checks.
     consumed: std.AutoHashMapUnmanaged(Slot, bool),
     // Cached state: last root slot from blockstore to reduce read overhead.
     // Updated at the beginning of each handle() call.

@@ -1,5 +1,6 @@
 //! Token-2022 extension parsing and UI representation for account decoder.
-//! [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_token_extension.rs#L22
+//! [agave]
+//! https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_token_extension.rs#L22
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
@@ -14,13 +15,17 @@ const Pubkey = sig.core.Pubkey;
 
 /// TLV parsing constants for Token-2022 extensions.
 /// TLV layout: 2 bytes type (ExtensionType as u16) + 2 bytes length (Length as u16) + value
-/// [spl] https://github.com/solana-program/token-2022/blob/main/interface/src/extension/mod.rs#L93-L99
+/// [spl]
+/// https://github.com/solana-program/token-2022/blob/main/interface/src/extension/mod.rs#L93-L99
 const TLV_HEADER_SIZE: usize = 4;
 /// Implementation limit for extension parsing (not a protocol limit).
 pub const MAX_EXTENSIONS: usize = 16;
 
 /// Token-2022 extension type discriminants.
-/// [spl] https://github.com/solana-program/token-2022/blob/main/interface/src/extension/mod.rs#L1055-L1130
+/// [spl]
+// sig fmt: off
+/// https://github.com/solana-program/token-2022/blob/main/interface/src/extension/mod.rs#L1055-L1130
+// sig fmt: on
 pub const ExtensionType = enum(u16) {
     uninitialized = 0,
     transfer_fee_config = 1,
@@ -54,7 +59,10 @@ pub const ExtensionType = enum(u16) {
 
     /// Expected size of extension data (excluding TLV header).
     /// Returns null for variable-length extensions (TokenMetadata).
-    /// [spl] https://github.com/solana-program/token-2022/blob/main/interface/src/extension/mod.rs#L1167-L1212
+    /// [spl]
+    // sig fmt: off
+    /// https://github.com/solana-program/token-2022/blob/main/interface/src/extension/mod.rs#L1167-L1212
+    // sig fmt: on
     pub fn expectedSize(self: ExtensionType) ?usize {
         return switch (self) {
             .uninitialized => 0,
@@ -91,7 +99,10 @@ pub const ExtensionType = enum(u16) {
     }
 
     /// Check if this is a mint extension (vs account extension).
-    /// [spl] https://github.com/solana-program/token-2022/blob/main/interface/src/extension/mod.rs#L1255-L1295
+    /// [spl]
+    // sig fmt: off
+    /// https://github.com/solana-program/token-2022/blob/main/interface/src/extension/mod.rs#L1255-L1295
+    // sig fmt: on
     pub fn isMintExtension(self: ExtensionType) bool {
         return switch (self) {
             .transfer_fee_config,
@@ -208,7 +219,8 @@ pub const UiExtension = union(enum) {
 /// Parse Token-2022 TLV extensions from account data.
 /// Returns an empty array if data doesn't contain valid extensions.
 /// Uses similar iteration logic to spl-token-2022's get_tlv_data_info.
-/// [spl] https://github.com/solana-program/token-2022/blob/main/interface/src/extension/mod.rs#L203-L245
+/// [spl]
+/// https://github.com/solana-program/token-2022/blob/main/interface/src/extension/mod.rs#L203-L245
 pub fn parseExtensions(data: []const u8) JsonArray(UiExtension, MAX_EXTENSIONS) {
     var extensions: JsonArray(UiExtension, MAX_EXTENSIONS) = .{};
 
@@ -254,7 +266,10 @@ pub fn parseExtensions(data: []const u8) JsonArray(UiExtension, MAX_EXTENSIONS) 
 
 // Parse a single extension from its value bytes.
 /// Returns null if parsing fails (caller should use unparseable_extension).
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_token_extension.rs#L22-L148
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_token_extension.rs#L22-L148
+// sig fmt: on
 fn parseExtension(ext_type: ExtensionType, value: []const u8) ?UiExtension {
     // Validate size for fixed-length extensions. AGave's get_extension uses pod_from_bytes
     // which fails on size mismatch, returning UnparseableExtension via unwrap_or.
@@ -296,7 +311,10 @@ fn parseExtension(ext_type: ExtensionType, value: []const u8) ?UiExtension {
 }
 
 /// Subset of InterestBearingConfig needed for amount calculations.
-/// [spl] https://github.com/solana-program/token-2022/blob/main/interface/src/extension/interest_bearing_mint/mod.rs
+/// [spl]
+// sig fmt: off
+/// https://github.com/solana-program/token-2022/blob/main/interface/src/extension/interest_bearing_mint/mod.rs
+// sig fmt: on
 pub const InterestBearingConfigData = struct {
     rate_authority: ?Pubkey,
     initialization_timestamp: i64,
@@ -795,7 +813,8 @@ pub const UiTokenMetadata = struct {
     additionalMetadata: JsonArray(KeyValuePair, 32),
 
     /// Parse TokenMetadata from Borsh-serialized bytes.
-    /// Borsh format: OptionalNonZeroPubkey(32) + Pubkey(32) + String(4+len) * 3 + Vec<(String,String)>
+    /// Borsh format: OptionalNonZeroPubkey(32) + Pubkey(32) + String(4+len) * 3 +
+    /// Vec<(String,String)>
     /// [spl] https://github.com/solana-program/token-metadata/blob/main/interface/src/state.rs
     fn parse(value: []const u8) ?UiExtension {
         var offset: usize = 0;

@@ -18,7 +18,8 @@ const VALIDATOR_INFO_ID: Pubkey = .parse("Va1idator1nfo1111111111111111111111111
 
 /// Parse a config account by its pubkey.
 /// Returns null if the config type is unknown (not StakeConfig or ValidatorInfo).
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_config.rs#L14-L33
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_config.rs#L14-L33
 pub fn parseConfig(
     arena: Allocator,
     pubkey: Pubkey,
@@ -131,24 +132,28 @@ const StakeConfig = struct {
 
 /// ValidatorInfo data stored after ConfigKeys.
 /// The `info` field is a JSON string containing validator metadata.
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/validator_info.rs#L17-L20
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/validator_info.rs#L17-L20
 const ValidatorInfo = struct {
     info: []const u8,
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_config.rs#L59-L63
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_config.rs#L59-L63
 pub const UiStakeConfig = struct {
     warmupCooldownRate: RyuF64,
     slashPenalty: u8,
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_config.rs#L65-L70
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_config.rs#L65-L70
 pub const UiConfigKey = struct {
     pubkey: Pubkey,
     signer: bool,
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_config.rs#L77-L81
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_config.rs#L77-L81
 pub const UiConfig = struct {
     keys: []UiConfigKey,
     configData: []const u8, // Raw JSON string, written verbatim
@@ -166,7 +171,8 @@ pub const UiConfig = struct {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_config.rs#L35-L38
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_config.rs#L35-L38
 pub const ConfigAccountType = union(enum) {
     stake_config: UiStakeConfig,
     validator_info: UiConfig,

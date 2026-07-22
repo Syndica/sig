@@ -16,7 +16,8 @@ const writeIntLittleMem = sig.core.account.writeIntLittleMem;
 
 /// Simple strictly-typed alias for an integer, used to represent a file ID.
 ///
-/// Analogous to [AccountsFileId](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L824)
+/// Analogous to [AccountsFileId](
+/// https://github.com/anza-xyz/agave/blob/4c921ca/accounts-db/src/accounts_db.rs#L824)
 pub const FileId = enum(Int) {
     _,
 
@@ -79,7 +80,8 @@ pub const FileId = enum(Int) {
 
 /// an account thats stored in an AccountFile
 ///
-/// Analogous to [StoredAccountMeta::AppendVec](https://github.com/anza-xyz/agave/blob/f8067ea7883e04bdfc1a82b0779f7363b71bf548/accounts-db/src/account_storage/meta.rs#L21)
+/// Analogous to [StoredAccountMeta::AppendVec](
+/// https://github.com/anza-xyz/agave/blob/f8067ea/accounts-db/src/account_storage/meta.rs#L21)
 pub const AccountInFile = struct {
     store_info: StorageInfo,
     account_info: AccountInfo,
@@ -93,7 +95,8 @@ pub const AccountInFile = struct {
 
     /// info about the account stored
     ///
-    /// Analogous to [StoredMeta](https://github.com/anza-xyz/agave/blob/f8067ea7883e04bdfc1a82b0779f7363b71bf548/accounts-db/src/account_storage/meta.rs#L134)
+    /// Analogous to [StoredMeta](
+    /// https://github.com/anza-xyz/agave/blob/f8067ea/accounts-db/src/account_storage/meta.rs#L134)
     pub const StorageInfo = extern struct {
         write_version_obsolete: u64,
         data_len: u64,
@@ -114,7 +117,8 @@ pub const AccountInFile = struct {
 
     /// on-chain account info about the account
     ///
-    /// Analogous to [AccountMeta](https://github.com/anza-xyz/agave/blob/f8067ea7883e04bdfc1a82b0779f7363b71bf548/accounts-db/src/account_storage/meta.rs#L149)
+    /// Analogous to [AccountMeta](
+    /// https://github.com/anza-xyz/agave/blob/f8067ea/accounts-db/src/account_storage/meta.rs#L149)
     pub const AccountInfo = extern struct {
         lamports: u64,
         rent_epoch: Epoch,
@@ -224,7 +228,8 @@ pub const AccountInFile = struct {
     }
 };
 
-/// Analogous to [AccountStorageEntry](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L1069)
+/// Analogous to [AccountStorageEntry](
+/// https://github.com/anza-xyz/agave/blob/4c921ca/accounts-db/src/accounts_db.rs#L1069)
 pub const AccountFile = struct {
     // file contents
     file: std.fs.File,
@@ -344,7 +349,8 @@ pub const AccountFile = struct {
         };
     }
 
-    /// get the account pubkey without parsing data (a lot faster if the data field isnt used anyway)
+    /// get the account pubkey without parsing data (a lot faster if the data field isnt used
+    /// anyway)
     pub fn getAccountPubkey(self: *const AccountFile, start_offset: usize) error{EOF}!struct {
         pubkey: *Pubkey,
         account_len: usize,

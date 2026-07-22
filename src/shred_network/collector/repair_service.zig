@@ -44,7 +44,8 @@ const MAX_DATA_SHREDS_PER_SLOT = sig.ledger.shred.DataShred.constants.max_per_sl
 /// - delegates to RepairPeerProvider to identify repair peers.
 /// - delegates to RepairRequester to send the requests.
 ///
-/// Analogous to [RepairService](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/core/src/repair/repair_service.rs#L245)
+/// Analogous to [RepairService](
+/// https://github.com/anza-xyz/agave/blob/8c5a33a/core/src/repair/repair_service.rs#L245)
 pub const RepairService = struct {
     allocator: Allocator,
     requester: RepairRequester,

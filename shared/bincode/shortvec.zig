@@ -14,7 +14,8 @@ const MAX_ENCODING_LENGTH: usize = 3;
 ///   * the third byte must not have the continuation bit set,
 ///   * the decoded value must fit in `u16`.
 ///
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/short-vec@v3.2.2/short-vec/src/lib.rs#L146-166
+/// [agave]
+/// https://github.com/anza-xyz/solana-sdk/blob/short-vec@v3.2.2/short-vec/src/lib.rs#L146-166
 pub fn readShortU16(reader: anytype) !u16 {
     var value: u16 = 0;
     inline for (0..MAX_ENCODING_LENGTH) |nth_byte| {
@@ -42,7 +43,8 @@ pub fn readShortU16(reader: anytype) !u16 {
 /// the only byte, and the shift on the terminating byte cannot truncate any
 /// of its set bits.
 ///
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/serde-varint@v3.0.1/serde-varint/src/lib.rs#L69-96
+/// [agave]
+/// https://github.com/anza-xyz/solana-sdk/blob/serde-varint@v3.0.1/serde-varint/src/lib.rs#L69-96
 pub fn readVarInt(comptime T: type, reader: anytype) !T {
     comptime std.debug.assert(@typeInfo(T) == .int and @typeInfo(T).int.signedness == .unsigned);
     const ShiftT = std.math.Log2Int(T);

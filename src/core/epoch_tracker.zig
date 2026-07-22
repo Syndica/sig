@@ -102,7 +102,8 @@ pub const EpochTracker = struct {
     /// Unrooted epoch stakes buffer.
     /// Holds epoch stakes for forks which have crossed an epoch boundary but are not yet rooted.
     /// New epoch stakes are added by the first slot on each fork which crosses an epoch boundary.
-    /// When the first insert happens for a new epoch, the buffer is cleared and the items deinitialized.
+    /// When the first insert happens for a new epoch, the buffer is cleared and the items
+    /// deinitialized.
     ///
     /// Example:
     ///   - Last rooted slot is 30
@@ -116,7 +117,8 @@ pub const EpochTracker = struct {
     ///      30           E(0)
     ///
     ///   - Slot 32 becomes the first rooted slot in epoch 1
-    ///   - The epoch stakes and leader schedule are computed from the epoch stakes computed by slot 32
+    /// - The epoch stakes and leader schedule are computed from the epoch stakes computed by slot
+    /// 32
     unrooted_epochs: UnrootedEpochBuffer,
 
     pub fn init(
@@ -175,7 +177,8 @@ pub const EpochTracker = struct {
 
     /// Get the EpochInfo which is 'active' for the current slot. This means the EpochInfo which
     /// is used to compute the leader schedule for the current slot's epoch. If the current slot is
-    /// in epoch E, then this epoch info will have been 'saved' on the first rooted slot of epoch E-1,
+    /// in epoch E, then this epoch info will have been 'saved' on the first rooted slot of epoch
+    /// E-1,
     /// and will contain the stakes at the end of epoch E-2.
     /// If the slot is in Epoch 10, then this function will return an EpochInfo which was saved
     /// at the beginning of Epoch 9, and contains stakes from the end of Epoch 8.

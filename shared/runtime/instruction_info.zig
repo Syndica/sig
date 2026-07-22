@@ -8,7 +8,10 @@ const Pubkey = sig.core.Pubkey;
 const Transaction = sig.core.Transaction;
 
 /// Intruction information which is constant across instruction execution
-/// [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/info/fd_instr_info.h#L14-L15
+/// [fd]
+// sig fmt: off
+/// https://github.com/firedancer-io/firedancer/blob/dfadb7d/src/flamenco/runtime/info/fd_instr_info.h#L14-L15
+// sig fmt: on
 pub const InstructionInfo = struct {
     program_meta: ProgramMeta,
     account_metas: AccountMetas,
@@ -25,8 +28,10 @@ pub const InstructionInfo = struct {
     pub const MAX_ACCOUNT_METAS = 256;
 
     /// Errors resulting from instructions with account metas > MAX_ACCOUNT_METAS are handled during
-    /// transaction execution. We construct the account metas before transaction execution, so using an
-    /// array of size MAX_ACCOUNTS_METAS + 1 allows us to check the account metas length during transaction
+    /// transaction execution. We construct the account metas before transaction execution, so using
+    /// an
+    /// array of size MAX_ACCOUNTS_METAS + 1 allows us to check the account metas length during
+    /// transaction
     /// execution and return the appropriate error.
     pub const AccountMetas = std.ArrayListUnmanaged(AccountMeta);
 
@@ -63,7 +68,7 @@ pub const InstructionInfo = struct {
         return error.MissingAccount;
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L523
+    /// [agave] https://github.com/anza-xyz/agave/blob/134be7c/sdk/src/transaction_context.rs#L523
     pub fn getAccountMetaIndex(
         self: *const InstructionInfo,
         pubkey: Pubkey,
@@ -104,7 +109,7 @@ pub const InstructionInfo = struct {
     }
 
     /// Caller owns the returned slice.
-    /// [agave] https://github.com/anza-xyz/agave/blob/9eee2f66775291a1ec4c4b1be32efc1d314002f7/transaction-context/src/lib.rs#L736
+    /// [agave] https://github.com/anza-xyz/agave/blob/9eee2f6/transaction-context/src/lib.rs#L736
     pub fn getSigners(
         self: *const InstructionInfo,
         allocator: std.mem.Allocator,
@@ -114,7 +119,8 @@ pub const InstructionInfo = struct {
         // dedupe via an ArrayHashMap (O(1) per probe, insertion-ordered) to
         // keep the result within the distinct-account bound
         // (MAX_ACCOUNT_METAS) instead of an O(n^2) scan.
-        // [agave] https://github.com/anza-xyz/agave/blob/v4.0/transaction-context/src/instruction.rs#L253
+        // [agave]
+        // https://github.com/anza-xyz/agave/blob/v4.0/transaction-context/src/instruction.rs#L253
         var seen: std.AutoArrayHashMapUnmanaged(Pubkey, void) = .empty;
         defer seen.deinit(allocator);
         try seen.ensureTotalCapacity(allocator, MAX_ACCOUNT_METAS);
@@ -133,7 +139,7 @@ pub const InstructionInfo = struct {
         )];
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/program_utils.rs#L9
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/src/program_utils.rs#L9
     pub fn deserializeInstruction(
         self: *const InstructionInfo,
         allocator: std.mem.Allocator,
@@ -147,7 +153,7 @@ pub const InstructionInfo = struct {
     }
 
     /// Identical to deserializeInstruction but using `alloc_buf` to avoid heap allocation.
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/1276772ee61fbd1f8a60cfec7cd553aa4f6a55f3/bincode/src/lib.rs#L9
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/1276772/bincode/src/lib.rs#L9
     pub fn limitedDeserializeInstruction(
         self: *const InstructionInfo,
         comptime T: type,
@@ -160,7 +166,7 @@ pub const InstructionInfo = struct {
         };
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L493
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/src/transaction_context.rs#L493
     pub fn checkNumberOfAccounts(
         self: *const InstructionInfo,
         minimum_accounts: u16,

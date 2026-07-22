@@ -6,7 +6,8 @@ const Allocator = std.mem.Allocator;
 
 const Hash = sig.core.Hash;
 
-/// Analogous to [BlockhashQueue](https://github.com/anza-xyz/agave/blob/a79ba51741864e94a066a8e27100dfef14df835f/accounts-db/src/blockhash_queue.rs#L32)
+/// Analogous to [BlockhashQueue](
+/// https://github.com/anza-xyz/agave/blob/a79ba51/accounts-db/src/blockhash_queue.rs#L32)
 pub const BlockhashQueue = struct {
     /// index of the last hash registered
     last_hash_index: u64,
@@ -26,7 +27,8 @@ pub const BlockhashQueue = struct {
 
     /// Maximum age of a blockhash that is still considered valid for processing transactions.
     /// This is half of MAX_RECENT_BLOCKHASHES.
-    /// Analogous to [MAX_PROCESSING_AGE](https://github.com/anza-xyz/solana-sdk/blob/ba1f9cdd836f9977df2bf7cb606be6e15c7b61aa/clock/src/lib.rs#L100)
+    /// Analogous to [MAX_PROCESSING_AGE](
+    /// https://github.com/anza-xyz/solana-sdk/blob/ba1f9cd/clock/src/lib.rs#L100)
     pub const MAX_PROCESSING_AGE: usize = MAX_RECENT_BLOCKHASHES / 2;
 
     pub const BlockhashInfo = struct {
@@ -146,7 +148,8 @@ pub const BlockhashQueue = struct {
         random: std.Random,
         max_list_entries: usize,
     ) Allocator.Error!BlockhashQueue {
-        // Used by BankFeilds.initRandom inside accounts_db.manager.runLoop, should be made test only when possible.
+        // Used by BankFeilds.initRandom inside accounts_db.manager.runLoop, should be made test
+        // only when possible.
         // if (!builtin.is_test) @compileError("only for testing");
         var self = BlockhashQueue.DEFAULT;
         var timestamp: u64 = @intCast(std.time.milliTimestamp());
@@ -267,7 +270,8 @@ test "len" {
     }
     try std.testing.expectEqual(max_age, queue.hash_infos.count());
 
-    // BlockhashQueue actually holds max age + 1 entries due to a historical 'off-by-one' error in agave
+    // BlockhashQueue actually holds max age + 1 entries due to a historical 'off-by-one' error in
+    // agave
     try queue.insertHash(allocator, Hash.initRandom(prng.random()), 0);
     try std.testing.expectEqual(max_age + 1, queue.hash_infos.count());
 

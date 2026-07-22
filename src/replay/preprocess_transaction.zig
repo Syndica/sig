@@ -27,7 +27,8 @@ const MAX_ACCOUNTS_PER_INSTRUCTION = sig.runtime.transaction_context.MAX_ACCOUNT
 const MAX_INSTRUCTION_TRACE_LENGTH = sig.runtime.transaction_context.MAX_INSTRUCTION_TRACE_LENGTH;
 
 /// Checks that a transaction is valid for execution.
-///     1. Ensure the transaction is valid i.e. signature counts make sense, there are enough accounts, etc.
+/// 1. Ensure the transaction is valid i.e. signature counts make sense, there are enough accounts,
+/// etc.
 ///     2. Ensure the transaction message is serialisable
 ///     3. Ensure all signatures are verified against the serialized transaction message
 ///     4. Ensure that the compute budget program is executed succesfully
@@ -63,7 +64,8 @@ pub fn preprocessTransaction(
 
     // SIMD-0406: Reject transactions with instructions that reference more than 255 accounts.
     // Runs before sig verification, matching Agave's sanitize_instructions ordering.
-    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/transaction-view/src/sanitize.rs#L98-L102
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/transaction-view/src/sanitize.rs#L98-L102
     if (instruction_accounts_limit) {
         for (txn.msg.instructions) |instr| {
             if (instr.account_indexes.len > MAX_ACCOUNTS_PER_INSTRUCTION) {
@@ -294,7 +296,9 @@ test preprocessTransaction {
         @memset(&account_indexes, 0);
 
         // Use a non-compute-budget program, matching Agave's test which uses Pubkey::new_unique().
+        // sig fmt: off
         // https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime-transaction/src/runtime_transaction/sdk_transactions.rs#L396-L452
+        // sig fmt: on
         const dummy_program = Pubkey{ .data = .{1} ** 32 };
         const txn = Transaction{
             .signatures = &.{Signature.ZEROES},

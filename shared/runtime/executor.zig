@@ -17,7 +17,8 @@ const TransactionContext = sig.runtime.TransactionContext;
 const deinitAccountMap = sig.runtime.testing.deinitAccountMap;
 
 /// Execute an instruction described by the instruction info\
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/invoke_context.rs#L477-L488
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/invoke_context.rs#L477-L488
 pub fn executeInstruction(
     allocator: std.mem.Allocator,
     tc: *TransactionContext,
@@ -26,7 +27,10 @@ pub fn executeInstruction(
     const zone = tracy.Zone.init(@src(), .{ .name = "runtime: executeInstruction" });
     defer zone.deinit();
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L471-L474
+    // [agave]
+    // sig fmt: off
+    // https://github.com/anza-xyz/agave/blob/a705c76/program-runtime/src/invoke_context.rs#L471-L474
+    // sig fmt: on
     try pushInstruction(tc, instruction_info);
 
     processNextInstruction(allocator, tc) catch |err| {
@@ -38,7 +42,8 @@ pub fn executeInstruction(
 }
 
 /// Execute a native CPI instruction\
-/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L305-L306
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/a705c76/program-runtime/src/invoke_context.rs#L305-L306
 pub fn executeNativeCpiInstruction(
     allocator: std.mem.Allocator,
     tc: *TransactionContext,
@@ -47,18 +52,24 @@ pub fn executeNativeCpiInstruction(
 ) (error{OutOfMemory} || InstructionError)!void {
     const instruction_info = try prepareCpiInstructionInfo(tc, instruction, signers);
     // NOTE: We don't call instruction_info.deinit() here because the InstructionInfo is stored
-    // in the instruction_trace (by value copy in pushInstruction). The trace needs the account_metas
+    // in the instruction_trace (by value copy in pushInstruction). The trace needs the
+    // account_metas
     // memory to remain valid until the transaction completes. Cleanup happens in
     // TransactionContext.deinit() which iterates over the trace and deinits each CPI entry.
 
     try executeInstruction(allocator, tc, instruction_info);
 }
 
-/// Push an instruction onto the instruction stack and an associated entry onto the instruction trace\
+/// Push an instruction onto the instruction stack and an associated entry onto the instruction
+/// trace\
 /// Checks for reentrancy violations\
 /// Returns a reference to the pushed instruction context\
-/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L471-L475
-/// [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1034-L1035
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/a705c76/program-runtime/src/invoke_context.rs#L471-L475
+/// [fd]
+// sig fmt: off
+/// https://github.com/firedancer-io/firedancer/blob/dfadb7d/src/flamenco/runtime/fd_executor.c#L1034-L1035
+// sig fmt: on
 pub fn pushInstruction(
     tc: *TransactionContext,
     initial_instruction_info: InstructionInfo,
@@ -69,8 +80,12 @@ pub fn pushInstruction(
     const instruction_info = initial_instruction_info;
     const program_id = instruction_info.program_meta.pubkey;
 
-    // [agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/program-runtime/src/invoke_context.rs#L245-L283
-    // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1048-L1070
+    // [agave]
+    // sig fmt: off
+    // https://github.com/anza-xyz/agave/blob/92b11cd/program-runtime/src/invoke_context.rs#L245-L283
+    // [fd]
+    // https://github.com/firedancer-io/firedancer/blob/dfadb7d/src/flamenco/runtime/fd_executor.c#L1048-L1070
+    // sig fmt: on
     const stack = tc.instruction_stack.constSlice();
     if (stack.len > 0) {
         // Reentrancy is only forbidden when the caller (current top of stack)
@@ -135,7 +150,8 @@ pub fn pushInstruction(
 }
 
 /// Execute an instruction context after it has been pushed onto the instruction stack\
-/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L510
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/a705c76/program-runtime/src/invoke_context.rs#L510
 fn processNextInstruction(
     allocator: std.mem.Allocator,
     tc: *TransactionContext,
@@ -148,7 +164,8 @@ fn processNextInstruction(
     const ic = &tc.instruction_stack.buffer[tc.instruction_stack.len - 1];
 
     // Lookup the program id
-    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/invoke_context.rs#L515-L528
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/invoke_context.rs#L515-L528
     const builtin_id, const program_id = blk: {
         const program_account = try ic.borrowProgramAccount();
         defer program_account.release();
@@ -178,18 +195,30 @@ fn processNextInstruction(
     };
 
     // Emulate Agave's program_map by checking the feature gates here.
-    // [fd] https://github.com/firedancer-io/firedancer/blob/31e08b0cd42c25b36155307e4b422a9390d25e4d/src/flamenco/runtime/fd_executor.c#L179-L187
+    // [fd]
+    // sig fmt: off
+    // https://github.com/firedancer-io/firedancer/blob/31e08b0/src/flamenco/runtime/fd_executor.c#L179-L187
+    // sig fmt: on
     if (builtin.gate) |gate| if (!tc.feature_set.active(gate, tc.slot)) {
         return InstructionError.UnsupportedProgramId;
     };
 
-    // NOTE: Precompiles do not log invocations because they are not considered "programs" in the same sense as BPF or native programs, and they may be called by other programs which would already log the invocation.
-    // Additionally, some precompiles are used for utility functions that may be called frequently, and logging every invocation could lead to excessive log spam.
-    // For example, the Keccak256 precompile is often used for hashing in other programs, and logging every call to it would generate a large number of logs that may not be useful for end users.
+    // NOTE: Precompiles do not log invocations because they are not considered "programs" in the
+    // same sense as BPF or native programs, and they may be called by other programs which would
+    // already log the invocation.
+    // Additionally, some precompiles are used for utility functions that may be called frequently,
+    // and logging every invocation could lead to excessive log spam.
+    // For example, the Keccak256 precompile is often used for hashing in other programs, and
+    // logging every call to it would generate a large number of logs that may not be useful for end
+    // users.
     if (!is_precompile) {
         // Invoke the program and log the result
-        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/invoke_context.rs#L549
-        // [fd] https://github.com/firedancer-io/firedancer/blob/913e47274b135963fe8433a1e94abb9b42ce6253/src/flamenco/runtime/fd_executor.c#L1347-L1359
+        // [agave]
+        // https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/invoke_context.rs#L549
+        // [fd]
+        // sig fmt: off
+        // https://github.com/firedancer-io/firedancer/blob/913e472/src/flamenco/runtime/fd_executor.c#L1347-L1359
+        // sig fmt: on
         try stable_log.programInvoke(
             ic.tc,
             program_id,
@@ -227,7 +256,8 @@ fn processNextInstruction(
 }
 
 /// Pop an instruction from the instruction stack\
-/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L290
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/a705c76/program-runtime/src/invoke_context.rs#L290
 pub fn popInstruction(
     tc: *TransactionContext,
 ) InstructionError!void {
@@ -235,12 +265,17 @@ pub fn popInstruction(
     defer zone.deinit();
 
     // TODO: pop syscall context and record trace log
-    // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L291-L294
+    // [agave]
+    // sig fmt: off
+    // https://github.com/anza-xyz/agave/blob/a705c76/program-runtime/src/invoke_context.rs#L291-L294
+    // sig fmt: on
 
-    // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L407-L409
+    // [agave]
+    // https://github.com/anza-xyz/solana-sdk/blob/e1554f4/transaction-context/src/lib.rs#L407-L409
     if (tc.instruction_stack.len == 0) return InstructionError.CallDepth;
 
-    // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L411-L426
+    // [agave]
+    // https://github.com/anza-xyz/solana-sdk/blob/e1554f4/transaction-context/src/lib.rs#L411-L426
     const unbalanced_instruction = blk: {
         const ic = try tc.getCurrentInstructionContext();
 
@@ -263,7 +298,8 @@ pub fn popInstruction(
 }
 
 /// Prepare the InstructionInfo for an instruction invoked via CPI\
-/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L325
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/a705c76/program-runtime/src/invoke_context.rs#L325
 pub fn prepareCpiInstructionInfo(
     tc: *TransactionContext,
     callee: Instruction,

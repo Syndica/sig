@@ -22,7 +22,10 @@ const MAX_EXTENSIONS = parse_token_extension.MAX_EXTENSIONS;
 
 /// Index of the account state byte in TokenAccount.
 /// Offset 108 = mint(32) + owner(32) + amount(8) + delegate(36) = 108
-/// [spl] https://github.com/solana-program/token-2022/blob/main/interface/src/generic_token_account.rs#L56
+/// [spl]
+// sig fmt: off
+/// https://github.com/solana-program/token-2022/blob/main/interface/src/generic_token_account.rs#L56
+// sig fmt: on
 pub const ACCOUNT_INITIALIZED_INDEX: usize = 108;
 
 /// Parse an SPL Token account.
@@ -45,7 +48,10 @@ pub fn parseToken(
 }
 
 /// Token-2022 account type discriminator (placed after base account data for extended accounts).
-/// [spl] https://github.com/solana-program/token-2022/blob/main/interface/src/extension/mod.rs#L1038-L1047
+/// [spl]
+// sig fmt: off
+/// https://github.com/solana-program/token-2022/blob/main/interface/src/extension/mod.rs#L1038-L1047
+// sig fmt: on
 const AccountTypeDiscriminator = enum(u8) {
     uninitialized = 0,
     mint = 1,
@@ -281,7 +287,8 @@ pub const Multisig = struct {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder-client-types/src/token.rs#L86-L93
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder-client-types/src/token.rs#L86-L93
 pub const TokenAccountType = union(enum) {
     account: UiTokenAccount,
     mint: UiMint,
@@ -301,7 +308,8 @@ pub const TokenAccountType = union(enum) {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder-client-types/src/token.rs#L53-L64
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder-client-types/src/token.rs#L53-L64
 pub const UiTokenAccount = struct {
     mint: Pubkey,
     owner: Pubkey,
@@ -359,7 +367,8 @@ pub const UiTokenAccount = struct {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder-client-types/src/token.rs#L66-L75
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder-client-types/src/token.rs#L66-L75
 pub const UiMint = struct {
     mintAuthority: ?Pubkey,
     supply: account_codec.Stringified(u64),
@@ -389,7 +398,8 @@ pub const UiMint = struct {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder-client-types/src/token.rs#L77-L84
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder-client-types/src/token.rs#L77-L84
 pub const UiMultisig = struct {
     numRequiredSigners: u8,
     numValidSigners: u8,
@@ -397,7 +407,8 @@ pub const UiMultisig = struct {
     signers: JsonArray(Pubkey, Multisig.MAX_SIGNERS),
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder-client-types/src/token.rs#L27-L37
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder-client-types/src/token.rs#L27-L37
 pub const UiTokenAmount = struct {
     ui_amount: ?f64,
     decimals: u8,
@@ -549,7 +560,10 @@ fn formatTokenAmount(amount: u64, decimals: u8) JsonString(40) {
 }
 
 // Constants for interest-bearing calculations
-// [spl] https://github.com/solana-program/token-2022/blob/main/interface/src/extension/interest_bearing_mint/mod.rs
+// [spl]
+// sig fmt: off
+// https://github.com/solana-program/token-2022/blob/main/interface/src/extension/interest_bearing_mint/mod.rs
+// sig fmt: on
 const SECONDS_PER_YEAR: f64 = 31_556_736.0; // 60 * 60 * 24 * 365.24
 const ONE_IN_BASIS_POINTS: f64 = 10_000.0;
 
@@ -1009,7 +1023,8 @@ test "rpc.account_codec.parse_token: basic extension parsing" {
     // Test TLV parsing with marker extension
     {
         // make a minimal Token-2022 account with ImmutableOwner extension
-        // Layout: [165 bytes base][1 byte discriminator][4 byte TLV header][0 bytes value][2 byte terminator]
+        // Layout: [165 bytes base][1 byte discriminator][4 byte TLV header][0 bytes value][2 byte
+        // terminator]
         var data: [172]u8 = undefined;
         @memset(&data, 0);
 
@@ -1108,7 +1123,8 @@ test "rpc.account_codec.parse_token: token account with extensions" {
     const mint_pubkey = Pubkey{ .data = [_]u8{2} ** 32 };
     const owner_pubkey = Pubkey{ .data = [_]u8{3} ** 32 };
     // Build token account data manually (165 bytes)
-    // Layout: mint(32) + owner(32) + amount(8) + delegate(36) + state(1) + is_native(12) + delegated_amount(8) + close_authority(36)
+    // Layout: mint(32) + owner(32) + amount(8) + delegate(36) + state(1) + is_native(12) +
+    // delegated_amount(8) + close_authority(36)
     var account_data: [TokenAccount.LEN]u8 = [_]u8{0} ** TokenAccount.LEN;
     // mint (bytes 0-31)
     @memcpy(account_data[0..32], &mint_pubkey.data);
@@ -1396,7 +1412,8 @@ test "rpc.account_codec.parse_token: mint with extensions conformance" {
     }
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_token.rs#L368-L396
+// [agave]
+// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_token.rs#L368-L396
 test "rpc.account_codec.parse_token: interest-bearing 5% rate" {
     const INT_SECONDS_PER_YEAR: i64 = 31_556_736; // 6 * 6 * 24 * 36524
     const ONE: u64 = 1_000_000_000_000_000_000; // 1e18
@@ -1477,7 +1494,8 @@ test "rpc.account_codec.parse_token: interest-bearing negative rate" {
     try std.testing.expect(@abs(t.ui_amount.? - 0.951229424500714) < 0.000001);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_token.rs#L398-L413
+// [agave]
+// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_token.rs#L398-L413
 test "rpc.account_codec.parse_token: scaled UI 2x multiplier" {
     const ONE: u64 = 1_000_000_000_000_000_000; // 1e18
 

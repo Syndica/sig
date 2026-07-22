@@ -27,7 +27,7 @@ pub const ID: Pubkey = .parse("ComputeBudget111111111111111111111111111111");
 
 pub const COMPUTE_UNITS = 150;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/compute-budget/src/lib.rs#L5
+/// [agave] https://github.com/anza-xyz/agave/blob/a2af443/programs/compute-budget/src/lib.rs#L5
 pub fn entrypoint(
     _: std.mem.Allocator,
     ic: *InstructionContext,
@@ -40,7 +40,8 @@ pub fn entrypoint(
 
 pub const ComputeBudgetInstructionDetails = struct {
     // compute-budget instruction details:
-    // the first field in tuple is instruction index, second field is the unsanitized value set by user
+    // the first field in tuple is instruction index, second field is the unsanitized value set by
+    // user
     requested_compute_unit_limit: ?struct { u8, u32 } = null,
     requested_compute_unit_price: ?struct { u8, u64 } = null,
     requested_heap_size: ?struct { u8, u32 } = null,
@@ -52,7 +53,8 @@ pub const ComputeBudgetInstructionDetails = struct {
     migrating_builtin_feature_counters: [MIGRATING_BUILTIN_COSTS.len]u16 = @splat(0),
 };
 
-// [agave] https://github.com/anza-xyz/agave/blob/3e9af14f3a145070773c719ad104b6a02aefd718/compute-budget/src/compute_budget_limits.rs#L28
+// [agave]
+// https://github.com/anza-xyz/agave/blob/3e9af14/compute-budget/src/compute_budget_limits.rs#L28
 pub const ComputeBudgetLimits = struct {
     heap_size: u32,
     compute_unit_limit: u32,
@@ -74,7 +76,9 @@ pub const ComputeBudgetLimits = struct {
     }
 };
 
-/// Analogous to [ComputeBudgetInstruction](https://github.com/anza-xyz/solana-sdk/blob/1c1d667f161666f12f5a43ebef8eda9470a8c6ee/compute-budget-interface/src/lib.rs#L18-L24).
+// sig fmt: off
+/// Analogous to [ComputeBudgetInstruction](https://github.com/anza-xyz/solana-sdk/blob/1c1d667/compute-budget-interface/src/lib.rs#L18-L24).
+// sig fmt: on
 /// NOTE: this type uses [BORSH](https://borsh.io/) encoding.
 const ComputeBudgetInstruction = union(enum) {
     /// Deprecated variant, reserved value.
@@ -359,7 +363,8 @@ pub fn sanitize(
     else
         0;
 
-    // Requested loaded accounts data size limit greater than max results in max loaded accounts data size limit
+    // Requested loaded accounts data size limit greater than max results in max loaded accounts
+    // data size limit
     const loaded_accounts_bytes = blk: {
         if (details.requested_loaded_accounts_data_size_limit) |max_size| {
             if (max_size[1] == 0) return .{ .err = .InvalidLoadedAccountsDataSizeLimit };

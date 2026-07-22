@@ -1,4 +1,6 @@
-//! The Replay RPC hook context. These methods reflect consensus-derived state (commitment levels, vote accounts, block hashes, etc.)
+//! The Replay RPC hook context. These methods reflect
+//! consensus-derived state (commitment levels, vote accounts,
+//! block hashes, etc.)
 
 const std = @import("std");
 const sig = @import("../../sig.zig");
@@ -257,26 +259,27 @@ pub fn getVoteAccounts(
         const activated_stake = stake_and_vote.stake;
 
         // Get the slot this vote account last voted on.
-        // See: https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/rpc/src/rpc.rs#L1172
+        // See: https://github.com/anza-xyz/agave/blob/01159e4/rpc/src/rpc.rs#L1172
         const last_vote_slot = vote_state.lastVotedSlot() orelse 0;
 
         // Check if vote account is active in current epoch.
         const in_delegated_stakes = epoch_vote_accounts.contains(vote_pk);
         const is_epoch_vote_account = in_delegated_stakes or activated_stake > 0;
 
-        // Partition by delinquent status. current is set when last_vote_slot > slot - delinquent_distance.
-        // See: https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/rpc/src/rpc.rs#L1194
+        // Partition by delinquent status. current is set when last_vote_slot > slot -
+        // delinquent_distance.
+        // See: https://github.com/anza-xyz/agave/blob/01159e4/rpc/src/rpc.rs#L1194
         const is_current = if (resolved.slot >= delinquent_distance)
             last_vote_slot > resolved.slot - delinquent_distance
         else
             last_vote_slot > 0;
 
         // Skip delinquent accounts with no stake unless explicitly requested.
-        // See: https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/rpc/src/rpc.rs#L1203
+        // See: https://github.com/anza-xyz/agave/blob/01159e4/rpc/src/rpc.rs#L1203
         if (!is_current and !keep_unstaked and activated_stake == 0) continue;
 
         // Convert epoch credits to [3]u64 format
-        // See: https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/rpc/src/rpc.rs#L1174
+        // See: https://github.com/anza-xyz/agave/blob/01159e4/rpc/src/rpc.rs#L1174
         const all_credits = vote_state.epochCreditsList();
         const num_credits_to_return = @min(
             all_credits.len,
@@ -296,7 +299,7 @@ pub fn getVoteAccounts(
             .commission = vote_state.commission(),
             .lastVote = last_vote_slot,
             .epochCredits = credits,
-            // See: https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/rpc/src/rpc.rs#L1188
+            // See: https://github.com/anza-xyz/agave/blob/01159e4/rpc/src/rpc.rs#L1188
             .rootSlot = vote_state.rootSlot() orelse 0,
         };
 
@@ -317,7 +320,8 @@ pub fn getVoteAccounts(
 }
 
 /// Checks if a blockhash is still valid for processing transactions.
-/// Analogous to [is_blockhash_valid](https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2367)
+/// Analogous to [is_blockhash_valid](
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2367)
 pub fn isBlockhashValid(
     self: ReplayHookContext,
     _: std.mem.Allocator,

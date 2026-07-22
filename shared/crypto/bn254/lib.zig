@@ -1,5 +1,5 @@
 //! Inspired by Firedancer's code; it contains a lot of interesting optimizations ported over.
-//! https://github.com/firedancer-io/firedancer/blob/9068496fbf7d211a01b535039e876ffbf84fcc6e/src/ballet/bn254/
+//! https://github.com/firedancer-io/firedancer/blob/9068496/src/ballet/bn254/
 
 const std = @import("std");
 const std14 = @import("std14");
@@ -187,7 +187,8 @@ pub const G2 = struct {
         const x3b = p.x.sq().mul(p.x).add(Fp2.constants.twist_b_mont);
         if (!y2.eql(x3b)) return error.NotWellFormed;
 
-        // G2 does *not* have prime order, so we need to perform a secondary subgroup membership check.
+        // G2 does *not* have prime order, so we need to perform a secondary subgroup membership
+        // check.
         // https://eprint.iacr.org/2022/348, Sec 3.1.
         // [r]P == 0 <==> [x+1]P + ψ([x]P) + ψ²([x]P) = ψ³([2x]P)
         const xp: G2 = shared.mulScalar(p, Fp.constants.x);
@@ -239,7 +240,8 @@ pub const G2 = struct {
 
         if (is_inf) {
             @memset(out, 0);
-            // The infinity point in the result is set if and only if the infinity flag is set in the Y coordinate.
+            // The infinity point in the result is set if and only if the infinity flag is set in
+            // the Y coordinate.
             out[if (endian == .big) 0 else 63] |= flag_inf;
             return;
         }
@@ -524,7 +526,9 @@ const shared = struct {
 
     /// Assumes that `a` is affine.
     ///
+    // sig fmt: off
     /// https://encrypt.a41.io/primitives/abstract-algebra/elliptic-curve/scalar-multiplication/double-and-add
+    // sig fmt: on
     /// https://en.wikipedia.org/wiki/Elliptic_curve_point_multiplication#Double-and-add
     fn mulScalar(a: anytype, scalar: u256) @TypeOf(a) {
         // TODO: can be further optimized with GLV and wNAF

@@ -4,19 +4,19 @@ const std = @import("std");
 
 const Pubkey = sig.core.Pubkey;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/rent.rs#L35
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/program/src/rent.rs#L35
 pub const DEFAULT_LAMPORTS_PER_BYTE_YEAR: u64 = 1_000_000_000 / 100 * 365 / (1024 * 1024);
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/rent.rs#L39
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/program/src/rent.rs#L39
 pub const DEFAULT_EXEMPTION_THRESHOLD: f64 = 2.0;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/rent.rs#L45
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/program/src/rent.rs#L45
 pub const DEFAULT_BURN_PERCENT: u8 = 50;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/rent.rs#L51-L52
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/program/src/rent.rs#L51-L52
 pub const ACCOUNT_STORAGE_OVERHEAD: u64 = 128;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/rent.rs#L13
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/program/src/rent.rs#L13
 pub const Rent = extern struct {
     /// Rental rate in lamports/byte-year.
     lamports_per_byte_year: u64,
@@ -77,7 +77,8 @@ pub const Rent = extern struct {
     }
 
     pub fn initRandom(random: std.Random) Rent {
-        // Used by BankFeilds.initRandom inside accounts_db.manager.runLoop, should be made test only when possible.
+        // Used by BankFeilds.initRandom inside accounts_db.manager.runLoop, should be made test
+        // only when possible.
         // if (!builtin.is_test) @compileError("only for testing");
         return .{
             .lamports_per_byte_year = random.int(u64),

@@ -12,7 +12,7 @@ const ParseError = account_codec.ParseError;
 const Pubkey = sig.core.Pubkey;
 const Stringified = account_codec.Stringified;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/account-decoder/src/parse_nonce.rs#L8
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084/account-decoder/src/parse_nonce.rs#L8
 pub fn parseNonce(
     arena: Allocator,
     // std.io.Reader
@@ -37,7 +37,8 @@ pub fn parseNonce(
         },
         // Uninitialized nonces return error per Agave:
         // "This prevents parsing an allocated System-owned account with empty data..."
-        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_nonce.rs#L11-L17
+        // [agave]
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_nonce.rs#L11-L17
         .uninitialized => return ParseError.InvalidAccountData,
     };
 }
@@ -76,7 +77,8 @@ test "rpc.account_codec.parse_nonce: parse nonce accounts" {
     const allocator = std.testing.allocator;
 
     // Parse initialized nonce state (current version)
-    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_nonce.rs#L57-L82
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_nonce.rs#L57-L82
     {
         const authority = Pubkey{ .data = [_]u8{1} ** 32 };
         const blockhash = Hash{ .data = [_]u8{2} ** 32 };
@@ -103,7 +105,8 @@ test "rpc.account_codec.parse_nonce: parse nonce accounts" {
     }
 
     // Parse legacy initialized nonce state
-    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_nonce.rs#L57-L82
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_nonce.rs#L57-L82
     {
         const authority = Pubkey{ .data = [_]u8{5} ** 32 };
         const blockhash = Hash{ .data = [_]u8{9} ** 32 };
@@ -130,7 +133,8 @@ test "rpc.account_codec.parse_nonce: parse nonce accounts" {
     }
 
     // Uninitialized nonce returns error
-    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_nonce.rs#L84-L89
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_nonce.rs#L84-L89
     {
         const versions = nonce.Versions{ .current = .uninitialized };
 
@@ -143,7 +147,8 @@ test "rpc.account_codec.parse_nonce: parse nonce accounts" {
     }
 
     // Bad data returns error
-    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_nonce.rs#L91-L96
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_nonce.rs#L91-L96
     {
         const bad_data = [_]u8{ 0, 1, 2, 3 };
 

@@ -9,7 +9,8 @@ const StakeAndVoteAccountsMap = sig.core.stakes.StakeAndVoteAccountsMap;
 
 const SortedMap = sig.utils.collections.SortedMapUnmanaged;
 
-/// Analogous to [MaxAllowableDrift](https://github.com/anza-xyz/agave/blob/e0bd9224fe60d8caa35bcca8daf6c8103ce424ec/runtime/src/stake_weighted_timestamp.rs#L21)
+/// Analogous to [MaxAllowableDrift](
+/// https://github.com/anza-xyz/agave/blob/e0bd922/runtime/src/stake_weighted_timestamp.rs#L21)
 pub const MaxAllowableDrift = struct {
     fast: u32,
     slow: u32,

@@ -133,7 +133,8 @@ pub const CommissionSplit = struct {
 /// Matches Agave's `commission_split` after SIMD-0291: voter and staker portions
 /// are computed independently in u128 to avoid overflow and any residual
 /// fractional lamport is intentionally discarded.
-/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/inflation_rewards/mod.rs#L243
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/inflation_rewards/mod.rs#L243
 pub fn commissionSplit(commission_bps: u16, rewards: u64) CommissionSplit {
     const MAX_BPS: u16 = 10_000;
     return switch (@min(commission_bps, MAX_BPS)) {

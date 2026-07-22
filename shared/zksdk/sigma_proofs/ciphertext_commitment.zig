@@ -1,5 +1,9 @@
-//! [fd](https://github.com/firedancer-io/firedancer/blob/33538d35a623675e66f38f77d7dc86c1ba43c935/src/flamenco/runtime/program/zksdk/instructions/fd_zksdk_ciphertext_commitment_equality.c)
-//! [agave](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs)
+//! [fd](
+// sig fmt: off
+//! https://github.com/firedancer-io/firedancer/blob/33538d3/src/flamenco/runtime/program/zksdk/instructions/fd_zksdk_ciphertext_commitment_equality.c)
+//! [agave](
+//! https://github.com/anza-xyz/agave/blob/5a9906e/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs)
+// sig fmt: on
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -43,7 +47,10 @@ pub const Proof = struct {
         .{ .label = "w", .type = .challenge }, // w used for batch verification
     };
 
-    /// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L71
+    /// [agave]
+    // sig fmt: off
+    /// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L71
+    // sig fmt: on
     pub fn init(
         kp: *const ElGamalKeypair,
         ciphertext: *const ElGamalCiphertext,
@@ -116,7 +123,10 @@ pub const Proof = struct {
         };
     }
 
-    /// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L139
+    /// [agave]
+    // sig fmt: off
+    /// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L139
+    // sig fmt: on
     pub fn verify(
         self: Proof,
         pubkey: *const ElGamalPubkey,
@@ -323,7 +333,10 @@ pub const Data = struct {
     }
 };
 
-// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L292-L318
+// [agave]
+// sig fmt: off
+// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L292-L318
+// sig fmt: on
 test "success case" {
     const kp = ElGamalKeypair.random();
     const message: u64 = 55;
@@ -350,7 +363,10 @@ test "success case" {
     );
 }
 
-// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L320-L352
+// [agave]
+// sig fmt: off
+// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L320-L352
+// sig fmt: on
 test "fail case" {
     const kp = ElGamalKeypair.random();
     const encrypted_message: u64 = 55;
@@ -382,7 +398,10 @@ test "fail case" {
     );
 }
 
-// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L357-L387
+// [agave]
+// sig fmt: off
+// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L357-L387
+// sig fmt: on
 test "public key zeroed" {
     // if ElGamal public key is zeroed (invalid), then the proof should always fail to verify.
     const zeroed_public = try ElGamalPubkey.fromBytes(.{0} ** 32);
@@ -416,7 +435,10 @@ test "public key zeroed" {
     );
 }
 
-// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L389-L417
+// [agave]
+// sig fmt: off
+// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L389-L417
+// sig fmt: on
 test "all zeroed" {
     const kp = ElGamalKeypair.random();
 
@@ -448,7 +470,10 @@ test "all zeroed" {
     );
 }
 
-// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L419-L447
+// [agave]
+// sig fmt: off
+// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L419-L447
+// sig fmt: on
 test "commitment zeroed" {
     const kp = ElGamalKeypair.random();
 
@@ -510,7 +535,10 @@ test "ciphertext zeroed" {
     );
 }
 
-// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L451
+// [agave]
+// sig fmt: off
+// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_commitment_equality.rs#L451
+// sig fmt: on
 test "proof strings" {
     const pubkey_string = "uO3j5FuK4OGJD8ain+4MXLU84ixomYnBI5s0pQ3X0Cs=";
     const pubkey = try ElGamalPubkey.fromBase64(pubkey_string);

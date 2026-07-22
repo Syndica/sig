@@ -99,9 +99,11 @@ pub const InnerInstruction = struct {
 };
 
 pub const CompiledInstruction = struct {
-    /// Index into the transaction keys array indicating the program account that executes this instruction.
+    /// Index into the transaction keys array indicating the program account that executes this
+    /// instruction.
     program_id_index: u8,
-    /// Ordered indices into the transaction keys array indicating which accounts to pass to the program.
+    /// Ordered indices into the transaction keys array indicating which accounts to pass to the
+    /// program.
     accounts: []const u8,
     /// The program input data.
     data: []const u8,
@@ -144,7 +146,8 @@ pub const Reward = struct {
     /// Account balance in lamports after `lamports` was applied
     post_balance: u64,
     reward_type: ?RewardType,
-    /// Vote account commission when the reward was credited, only present for voting and staking rewards
+    /// Vote account commission when the reward was credited, only present for voting and staking
+    /// rewards
     commission: ?u8,
 };
 
@@ -254,7 +257,10 @@ pub const TransactionStatusMetaBuilder = struct {
             .pre_token_balances = pre_token_balances,
             .post_token_balances = post_token_balances,
             // NOTE: rewards are not populated at all by agave
-            // [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/rpc/src/transaction_status_service.rs#L190
+            // [agave]
+            // sig fmt: off
+            // https://github.com/anza-xyz/agave/blob/2717084/rpc/src/transaction_status_service.rs#L190
+            // sig fmt: on
             .rewards = null,
             .loaded_addresses = owned_loaded_addresses,
             .return_data = return_data,
@@ -301,7 +307,8 @@ pub const TransactionStatusMetaBuilder = struct {
         if (trace.len == 0) return &.{};
 
         // Group instructions by their top-level instruction index (depth == 1 starts a new group)
-        // Instructions at depth > 1 are inner instructions of the most recent depth == 1 instruction
+        // Instructions at depth > 1 are inner instructions of the most recent depth == 1
+        // instruction
 
         var result = try std.ArrayList(InnerInstructions).initCapacity(allocator, trace.len);
         errdefer {

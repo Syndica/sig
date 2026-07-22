@@ -48,7 +48,7 @@ pub fn AutoArrayHashSet(comptime T: type) type {
 /// insertion of values is all based on the GossipData type -- when duplicates
 /// are found, the entry with the largest wallclock time (newest) is stored.
 ///
-/// Analogous to [Crds](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds.rs#L68)
+/// Analogous to [Crds](https://github.com/solana-labs/solana/blob/e0203f2/gossip/src/crds.rs#L68)
 pub const GossipTable = struct {
     store: GossipMap,
 
@@ -721,10 +721,12 @@ pub const GossipTable = struct {
         return (10 * n_pubkeys > 9 * max_pubkey_capacity);
     }
 
-    /// removes pubkeys and their associated values until the pubkey count is less than max_pubkey_capacity.
+    /// removes pubkeys and their associated values until the pubkey count is less than
+    /// max_pubkey_capacity.
     /// returns the number of pubkeys removed.
     ///
-    /// NOTE: the `now` parameter is used to populate the purged field with the timestamp of the removal.
+    /// NOTE: the `now` parameter is used to populate the purged field with the timestamp of the
+    /// removal.
     pub fn attemptTrim(self: *Self, now: u64, max_pubkey_capacity: usize) error{OutOfMemory}!u64 {
         if (!self.shouldTrim(max_pubkey_capacity)) return 0;
 

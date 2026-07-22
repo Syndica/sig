@@ -37,7 +37,8 @@ const DUPLICATE_SHRED_MAX_PAYLOAD_SIZE =
 const DUPLICATE_SHRED_HEADER_SIZE =
     shred_network.duplicate_shred_handler.DUPLICATE_SHRED_HEADER_SIZE;
 
-/// Analogous to [ShredFetchStage](https://github.com/anza-xyz/agave/blob/aa2f078836434965e1a5a03af7f95c6640fe6e1e/core/src/shred_fetch_stage.rs#L34)
+/// Analogous to [ShredFetchStage](
+/// https://github.com/anza-xyz/agave/blob/aa2f078/core/src/shred_fetch_stage.rs#L34)
 pub const ShredReceiver = struct {
     params: Params,
     logger: Logger,

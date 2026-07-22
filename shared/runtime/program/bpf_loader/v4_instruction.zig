@@ -86,7 +86,10 @@ pub const Finalize = struct {
     };
 };
 
-/// [agave] https://docs.rs/solana-loader-v4-interface/latest/src/solana_loader_v4_interface/instruction.rs.html#15
+/// [agave]
+// sig fmt: off
+/// https://docs.rs/solana-loader-v4-interface/latest/src/solana_loader_v4_interface/instruction.rs.html#15
+// sig fmt: on
 pub const Instruction = union(enum) {
     /// Write ELF data into an undeployed program account.
     ///
@@ -107,7 +110,8 @@ pub const Instruction = union(enum) {
     ///
     /// A program account is automatically initialized when its size is first increased.
     /// In this initial truncate, this sets the authority needed for subsequent operations.
-    /// Decreasing to size zero closes the program account and resets it into an uninitialized state.
+    /// Decreasing to size zero closes the program account and resets it into an uninitialized
+    /// state.
     /// Closing the program requires a recipient account.
     /// Providing additional lamports upfront might be necessary to reach rent exemption.
     /// Superflous funds are transferred to the recipient account if provided.
@@ -129,7 +133,8 @@ pub const Instruction = union(enum) {
     /// # Account references
     ///   0. `[writable]` The program account to deploy.
     ///   1. `[signer]` The authority of the program.
-    ///   2. `[writable]` Optional, an undeployed source program account to take data and lamports from.
+    /// 2. `[writable]` Optional, an undeployed source program account to take data and lamports
+    /// from.
     deploy: Deploy,
 
     /// Undo the deployment of a program account.

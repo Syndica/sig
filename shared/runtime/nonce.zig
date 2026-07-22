@@ -4,19 +4,20 @@ const sig = @import("../lib.zig");
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/nonce/state/current.rs#L10-L11
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/sdk/program/src/nonce/state/current.rs#L10-L11
 const DURABLE_NONCE_HASH_PREFIX = "DURABLE_NONCE";
 
 /// Current variants have durable nonce and blockhash domains separated.\
 ///
 /// Must support `bincode` and `serializedSize` methods for writing to the account data.\
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/nonce/state/mod.rs#L12
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/program/src/nonce/state/mod.rs#L12
 pub const Versions = union(enum) {
     legacy: State,
     current: State,
 
-    // [agave] https://github.com/anza-xyz/solana-sdk/blob/51e1da20ab83511563bd400cb448c2fee4ac4db6/nonce/src/state.rs#L104
+    // [agave] https://github.com/anza-xyz/solana-sdk/blob/51e1da2/nonce/src/state.rs#L104
     pub const SERIALIZED_SIZE = 80;
 
     pub fn getState(self: Versions) State {
@@ -66,14 +67,16 @@ pub const Versions = union(enum) {
 };
 
 /// The state of a durable transaction nonce account.
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/nonce/state/current.rs#L71
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/sdk/program/src/nonce/state/current.rs#L71
 pub const State = union(enum) {
     uninitialized,
     initialized: Data,
 };
 
 /// Initialized data of a durable transaction nonce account
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/nonce/state/current.rs#L19
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/sdk/program/src/nonce/state/current.rs#L19
 pub const Data = struct {
     /// Address of the account that signs transactions using the nonce account.
     authority: Pubkey,

@@ -389,7 +389,8 @@ pub fn serializeBlockNotification(
 
     const raw_block = data.block;
 
-    // Apply mentionsAccountOrProgram filter: rebuild the block with only transactions that mention the target pubkey.
+    // Apply mentionsAccountOrProgram filter: rebuild the block with only transactions that mention
+    // the target pubkey.
     // If no transactions match, skip this notification entirely (return error to drop it).
     const block = switch (data.filter) {
         .all => raw_block,

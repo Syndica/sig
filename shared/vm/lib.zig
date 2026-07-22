@@ -98,7 +98,7 @@ pub const State = struct {
     }
 };
 
-// [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L299-L300
+// [agave] https://github.com/anza-xyz/agave/blob/a2af443/programs/bpf_loader/src/lib.rs#L299-L300
 pub fn init(
     allocator: std.mem.Allocator,
     tc: *sig.runtime.TransactionContext,
@@ -147,7 +147,8 @@ pub fn init(
     );
     errdefer memory_map.deinit(allocator);
 
-    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L280-L285
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/32ac530/programs/bpf_loader/src/lib.rs#L280-L285
     // TODO: Set syscall context
 
     const sbpf_vm = try Vm.init(

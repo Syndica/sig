@@ -1,4 +1,5 @@
-//! Types for parsing BPF upgradeable loader accounts for RPC responses using the `jsonParsed` encoding.
+//! Types for parsing BPF upgradeable loader accounts for RPC
+//! responses using the `jsonParsed` encoding.
 //! [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_bpf_loader.rs
 const std = @import("std");
 const sig = @import("../../sig.zig");
@@ -10,7 +11,8 @@ const ParseError = account_codec.ParseError;
 const Pubkey = sig.core.Pubkey;
 const State = sig.runtime.program.bpf_loader.v3.State;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_bpf_loader.rs#L13
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_bpf_loader.rs#L13
 pub fn parseBpfUpgradeableLoader(
     arena: Allocator,
     // std.io.Reader
@@ -49,7 +51,8 @@ pub fn parseBpfUpgradeableLoader(
             const slot = reader.readInt(u64, .little) catch return ParseError.InvalidAccountData;
             const maybe_upgrade_authority = readOptionPubkey(reader) catch
                 return ParseError.InvalidAccountData;
-            // ProgramData size: enum tag (u32) + slot (u64) + option tag (1 byte) + optionally pubkey
+            // ProgramData size: enum tag (u32) + slot (u64) + option tag (1 byte) + optionally
+            // pubkey
             const auth_size: u32 = if (maybe_upgrade_authority != null) Pubkey.SIZE else 0;
             const metadata_size: u32 = @sizeOf(u32) + @sizeOf(u64) + 1 + auth_size;
             const data = readRemainingBytes(
@@ -100,7 +103,8 @@ fn readRemainingBytes(
     return bytecode;
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_bpf_loader.rs#L68-L73
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_bpf_loader.rs#L68-L73
 pub const BpfUpgradeableLoaderAccountType = union(enum) {
     uninitialized,
     buffer: UiBuffer,
@@ -135,7 +139,8 @@ pub const BpfUpgradeableLoaderAccountType = union(enum) {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_bpf_loader.rs#L77-L80
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_bpf_loader.rs#L77-L80
 pub const UiBuffer = struct {
     authority: ?Pubkey,
     data: []const u8,
@@ -150,7 +155,8 @@ pub const UiBuffer = struct {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_bpf_loader.rs#L84-L86
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_bpf_loader.rs#L84-L86
 pub const UiProgram = struct {
     programData: Pubkey,
 
@@ -162,7 +168,8 @@ pub const UiProgram = struct {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_bpf_loader.rs#L90-L95
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_bpf_loader.rs#L90-L95
 pub const UiProgramData = struct {
     slot: u64,
     authority: ?Pubkey,
@@ -180,7 +187,8 @@ pub const UiProgramData = struct {
     }
 };
 
-/// Writes a ["<base64>", "base64"] tuple, streaming the base64 encoding directly to the JSON writer.
+/// Writes a ["<base64>", "base64"] tuple, streaming the base64 encoding directly to the JSON
+/// writer.
 /// Weird, but to conform with Agave response format.
 fn writeBase64DataTuple(jw: anytype, bytecode: []const u8) @TypeOf(jw.*).Error!void {
     try jw.beginArray();

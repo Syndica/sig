@@ -22,7 +22,8 @@ const InstructionContext = sig.runtime.InstructionContext;
 const TransactionContext = sig.runtime.TransactionContext;
 const V3State = sig.runtime.program.bpf_loader.v3.State;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L300
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L300
 pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -39,7 +40,8 @@ pub fn execute(
     };
     const program_id = &ic.ixn_info.program_meta.pubkey;
 
-    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/programs/bpf_loader/src/lib.rs#L394-L417
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/v3.1.4/programs/bpf_loader/src/lib.rs#L394-L417
     if (ids.NATIVE_LOADER_ID.equals(&program_owner)) {
         if (bpf_loader_program.v3.ID.equals(program_id)) {
             try ic.tc.consumeCompute(bpf_loader_program.v3.COMPUTE_UNITS);
@@ -59,10 +61,15 @@ pub fn execute(
     }
 
     // NOTE: We double borrow the program account within `executeBpfProgram`, which adds an
-    // additional borrow relative to Agave. This difference should not cause any issues, but is worth noting.
-    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L458-L518
+    // additional borrow relative to Agave. This difference should not cause any issues, but is
+    // worth noting.
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/a2af443/programs/bpf_loader/src/lib.rs#L458-L518
     executeBpfProgram(allocator, ic) catch |err| {
-        // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L574-L588
+        // [agave]
+        // sig fmt: off
+        // https://github.com/anza-xyz/agave/blob/a705c76/program-runtime/src/invoke_context.rs#L574-L588
+        // sig fmt: on
         // Agave always logs program failure regardless of error kind.
         try stable_log.programFailure(
             ic.tc,
@@ -119,7 +126,7 @@ fn executeBpfProgram(
         ic.tc.slot,
     );
 
-    // [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/bpf_loader/src/lib.rs#L1588
+    // [agave] https://github.com/anza-xyz/agave/blob/32ac530/programs/bpf_loader/src/lib.rs#L1588
     var serialized = try bpf_serialize.serializeParameters(
         allocator,
         ic,
@@ -135,10 +142,12 @@ fn executeBpfProgram(
     ic.tc.serialized_accounts = serialized.account_metas;
     defer ic.tc.serialized_accounts = old_accounts;
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1604-L1617
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/a2af443/programs/bpf_loader/src/lib.rs#L1604-L1617
     // TODO: save account addresses for access violation errors resolution
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1621-L1640
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/a2af443/programs/bpf_loader/src/lib.rs#L1621-L1640
     const compute_available = ic.tc.compute_meter;
     // SIMD-0460: scratch state used by the access-violation handler. It needs
     // a stable address for the whole VM run, hence declared at the outer scope
@@ -183,17 +192,20 @@ fn executeBpfProgram(
         break :blk result;
     };
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1641-L1644
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/a2af443/programs/bpf_loader/src/lib.rs#L1641-L1644
     // TODO: timings
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1646-L1653
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/a2af443/programs/bpf_loader/src/lib.rs#L1646-L1653
     try ic.tc.log("Program {f} consumed {} of {} compute units", .{
         ic.ixn_info.program_meta.pubkey,
         compute_consumed,
         compute_available,
     });
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1653-L1657
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/a2af443/programs/bpf_loader/src/lib.rs#L1653-L1657
     if (ic.tc.return_data.data.len != 0) {
         try stable_log.programReturn(
             ic.tc,
@@ -202,7 +214,8 @@ fn executeBpfProgram(
         );
     }
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1658-L1731
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/a2af443/programs/bpf_loader/src/lib.rs#L1658-L1731
     var maybe_execute_error: ?ExecutionError = handleExecutionResult(
         result,
         &ic.tc.custom_error,
@@ -230,7 +243,8 @@ fn executeBpfProgram(
         };
     }
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1750-L1756
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/a2af443/programs/bpf_loader/src/lib.rs#L1750-L1756
     if (maybe_execute_error == null)
         bpf_serialize.deserializeParameters(
             allocator,
@@ -243,7 +257,8 @@ fn executeBpfProgram(
             maybe_execute_error = err;
         };
 
-    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L1757-L1761
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/a2af443/programs/bpf_loader/src/lib.rs#L1757-L1761
     // TODO: update timings
 
     if (maybe_execute_error) |err| return err;
@@ -291,7 +306,8 @@ fn handleExecutionResult(
 ///      and zero-extends the account data — matching SIMD-0460's
 ///      "extend the account with zeros to the maximum allowed" rule.
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/v4.0/transaction-context/src/transaction.rs#L519-L543
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/v4.0/transaction-context/src/transaction.rs#L519-L543
 pub const AccessViolationHandlerCtx = struct {
     tc: *TransactionContext,
     allocator: std.mem.Allocator,
@@ -381,7 +397,10 @@ pub const AccessViolationHandlerCtx = struct {
         }
 
         // Direct-mapping: re-anchor `host_memory` to `account.data`.
-        // [agave] https://github.com/anza-xyz/agave/blob/v4.0/transaction-context/src/transaction.rs#L541-L543
+        // [agave]
+        // sig fmt: off
+        // https://github.com/anza-xyz/agave/blob/v4.0/transaction-context/src/transaction.rs#L541-L543
+        // sig fmt: on
         if (ctx.direct_mapping) {
             region.host_memory = .{ .mutable = account.data };
         }
@@ -452,7 +471,7 @@ fn remapAccessViolation(
     return null;
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/94d70cdf40ab55a3f1c2099037cdb36276ef9032/programs/bpf_loader/src/lib.rs#L486
+/// [agave] https://github.com/anza-xyz/agave/blob/94d70cd/programs/bpf_loader/src/lib.rs#L486
 pub fn executeBpfLoaderV3ProgramInstruction(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -503,7 +522,7 @@ pub fn executeBpfLoaderV3ProgramInstruction(
     };
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/94d70cdf40ab55a3f1c2099037cdb36276ef9032/programs/bpf_loader/src/lib.rs#L496-L513
+/// [agave] https://github.com/anza-xyz/agave/blob/94d70cd/programs/bpf_loader/src/lib.rs#L496-L513
 pub fn executeV3InitializeBuffer(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -531,7 +550,7 @@ pub fn executeV3InitializeBuffer(
     });
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/94d70cdf40ab55a3f1c2099037cdb36276ef9032/programs/bpf_loader/src/lib.rs#L514-L545
+/// [agave] https://github.com/anza-xyz/agave/blob/94d70cd/programs/bpf_loader/src/lib.rs#L514-L545
 pub fn executeV3Write(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -581,14 +600,14 @@ pub fn executeV3Write(
     @memcpy(data[start..end], bytes);
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/94d70cdf40ab55a3f1c2099037cdb36276ef9032/programs/bpf_loader/src/lib.rs#L546-L720
+/// [agave] https://github.com/anza-xyz/agave/blob/94d70cd/programs/bpf_loader/src/lib.rs#L546-L720
 pub fn executeV3DeployWithMaxDataLen(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
     max_data_len: u64,
 ) (error{OutOfMemory} || InstructionError)!void {
     const AccountIndex = bpf_loader_program.v3.instruction.DeployWithMaxDataLen.AccountIndex;
-    // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L565
+    // [agave] https://github.com/anza-xyz/agave/blob/c5ed166/programs/bpf_loader/src/lib.rs#L565
     try ic.ixn_info.checkNumberOfAccounts(4);
 
     // Safety: at least 4 accounts are present
@@ -606,7 +625,7 @@ pub fn executeV3DeployWithMaxDataLen(
         @intFromEnum(AccountIndex.clock),
     );
 
-    // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L575
+    // [agave] https://github.com/anza-xyz/agave/blob/c5ed166/programs/bpf_loader/src/lib.rs#L575
     try ic.ixn_info.checkNumberOfAccounts(8);
 
     // Safety: at least 8 accounts are present
@@ -615,7 +634,8 @@ pub fn executeV3DeployWithMaxDataLen(
     );
 
     // Verify program account and retrieve its program id
-    // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L582-L597
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/c5ed166/programs/bpf_loader/src/lib.rs#L582-L597
     const new_program_id = blk: {
         const program_account = try ic.borrowInstructionAccount(
             @intFromEnum(AccountIndex.program),
@@ -646,7 +666,8 @@ pub fn executeV3DeployWithMaxDataLen(
     };
 
     // Verify buffer account
-    // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L601-L638
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/c5ed166/programs/bpf_loader/src/lib.rs#L601-L638
     const program_data_len = V3State.PROGRAM_DATA_METADATA_SIZE +| max_data_len;
     {
         const buffer_account = try ic.borrowInstructionAccount(
@@ -707,12 +728,13 @@ pub fn executeV3DeployWithMaxDataLen(
     }
 
     // Create the ProgramData account key
-    // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L640-L646
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/c5ed166/programs/bpf_loader/src/lib.rs#L640-L646
     const derived_key, const bump_seed = pubkey_utils.findProgramAddress(
         &.{&new_program_id.data},
         bpf_loader_program.v3.ID,
     ) orelse {
-        // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/pubkey/src/lib.rs#L611-L612
+        // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4/pubkey/src/lib.rs#L611-L612
         @panic("Unable to find viable program address bump seed");
     };
 
@@ -738,7 +760,7 @@ pub fn executeV3DeployWithMaxDataLen(
     }
 
     // Create the ProgramData account
-    // https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L658-L680
+    // https://github.com/anza-xyz/agave/blob/c5ed166/programs/bpf_loader/src/lib.rs#L658-L680
     const signer_derived_key = pubkey_utils.createProgramAddress(
         &.{&new_program_id.data},
         &.{bump_seed},
@@ -762,7 +784,10 @@ pub fn executeV3DeployWithMaxDataLen(
             .{ .pubkey = payer_key, .is_signer = true, .is_writable = true },
             .{ .pubkey = program_data_key, .is_signer = true, .is_writable = true },
             // pass an extra account to avoid the overly strict UnbalancedInstruction error
-            // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L668-L669
+            // [agave]
+            // sig fmt: off
+            // https://github.com/anza-xyz/agave/blob/c5ed166/programs/bpf_loader/src/lib.rs#L668-L669
+            // sig fmt: on
             .{
                 .pubkey = ic.getAccountKeyByIndexUnchecked(
                     @intFromEnum(AccountIndex.buffer),
@@ -775,7 +800,8 @@ pub fn executeV3DeployWithMaxDataLen(
     );
 
     // Load and verify the program bits and deploy the program
-    // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L683-L698
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/c5ed166/programs/bpf_loader/src/lib.rs#L683-L698
     {
         const buffer_account = try ic.borrowInstructionAccount(
             @intFromEnum(AccountIndex.buffer),
@@ -798,7 +824,7 @@ pub fn executeV3DeployWithMaxDataLen(
     }
 
     // Update the ProgramData account and record the program bits
-    // https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L704-L726
+    // https://github.com/anza-xyz/agave/blob/c5ed166/programs/bpf_loader/src/lib.rs#L704-L726
     {
         var program_data_account = try ic.borrowInstructionAccount(
             @intFromEnum(AccountIndex.program_data),
@@ -832,7 +858,8 @@ pub fn executeV3DeployWithMaxDataLen(
     }
 
     // Update the program account
-    // [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/programs/bpf_loader/src/lib.rs#L729-735
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/c5ed166/programs/bpf_loader/src/lib.rs#L729-735
     {
         var program_account = try ic.borrowInstructionAccount(
             @intFromEnum(AccountIndex.program),
@@ -850,7 +877,7 @@ pub fn executeV3DeployWithMaxDataLen(
     try ic.tc.log("Deployed program {f}", .{new_program_id});
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L705-L894
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f/programs/bpf_loader/src/lib.rs#L705-L894
 pub fn executeV3Upgrade(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -1092,7 +1119,7 @@ pub fn executeV3Upgrade(
     try ic.tc.log("Upgraded program {f}", .{new_program_id});
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/programs/bpf_loader/src/lib.rs#L946-L1010
+/// [agave] https://github.com/anza-xyz/agave/blob/a705c76/programs/bpf_loader/src/lib.rs#L946-L1010
 pub fn executeV3SetAuthority(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -1152,7 +1179,10 @@ pub fn executeV3SetAuthority(
             // SIMD-0500: forbid finalize (SetAuthority None) on programs whose embedded
             // ELF is older than SBPFv3. Short data short-circuits to OK, matching Agave's
             // let-chain.
-            // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/bpf_loader/src/lib.rs#L580-L591
+            // [agave]
+            // sig fmt: off
+            // https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/bpf_loader/src/lib.rs#L580-L591
+            // sig fmt: on
             if (new_authority == null and
                 ic.tc.feature_set.active(.disable_sbpf_v0_v1_v2_deployment, ic.tc.slot))
             {
@@ -1189,7 +1219,8 @@ pub fn executeV3SetAuthority(
     }
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/programs/bpf_loader/src/lib.rs#L1011-L1083
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/a705c76/programs/bpf_loader/src/lib.rs#L1011-L1083
 pub fn executeV3SetAuthorityChecked(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -1276,7 +1307,8 @@ pub fn executeV3SetAuthorityChecked(
     try ic.tc.log("New authority {f}", .{new_authority});
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/bpf_loader/src/lib.rs#L1033-L1138
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/faea52f/programs/bpf_loader/src/lib.rs#L1033-L1138
 pub fn executeV3Close(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -1435,7 +1467,7 @@ fn commonCloseAccount(
     try close_account.serializeIntoAccountData(V3State{ .uninitialized = {} });
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/94d70cdf40ab55a3f1c2099037cdb36276ef9032/programs/bpf_loader/src/lib.rs#L1158
+/// [agave] https://github.com/anza-xyz/agave/blob/94d70cd/programs/bpf_loader/src/lib.rs#L1158
 pub fn executeV3ExtendProgram(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -1518,7 +1550,8 @@ fn commonExtendProgram(
         return InstructionError.InvalidRealloc;
     }
 
-    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.1/programs/bpf_loader/src/lib.rs#L861-L883
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/v4.1.0-beta.1/programs/bpf_loader/src/lib.rs#L861-L883
     if (ic.tc.feature_set.active(.loader_v3_minimum_extend_program_size, ic.tc.slot)) {
         const old_len = programdata.constAccountData().len;
         const headroom = system_program.MAX_PERMITTED_DATA_LENGTH -| old_len;
@@ -1563,7 +1596,10 @@ fn commonExtendProgram(
 
     const required_payment = blk: {
         const balance = programdata.account.lamports;
-        // [agave] https://github.com/anza-xyz/agave/blob/5fa721b3b27c7ba33e5b0e1c55326241bb403bb1/program-runtime/src/sysvar_cache.rs#L130-L141
+        // [agave]
+        // sig fmt: off
+        // https://github.com/anza-xyz/agave/blob/5fa721b/program-runtime/src/sysvar_cache.rs#L130-L141
+        // sig fmt: on
         const rent = try ic.tc.sysvar_cache.get(sysvar.Rent);
         const min_balance = @max(1, rent.minimumBalance(new_len));
         break :blk min_balance -| balance;
@@ -1575,7 +1611,8 @@ fn commonExtendProgram(
 
     // Determine the program ID to prevent overlapping mutable/immutable borrow of invoke context.
     if (required_payment > 0) {
-        // [agave] https://github.com/anza-xyz/agave/blob/ad0983afd4efa711cf2258aa9630416ed6716d2a/transaction-context/src/lib.rs#L260-L267
+        // [agave]
+        // https://github.com/anza-xyz/agave/blob/ad0983a/transaction-context/src/lib.rs#L260-L267
         const payer = ic.ixn_info.getAccountMetaAtIndex(
             @intFromEnum(AccountIndex.payer),
         ) orelse
@@ -1612,7 +1649,10 @@ fn commonExtendProgram(
             data[V3State.PROGRAM_DATA_METADATA_SIZE..],
             clock_slot,
             // SIMD-0500: explicitly continue to allow SBPFv0/v1/v2 for ExtendProgram.
-            // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/bpf_loader/src/lib.rs#L971
+            // [agave]
+            // sig fmt: off
+            // https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/bpf_loader/src/lib.rs#L971
+            // sig fmt: on
             false,
         );
     }
@@ -1633,8 +1673,11 @@ fn commonExtendProgram(
 /// TODO: This function depends on syscalls and program cache implementations
 /// which is are not implemented yet. It does not affect the account state resulting from
 /// the execution of bpf loader instructions unless it returns an error.
-/// [agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/programs/bpf_loader/src/lib.rs#L115
-/// [fd] https://github.com/firedancer-io/firedancer/blob/5e9c865414c12b89f1e0c3a2775cb90e3ca3da60/src/flamenco/runtime/program/fd_bpf_loader_program.c#L238
+/// [agave] https://github.com/anza-xyz/agave/blob/92b11cd/programs/bpf_loader/src/lib.rs#L115
+/// [fd]
+// sig fmt: off
+/// https://github.com/firedancer-io/firedancer/blob/5e9c865/src/flamenco/runtime/program/fd_bpf_loader_program.c#L238
+// sig fmt: on
 pub fn deployProgram(
     allocator: std.mem.Allocator,
     tc: *TransactionContext,
@@ -1672,7 +1715,8 @@ pub fn verifyProgram(
     log_collector: ?*sig.runtime.LogCollector,
     disable_sbpf_v0_v1_v2_deployment: bool,
 ) !void {
-    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L124-L131
+    // [agave]
+    // https://github.com/anza-xyz/agave/blob/a2af443/programs/bpf_loader/src/lib.rs#L124-L131
     var environment = vm.Environment.initV1(
         feature_set,
         compute_budget,
@@ -1681,7 +1725,7 @@ pub fn verifyProgram(
     );
 
     // SIMD-0500: morph the base environment into a deployment environment.
-    // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/program-runtime/src/deploy.rs#L30-32
+    // [agave] https://github.com/anza-xyz/agave/blob/a2af443/program-runtime/src/deploy.rs#L30-32
     if (disable_sbpf_v0_v1_v2_deployment) {
         environment.config.minimum_version = @enumFromInt(@max(
             @intFromEnum(environment.config.minimum_version),

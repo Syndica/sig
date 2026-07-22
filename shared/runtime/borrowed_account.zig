@@ -17,7 +17,8 @@ const MAX_PERMITTED_ACCOUNTS_DATA_ALLOCATIONS_PER_TRANSACTION =
 
 const MAX_PERMITTED_DATA_LENGTH = sig.runtime.program.system.MAX_PERMITTED_DATA_LENGTH;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/compute-budget/src/compute_budget.rs#L11-L12
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/8db563d/compute-budget/src/compute_budget.rs#L11-L12
 pub const MAX_INSTRUCTION_STACK_DEPTH: usize = 5;
 
 /// Borrowed account context exists to provide information about the context under which an account
@@ -34,11 +35,12 @@ pub const BorrowedAccountContext = struct {
 ///
 /// The `borrow_context` holds the context under which the account was borrowed:
 ///    - `program_id: Pubkey`: the program which borrowed the account
-///    - `is_writable: bool`: whether the account is writable within the program instruction which borrowed the account
+/// - `is_writable: bool`: whether the account is writable within the program instruction which
+/// borrowed the account
 ///
 /// TODO: add remaining methods as required by the runtime
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L706
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/src/transaction_context.rs#L706
 pub const BorrowedAccount = struct {
     /// The public key of the account
     pubkey: Pubkey,
@@ -53,12 +55,12 @@ pub const BorrowedAccount = struct {
         self.account_write_guard.release();
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/transaction-context/src/lib.rs#L1129
+    /// [agave] https://github.com/anza-xyz/agave/blob/108fcb4/transaction-context/src/lib.rs#L1129
     pub fn isOwnedByCurrentProgram(self: *const BorrowedAccount) bool {
         return self.account.owner.equals(&self.context.program_id);
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L1077
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/src/transaction_context.rs#L1077
     pub fn checkDataIsMutable(self: *const BorrowedAccount) ?InstructionError {
         if (!self.context.is_writable)
             return InstructionError.ReadonlyDataModified;
@@ -69,7 +71,10 @@ pub const BorrowedAccount = struct {
         return null;
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/v4.2/transaction-context/src/instruction_accounts.rs#L351
+    /// [agave]
+    // sig fmt: off
+    /// https://github.com/anza-xyz/agave/blob/v4.2/transaction-context/src/instruction_accounts.rs#L351
+    // sig fmt: on
     pub fn checkCanSetDataLength(
         self: *const BorrowedAccount,
         resize_delta: i64,
@@ -92,7 +97,8 @@ pub const BorrowedAccount = struct {
         return self.checkDataIsMutable();
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/transaction-context/src/lib.rs#L825
+    /// [agave]
+    /// https://github.com/anza-xyz/agave/blob/c5ed166/sdk/transaction-context/src/lib.rs#L825
     pub fn setLamports(self: *const BorrowedAccount, lamports: u64) InstructionError!void {
         if (lamports < self.account.lamports and
             !self.account.owner.equals(&self.context.program_id))
@@ -115,7 +121,7 @@ pub const BorrowedAccount = struct {
         self.account.lamports = lamports;
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L800
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/src/transaction_context.rs#L800
     pub fn addLamports(self: *const BorrowedAccount, lamports: u64) InstructionError!void {
         try self.setLamports(std.math.add(
             u64,
@@ -124,7 +130,7 @@ pub const BorrowedAccount = struct {
         ) catch return InstructionError.ProgramArithmeticOverflow);
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L808
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/src/transaction_context.rs#L808
     pub fn subtractLamports(self: *const BorrowedAccount, lamports: u64) InstructionError!void {
         try self.setLamports(std.math.sub(
             u64,
@@ -133,18 +139,18 @@ pub const BorrowedAccount = struct {
         ) catch return InstructionError.ProgramArithmeticOverflow);
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L817
+    /// [agave] https://github.com/anza-xyz/agave/blob/134be7c/sdk/src/transaction_context.rs#L817
     pub fn constAccountData(self: *const BorrowedAccount) []const u8 {
         return self.account.data;
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L823
+    /// [agave] https://github.com/anza-xyz/agave/blob/134be7c/sdk/src/transaction_context.rs#L823
     pub fn mutableAccountData(self: *const BorrowedAccount) InstructionError![]u8 {
         if (self.checkDataIsMutable()) |err| return err;
         return self.account.data;
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L885
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/src/transaction_context.rs#L885
     pub fn setDataLength(
         self: *const BorrowedAccount,
         allocator: std.mem.Allocator,
@@ -161,7 +167,8 @@ pub const BorrowedAccount = struct {
         try self.account.resize(allocator, new_length);
     }
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L916
+    /// [agave]
+    /// https://github.com/anza-xyz/solana-sdk/blob/e1554f4/transaction-context/src/lib.rs#L916
     pub fn setDataFromSlice(
         self: *const BorrowedAccount,
         allocator: std.mem.Allocator,
@@ -175,14 +182,14 @@ pub const BorrowedAccount = struct {
         resize_delta.* +|= new_length_signed -| old_length_signed;
 
         // TODO: Implement account shared data method set data from slice
-        // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/account/src/lib.rs#L616
+        // [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4/account/src/lib.rs#L616
         try self.account.resize(allocator, data.len);
         @memcpy(self.account.data[0..data.len], data);
     }
 
     /// Deserialize the account data into a type `T`
     ///
-    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L968
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/src/transaction_context.rs#L968
     pub fn deserializeFromAccountData(
         self: *const BorrowedAccount,
         allocator: std.mem.Allocator,
@@ -200,7 +207,7 @@ pub const BorrowedAccount = struct {
     ///
     /// `state` must support bincode serialization
     ///
-    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L976
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/src/transaction_context.rs#L976
     pub fn serializeIntoAccountData(
         self: *const BorrowedAccount,
         state: anytype,
@@ -218,7 +225,7 @@ pub const BorrowedAccount = struct {
             return InstructionError.GenericError;
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L742
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/src/transaction_context.rs#L742
     pub fn setOwner(
         self: *const BorrowedAccount,
         pubkey: Pubkey,
@@ -236,7 +243,7 @@ pub const BorrowedAccount = struct {
         self.account.owner = pubkey;
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L1001
+    /// [agave] https://github.com/anza-xyz/agave/blob/134be7c/sdk/src/transaction_context.rs#L1001
     pub fn setExecutable(
         self: *BorrowedAccount,
         executable: bool,

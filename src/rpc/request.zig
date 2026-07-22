@@ -108,8 +108,10 @@ pub const Request = struct {
             //
             // [agave] Agave unit tests call `create_test_request(..., None)`, which
             // serializes as `"params": null` and still expects success.
-            // - test_rpc_get_version: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L7151-L7163
-            // - test_rpc_get_identity: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L7126-L7133
+            // - test_rpc_get_version:
+            // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L7151-L7163
+            // - test_rpc_get_identity:
+            // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L7126-L7133
             const empty_params: []const std.json.Value = &[_]std.json.Value{};
             const params_values = self.params orelse empty_params;
 

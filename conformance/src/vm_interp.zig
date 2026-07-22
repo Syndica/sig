@@ -246,7 +246,10 @@ fn executeVmTest(
     // In vm_syscalls we allow override them (especially r1) because that simulates the fact
     // that a program partially executed before reaching the syscall.
     // Here we want to test what happens when the program starts from the beginning.
-    // [agave] https://github.com/firedancer-io/solfuzz-agave/blob/agave-v3.1.0-beta.0/src/vm_interp.rs#L354-L365
+    // [agave]
+    // sig fmt: off
+    // https://github.com/firedancer-io/solfuzz-agave/blob/agave-v3.1.0-beta.0/src/vm_interp.rs#L354-L365
+    // sig fmt: on
     vm.registers.set(.r0, vm_context.r0);
     vm.registers.set(.r1, sig.vm.memory.INPUT_START);
     vm.registers.set(.r2, vm_context.r2);

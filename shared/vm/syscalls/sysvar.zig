@@ -44,7 +44,8 @@ fn getSyscall(comptime T: type) fn (*TransactionContext, *MemoryMap, *RegisterMa
             // must be on the stack or heap, meaning their virtual address is
             // inside `0x200000000..0x400000000`.
             // (bytecode/rodata regions below 0x200000000 are always readonly
-            // so mutable translation to addresses below that will result in an AccessViolation anyways).
+            // so mutable translation to addresses below that will result in an AccessViolation
+            // anyways).
             if (value_addr >= memory.INPUT_START and
                 tc.feature_set.active(.syscall_parameter_address_restrictions, tc.slot))
             {
@@ -76,7 +77,8 @@ pub const getEpochRewards = getSyscall(sysvar.EpochRewards);
 pub const getEpochSchedule = getSyscall(sysvar.EpochSchedule);
 pub const getClock = getSyscall(sysvar.Clock);
 
-/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/sysvar.rs#L169
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/master/programs/bpf_loader/src/syscalls/sysvar.rs#L169
 pub fn getSysvar(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
@@ -506,7 +508,8 @@ test getSysvar {
         );
     }
 
-    // SIMD-0459: value_addr >= INPUT_START with syscall_parameter_address_restrictions returns InvalidPointer
+    // SIMD-0459: value_addr >= INPUT_START with syscall_parameter_address_restrictions returns
+    // InvalidPointer
     {
         var cache_strict, var tc_strict = try testing.createTransactionContext(
             allocator,

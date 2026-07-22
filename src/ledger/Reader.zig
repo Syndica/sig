@@ -60,7 +60,8 @@ pub fn isFull(self: *const Reader, allocator: Allocator, slot: Slot) !bool {
         false;
 }
 
-/// Analogous to [slot_meta_iterator](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L604)
+/// Analogous to [slot_meta_iterator](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L604)
 pub fn slotMetaIterator(
     self: *const Reader,
     slot: Slot,
@@ -68,7 +69,8 @@ pub fn slotMetaIterator(
     return try self.ledger.db.iterator(schema.slot_meta, .forward, slot);
 }
 
-/// Analogous to [rooted_slot_iterator](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L667)
+/// Analogous to [rooted_slot_iterator](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L667)
 pub fn rootedSlotIterator(
     self: *const Reader,
     slot: Slot,
@@ -79,7 +81,8 @@ pub fn rootedSlotIterator(
 /// Determines if we can iterate from `starting_slot` to >= `ending_slot` by full slots
 /// `starting_slot` is excluded from the `isFull()` check --> TODO: figure out why
 ///
-/// Analogous to [slot_range_connected](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L690)
+/// Analogous to [slot_range_connected](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L690)
 pub fn slotRangeConnected(
     self: *const Reader,
     allocator: Allocator,
@@ -132,7 +135,8 @@ pub fn slotRangeConnected(
     return false;
 }
 
-/// Analogous to [get_data_shred](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2220)
+/// Analogous to [get_data_shred](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L2220)
 pub fn getDataShred(self: *const Reader, slot: Slot, index: u64) !?BytesRef {
     const shred = try self.ledger.db.getBytes(schema.data_shred, .{ slot, index }) orelse
         return null;
@@ -142,12 +146,14 @@ pub fn getDataShred(self: *const Reader, slot: Slot, index: u64) !?BytesRef {
     return shred;
 }
 
-/// Analogous to [get_coding_shred](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2256)
+/// Analogous to [get_coding_shred](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L2256)
 pub fn getCodeShred(self: *const Reader, slot: Slot, index: u64) !?BytesRef {
     return try self.ledger.db.getBytes(schema.code_shred, .{ slot, index }) orelse return null;
 }
 
-/// Analogous to [get_data_shreds_for_slot](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2230)
+/// Analogous to [get_data_shreds_for_slot](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L2230)
 pub fn getDataShredsForSlot(
     self: *const Reader,
     allocator: Allocator,
@@ -157,7 +163,8 @@ pub fn getDataShredsForSlot(
     return self.getShredsForSlot(allocator, schema.data_shred, slot, start_index);
 }
 
-/// Analogous to [get_coding_shreds_for_slot](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2287-L2288)
+/// Analogous to [get_coding_shreds_for_slot](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L2287-L2288)
 pub fn getCodeShredsForSlot(
     self: *const Reader,
     allocator: Allocator,
@@ -211,7 +218,8 @@ fn getShredsForSlot(
 ///  - `end_index`: Finish search (exclusively) at this shred index.
 ///  - `max_missing`: Limit result to this many indices.
 ///
-/// Analogous to [find_missing_data_indexes](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2491)
+/// Analogous to [find_missing_data_indexes](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L2491)
 ///
 /// agave handles DB errors with placeholder values, which seems like a mistake.
 /// this implementation instead returns errors.
@@ -292,7 +300,8 @@ fn appendIntegers(
     }
 }
 
-/// Analogous to [get_rooted_block_time](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2523)
+/// Analogous to [get_rooted_block_time](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L2523)
 pub fn getRootedBlockTime(self: *const Reader, allocator: Allocator, slot: Slot) !UnixTimestamp {
     if (self.rpc_metrics) |m| m.num_get_rooted_block_time.inc();
     var lock = try self.checkLowestCleanupSlot(slot);
@@ -313,7 +322,8 @@ pub fn getCompleteBlockTime(
     return try self.ledger.db.get(allocator, schema.blocktime, slot) orelse error.SlotUnavailable;
 }
 
-/// Analogous to [get_block_height](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2542)
+/// Analogous to [get_block_height](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L2542)
 pub fn getBlockHeight(self: *const Reader, allocator: Allocator, slot: Slot) !?u64 {
     if (self.rpc_metrics) |m| m.num_get_block_height.inc();
     var lock = try self.checkLowestCleanupSlot(slot);
@@ -363,7 +373,8 @@ fn ensureLowestCleanupSlot(
 
 /// The first complete block that is available in the Ledger ledger
 ///
-/// Analogous to [get_first_available_block](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2556)
+/// Analogous to [get_first_available_block](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L2556)
 pub fn getFirstAvailableBlock(self: *const Reader) !Slot {
     var root_iterator = try self.ledger.db
         .iterator(schema.rooted_slots, .forward, try lowestSlotWithGenesis(self));
@@ -393,7 +404,8 @@ fn lowestSlotWithGenesis(
     return self.ledger.max_root.load(.monotonic);
 }
 
-/// Analogous to [get_rooted_block](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2570)
+/// Analogous to [get_rooted_block](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L2570)
 pub fn getRootedBlock(
     self: *const Reader,
     allocator: Allocator,
@@ -410,7 +422,8 @@ pub fn getRootedBlock(
     return error.SlotNotRooted;
 }
 
-/// Analogous to [get_complete_block](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2586)
+/// Analogous to [get_complete_block](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L2586)
 pub fn getCompleteBlock(
     self: *const Reader,
     allocator: Allocator,
@@ -429,7 +442,8 @@ pub fn getCompleteBlock(
     return block_with_entries.block;
 }
 
-/// Analogous to [get_rooted_block_with_entries](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2600)
+/// Analogous to [get_rooted_block_with_entries](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L2600)
 pub fn getRootedBlockWithEntries(
     self: *const Reader,
     allocator: Allocator,
@@ -452,7 +466,8 @@ pub fn getRootedBlockWithEntries(
     return error.SlotNotRooted;
 }
 
-/// Analogous to [get_complete_block_with_entries](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L2622)
+/// Analogous to [get_complete_block_with_entries](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L2622)
 pub fn getCompleteBlockWithEntries(
     self: *const Reader,
     allocator: Allocator,
@@ -624,7 +639,8 @@ pub fn getBlockRewards(
 
 /// Returns a transaction status
 ///
-/// Analogous to [get_rooted_transaction_status](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3035)
+/// Analogous to [get_rooted_transaction_status](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L3035)
 pub fn getRootedTransactionStatus(
     self: *const Reader,
     allocator: Allocator,
@@ -638,7 +654,8 @@ pub fn getRootedTransactionStatus(
 
 /// Returns a transaction status
 ///
-/// Analogous to [get_transaction_status](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3047)
+/// Analogous to [get_transaction_status](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L3047)
 pub fn getTransactionStatus(
     self: *const Reader,
     allocator: Allocator,
@@ -702,7 +719,8 @@ fn getTransactionStatusWithCounter(
 
 /// Returns a complete transaction if it was processed in a root
 ///
-/// Analogous to [get_rooted_transaction](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3061)
+/// Analogous to [get_rooted_transaction](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L3061)
 pub fn getRootedTransaction(
     self: *const Reader,
     allocator: Allocator,
@@ -715,7 +733,8 @@ pub fn getRootedTransaction(
 
 /// Returns a complete transaction
 ///
-/// Analogous to [get_complete_transaction](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3073)
+/// Analogous to [get_complete_transaction](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L3073)
 pub fn getCompleteTransaction(
     self: *const Reader,
     allocator: Allocator,
@@ -739,7 +758,8 @@ pub fn getCompleteTransaction(
     return self.getTransactionWithStatus(allocator, signature, &unrooted_slots_to_include);
 }
 
-/// Analogous to [get_transaction_with_status](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3090)
+/// Analogous to [get_transaction_with_status](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L3090)
 fn getTransactionWithStatus(
     self: *const Reader,
     allocator: Allocator,
@@ -770,7 +790,8 @@ fn getBlockTime(self: *const Reader, allocator: Allocator, slot: Slot) !?UnixTim
     return self.ledger.db.get(allocator, schema.blocktime, slot);
 }
 
-/// Analogous to [find_transaction_in_slot](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3115)
+/// Analogous to [find_transaction_in_slot](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L3115)
 ///
 /// TODO: optimize the performance of this function. this is a critical function for the very
 /// slow getTransaction RPC method and it appears to have significant room for improvement.
@@ -803,7 +824,8 @@ fn findTransactionInSlot(
     return null;
 }
 
-/// Analogous to [get_confirmed_signatures_for_address2](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3220)
+/// Analogous to [get_confirmed_signatures_for_address2](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L3220)
 pub fn getConfirmedSignaturesForAddress(
     self: *const Reader,
     allocator: Allocator,
@@ -1062,7 +1084,8 @@ fn findAddressSignaturesForSlot(
 
 const SlotPerfSample = struct { Slot, PerfSample };
 
-/// Analogous to [get_recent_perf_samples](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3408)
+/// Analogous to [get_recent_perf_samples](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L3408)
 pub fn getRecentPerfSamples(
     self: *const Reader,
     allocator: Allocator,
@@ -1082,7 +1105,8 @@ pub fn getRecentPerfSamples(
 
 const ProgramCost = struct { Pubkey, u64 };
 
-/// Analogous to [read_program_costs](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3445)
+/// Analogous to [read_program_costs](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L3445)
 pub fn readProgramCosts(
     self: *const Reader,
     allocator: Allocator,
@@ -1098,7 +1122,8 @@ pub fn readProgramCosts(
 
 /// Returns the entry vector for the slot starting with `shred_start_index`
 ///
-/// Analogous to [get_slot_entries](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3466)
+/// Analogous to [get_slot_entries](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L3466)
 pub fn getSlotEntries(
     self: *const Reader,
     allocator: Allocator,
@@ -1116,7 +1141,8 @@ pub fn getSlotEntries(
 /// Returns the entry vector for the slot starting with `shred_start_index`, the number of
 /// shreds that comprise the entry vector, and whether the slot is full (consumed all shreds).
 ///
-/// Analogous to [get_slot_entries_with_shred_info](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3473)
+/// Analogous to [get_slot_entries_with_shred_info](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L3473)
 pub fn getSlotEntriesWithShredInfo(
     self: *const Reader,
     allocator: Allocator,
@@ -1201,7 +1227,8 @@ fn getCompletedDataRanges(
     return ranges;
 }
 
-/// Analogous to [get_entries_in_data_block](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3700)
+/// Analogous to [get_entries_in_data_block](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L3700)
 pub fn getEntriesInDataBlock(
     self: *const Reader,
     allocator: Allocator,
@@ -1226,7 +1253,8 @@ pub fn getEntriesInDataBlock(
 ///   s_i < e_i <= s_i+1 < e_i+1
 ///   e_i == s_i+1
 ///
-/// Analogous to [get_slot_entries_in_block](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3614)
+/// Analogous to [get_slot_entries_in_block](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L3614)
 fn getSlotEntriesInBlock(
     self: *const Reader,
     allocator: Allocator,
@@ -1338,7 +1366,8 @@ fn getSlotEntriesInBlock(
 /// Returns a mapping from each elements of `slots` to a list of the
 /// element's children slots.
 ///
-/// Analogous to [get_slots_since](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3821)
+/// Analogous to [get_slots_since](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L3821)
 pub fn getSlotsSince(
     self: *const Reader,
     allocator: Allocator,
@@ -1365,7 +1394,8 @@ pub fn getSlotsSince(
     return map;
 }
 
-/// Analogous to [is_root](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3838)
+/// Analogous to [is_root](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L3838)
 ///
 /// agave handles DB errors with placeholder values, which seems like a mistake.
 /// this implementation instead returns errors.
@@ -1377,7 +1407,8 @@ pub fn isRoot(self: *const Reader, allocator: Allocator, slot: Slot) !bool {
 /// been rooted. This is either because the slot was skipped, or due to a gap in ledger data,
 /// as when booting from a newer snapshot.
 ///
-/// Analogous to [is_skipped](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3845)
+/// Analogous to [is_skipped](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L3845)
 ///
 /// agave handles DB errors with placeholder values, which seems like a mistake.
 /// this implementation instead returns errors.
@@ -1391,7 +1422,8 @@ pub fn isSkipped(self: *const Reader, allocator: Allocator, slot: Slot) !bool {
         slot < self.ledger.max_root.load(.monotonic) and slot > lowest_root;
 }
 
-/// Analogous to [get_bank_hash](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3873)
+/// Analogous to [get_bank_hash](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L3873)
 pub fn getBankHash(self: *const Reader, allocator: Allocator, slot: Slot) !?Hash {
     return if (try self.ledger.db.get(allocator, schema.bank_hash, slot)) |versioned|
         versioned.frozenHash()
@@ -1399,7 +1431,8 @@ pub fn getBankHash(self: *const Reader, allocator: Allocator, slot: Slot) !?Hash
         null;
 }
 
-/// Analogous to [is_duplicate_confirmed](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3880)
+/// Analogous to [is_duplicate_confirmed](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L3880)
 pub fn isDuplicateConfirmed(self: *const Reader, allocator: Allocator, slot: Slot) !bool {
     return if (try self.ledger.db.get(allocator, schema.bank_hash, slot)) |versioned|
         versioned.isDuplicateConfirmed()
@@ -1409,7 +1442,8 @@ pub fn isDuplicateConfirmed(self: *const Reader, allocator: Allocator, slot: Slo
 
 /// Returns information about a single optimistically confirmed slot
 ///
-/// Analogous to [get_optimistic_slot](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3899)
+/// Analogous to [get_optimistic_slot](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L3899)
 pub fn getOptimisticSlot(
     self: *const Reader,
     allocator: Allocator,
@@ -1425,7 +1459,8 @@ const OptimisticSlot = struct { Slot, Hash, UnixTimestamp };
 ///
 /// The returned slots are sorted in increasing order of slot number.
 ///
-/// Analogous to [get_latest_optimistic_slots](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3907)
+/// Analogous to [get_latest_optimistic_slots](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L3907)
 pub fn getLatestOptimisticSlots(
     self: *const Reader,
     allocator: Allocator,
@@ -1446,24 +1481,28 @@ pub fn getLatestOptimisticSlots(
     return optimistic_slots;
 }
 
-/// Analogous to [is_dead](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3962)
+/// Analogous to [is_dead](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L3962)
 pub fn isDead(self: *const Reader, allocator: Allocator, slot: Slot) !bool {
     return try self.ledger.db.get(allocator, schema.dead_slots, slot) orelse false;
 }
 
-/// Analogous to [has_duplicate_shreds_in_slot](https://github.com/anza-xyz/agave/blob/60ba168d54d7ac6683f8f2e41a0e325f29d9ab2b/ledger/src/blockstore.rs#L4040)
+/// Analogous to [has_duplicate_shreds_in_slot](
+/// https://github.com/anza-xyz/agave/blob/60ba168/ledger/src/blockstore.rs#L4040)
 pub fn isDuplicateSlot(self: *const Reader, slot: Slot) !bool {
     return try self.ledger.db.contains(schema.duplicate_slots, slot);
 }
 
-/// Analogous to [get_first_duplicate_proof](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L3983)
+/// Analogous to [get_first_duplicate_proof](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L3983)
 pub fn getFirstDuplicateProof(self: *const Reader) !?struct { Slot, DuplicateSlotProof } {
     var iterator = try self.ledger.db.iterator(schema.duplicate_slots, .forward, 0);
     defer iterator.deinit();
     return try iterator.next();
 }
 
-/// Analogous to [get_duplicate_slot](https://github.com/anza-xyz/agave/blob/6e84f7eab872cc553995e7d35ff1f2ec0dd37751/ledger/src/blockstore.rs#L4057)
+/// Analogous to [get_duplicate_slot](
+/// https://github.com/anza-xyz/agave/blob/6e84f7e/ledger/src/blockstore.rs#L4057)
 pub fn getDuplicateSlot(self: *const Reader, allocator: Allocator, slot: u64) !?DuplicateSlotProof {
     return try self.ledger.db.get(allocator, schema.duplicate_slots, slot);
 }
@@ -1475,7 +1514,8 @@ pub fn getDuplicateSlot(self: *const Reader, allocator: Allocator, slot: u64) !?
 /// The payload is modified so that it has the same retransmitter's
 /// signature as the `shred` argument.
 ///
-/// Analogous to [is_shred_duplicate](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L4009)
+/// Analogous to [is_shred_duplicate](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L4009)
 pub fn isShredDuplicate(self: *const Reader, allocator: Allocator, shred: Shred) !?ArrayList(u8) {
     const id = shred.id();
     const other_ref = try switch (shred) {
@@ -1505,7 +1545,8 @@ pub fn isShredDuplicate(self: *const Reader, allocator: Allocator, shred: Shred)
 }
 
 /// find the first available slot in ledger that has some data in it
-/// Analogous to [lowest_slot](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L4073)
+/// Analogous to [lowest_slot](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L4073)
 pub fn lowestSlot(self: *const Reader) !Slot {
     var iterator = try self.ledger.db.iterator(schema.slot_meta, .forward, null);
     defer iterator.deinit();
@@ -1526,7 +1567,8 @@ pub fn maxRoot(self: *const Reader) Slot {
 
 /// Returns the highest available slot in the ledger
 ///
-/// Analogous to [highest_slot](https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/ledger/src/blockstore.rs#L4100)
+/// Analogous to [highest_slot](
+/// https://github.com/anza-xyz/agave/blob/15dbe7f/ledger/src/blockstore.rs#L4100)
 pub fn highestSlot(self: *const Reader) !?Slot {
     var iterator = try self.ledger.db.iterator(schema.slot_meta, .reverse, null);
     defer iterator.deinit();

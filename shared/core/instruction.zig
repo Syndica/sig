@@ -1,5 +1,5 @@
-// https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/instruction/src/account_meta.rs
-// https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/instruction/src/error.rs
+// https://github.com/anza-xyz/agave/blob/8db563d/sdk/instruction/src/account_meta.rs
+// https://github.com/anza-xyz/agave/blob/8db563d/sdk/instruction/src/error.rs
 
 const std = @import("std");
 const sig = @import("../lib.zig");
@@ -21,7 +21,7 @@ pub const Instruction = struct {
         allocator.free(self.accounts);
     }
 
-    // https://github.com/anza-xyz/agave/blob/3bbabb38c5800b197841eb79037a82e88e174440/sdk/instruction/src/lib.rs#L221
+    // https://github.com/anza-xyz/agave/blob/3bbabb3/sdk/instruction/src/lib.rs#L221
     pub fn initUsingBincodeAlloc(
         allocator: std.mem.Allocator,
         T: type,
@@ -30,7 +30,8 @@ pub const Instruction = struct {
         data: *const T,
     ) error{OutOfMemory}!Instruction {
         const serialized = sig.bincode.writeAlloc(allocator, data, .{}) catch
-            // reviewer's note - can we trim away bincode's use of any error? I don't think we need it,
+            // reviewer's note - can we trim away bincode's use of any error? I don't think we need
+            // it,
             // a bit annoying.
             return error.OutOfMemory;
         errdefer allocator.free(serialized);

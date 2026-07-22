@@ -136,7 +136,8 @@ pub fn BoundedArrayAligned(
             return &self.slice()[self.len - 1];
         }
 
-        /// Remove and return the last element from the slice, or return `null` if the slice is empty.
+        /// Remove and return the last element from the slice, or return `null` if the slice is
+        /// empty.
         pub fn pop(self: *Self) ?T {
             if (self.len == 0) return null;
             const item = self.get(self.len - 1);
@@ -230,7 +231,8 @@ pub fn BoundedArrayAligned(
             return .{ .context = self };
         }
 
-        /// Same as `appendSlice` except it returns the number of bytes written, which is always the same
+        /// Same as `appendSlice` except it returns the number of bytes written, which is always the
+        /// same
         /// as `m.len`. The purpose of this function existing is to match `std.io.Writer` API.
         fn appendWrite(self: *Self, m: []const u8) error{Overflow}!usize {
             try self.appendSlice(m);

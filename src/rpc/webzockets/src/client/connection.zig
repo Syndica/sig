@@ -160,7 +160,8 @@ pub fn ClientConnection(
             /// Length of actual header in header_buf. Set to 1 if raw write is pending/in-flight
             /// to distinguish from normal data writes.
             header_len: usize = 0,
-            /// Payload for current or pending data write (caller owned slice, data masked in place).
+            /// Payload for current or pending data write (caller owned slice, data masked in
+            /// place).
             payload: []const u8 = &.{},
 
             // Control frame buffers (127 payload + 4 mask key)

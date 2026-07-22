@@ -99,7 +99,8 @@ pub fn processResult(params: ProcessResultParams, result: sig.replay.execution.R
     }
 }
 
-/// Analogous to [mark_dead_slot](https://github.com/anza-xyz/agave/blob/15635be1503566820331cd2c845675641a42d405/core/src/replay_stage.rs#L2255)
+/// Analogous to [mark_dead_slot](
+/// https://github.com/anza-xyz/agave/blob/15635be/core/src/replay_stage.rs#L2255)
 fn markDeadSlot(
     params: ProcessResultParams,
     dead_slot: Slot,

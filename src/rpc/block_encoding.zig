@@ -17,7 +17,7 @@ const TransactionEncoding = methods.common.TransactionEncoding;
 const resolve_lookup = sig.replay.resolve_lookup;
 
 /// Encode transactions and/or signatures based on the requested options.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L332
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/lib.rs#L332
 pub fn encodeBlockWithOptions(
     arena: Allocator,
     block: sig.ledger.Reader.VersionedConfirmedBlock,
@@ -96,7 +96,7 @@ pub fn encodeBlockWithOptions(
 }
 
 /// Validates that the transaction version is supported by the provided max version
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L496
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/lib.rs#L496
 fn validateVersion(
     version: sig.core.transaction.Version,
     max_supported_version: ?u8,
@@ -117,7 +117,7 @@ fn validateVersion(
 }
 
 /// Encode a transaction with its metadata for the RPC response.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L452
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/lib.rs#L452
 pub fn encodeTransactionWithStatusMeta(
     arena: Allocator,
     tx_with_meta: sig.ledger.Reader.TransactionWithStatusMeta,
@@ -146,7 +146,7 @@ pub fn encodeTransactionWithStatusMeta(
 }
 
 /// Encode a transaction missing metadata
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L708
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/lib.rs#L708
 fn encodeTransactionWithoutMeta(
     arena: Allocator,
     transaction: sig.core.Transaction,
@@ -204,7 +204,7 @@ fn encodeTransactionWithoutMeta(
 }
 
 /// Encode a full versioned transaction
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L520
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/lib.rs#L520
 fn encodeVersionedTransactionWithStatusMeta(
     arena: Allocator,
     tx_with_meta: sig.ledger.Reader.VersionedTransactionWithStatusMeta,
@@ -242,7 +242,8 @@ fn encodeVersionedTransactionWithStatusMeta(
 
 /// Parse a ledger transaction status meta directly into a
 /// UiTransactionStatusMeta (matches agave's From implementation)
-/// [agave] https://github.com/anza-xyz/agave/blob/1c084acb9195fab0981b9876bcb409cabaf35d5c/transaction-status-client-types/src/lib.rs#L380
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/1c084ac/transaction-status-client-types/src/lib.rs#L380
 fn parseUiTransactionStatusMetaFromLedger(
     arena: Allocator,
     meta: sig.ledger.meta.TransactionStatusMeta,
@@ -317,7 +318,7 @@ fn parseUiTransactionStatusMetaFromLedger(
 }
 
 /// Encode a transaction with its metadata
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L632
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/lib.rs#L632
 fn encodeVersionedTransactionWithMeta(
     arena: Allocator,
     transaction: sig.core.Transaction,
@@ -400,7 +401,7 @@ fn encodeVersionedTransactionWithMeta(
 }
 
 /// Encode a transaction to JSON format with its metadata
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L663
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/lib.rs#L663
 fn jsonEncodeVersionedTransaction(
     arena: Allocator,
     transaction: sig.core.Transaction,
@@ -419,7 +420,7 @@ fn jsonEncodeVersionedTransaction(
 }
 
 /// Encode a legacy transaction message
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L743
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/lib.rs#L743
 fn encodeLegacyTransactionMessage(
     arena: Allocator,
     message: sig.core.transaction.Message,
@@ -501,7 +502,7 @@ fn encodeLegacyTransactionMessage(
 }
 
 /// Encode a v0 transaction message to JSON format
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L859
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/lib.rs#L859
 fn jsonEncodeV0TransactionMessage(
     arena: Allocator,
     message: sig.core.transaction.Message,
@@ -551,7 +552,7 @@ fn jsonEncodeV0TransactionMessage(
 }
 
 /// Encode a v0 transaction message with metadata to JSON format
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L824
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/lib.rs#L824
 fn jsonEncodeV0TransactionMessageWithMeta(
     arena: Allocator,
     message: sig.core.transaction.Message,
@@ -623,7 +624,8 @@ fn jsonEncodeV0TransactionMessageWithMeta(
 }
 
 /// Parse account keys for a legacy transaction message
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_accounts.rs#L7
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_accounts.rs#L7
 fn parseLegacyMessageAccounts(
     arena: Allocator,
     message: sig.core.transaction.Message,
@@ -650,7 +652,8 @@ fn parseLegacyMessageAccounts(
 }
 
 /// Parse account keys for a versioned transaction message
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/parse_accounts.rs#L21
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/parse_accounts.rs#L21
 fn parseV0MessageAccounts(
     arena: Allocator,
     message: sig.core.transaction.Message,
@@ -689,7 +692,7 @@ fn parseV0MessageAccounts(
 
 /// Parse transaction and its metadata into the UiTransactionStatusMeta
 /// format for the jsonParsed encoding
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L200
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/lib.rs#L200
 fn parseUiTransactionStatusMeta(
     arena: Allocator,
     meta: sig.ledger.transaction_status.TransactionStatusMeta,
@@ -778,7 +781,7 @@ fn parseUiTransactionStatusMeta(
 }
 
 /// Encode a transaction for transactionDetails=accounts
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L477
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/lib.rs#L477
 fn buildJsonAccounts(
     arena: Allocator,
     tx_with_meta: sig.ledger.Reader.TransactionWithStatusMeta,
@@ -804,7 +807,7 @@ fn buildJsonAccounts(
 }
 
 /// Parse json accounts for a transaction without metadata
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L733
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/lib.rs#L733
 fn buildTransactionJsonAccounts(
     arena: Allocator,
     transaction: sig.core.Transaction,
@@ -821,7 +824,7 @@ fn buildTransactionJsonAccounts(
 }
 
 /// Parse json accounts for a versioned transaction with metadata
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L555
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/lib.rs#L555
 fn buildJsonAccountsWithMeta(
     arena: Allocator,
     tx_with_meta: sig.ledger.Reader.VersionedTransactionWithStatusMeta,
@@ -872,7 +875,7 @@ fn buildJsonAccountsWithMeta(
 
 /// Build a simplified UiTransactionStatusMeta with only the fields
 /// required for transactionDetails=accounts
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/transaction-status/src/lib.rs#L168
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084/transaction-status/src/lib.rs#L168
 fn buildSimpleUiTransactionStatusMeta(
     arena: Allocator,
     meta: sig.ledger.transaction_status.TransactionStatusMeta,

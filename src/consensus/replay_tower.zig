@@ -391,9 +391,12 @@ pub const ReplayTower = struct {
         }
 
         if (last_vote_ancestors.ancestors.count() == 0) {
-            // If `last_vote_ancestors` is empty, this means we must have a last vote that is stray. If the `last_voted_slot`
-            // is stray, it must be descended from some earlier root than the latest root (the anchor at startup).
-            // The above check also guarantees that the candidate slot is not a descendant of this stray last vote.
+            // If `last_vote_ancestors` is empty, this means we must have a last vote that is stray.
+            // If the `last_voted_slot`
+            // is stray, it must be descended from some earlier root than the latest root (the
+            // anchor at startup).
+            // The above check also guarantees that the candidate slot is not a descendant of this
+            // stray last vote.
             //
             // This gives us a fork graph:
             //     / ------------- stray `last_voted_slot`
@@ -401,15 +404,18 @@ pub const ReplayTower = struct {
             //     \- latest root (anchor) - ... - candidate slot
             //                                \- switch slot
             //
-            // Thus the common ancestor of `last_voted_slot` and `candidate_slot` is `old_root`, which the `switch_slot`
+            // Thus the common ancestor of `last_voted_slot` and `candidate_slot` is `old_root`,
+            // which the `switch_slot`
             // descends from. Thus it is safe to use `candidate_slot` in the switching proof.
             //
-            // Note: the calling function should have already panicked if we do not have ancestors and the last vote is not stray.
+            // Note: the calling function should have already panicked if we do not have ancestors
+            // and the last vote is not stray.
             std.debug.assert(self.isStrayLastVote());
             return true;
         }
 
-        // Only consider forks that split at the common_ancestor of `switch_slot` and `last_voted_slot` or earlier.
+        // Only consider forks that split at the common_ancestor of `switch_slot` and
+        // `last_voted_slot` or earlier.
         // This is to prevent situations like this from being included in the switching proof:
         //
         //         /-- `last_voted_slot`
@@ -417,8 +423,10 @@ pub const ReplayTower = struct {
         //    X    \-- `candidate_slot`
         //     \-- `switch_slot`
         //
-        // The common ancestor of `last_voted_slot` and `switch_slot` is `X`. Votes for the `candidate_slot`
-        // should not count towards the switch proof since `candidate_slot` is "on the same fork" as `last_voted_slot`
+        // The common ancestor of `last_voted_slot` and `switch_slot` is `X`. Votes for the
+        // `candidate_slot`
+        // should not count towards the switch proof since `candidate_slot` is "on the same fork" as
+        // `last_voted_slot`
         // in relation to `switch_slot`.
         // However these candidate slots should be allowed:
         //
@@ -431,7 +439,8 @@ pub const ReplayTower = struct {
         // As the `candidate_slot`s forked off from `X` or earlier.
         //
         // To differentiate, we check the common ancestor of `last_voted_slot` and `candidate_slot`.
-        // If the `switch_slot` descends from this ancestor, then the vote for `candidate_slot` can be included.
+        // If the `switch_slot` descends from this ancestor, then the vote for `candidate_slot` can
+        // be included.
         if (greatestCommonAncestor(ancestors, candidate_slot, last_voted_slot)) |ancestor| {
             return isDescendantSlot(switch_slot, ancestor, ancestors);
         }
@@ -442,7 +451,8 @@ pub const ReplayTower = struct {
     /// Determines whether the validator is allowed to switch forks by evaluating
     /// the stake-weighted lockouts between the last voted slot and a candidate switch slot.
     ///
-    /// It requires gathering of stake information from other validators' lockouts to justify switching to a
+    /// It requires gathering of stake information from other validators' lockouts to justify
+    /// switching to a
     /// different fork. It ensures safety by preventing forks from being abandoned prematurely.
     ///
     /// Returns a `SwitchForkDecision`, which indicates whether:
@@ -470,19 +480,27 @@ pub const ReplayTower = struct {
         const last_voted_hash = last_voted.hash;
         const root = try self.tower.getRoot();
 
-        // `heaviest_subtree_fork_choice` entries are not cleaned by duplicate block purging/rollback logic,
-        // so this is safe to check here. We return here if the last voted slot was rolled back/purged due to
-        // being a duplicate because `ancestors`/`descendants`/`progress` structures may be missing this slot due
+        // `heaviest_subtree_fork_choice` entries are not cleaned by duplicate block
+        // purging/rollback logic,
+        // so this is safe to check here. We return here if the last voted slot was rolled
+        // back/purged due to
+        // being a duplicate because `ancestors`/`descendants`/`progress` structures may be missing
+        // this slot due
         // to duplicate purging. This would cause many of the `unwrap()` checks below to fail.
         const switch_hash = progress.getHash(switch_slot) orelse return error.MissingSlot;
         if (heaviest_subtree_fork_choice.latestDuplicateAncestor(
             SlotAndHash{ .slot = last_voted_slot, .hash = last_voted_hash },
         )) |latest_duplicate_ancestor| {
-            // We're rolling back because one of the ancestors of the last vote was a duplicate. In this
-            // case, it's acceptable if the switch candidate is one of ancestors of the previous vote,
-            // just fail the switch check because there's no point in voting on an ancestor. ReplayStage
-            // should then have a special case continue building an alternate fork from this ancestor, NOT
-            // the `last_voted_slot`. This is in contrast to usual SwitchFailure where ReplayStage continues to build blocks
+            // We're rolling back because one of the ancestors of the last vote was a duplicate. In
+            // this
+            // case, it's acceptable if the switch candidate is one of ancestors of the previous
+            // vote,
+            // just fail the switch check because there's no point in voting on an ancestor.
+            // ReplayStage
+            // should then have a special case continue building an alternate fork from this
+            // ancestor, NOT
+            // the `last_voted_slot`. This is in contrast to usual SwitchFailure where ReplayStage
+            // continues to build blocks
             // on latest vote. See `ReplayStage::select_vote_and_reset_forks()` for more details.
             if (heaviest_subtree_fork_choice.isStrictAncestor(&.{
                 .slot = switch_slot,
@@ -501,8 +519,10 @@ pub const ReplayTower = struct {
                     true;
 
                 if (is_switch) {
-                    // Our last vote slot was purged because it was on a duplicate fork, don't continue below
-                    // where checks may panic. We allow a freebie vote here that may violate switching
+                    // Our last vote slot was purged because it was on a duplicate fork, don't
+                    // continue below
+                    // where checks may panic. We allow a freebie vote here that may violate
+                    // switching
                     // thresholds
                     return SwitchForkDecision{ .switch_proof = Hash.ZEROES };
                 }
@@ -515,7 +535,8 @@ pub const ReplayTower = struct {
                     // Unless last vote is stray and stale, ancestors.get(last_voted_slot) must
                     // return a value, justifying to panic! here.
                     // Also, adjustLockoutsAfterReplay() correctly makes last_voted_slot None,
-                    // if all saved votes are ancestors of replayed_root_slot. So this code shouldn't be
+                    // if all saved votes are ancestors of replayed_root_slot. So this code
+                    // shouldn't be
                     // touched in that case as well.
                     // In other words, except being stray, all other slots have been voted on while
                     // this validator has been running, so we must be able to fetch ancestors for
@@ -527,12 +548,14 @@ pub const ReplayTower = struct {
                     // validator SEGV, OS/HW crash, or plain No Free Space FS error.
 
                     // However, returning empty ancestors as a fallback here shouldn't result in
-                    // slashing by itself (Note that we couldn't fully preclude any kind of slashing if
+                    // slashing by itself (Note that we couldn't fully preclude any kind of slashing
+                    // if
                     // the failure was OS or HW level).
 
                     // Firstly, lockout is ensured elsewhere.
 
-                    // Also, there is no risk of optimistic conf. violation. Although empty ancestors
+                    // Also, there is no risk of optimistic conf. violation. Although empty
+                    // ancestors
                     // could result in incorrect (= more than actual) locked_out_stake and
                     // false-positive SwitchProof later in this function, there should be no such a
                     // heavier fork candidate, first of all, if the last vote (or any of its
@@ -722,7 +745,8 @@ pub const ReplayTower = struct {
             if (candidate_latest_frozen_vote > last_voted_slot) {
                 // Because `candidate_latest_frozen_vote` is the last vote made by some validator
                 // in the cluster for a frozen bank `B` observed through gossip, we may have cleared
-                // that frozen bank `B` because we `set_root(root)` for a `root` on a different fork,
+                // that frozen bank `B` because we `set_root(root)` for a `root` on a different
+                // fork,
                 // like so:
                 //
                 //    |----------X ------candidate_latest_frozen_vote (frozen)
@@ -730,16 +754,22 @@ pub const ReplayTower = struct {
                 //    |----------new root ----last_voted_slot
                 //
                 // In most cases, because `last_voted_slot` must be a descendant of `root`, then
-                // if `candidate_latest_frozen_vote` is not found in the ancestors/descendants map (recall these
-                // directly reflect the state of BankForks), this implies that `B` was pruned from BankForks
-                // because it was on a different fork than `last_voted_slot`, and thus this vote for `candidate_latest_frozen_vote`
+                // if `candidate_latest_frozen_vote` is not found in the ancestors/descendants map
+                // (recall these
+                // directly reflect the state of BankForks), this implies that `B` was pruned from
+                // BankForks
+                // because it was on a different fork than `last_voted_slot`, and thus this vote for
+                // `candidate_latest_frozen_vote`
                 // should be safe to count towards the switching proof:
                 //
-                // However, there is also the possibility that `last_voted_slot` is a stray, in which
+                // However, there is also the possibility that `last_voted_slot` is a stray, in
+                // which
                 // case we cannot make this conclusion as we do not know the ancestors/descendants
                 // of strays. Hence we err on the side of caution here and ignore this vote. This
-                // is ok because validators voting on different unrooted forks should eventually vote
-                // on some descendant of the root, at which time they can be included in switching proofs.
+                // is ok because validators voting on different unrooted forks should eventually
+                // vote
+                // on some descendant of the root, at which time they can be included in switching
+                // proofs.
                 const is_valid = self.isValidSwitchingProofVote(
                     candidate_latest_frozen_vote,
                     last_voted_slot,
@@ -832,7 +862,8 @@ pub const ReplayTower = struct {
     /// This is used to experiment with vote lockout behavior and assess whether a vote is
     /// justified based on recent vote history, lockout depth, and voting stake.
     ///
-    /// Analogous to [check_vote_stake_thresholds](https://github.com/anza-xyz/agave/blob/3572983cc28393e3c39a971c274cdac9b2eb902a/core/src/consensus.rs#L1346)
+    /// Analogous to [check_vote_stake_thresholds](
+    /// https://github.com/anza-xyz/agave/blob/3572983/core/src/consensus.rs#L1346)
     pub fn checkVoteStakeThresholds(
         self: *const ReplayTower,
         allocator: std.mem.Allocator,
@@ -849,9 +880,11 @@ pub const ReplayTower = struct {
 
         // Assemble all the vote thresholds and depths to check.
         const vote_thresholds_and_depths = [threshold_size]struct { depth: usize, size: f64 }{
-            // The following two checks are log only and are currently being used for experimentation
+            // The following two checks are log only and are currently being used for
+            // experimentation
             // purposes. We wish to impose a shallow threshold check to prevent the frequent 8 deep
-            // lockouts seen multiple times a day. We check both the 4th and 5th deep here to collect
+            // lockouts seen multiple times a day. We check both the 4th and 5th deep here to
+            // collect
             // metrics to determine the right depth and threshold percentage to set in the future.
             .{ .depth = VOTE_THRESHOLD_DEPTH_SHALLOW, .size = SWITCH_FORK_THRESHOLD },
             .{ .depth = VOTE_THRESHOLD_DEPTH_SHALLOW + 1, .size = SWITCH_FORK_THRESHOLD },
@@ -1079,7 +1112,8 @@ pub const ReplayTower = struct {
                     slot_in_tower == tower_root;
 
                 if (!voting_for_root) {
-                    // Unless we're voting since genesis, slots_in_tower must always be older than last checked_slot
+                    // Unless we're voting since genesis, slots_in_tower must always be older than
+                    // last checked_slot
                     // including all vote slot and the root slot.
                     if (slot_in_tower >= checked_slot) {
                         return TowerError.FatallyInconsistentTowerSlotOrder;
@@ -1684,9 +1718,11 @@ fn optimisticallyBypassVoteStakeThresholdCheck(
 /// - Consistent view: deterministic simulation produces the same projected state across validators.
 ///
 /// Note: the simulated vote is excluded from stake accumulation; stake is credited only to the
-/// latest landed vote (and its ancestors). As a result, `fork_stake` is taken from the parent of `slot`.
+/// latest landed vote (and its ancestors). As a result, `fork_stake` is taken from the parent of
+/// `slot`.
 ///
-/// Analogous to [collect_vote_lockouts]https://github.com/anza-xyz/agave/blob/91520c7095c4db968fe666b80a1b80dfef1bd909/core/src/consensus.rs#L389
+/// Analogous to [collect_vote_lockouts]
+/// https://github.com/anza-xyz/agave/blob/91520c7/core/src/consensus.rs#L389
 pub fn collectClusterVoteState(
     allocator: std.mem.Allocator,
     logger: Logger,
@@ -1879,7 +1915,8 @@ fn updateAncestorVotedStakes(
     }
 }
 
-/// Analogous to [is_slot_duplicate_confirmed](https://github.com/anza-xyz/agave/blob/91520c7095c4db968fe666b80a1b80dfef1bd909/core/src/consensus.rs#L540)
+/// Analogous to [is_slot_duplicate_confirmed](
+/// https://github.com/anza-xyz/agave/blob/91520c7/core/src/consensus.rs#L540)
 pub fn isDuplicateSlotConfirmed(
     slot: Slot,
     voted_stakes: *const VotedStakes,
@@ -4085,7 +4122,8 @@ test "isValidSwitchingProofVote common ancestor" {
     }
 }
 
-// Analogous to [test_switch_threshold](https://github.com/anza-xyz/agave/blob/1538a5d7823c5a4ea2c8000d14d09eff3bee2ef1/core/src/consensus.rs#L2103)
+// Analogous to [test_switch_threshold](
+// https://github.com/anza-xyz/agave/blob/1538a5d/core/src/consensus.rs#L2103)
 test "switch threshold" {
     const allocator = std.testing.allocator;
 
@@ -4433,7 +4471,8 @@ test "switch threshold" {
         }
     }
 
-    // Test 5: Lockout on different fork (14) that doesn't cover last vote (12 to 46) shouldn't count
+    // Test 5: Lockout on different fork (14) that doesn't cover last vote (12 to 46) shouldn't
+    // count
     {
         if (progress.map.getPtr(14)) |fork_progress| {
             const interval = try fork_progress
@@ -4472,7 +4511,8 @@ test "switch threshold" {
         }
     }
 
-    // Test 6: Lockout on slot 13 that covers last vote shouldn't count because 14 is more recent frozen bank
+    // Test 6: Lockout on slot 13 that covers last vote shouldn't count because 14 is more recent
+    // frozen bank
     {
         if (progress.map.getPtr(13)) |fork_progress| {
             const interval = try fork_progress
@@ -4617,7 +4657,8 @@ test "switch threshold" {
     }
 }
 
-// Analogous to [test_switch_threshold_use_gossip_votes](https://github.com/anza-xyz/agave/blob/1538a5d7823c5a4ea2c8000d14d09eff3bee2ef1/core/src/consensus.rs#L2272)
+// Analogous to [test_switch_threshold_use_gossip_votes](
+// https://github.com/anza-xyz/agave/blob/1538a5d/core/src/consensus.rs#L2272)
 test "switch threshold use gossip votes" {
     const allocator = std.testing.allocator;
 
@@ -4854,7 +4895,8 @@ test "switch threshold use gossip votes" {
         }
     }
 
-    // Test 3: Adding a later vote from gossip that isn't on the same fork should count toward the switch threshold
+    // Test 3: Adding a later vote from gossip that isn't on the same fork should count toward the
+    // switch threshold
     {
         // Add gossip vote for slot 112
         _ = try latest_validator_votes.checkAddVote(

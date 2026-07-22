@@ -83,15 +83,16 @@ pub fn memmove(tc: *TransactionContext, memory_map: *MemoryMap, reg_map: *Regist
     const src_host = try memory_map.translateSlice(u8, .constant, src_addr, len, check_aligned);
 
     const S = struct {
-        // memmove() is in Zig's compiler-rt, but not exposed via builtin or stdlib outside this symbol:
-        // https://github.com/ziglang/zig/blob/79460d4a3eef8eb927b02a7eda8bc9999a766672/lib/compiler_rt/memmove.zig#L9-L22
+        // memmove() is in Zig's compiler-rt, but not exposed via builtin or stdlib outside this
+        // symbol:
+        // https://github.com/ziglang/zig/blob/79460d4/lib/compiler_rt/memmove.zig#L9-L22
         // TODO(0.15): Use `@memmove` builtin.
         extern fn memmove(dst: ?[*]u8, src: ?[*]const u8, len: usize) callconv(.c) ?[*]u8;
     };
     _ = S.memmove(dst_host.ptr, src_host.ptr, len);
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/6dcc39fcba90fbb5c924c71a1ef287c234f56c17/syscalls/src/mem_ops.rs#L67-L111
+/// [agave] https://github.com/anza-xyz/agave/blob/6dcc39f/syscalls/src/mem_ops.rs#L67-L111
 pub fn memcmp(tc: *TransactionContext, memory_map: *MemoryMap, registers: *RegisterMap) Error!void {
     const a_addr = registers.get(.r1);
     const b_addr = registers.get(.r2);

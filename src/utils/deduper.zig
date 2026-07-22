@@ -10,7 +10,8 @@ const AHasher = sig.utils.ahash.AHasher;
 const ChaChaRng = sig.rand.ChaChaRng(20);
 const uintLessThanRust = sig.rand.weighted_shuffle.uintLessThanRust;
 
-/// Deduper which uses the AHash algorithm across K different seeds/hashers to find possible duplicates.
+/// Deduper which uses the AHash algorithm across K different seeds/hashers to find possible
+/// duplicates.
 pub fn Deduper(comptime n_hashers: usize, comptime T: type) type {
     return struct {
         num_bits: u64,
@@ -42,7 +43,8 @@ pub fn Deduper(comptime n_hashers: usize, comptime T: type) type {
             self.bits.deinit();
         }
 
-        /// Resets the deduper if the false positive rate is too high or the reset cycle has elapsed.
+        /// Resets the deduper if the false positive rate is too high or the reset cycle has
+        /// elapsed.
         pub fn maybeReset(
             self: *Deduper(n_hashers, T),
             rand: std.Random,

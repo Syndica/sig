@@ -217,7 +217,7 @@ pub fn getBlocksWithLimit(
 
 /// Returns the commitment data for a given slot along with the total active stake.
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/b6eacb135037ab1021683d28b67a3c60e9039010/rpc/src/rpc.rs#L940
+/// [agave] https://github.com/anza-xyz/agave/blob/b6eacb1/rpc/src/rpc.rs#L940
 pub fn getBlockCommitment(
     self: LedgerHookContext,
     arena: Allocator,
@@ -337,7 +337,7 @@ pub fn getBlockProduction(
     };
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/15dbe7fb0fc07e11aaad89de1576016412c7eb9e/rpc/src/rpc.rs#L1577-L1609
+/// [agave] https://github.com/anza-xyz/agave/blob/15dbe7f/rpc/src/rpc.rs#L1577-L1609
 pub fn getBlockTime(
     self: LedgerHookContext,
     arena: Allocator,
@@ -784,7 +784,8 @@ fn getTransactionStatus(
 /// returns `error.BlockNotAvailable` for the caller to propagate.
 ///
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-api/src/custom_error.rs#L13-L14
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-api/src/custom_error.rs#L150-L155
+/// [agave]
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/rpc-client-api/src/custom_error.rs#L150-L155
 fn blockNotAvailable(
     arena: std.mem.Allocator,
     error_detail: *?sig.rpc.response.Error,

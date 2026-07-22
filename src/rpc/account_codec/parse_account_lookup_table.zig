@@ -1,5 +1,9 @@
-//! Types for parsing a address lookup table accounts for RPC responses using the `jsonParsed` encoding.
-//! [agave]: https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs
+//! Types for parsing a address lookup table accounts for RPC
+//! responses using the `jsonParsed` encoding.
+//! [agave]:
+// sig fmt: off
+//! https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs
+// sig fmt: on
 const std = @import("std");
 const sig = @import("../../sig.zig");
 
@@ -15,7 +19,10 @@ const Pubkey = sig.core.Pubkey;
 
 const LOOKUP_TABLE_META_SIZE = address_lookup_table.state.LOOKUP_TABLE_META_SIZE;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs#L7-L20
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs#L7-L20
+// sig fmt: on
 ///
 /// Caller owns the returned `.addresses` allocation and must free it.
 pub fn parseAddressLookupTable(
@@ -24,7 +31,8 @@ pub fn parseAddressLookupTable(
     reader: anytype,
     data_len: u32,
 ) ParseError!LookupTableAccountType {
-    // Read all data into buffer since the AddressLookupTable deserialize impl doesn't support borrowing from the reader.
+    // Read all data into buffer since the AddressLookupTable deserialize impl doesn't support
+    // borrowing from the reader.
     const data = try arena.alloc(u8, data_len);
     defer arena.free(data);
 
@@ -49,7 +57,10 @@ pub fn parseAddressLookupTable(
     } };
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs#L22-L27
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs#L22-L27
+// sig fmt: on
 pub const LookupTableAccountType = union(enum) {
     uninitialized,
     lookup_table: UiLookupTable,
@@ -76,7 +87,10 @@ pub const LookupTableAccountType = union(enum) {
         };
     }
 };
-/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs#L29-L38
+/// [agave]
+// sig fmt: off
+/// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs#L29-L38
+// sig fmt: on
 pub const UiLookupTable = struct {
     deactivationSlot: account_codec.Stringified(u64),
     lastExtendedSlot: account_codec.Stringified(u64),
@@ -93,7 +107,10 @@ pub const UiLookupTable = struct {
         try jw.objectField("lastExtendedSlotStartIndex");
         try jw.write(self.lastExtendedSlotStartIndex);
         // Skip authority if null to match Agave behavior
-        // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs#L36
+        // [agave]
+        // sig fmt: off
+        // https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs#L36
+        // sig fmt: on
         if (self.authority) |auth| {
             try jw.objectField("authority");
             try jw.write(auth);
@@ -104,12 +121,18 @@ pub const UiLookupTable = struct {
     }
 };
 
-// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs#L49-L103
+// [agave]
+// sig fmt: off
+// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs#L49-L103
+// sig fmt: on
 test "rpc.account_codec.parse_account_lookup_table: parse lookup tables" {
     const allocator = std.testing.allocator;
 
     // Parse valid lookup table with addresses
-    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs#L49-L81
+    // [agave]
+    // sig fmt: off
+    // https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs#L49-L81
+    // sig fmt: on
     {
         const authority = Pubkey{ .data = [_]u8{1} ** 32 };
         const addr1 = Pubkey{ .data = [_]u8{2} ** 32 };
@@ -152,7 +175,10 @@ test "rpc.account_codec.parse_account_lookup_table: parse lookup tables" {
     }
 
     // Parse table without authority (frozen)
-    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs#L49-L81
+    // [agave]
+    // sig fmt: off
+    // https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs#L49-L81
+    // sig fmt: on
     {
         const meta = LookupTableMeta{
             .deactivation_slot = 99999,
@@ -182,7 +208,10 @@ test "rpc.account_codec.parse_account_lookup_table: parse lookup tables" {
     }
 
     // Parse uninitialized table
-    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs#L83-L95
+    // [agave]
+    // sig fmt: off
+    // https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs#L83-L95
+    // sig fmt: on
     {
         const program_state = ProgramState{ .Uninitialized = {} };
 
@@ -197,7 +226,10 @@ test "rpc.account_codec.parse_account_lookup_table: parse lookup tables" {
     }
 
     // Bad data returns error
-    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs#L97-L103
+    // [agave]
+    // sig fmt: off
+    // https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_address_lookup_table.rs#L97-L103
+    // sig fmt: on
     {
         const bad_data = [_]u8{ 0, 1, 2, 3 };
 
