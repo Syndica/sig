@@ -35,7 +35,8 @@ jobs:
 
       - name: Build Check
         run: |
-          ./tools/fetch-zig-deps.py
+          ./tools/fetch-zig-deps.py v1/build.zig.zon
+          cd v1
           zig build --summary all -Dno-run -Dno-bin
 
   test_macos:
@@ -61,7 +62,8 @@ jobs:
       - name: Run Tests
         run: |
           set -eo pipefail
-          v1/zig-out/bin/test 2>&1 | cat
+          cd v1
+          zig-out/bin/test 2>&1 | cat
 
   test_macos_hashmap_ledger:
     runs-on: macos-15
@@ -86,7 +88,8 @@ jobs:
       - name: Run Tests
         run: |
           set -eo pipefail
-          v1/zig-out/bin/test 2>&1 | cat
+          cd v1
+          zig-out/bin/test 2>&1 | cat
 
   test_webzockets_macos:
     runs-on: macos-15

@@ -194,7 +194,7 @@ jobs:
         run: |
           set -eo pipefail
           cd v1
-          v1/zig-out/bin/test 2>&1 | cat
+          zig-out/bin/test 2>&1 | cat
 
   linux_misc_checks:
     runs-on: ubuntu-latest
