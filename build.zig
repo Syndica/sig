@@ -612,6 +612,11 @@ const Tools = struct {
             .root_source_file = "v2/tests/gossip/main.zig",
             .services = &.{ "gossip", "telemetry" },
         },
+        .{
+            .name = "replay",
+            .root_source_file = "v2/tests/replay/main.zig",
+            .services = &.{ "shred_receiver", "replay", "telemetry" },
+        },
     };
 
     pub fn init(

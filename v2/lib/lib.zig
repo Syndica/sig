@@ -28,4 +28,4 @@ pub const runner = @import("runner.zig");
 pub const telemetry = @import("telemetry.zig");
 pub const fio = @import("fio.zig");
 
-pub const test_data_dir = "../data/test-data/";
+pub const test_data_dir = "data/test-data/";

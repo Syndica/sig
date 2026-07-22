@@ -36,15 +36,12 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     });
     rw.tel.signalReady();
 
-    logger.info().logf(
-        "Gossip started on :{} as {f}:\n\tshred_version:{}\n\tentrypoints:{f}",
-        .{
-            rw.net_pair.port,
-            ro.config.keypair.pubkey,
-            ro.config.cluster_info.shred_version,
-            lib.util.fmtSlice(ro.config.cluster_info.getEntryAddresses()),
-        },
-    );
+    logger.info()
+        .field("port", &rw.net_pair.port)
+        .field("identity", &ro.config.keypair.pubkey)
+        .field("shred_version", &ro.config.cluster_info.shred_version)
+        .field("entrypoints", &lib.util.fmtSlice(ro.config.cluster_info.getEntryAddresses()))
+        .log("Gossip started");
 
     const Effects = struct {
         packet_writer: *lib.net.Pair.PacketRing.Iterator(.writer),

@@ -2180,10 +2180,11 @@ pub const Downloader = struct {
         race.phase = .completed;
         self.finishOtherDownloads(data.index);
 
-        self.logger.info().logf(
-            "download complete slot={d} name={s}",
-            .{ final_snapshot.slot, final_name },
-        );
+        self.logger.info()
+            .field("slot", &final_snapshot.slot)
+            .field("name", &final_name)
+            .log("download complete");
+
         self.finishDownload(data.index, .succeeded);
 
         self.run_result = .{
