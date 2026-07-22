@@ -1,6 +1,11 @@
 const std = @import("std");
 const tel = @import("../telemetry.zig");
 
+pub const Alert = enum {
+    dev,
+    operator,
+};
+
 pub const Level = enum(u8) {
     /// Fatal failure, definitely not recoverable.
     fatal,
@@ -85,7 +90,7 @@ pub const MessageStream = extern struct {
             @memset(buffers, 0);
         }
 
-        /// Atomically write a full message.
+        /// Acquires exclusive access to writable space in the active buffer.
         pub fn getWritable(self: *SwapBuffer) Writable {
             const sync_writing: Sync = .{ .writing = 1 };
             const old_sync: Sync = self.sync.fetchAdd(sync_writing, .acquire);
@@ -138,29 +143,65 @@ pub const Message = struct {
     epoch_millis: u64,
     scope: []const u8,
     fields: []const EntryField,
-    /// It is assumed/asserted that `msg.surround = .literal`. The message quotes are implicit.
+    /// Message text to encode as a logfmt value.
     msg: EntryValueFmt,
     level: Level,
 
-    /// IMPORTANT: This should be kept in sync with `write`.
-    pub fn computeHeader(self: Message) Header {
+    /// Precomputed lengths and value quoting decisions for one message encoding.
+    pub const EncodingPlan = struct {
+        header: Header,
+        field_value_plans: []const EntryValueFmt.EncodingPlan,
+        message_value_plan: EntryValueFmt.EncodingPlan,
+    };
+
+    /// Computes an encoding plan using caller-owned field plan storage.
+    /// The returned plan borrows `field_value_plan_storage`.
+    pub fn computeEncodingPlan(
+        self: Message,
+        field_value_plan_storage: []EntryValueFmt.EncodingPlan,
+    ) EncodingPlan {
+        std.debug.assert(field_value_plan_storage.len == self.fields.len);
+
+        var fields_len: usize = 0;
+        for (self.fields, 0..) |field, i| {
+            // Field names currently come from comptime call sites. Validate them here as a
+            // safety measure so direct or dynamic EntryField construction cannot produce
+            // malformed logfmt keys.
+            std.debug.assert(field.name.len != 0);
+            for (field.name) |byte| {
+                std.debug.assert(byte > ' ' and byte != '=' and byte != '"' and byte != 127);
+            }
+
+            const value_plan = field.value.computeEncodingPlan();
+            field_value_plan_storage[i] = value_plan;
+            if (i != 0) fields_len += 1;
+            fields_len += field.name.len + 1 + value_plan.encoded_len;
+        }
+        const message_value_plan = self.msg.computeEncodingPlan();
         return .{
-            .epoch_millis = self.epoch_millis,
-            .scope_len = @intCast(self.scope.len),
-            .fields_len = @intCast(std.fmt.count("{f}", .{EntryField.listFmt(self.fields)})),
-            .msg_len = @intCast(std.fmt.count("{f}", .{self.msg})),
-            .level = self.level,
+            .header = .{
+                .epoch_millis = self.epoch_millis,
+                .scope_len = @intCast(self.scope.len),
+                .fields_len = @intCast(fields_len),
+                .msg_len = @intCast(message_value_plan.encoded_len),
+                .level = self.level,
+            },
+            .field_value_plans = field_value_plan_storage,
+            .message_value_plan = message_value_plan,
         };
     }
 
-    /// IMPORTANT: This should be kept in sync with `computeHeader` & `Header.logfmtStream`.
-    pub fn write(self: Message, w: *std.Io.Writer) std.Io.Writer.Error!Header {
-        const header = self.computeHeader();
-        try w.writeStruct(header, tel.endian);
+    /// Writes the log message using a precomputed encoding plan.
+    pub fn write(
+        self: Message,
+        w: *std.Io.Writer,
+        encoding: EncodingPlan,
+    ) std.Io.Writer.Error!void {
+        std.debug.assert(encoding.field_value_plans.len == self.fields.len);
+        try w.writeStruct(encoding.header, tel.endian);
         try w.writeAll(self.scope);
-        try EntryField.writeFields(self.fields, w);
-        try self.msg.format(w);
-        return header;
+        try EntryField.writeFieldsPlanned(self.fields, encoding.field_value_plans, w);
+        try self.msg.formatPlanned(w, encoding.message_value_plan);
     }
 
     pub const Header = extern struct {
@@ -223,28 +264,30 @@ test Message {
             .fields_len = "fizz=buzz".len,
             .msg_len = "bar".len,
         };
-        try std.testing.expectEqual(expected_header, msg.computeHeader());
+        var field_value_plan_storage: [1]EntryValueFmt.EncodingPlan = undefined;
+        const encoding = msg.computeEncodingPlan(&field_value_plan_storage);
+        try std.testing.expectEqual(expected_header, encoding.header);
     }
 
     var encoded: std.Io.Writer.Allocating = .init(gpa);
     defer encoded.deinit();
-    const written_header = try Message.write(
-        .{
-            .epoch_millis = 1_999,
-            .level = .debug,
-            .scope = "scope1",
-            .fields = &.{
-                .init("field_a", .fromValue("0x{X}", &0xFAF0)),
-                .init("field_b", .fromValue("{s}", &"ab cd")),
-            },
-            .msg = .fromFmt("message {s} here", &.{"goes"}),
+    const msg: Message = .{
+        .epoch_millis = 1_999,
+        .level = .debug,
+        .scope = "scope1",
+        .fields = &.{
+            .init("field_a", .fromValue("0x{X}", &0xFAF0)),
+            .init("field_b", .fromValue("{s}", &"ab cd")),
         },
-        &encoded.writer,
-    );
+        .msg = .fromFmt("message {s} here", &.{"goes"}),
+    };
+    var field_value_plan_storage: [2]EntryValueFmt.EncodingPlan = undefined;
+    const encoding = msg.computeEncodingPlan(&field_value_plan_storage);
+    try msg.write(&encoded.writer, encoding);
 
     var encoded_r: std.Io.Reader = .fixed(encoded.written());
     const decoded_header = try encoded_r.takeStruct(Message.Header, tel.endian);
-    try std.testing.expectEqual(written_header, decoded_header);
+    try std.testing.expectEqual(encoding.header, decoded_header);
 
     const decoded_slices = decoded_header.getSlicesFromFixedBuffer(&encoded_r) orelse
         return error.TestExpectedNonNull;
@@ -402,7 +445,7 @@ pub const Filter = struct {
 
     /// Parses `str` as a comma-separated list of `Filter`s (`std.mem.splitScalar` & `Filter.parse`).
     /// If a default filter is missing (ie a filter for which `filter.isLevelOnly() == true`), the
-    /// provided `default_root_log_level` will be used instead.
+    /// provided `default_log_level` will be used instead.
     /// `str.len == 0` is treated as an empty list (`default_log_level` will always be written).
     pub fn parseListAndWriteBinary(
         w: *std.Io.Writer,
@@ -583,6 +626,21 @@ pub const EntryField = struct {
         }
     }
 
+    /// Writes fields using their precomputed value encoding plans.
+    pub fn writeFieldsPlanned(
+        list: []const EntryField,
+        value_plans: []const EntryValueFmt.EncodingPlan,
+        w: *std.Io.Writer,
+    ) std.Io.Writer.Error!void {
+        std.debug.assert(value_plans.len == list.len);
+        for (list, value_plans, 0..) |entry, value_plan, i| {
+            if (i != 0) try w.writeByte(' ');
+            try w.writeAll(entry.name);
+            try w.writeByte('=');
+            try entry.value.formatPlanned(w, value_plan);
+        }
+    }
+
     pub fn listFmt(list: []const EntryField) std.fmt.Alt([]const EntryField, writeFields) {
         return .{ .data = list };
     }
@@ -598,30 +656,71 @@ test EntryField {
     });
 }
 
-/// Type-erased formatter.
+/// Type-erased formatter. Takes in a zig print format function and value(s) to be formatted and
+/// wraps them to provide planning and formatting output with quotes and escapes where needed.
+///
+/// Formatted output from function provided must be valid UTF-8 and identical on every call (as
+/// visible by this formatter). Encoding-plan computation and output formatting invoke the formatter
+/// separately (to produce a byte length prefix), so differing output between calls corrupts that
+/// length-prefix.
 pub const EntryValueFmt = struct {
     ptr: *const anyopaque,
-    formatFn: *const fn (
+    formatRawFn: *const fn (
         value: *const anyopaque,
         w: *std.Io.Writer,
     ) std.Io.Writer.Error!void,
 
-    pub fn format(self: EntryValueFmt, w: *std.Io.Writer) std.Io.Writer.Error!void {
-        try self.formatFn(self.ptr, w);
+    /// Describes how a formatted value will be represented in logfmt.
+    pub const EncodingPlan = struct {
+        /// Encoded length of the value in logfmt, including quotes and escapes if applicable.
+        encoded_len: usize,
+        /// Whether the value will be quoted in logfmt (e.g., if the value contains spaces it must
+        /// have `"` added so that it is quoted).
+        quoted: bool,
+    };
+
+    /// Computes encoded length and quoting by formatting once into an analyzing writer.
+    pub fn computeEncodingPlan(self: EntryValueFmt) EncodingPlan {
+        var analyzer: LogfmtValueAnalyzer = .init();
+        self.formatRawFn(self.ptr, &analyzer.writer) catch unreachable;
+        return analyzer.encodingPlan();
     }
 
-    /// Resulting formatter will write the equivalent of:
-    /// `std.Io.Writer.print(w, fmt_str, .{value_ptr.*})`.
+    /// Formats the value using a newly computed encoding plan.
+    pub fn format(self: EntryValueFmt, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        try self.formatPlanned(w, self.computeEncodingPlan());
+    }
+
+    /// Formats the value using a previously computed encoding plan.
+    pub fn formatPlanned(
+        self: EntryValueFmt,
+        w: *std.Io.Writer,
+        encoding: EncodingPlan,
+    ) std.Io.Writer.Error!void {
+        if (!encoding.quoted) {
+            try self.formatRawFn(self.ptr, w);
+            return;
+        }
+
+        try w.writeByte('"');
+        var escaping_writer: LogfmtEscapingWriter = .init(w);
+        try self.formatRawFn(self.ptr, &escaping_writer.writer);
+        try w.writeByte('"');
+    }
+
+    /// Creates a formatter for one value. `fmt_str` is a zig print format string for one value,
+    /// and `value_ptr` is a pointer to the value to be formatted.
+    ///
+    /// `value_ptr` must outlive formatter use.
     pub fn fromValue(
         comptime fmt_str: []const u8,
-        /// Pointer to a value.
         value_ptr: anytype,
     ) EntryValueFmt {
         const is_comptime_known = isComptimeKnown(value_ptr.*);
         comptime var ptr_info = @typeInfo(@TypeOf(value_ptr));
         ptr_info.pointer.is_const = true;
         const erased = struct {
-            fn formatImpl(
+            fn formatRawImpl(
                 ptr: *const anyopaque,
                 w: *std.Io.Writer,
             ) std.Io.Writer.Error!void {
@@ -629,41 +728,35 @@ pub const EntryValueFmt = struct {
                     value_ptr
                 else
                     @ptrCast(@alignCast(ptr));
-                const has_whitespace = WhitespaceDetector.detect(fmt_str, .{value.*});
-                if (has_whitespace) try w.writeByte('"');
                 try w.print(fmt_str, .{value.*});
-                if (has_whitespace) try w.writeByte('"');
             }
         };
         return .{
             .ptr = @ptrCast(value_ptr),
-            .formatFn = erased.formatImpl,
+            .formatRawFn = erased.formatRawImpl,
         };
     }
 
-    /// Resulting formatter will write the equivalent of:
-    /// `std.Io.Writer.print(w, fmt_strs, args_ptr.*)`.
+    /// Creates a formatter for a tuple of arguments. `fmt_str` is a zig print format string for
+    /// the tuple, and `args_ptr` is a pointer to the tuple to be formatted.
+    ///
+    /// `args_ptr` must outlive formatter use.
     pub fn fromFmt(
         comptime fmt_str: []const u8,
-        /// Pointer to a tuple of arguments, instead of the value.
-        /// Must outlive the return value.
         args_ptr: anytype,
     ) EntryValueFmt {
         const erased = struct {
-            fn formatImpl(
+            fn formatRawImpl(
                 ptr: *const anyopaque,
                 w: *std.Io.Writer,
             ) std.Io.Writer.Error!void {
                 const args: @TypeOf(args_ptr) = @ptrCast(@alignCast(ptr));
-                const has_whitespace = WhitespaceDetector.detect(fmt_str, args.*);
-                if (has_whitespace) try w.writeByte('"');
                 try w.print(fmt_str, args.*);
-                if (has_whitespace) try w.writeByte('"');
             }
         };
         return .{
             .ptr = @ptrCast(args_ptr),
-            .formatFn = erased.formatImpl,
+            .formatRawFn = erased.formatRawImpl,
         };
     }
 };
@@ -674,6 +767,24 @@ test EntryValueFmt {
     });
     try std.testing.expectFmt("\"321 foo\"", "{f}", .{
         EntryValueFmt.fromFmt("{d} {s}", &.{ 321, "foo" }),
+    });
+    try std.testing.expectFmt("\"a \\\"quoted\\\" value\"", "{f}", .{
+        EntryValueFmt.fromValue("{s}", &"a \"quoted\" value"),
+    });
+    try std.testing.expectFmt("path\\to\\file", "{f}", .{
+        EntryValueFmt.fromValue("{s}", &"path\\to\\file"),
+    });
+    try std.testing.expectFmt("\"path\\\\to file\"", "{f}", .{
+        EntryValueFmt.fromValue("{s}", &"path\\to file"),
+    });
+    try std.testing.expectFmt("\"a=b\"", "{f}", .{
+        EntryValueFmt.fromValue("{s}", &"a=b"),
+    });
+    try std.testing.expectFmt("\"first\\nsecond\\tcolumn\\rreturn\"", "{f}", .{
+        EntryValueFmt.fromValue("{s}", &"first\nsecond\tcolumn\rreturn"),
+    });
+    try std.testing.expectFmt("\"\\u0000\\u000f\\u0010\\u001f\\u007f\"", "{f}", .{
+        EntryValueFmt.fromValue("{s}", &"\x00\x0f\x10\x1f\x7f"),
     });
 }
 
@@ -822,27 +933,37 @@ inline fn isComptimeKnown(value: anytype) bool {
     return @typeInfo(@TypeOf(.{value})).@"struct".fields[0].is_comptime;
 }
 
-/// Discards all data written to it, but tracks whether any whitespace character
-/// (per `std.ascii.whitespace`) was ever written. Unbuffered: every write goes
-/// through `drain`, so `found` is up-to-date without needing to flush.
-pub const WhitespaceDetector = struct {
+/// Inspects arbitrary formatter output without allocation so the length-prefixed
+/// message header and required swap-buffer capacity can be computed before writing.
+const LogfmtValueAnalyzer = struct {
     writer: std.Io.Writer,
-    found: bool,
+    requires_quoting: bool,
+    raw_len: usize,
+    escaped_extra_len: usize,
 
-    pub fn init() WhitespaceDetector {
+    fn init() LogfmtValueAnalyzer {
         return .{
             .writer = .{
                 .vtable = &.{ .drain = drain },
                 .buffer = &.{},
             },
-            .found = false,
+            .requires_quoting = false,
+            .raw_len = 0,
+            .escaped_extra_len = 0,
         };
     }
 
-    pub fn detect(comptime fmt_str: []const u8, args: anytype) bool {
-        var white_space: WhitespaceDetector = .init();
-        white_space.writer.print(fmt_str, args) catch unreachable;
-        return white_space.found;
+    fn encodingPlan(analyzer: *const LogfmtValueAnalyzer) EntryValueFmt.EncodingPlan {
+        if (!analyzer.requires_quoting) {
+            return .{
+                .encoded_len = analyzer.raw_len,
+                .quoted = false,
+            };
+        }
+        return .{
+            .encoded_len = analyzer.raw_len + 2 + analyzer.escaped_extra_len,
+            .quoted = true,
+        };
     }
 
     fn drain(
@@ -850,63 +971,151 @@ pub const WhitespaceDetector = struct {
         data: []const []const u8,
         splat: usize,
     ) std.Io.Writer.Error!usize {
-        const self: *WhitespaceDetector = @alignCast(@fieldParentPtr("writer", w));
+        const self: *LogfmtValueAnalyzer = @alignCast(@fieldParentPtr("writer", w));
         const rest = data[0 .. data.len - 1];
         const pattern = data[data.len - 1];
-        var written: usize = pattern.len * splat;
-        for (rest) |bytes| written += bytes.len;
+        const written = std.Io.Writer.countSplat(data, splat);
 
-        if (!self.found) {
-            for (rest) |bytes| {
-                if (std.mem.indexOfAny(u8, bytes, &std.ascii.whitespace) != null) {
-                    self.found = true;
-                    return written;
-                }
-            }
-            if (splat != 0 and std.mem.indexOfAny(u8, pattern, &std.ascii.whitespace) != null)
-                self.found = true;
-        }
+        for (rest) |bytes| self.analyze(bytes);
+        for (0..splat) |_| self.analyze(pattern);
 
         return written;
     }
+
+    fn analyze(self: *LogfmtValueAnalyzer, bytes: []const u8) void {
+        self.raw_len += bytes.len;
+        for (bytes) |byte| {
+            self.requires_quoting = self.requires_quoting or
+                byte <= ' ' or byte == '=' or byte == '"' or byte == 127;
+            self.escaped_extra_len += switch (byte) {
+                // Two-byte escape replaces one byte.
+                '"', '\\', '\n', '\r', '\t' => 1,
+                // Six-byte `\u00xx` escape replaces one byte (following JSON-style escapes).
+                0...8, 11...12, 14...31, 127 => 5,
+                else => 0,
+            };
+        }
+    }
 };
 
-test WhitespaceDetector {
-    var wd: WhitespaceDetector = undefined;
+/// Escapes formatted bytes in quoted logfmt values using JSON-style escapes,
+/// including four-digit `\u00XX` escapes for control bytes.
+const LogfmtEscapingWriter = struct {
+    writer: std.Io.Writer,
+    output: *std.Io.Writer,
 
-    wd = .init();
-    try wd.writer.writeAll("no-whitespace-here");
-    try std.testing.expect(!wd.found);
+    fn init(output: *std.Io.Writer) LogfmtEscapingWriter {
+        return .{
+            .writer = .{
+                .vtable = &.{ .drain = drain },
+                .buffer = &.{},
+            },
+            .output = output,
+        };
+    }
 
-    wd = .init();
-    try wd.writer.writeAll("hello world");
-    try std.testing.expect(wd.found);
+    fn drain(
+        w: *std.Io.Writer,
+        data: []const []const u8,
+        splat: usize,
+    ) std.Io.Writer.Error!usize {
+        const self: *LogfmtEscapingWriter = @alignCast(@fieldParentPtr("writer", w));
+        const rest = data[0 .. data.len - 1];
+        const pattern = data[data.len - 1];
+        const written = std.Io.Writer.countSplat(data, splat);
 
-    wd = .init();
-    try wd.writer.writeAll("end ");
-    try std.testing.expect(wd.found);
+        for (rest) |bytes| try self.writeEscaped(bytes);
+        for (0..splat) |_| try self.writeEscaped(pattern);
+        return written;
+    }
 
-    wd = .init();
-    try wd.writer.writeAll(" start");
-    try std.testing.expect(wd.found);
+    fn writeEscaped(self: *LogfmtEscapingWriter, bytes: []const u8) std.Io.Writer.Error!void {
+        var start: usize = 0;
+        for (bytes, 0..) |byte, i| {
+            const replacement: ?[]const u8 = switch (byte) {
+                '"' => "\\\"",
+                '\\' => "\\\\",
+                '\n' => "\\n",
+                '\r' => "\\r",
+                '\t' => "\\t",
+                else => null,
+            };
+            if (replacement) |escaped| {
+                try self.output.writeAll(bytes[start..i]);
+                try self.output.writeAll(escaped);
+                start = i + 1;
+            } else if (byte < ' ' or byte == 127) {
+                try self.output.writeAll(bytes[start..i]);
+                try self.output.print("\\u00{x:0>2}", .{byte});
+                start = i + 1;
+            }
+        }
+        try self.output.writeAll(bytes[start..]);
+    }
+};
 
-    wd = .init();
-    try wd.writer.print("value={d}", .{42});
-    try std.testing.expect(!wd.found);
+test "encoding plans match encoded lengths for every byte" {
+    // ensures agreement between the length computed by the plan and the actual length of the
+    // encoded value written never diverge
+    for (0..256) |int| {
+        const raw: [1]u8 = .{@intCast(int)};
+        const value: EntryValueFmt = .fromValue("{s}", &raw);
+        const plan = value.computeEncodingPlan();
 
-    wd = .init();
-    try wd.writer.print("value = {d}", .{42});
-    try std.testing.expect(wd.found);
+        var encoded: [8]u8 = undefined;
+        var writer: std.Io.Writer = .fixed(&encoded);
+        try value.formatPlanned(&writer, plan);
+        try std.testing.expectEqual(plan.encoded_len, writer.buffered().len);
+    }
+}
 
-    wd = .init();
-    try wd.writer.print("value={s}", .{"hello world"});
-    try std.testing.expect(wd.found);
-
-    wd = .init();
-    try wd.writer.writeByte('\t');
-    try std.testing.expect(wd.found);
-
-    wd = .init();
-    try wd.writer.writeByte('\n');
-    try std.testing.expect(wd.found);
+test LogfmtValueAnalyzer {
+    try std.testing.expectEqual(
+        EntryValueFmt.EncodingPlan{ .encoded_len = 5, .quoted = false },
+        EntryValueFmt.fromValue("{s}", &"plain").computeEncodingPlan(),
+    );
+    try std.testing.expectEqual(
+        EntryValueFmt.EncodingPlan{ .encoded_len = 3, .quoted = false },
+        EntryValueFmt.fromValue("{s}", &"a\\b").computeEncodingPlan(),
+    );
+    try std.testing.expectEqual(
+        EntryValueFmt.EncodingPlan{ .encoded_len = 5, .quoted = true },
+        EntryValueFmt.fromValue("{s}", &"a=b").computeEncodingPlan(),
+    );
+    try std.testing.expectEqual(
+        EntryValueFmt.EncodingPlan{ .encoded_len = 13, .quoted = true },
+        EntryValueFmt.fromValue("{s}", &"hello world").computeEncodingPlan(),
+    );
+    try std.testing.expectEqual(
+        EntryValueFmt.EncodingPlan{ .encoded_len = 6, .quoted = true },
+        EntryValueFmt.fromValue("{s}", &"a\"b").computeEncodingPlan(),
+    );
+    try std.testing.expectEqual(
+        EntryValueFmt.EncodingPlan{ .encoded_len = 6, .quoted = true },
+        EntryValueFmt.fromValue("{s}", &"a\tb").computeEncodingPlan(),
+    );
+    try std.testing.expectEqual(
+        EntryValueFmt.EncodingPlan{ .encoded_len = 6, .quoted = true },
+        EntryValueFmt.fromValue("{s}", &"a\nb").computeEncodingPlan(),
+    );
+    try std.testing.expectEqual(
+        EntryValueFmt.EncodingPlan{ .encoded_len = 8, .quoted = true },
+        EntryValueFmt.fromValue("{s}", &"\x00").computeEncodingPlan(),
+    );
+    try std.testing.expectEqual(
+        EntryValueFmt.EncodingPlan{ .encoded_len = 8, .quoted = true },
+        EntryValueFmt.fromValue("{s}", &"\x0f").computeEncodingPlan(),
+    );
+    try std.testing.expectEqual(
+        EntryValueFmt.EncodingPlan{ .encoded_len = 8, .quoted = true },
+        EntryValueFmt.fromValue("{s}", &"\x10").computeEncodingPlan(),
+    );
+    try std.testing.expectEqual(
+        EntryValueFmt.EncodingPlan{ .encoded_len = 8, .quoted = true },
+        EntryValueFmt.fromValue("{s}", &"\x1f").computeEncodingPlan(),
+    );
+    try std.testing.expectEqual(
+        EntryValueFmt.EncodingPlan{ .encoded_len = 8, .quoted = true },
+        EntryValueFmt.fromValue("{s}", &"\x7f").computeEncodingPlan(),
+    );
 }
