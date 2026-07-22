@@ -4,7 +4,7 @@
 sudo -iu sig bash <<'EOF' | tee /dev/null
     set -euxo pipefail
     . /etc/sig.conf
-    cd /home/sig/sig
+    cd /home/sig/sig/v1
     git fetch
 
     if [[ $(git rev-parse HEAD) == $(git rev-parse remotes/origin/$BRANCH) ]] && \
@@ -15,12 +15,8 @@ sudo -iu sig bash <<'EOF' | tee /dev/null
 
     git checkout remotes/origin/$BRANCH
     echo building sig
-    # v1 (formerly the repo root) is now a nested build. The zig-out/bin/sig
-    # artifact ends up under v1/zig-out/bin/ — the run.sh wrapper reads it
-    # from there.
-    (cd v1 && zig build -Doptimize=ReleaseSafe -Dno-run sig)
+    zig build -Doptimize=ReleaseSafe -Dno-run sig
 
-    # metrics/ also moved with v1 (formerly at the repo root).
     echo > /home/sig/sig/v1/metrics/.env
     ip="$(curl -fsS https://checkip.amazonaws.com || echo fail)"
     if [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] \

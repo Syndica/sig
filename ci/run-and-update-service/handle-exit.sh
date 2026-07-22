@@ -1,10 +1,7 @@
 #!/usr/bin/env bash
 set -euxo pipefail
 
-BASE_DIR=/home/sig/sig
-# The sig binary is launched with cwd=$BASE_DIR/v1 (see run.sh), so validator/
-# state ends up under v1/ as well.
-RUN_DIR=$BASE_DIR/v1
+BASE_DIR=/home/sig/sig/v1
 
 log() { local level=$1; local message=$2;
     local timestamp="$(date -u +"%Y-%m-%dT%H:%M:%S.%3NZ")"
@@ -26,15 +23,15 @@ log error "exited unexpectedly with SERVICE_RESULT=$SERVICE_RESULT EXIT_CODE=$EX
 
 # Sig crashed, so we want to preserve the state for debugging, but we also want
 # to clear it out from "validator" so the next run can start fresh.
-if [ -d "$RUN_DIR/validator" ]; then
+if [ -d "$BASE_DIR/validator" ]; then
 
     # compress validator state to a tarball
-    cp "$BASE_DIR/logs/sig.log" "$RUN_DIR/validator/"
+    cp "$BASE_DIR/logs/sig.log" "$BASE_DIR/validator/"
     timestamp="$(date -u +"%Y-%m-%dT%H:%M:%S.%3NZ")"
     archive_name="validator-${timestamp}.tar.zst";
-    archive_path="$RUN_DIR/$archive_name"
-    tar --zstd -cf $archive_path -C "$RUN_DIR" validator
-    rm -rf "$RUN_DIR/validator"
+    archive_path="$BASE_DIR/$archive_name"
+    tar --zstd -cf $archive_path -C "$BASE_DIR" validator
+    rm -rf "$BASE_DIR/validator"
 
     logExitAndRm() {
         rm $archive_path
