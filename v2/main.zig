@@ -200,7 +200,13 @@ pub fn main() !void {
         var diag: std.zon.parse.Diagnostics = .{};
         defer diag.deinit(allocator);
 
-        const config = std.zon.parse.fromSlice(Config, allocator, cfg_bytes, &diag, .{}) catch |err| {
+        const config = std.zon.parse.fromSlice(
+            Config,
+            allocator,
+            cfg_bytes,
+            &diag,
+            .{},
+        ) catch |err| {
             std.log.err("{f}", .{diag});
             return err;
         };
