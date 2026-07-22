@@ -52,16 +52,19 @@ pub const AccountLookups = extern struct {
 /// The producer that sets the fields will call `populateSlot()` to mark them as consumable.
 pub const SnapshotMetadata = extern struct {
     slot: std.atomic.Value(u64),
+
     manifest: lib.solana.snapshot.Manifest,
     status_cache: lib.solana.snapshot.StatusCache,
+
     memory_len: usize,
     memory: [0]u8 align(16), // VLA for [0..memory_len]
 
     // 0 may be a valid slot, so use something that will never be reached.
     const invalid_slot = std.math.maxInt(Slot);
 
-    pub fn init(self: *SnapshotMetadata) void {
+    pub fn init(self: *SnapshotMetadata, memory_len: usize) void {
         self.slot = .init(invalid_slot);
+        self.memory_len = memory_len;
     }
 
     /// Returns the base pointer used to resolve `RelativeSlice`/`RelativeOffset`

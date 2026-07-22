@@ -277,8 +277,9 @@ pub const BankFields = extern struct {
 
     pub const BlockHashQueue = extern struct {
         /// Agave's MAX_RECENT_BLOCKHASHES and the current `Rooted.Journal.blockhash_max_age`.
+        /// It's plus-one given cutoff is `<= max_age` instead of `< max_age`.
         /// [agave] https://github.com/anza-xyz/solana-sdk/blob/clock%40v3.1.1/clock/src/lib.rs#L95
-        pub const MAX_RECENT_BLOCKHASHES: u32 = 300;
+        pub const MAX_RECENT_BLOCKHASHES: u32 = 300 + 1;
 
         last_hash: Hash,
         max_age: u64,

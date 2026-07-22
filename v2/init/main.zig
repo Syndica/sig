@@ -262,8 +262,7 @@ pub fn main() !void {
     var snapshot_metadata: Region(lib.accounts_db.SnapshotMetadata) = try .sized(
         @sizeOf(lib.accounts_db.SnapshotMetadata) + config.accounts_db.metadata.toBytes(),
     );
-    snapshot_metadata.ptr().init();
-    snapshot_metadata.ptr().memory_len = config.accounts_db.metadata.toBytes();
+    snapshot_metadata.ptr().init(config.accounts_db.metadata.toBytes());
 
     const unrooted_memory = config.accounts_db.unrooted.toBytes();
     var account_pool: Region(lib.accounts_db.AccountPool) =

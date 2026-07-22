@@ -1679,14 +1679,10 @@ test "bootstrap creates root block and chains blockhashes" {
     // `bank_fields.blockhash_queue.{hashes,hashes_count}` and `extra_fields.block_id`.
     // Everything else can be zero-initialized. `memory_len = 0` because none of
     // the fields used here go through a RelativeSlice/RelativeOffset.
-    var metadata: lib.accounts_db.SnapshotMetadata = std.mem.zeroes(
-        lib.accounts_db.SnapshotMetadata,
-    );
-    metadata.init();
-    metadata.memory_len = 0;
-    metadata.manifest.extra_fields.block_id = .parse(
-        "ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE",
-    );
+    var metadata = std.mem.zeroes(lib.accounts_db.SnapshotMetadata);
+    metadata.init(0);
+    metadata.manifest.extra_fields.block_id =
+        .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");
 
     const test_hashes = [_]Hash{
         .parse("BMHr4knWhDp8JhqCYhA2K5DUYQsYUVXdy2zWahzt5jLd"),

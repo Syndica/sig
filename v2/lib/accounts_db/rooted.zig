@@ -383,7 +383,7 @@ pub const Rooted = struct {
         // Build the FBA over snapshot_metadata.memory. Reserve offset 0 as a
         // null sentinel for RelativeOffset(T) so no real allocation lands there.
         var fba = std.heap.FixedBufferAllocator.init(
-            (&snapshot_metadata.memory)[0..snapshot_metadata.memory_len],
+            snapshot_metadata.memory[0..].ptr[0..snapshot_metadata.memory_len],
         );
         _ = try fba.allocator().alloc(u8, 1);
 
