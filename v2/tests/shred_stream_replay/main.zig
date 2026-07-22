@@ -117,14 +117,18 @@ pub fn main() !void {
 
     if (argv.len < 2) {
         std.debug.print(
-            "usage: shred-stream-replay <config.zon> [shred-streamer-args...]\n\n" ++
-                "  <config.zon>  Path to validator config file (same format as main validator).\n" ++
-                "                A snapshot must already exist in the configured snapshot folder.\n\n" ++
-                "  Remaining arguments are passed to the shred_streamer service:\n" ++
-                "    --ledger <path>      Path to Agave ledger (required)\n" ++
-                "    --start-slot <N>     First slot to stream\n" ++
-                "    --end-slot <N>       Last slot to stream\n" ++
-                "    --rate-hz <F>        Rate limit in Hz\n",
+            "usage: shred-stream-replay <config.zon>" ++
+                " [shred-streamer-args...]\n\n" ++
+                "  <config.zon>  Path to validator config file" ++
+                " (same format as main validator).\n" ++
+                "                A snapshot must already exist" ++
+                " in the configured snapshot folder.\n\n" ++
+                "  Remaining arguments are passed to the" ++
+                " shred_streamer service:\n" ++
+                "    --ledger <path>  Path to Agave ledger\n" ++
+                "    --start-slot <N> First slot to stream\n" ++
+                "    --end-slot <N>   Last slot to stream\n" ++
+                "    --rate-hz <F>    Rate limit in Hz\n",
             .{},
         );
         return error.ConfigPathMissing;
@@ -138,7 +142,10 @@ pub fn main() !void {
     const config: Config = cfg: {
         const cfg_path = argv[1];
         const cfg_file = std.fs.cwd().openFile(cfg_path, .{}) catch |err| {
-            std.debug.print("error: cannot open config file '{s}': {s}\n", .{ cfg_path, @errorName(err) });
+            std.debug.print(
+                "error: cannot open config file '{s}': {s}\n",
+                .{ cfg_path, @errorName(err) },
+            );
             return err;
         };
         defer cfg_file.close();

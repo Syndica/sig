@@ -15,11 +15,11 @@
         .log_level = .info,
     },
     .snapshot = .{
-        .folder = "./validator",
+        .folder = "v2/validator",
         .known_validators = .{"*"},
     },
     .accounts_db = .{
-        .file = "./validator/accounts.db",
+        .file = "v2/validator/accounts.db",
         .rooted = .{ .gb = 8 },
         .unrooted = .{ .gb = 8 },
     },
