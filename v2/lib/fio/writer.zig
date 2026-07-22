@@ -12,7 +12,7 @@ pub fn FileWriter(
     },
 ) type {
     return struct {
-        // publically observable fields
+        // publicly observable fields
         file: std.fs.File,
         offset: u64,
 

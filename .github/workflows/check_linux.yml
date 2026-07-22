@@ -70,7 +70,32 @@ jobs:
           echo "--- v2 filename samples ---"
           grep 'filename=' v2/zig-out/kcov/kcov-merged/cobertura.xml | head -3
 
+      - name: Generate local coverage report
+        if: github.event_name == 'pull_request'
+        run: |
+          pip install --quiet diff-cover==10.3.0
+          # Determine the base branch to diff against
+          BASE_REF="origin/${{ github.base_ref }}"
+          echo "Comparing coverage against $BASE_REF"
+
+          # Run diff-cover on both v1 and v2 cobertura reports
+          diff-cover \
+            kcov-merged/kcov-merged/cobertura.xml \
+            v2/zig-out/kcov/kcov-merged/cobertura.xml \
+            --compare-branch="$BASE_REF" \
+            --format markdown:diff-coverage.md \
+            --fail-under 0
+
+          # Output to GitHub step summary
+          if [ -f diff-coverage.md ]; then
+            echo "## Patch Coverage Report" >> "$GITHUB_STEP_SUMMARY"
+            cat diff-coverage.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "⚠️ diff-cover produced no output" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Upload coverage to Codecov
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -223,6 +248,24 @@ jobs:
           ./scripts/fetch-zig-deps.py src/rpc/webzockets/build.zig.zon
           cd src/rpc/webzockets
           zig build test --summary all
+
+      - uses: dtolnay/rust-toolchain@1.96.1 # keep version in sync with the cache key
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache snapshot-generator cargo artifacts
+        uses: actions/cache@v4
+        with:
+          key: snapshot-generator-${{ runner.os }}-rust-1.96.1-${{ hashFiles('scripts/snapshot-generator/Cargo.lock') }}
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            scripts/snapshot-generator/target
+
+      - name: Check snapshot-generator
+        run: |
+          cd scripts/snapshot-generator
+          ./check
 
   solana_conformance:
     runs-on: ubuntu-latest

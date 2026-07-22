@@ -368,6 +368,11 @@ pub const AccountsDbFields = struct {
 };
 
 pub const ExtraFields = struct {
+    /// - TowerBFT: the Merkle root of the last FEC set of the block
+    /// - Alpenglow: the "double Merkle root": a Merkle root computed over the
+    ///   sequence of per-FEC-set Merkle roots of the block's shreds.
+    block_id: Hash,
+
     pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !ExtraFields {
         const zone = tracy.Zone.init(@src(), .{ .name = "ExtraFields.read" });
         defer zone.deinit();
@@ -474,12 +479,19 @@ pub const ExtraFields = struct {
         }
 
         // block_id: NullOnEof(Hash)
-        r.discardAll(32) catch |err| switch (err) {
-            error.EndOfStream => {},
+        //
+        // in agave, this field is optional on the deserialize side, but it's
+        // actually always populated. we do not need to handle the null case,
+        // and it's actually not even possible for replay to work if this is
+        // null. so we treat this as a required field.
+        if (!try readBool(r)) return error.MissingBlockId; // optional discriminant
+        var block_id: Hash = undefined;
+        r.readSliceAll(&block_id.data) catch |err| switch (err) {
+            error.EndOfStream => return error.MissingBlockId,
             else => |e| return e,
         };
 
-        return .{};
+        return .{ .block_id = block_id };
     }
 };
 
@@ -783,3 +795,115 @@ pub const ZstReader = struct {
         return n;
     }
 };
+
+// Inputs for this test were generated using https://github.com/Syndica/snapshot-generator
+//
+// Agave is used to construct and validate the snapshot and json. So the json is
+// a reliable source of truth for snapshot contents and can be used to validate
+// a snapshot deserializer.
+test "deserialized snapshot matches generated snapshot json" {
+    const allocator = std.testing.allocator;
+    const expectEqual = std.testing.expectEqual;
+    const expectEqualStrings = std.testing.expectEqualStrings;
+    const expect = std.testing.expect;
+
+    var hash_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
+    var pubkey_buf: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
+
+    const json_path = lib.test_data_dir ++ "test-snapshot-v4.2.0-beta.1.json";
+    const snapshot_path = lib.test_data_dir ++ "test-snapshot-v4.2.0-beta.1.tar.zst";
+
+    const json_bytes = try std.fs.cwd().readFileAlloc(allocator, json_path, 8 * 1024 * 1024);
+    defer allocator.free(json_bytes);
+
+    const parsed_json: std.json.Parsed(std.json.Value) =
+        try std.json.parseFromSlice(std.json.Value, allocator, json_bytes, .{});
+    defer parsed_json.deinit();
+    const merged = parsed_json.value.object.get("merged_fields").?.object;
+    const accounts = parsed_json.value.object.get("accounts").?.object;
+
+    const zst_reader = try allocator.create(ZstReader);
+    defer allocator.destroy(zst_reader);
+    try zst_reader.init(std.fs.cwd(), snapshot_path);
+    defer zst_reader.deinit();
+
+    const SnapshotBufReader = struct {
+        zst_reader: *ZstReader,
+        buf: [128 * 1024]u8 = undefined,
+        pos: usize = 0,
+        end: usize = 0,
+
+        pub fn getBuffer(self: *@This()) []const u8 {
+            if (self.pos == self.end) {
+                self.pos = 0;
+                self.end = self.zst_reader.read(.noop, &self.buf) catch |e|
+                    std.debug.panic("ZstReader.read failed: {t}", .{e});
+            }
+            return self.buf[self.pos..self.end];
+        }
+
+        pub fn advance(self: *@This(), n: usize) void {
+            self.pos += n;
+        }
+    };
+
+    var snapshot_reader: SnapshotBufReader = .{ .zst_reader = zst_reader };
+    const fba_buf = try allocator.alloc(u8, 8 * 1024 * 1024);
+    defer allocator.free(fba_buf);
+    var fba: std.heap.FixedBufferAllocator = .init(fba_buf);
+    var snapshot_iter = try SnapshotIter(*SnapshotBufReader).init(&fba, &snapshot_reader);
+
+    try expectEqual(jsonU64(merged.get("slot").?), snapshot_iter.manifest.bank_fields.slot);
+    try expectEqual(jsonU64(merged.get("slot").?), snapshot_iter.manifest.accounts_db_fields.slot);
+    try expectEqualStrings(
+        merged.get("block_id").?.string,
+        snapshot_iter.manifest.extra_fields.block_id.base58String(&hash_buf),
+    );
+
+    const blockhash_queue_json = merged.get("blockhash_queue").?.object;
+    try expectEqual(
+        jsonU64(blockhash_queue_json.get("max_age").?),
+        snapshot_iter.manifest.bank_fields.blockhash_queue.max_age,
+    );
+
+    const json_hashes = blockhash_queue_json.get("hashes").?.array.items;
+    const bhq_hashes = snapshot_iter.manifest.bank_fields.blockhash_queue.hashes;
+    try expectEqual(json_hashes.len, bhq_hashes.count);
+    for (bhq_hashes.array, json_hashes) |hash, json_hash| {
+        try expectEqualStrings(json_hash.object.get("hash").?.string, hash.base58String(&hash_buf));
+    }
+
+    const account_entries = accounts.get("entries").?.array.items;
+    try expectEqual(jsonU64(accounts.get("count").?), account_entries.len);
+
+    var account_index: usize = 0;
+    while (try snapshot_iter.next()) |account| : (account_index += 1) {
+        try expect(account_index < account_entries.len);
+        const a = account_entries[account_index].object;
+
+        try expectEqual(jsonU64(a.get("slot").?), account.slot);
+        try expectEqualStrings(a.get("pubkey").?.string, account.pubkey.base58String(&pubkey_buf));
+        try expectEqualStrings(a.get("owner").?.string, account.owner.base58String(&pubkey_buf));
+        try expectEqual(jsonU64(a.get("lamports").?), account.lamports);
+        try expectEqual(jsonU64(a.get("rent_epoch").?), account.rent_epoch);
+        try expectEqual(a.get("executable").?.bool, account.data.executable);
+        try expectEqual(jsonU64(a.get("data_len").?), account.data.len);
+
+        const data = try allocator.alloc(u8, account.data.len);
+        defer allocator.free(data);
+        try snapshot_iter.readSliceAll(data);
+
+        const data_hex = try allocator.alloc(u8, data.len * 2);
+        defer allocator.free(data_hex);
+        for (data, 0..) |byte, i| {
+            data_hex[i * 2] = std.fmt.hex_charset[byte >> 4];
+            data_hex[i * 2 + 1] = std.fmt.hex_charset[byte & 0x0f];
+        }
+        try expectEqualStrings(a.get("data_hex").?.string, data_hex);
+    }
+    try expectEqual(account_entries.len, account_index);
+}
+
+fn jsonU64(value: std.json.Value) u64 {
+    return @intCast(value.integer);
+}

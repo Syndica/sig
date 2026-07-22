@@ -455,11 +455,6 @@ pub fn applyFeatureActivations(
         // https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=149549898
         return error.RaiseBlockLimitsTo100MActivationNotImplemented;
     }
-    if (new_activations.active(.raise_account_cu_limit, slot)) {
-        // TODO: Implement once cost tracker is added
-        // https://github.com/orgs/Syndica/projects/2/views/10?pane=issue&itemId=149549898
-        return error.RaiseAccountCuLimitActivationNotImplemented;
-    }
 }
 
 /// Apply built-in program feature transitions
@@ -1627,29 +1622,6 @@ test "applyFeatureActivations: basic activations" {
         );
         try std.testing.expectError(
             error.RaiseBlockLimitsTo100MActivationNotImplemented,
-            err,
-        );
-    }
-
-    { // Error on raise account CU limit
-        const slot: Slot = 0;
-
-        var env = try TestEnvironment.init(allocator);
-        defer env.deinit(allocator);
-        try env.ancestors.addSlot(allocator, slot);
-
-        // Test full inflation activation - feature slot 1
-        try env.insertFeatureAccount(allocator, slot, 1, .raise_account_cu_limit, null);
-        const err = applyFeatureActivations(
-            allocator,
-            slot,
-            &env.slot_constants,
-            &env.slot_state,
-            env.slotAccountStore(slot),
-            .noop,
-        );
-        try std.testing.expectError(
-            error.RaiseAccountCuLimitActivationNotImplemented,
             err,
         );
     }
