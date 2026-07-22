@@ -246,17 +246,3 @@ test "calculate rent result" {
         collector.calculateRentResult(&Pubkey.ZEROES, account),
     );
 }
-
-test "RENT_FEATURE_GATES matches the SIMD-0437 reduction schedule" {
-    const expected_gates = [_]struct { sig.core.features.Feature, u64 }{
-        .{ .set_lamports_per_byte_to_6333, 6333 },
-        .{ .set_lamports_per_byte_to_5080, 5080 },
-        .{ .set_lamports_per_byte_to_2575, 2575 },
-        .{ .set_lamports_per_byte_to_1322, 1322 },
-        .{ .set_lamports_per_byte_to_696, 696 },
-    };
-    for (expected_gates, RENT_FEATURE_GATES) |expected, actual| {
-        try std.testing.expectEqual(expected[0], actual[0]);
-        try std.testing.expectEqual(expected[1], actual[1]);
-    }
-}

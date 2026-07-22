@@ -116,35 +116,6 @@ pub const SlotConstants = struct {
         allocator: Allocator,
         bank_fields: *const BankFields,
         feature_set: FeatureSet,
-        account_reader: SlotAccountReader,
-    ) Allocator.Error!SlotConstants {
-        // `bank_fields.rent_collector.rent` is zeroed in snapshots, which makes
-        // `Rent.minimumBalance` return 0 and every account look rent-exempt. The rent comes from
-        // the rent sysvar account instead; see `loadRentForSnapshot`.
-        return .fromBankFieldsWithRent(
-            allocator,
-            bank_fields,
-            feature_set,
-            loadRentForSnapshot(allocator, account_reader),
-        );
-    }
-
-    /// `fromBankFields` with the genesis rent, for tests that don't exercise rent and so have no
-    /// account reader serving a rent sysvar account. Tests that do depend on the rent should call
-    /// `fromBankFields`.
-    pub fn fromBankFieldsForTest(
-        allocator: Allocator,
-        bank_fields: *const BankFields,
-        feature_set: FeatureSet,
-    ) Allocator.Error!SlotConstants {
-        if (!builtin.is_test) @compileError("only for tests");
-        return .fromBankFieldsWithRent(allocator, bank_fields, feature_set, .INIT);
-    }
-
-    fn fromBankFieldsWithRent(
-        allocator: Allocator,
-        bank_fields: *const BankFields,
-        feature_set: FeatureSet,
         rent: sig.runtime.sysvar.Rent,
     ) Allocator.Error!SlotConstants {
         var ancestors = try bank_fields.ancestors.clone(allocator);
@@ -179,24 +150,30 @@ pub const SlotConstants = struct {
         };
     }
 
+    pub fn fromBankFieldsForTest(
+        allocator: Allocator,
+        bank_fields: *const BankFields,
+        feature_set: FeatureSet,
+    ) Allocator.Error!SlotConstants {
+        if (!builtin.is_test) @compileError("only for tests");
+        return .fromBankFields(allocator, bank_fields, feature_set, .INIT);
+    }
+
     /// Reads the rent sysvar account, which holds the value written by past feature activations.
     /// This is the rent in effect at snapshot load: the serialized rent collector carries a zeroed
     /// `rent` (see the `Rent` doc comment in `runtime/sysvar/rent.zig`).
     /// [agave] https://github.com/anza-xyz/agave/blob/v4.2.0-beta.1/runtime/src/bank.rs#L1923
-    fn loadRentForSnapshot(
+    pub fn loadRentForSnapshot(
         allocator: Allocator,
         account_reader: SlotAccountReader,
-    ) sig.runtime.sysvar.Rent {
+    ) !sig.runtime.sysvar.Rent {
         const Rent = sig.runtime.sysvar.Rent;
-        const account = (account_reader.get(allocator, Rent.ID) catch null) orelse @panic(
-            "snapshot must contain rent sysvar account",
-        );
+        const maybe_account = try account_reader.get(allocator, Rent.ID);
+        const account = maybe_account orelse return error.MissingRentAccount;
         defer account.deinit(allocator);
 
         var data = account.data.iterator();
-        return sig.bincode.read(allocator, Rent, data.reader(), .{}) catch @panic(
-            "snapshot must contain well-formed rent sysvar account",
-        );
+        return try sig.bincode.read(allocator, Rent, data.reader(), .{});
     }
 
     pub fn genesis(
@@ -941,7 +918,10 @@ test "SlotConstants.fromBankFields takes rent from the rent sysvar account" {
         allocator,
         &bank_fields,
         feature_set,
-        .{ .account_map = &accounts },
+        try sig.core.bank.SlotConstants.loadRentForSnapshot(
+            allocator,
+            .{ .account_map = &accounts },
+        ),
     );
     defer constants.deinit(allocator);
 
