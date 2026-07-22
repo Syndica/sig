@@ -73,7 +73,11 @@ groups:
                 type: loki
                 uid: P8E80F9AEF21F6940
               editorMode: code
-              expr: count_over_time({level="error"}[5m]) > 0
+              # Error count per scope and message. scope is a stream label; message
+              # is extracted at query time via logfmt so it stays out of Loki's
+              # stream labels (avoiding cardinality issues) but still appears in
+              # the alert summary sent to Slack.
+              expr: sum by (scope, message) (count_over_time({source="sig", level="error"} | logfmt[5m]))
               intervalMs: 1000
               maxDataPoints: 43200
               queryType: range
@@ -103,7 +107,7 @@ groups:
               expression: A
               intervalMs: 1000
               maxDataPoints: 43200
-              reducer: count
+              reducer: last
               refId: B
               type: reduce
           - refId: C
@@ -134,15 +138,116 @@ groups:
               maxDataPoints: 43200
               refId: C
               type: threshold
-        dashboardUid: jBuN47BVz
-        panelId: 26
+        # Links to the cross-scope "Error Service Logs (all scopes)" panel (id 2) on
+        # the sig-logs-overview dashboard rather than gossip's scope-locked panel, so
+        # the alert link is correct for every scope, not just gossip_service.
+        dashboardUid: sig-logs-overview
+        panelId: 2
+        # Keep OK, not Alerting. For a {level="error"} query, no data means no errors
+        # (healthy), so Alerting would fire on every window without an error. The
+        # sig-logs-pipeline-check alert below handles the case where logs stop.
         noDataState: OK
         for: 1m
         execErrState: Error
         annotations:
-          __dashboardUid__: jBuN47BVz
-          __panelId__: "26"
-          summary: "error: [{{ $labels.scope }}]: {{ $labels.message }}"
+          __dashboardUid__: sig-logs-overview
+          __panelId__: "2"
+          summary: "sig error in {{ $labels.scope }}: {{ $labels.message }}"
+        labels: {}
+        isPaused: false
+        notification_settings:
+          receiver: slack-sig-alerts
+
+      # Fires when no sig logs arrive in 10m (the sig -> file -> alloy -> Loki pipeline
+      # has stopped). The error alert above keeps noDataState: OK, so it can't cover
+      # this. `or vector(0)` returns 0 rather than an empty result when there are no
+      # logs, so the < 1 threshold fires; noDataState: Alerting is a fallback.
+      #
+      # Intentionally no dashboardUid/panelId link: this is an absence alert, so any
+      # linked panel would just show a flatline (and can't render at all if Loki is the
+      # dead hop). The actionable remediation is the pipeline walk in the summary below,
+      # not a graph. Add a runbook link here only if a real runbook is written.
+      - uid: sig-logs-pipeline-check
+        title: sig-logs-pipeline-check
+        condition: C
+        data:
+          - refId: A
+            queryType: range
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: P8E80F9AEF21F6940
+            model:
+              datasource:
+                type: loki
+                uid: P8E80F9AEF21F6940
+              editorMode: code
+              expr: sum(count_over_time({source="sig"}[10m])) or vector(0)
+              intervalMs: 1000
+              maxDataPoints: 43200
+              queryType: range
+              refId: A
+          - refId: B
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params: []
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - B
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              intervalMs: 1000
+              maxDataPoints: 43200
+              reducer: last
+              refId: B
+              type: reduce
+          - refId: C
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: __expr__
+            model:
+              conditions:
+                - evaluator:
+                    params:
+                      - 1
+                    type: lt
+                  operator:
+                    type: and
+                  query:
+                    params:
+                      - C
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: B
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: C
+              type: threshold
+        noDataState: Alerting
+        execErrState: Error
+        for: 5m
+        annotations:
+          summary: "no sig logs in the last 10m; check the sig -> alloy -> Loki pipeline"
         labels: {}
         isPaused: false
         notification_settings:

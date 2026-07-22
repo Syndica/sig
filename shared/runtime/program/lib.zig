@@ -59,7 +59,6 @@ pub const NATIVE = sig.utils.pht(Program, &.{
     .{ bpf_loader.v1.ID,        .{ .func = bpf_loader.execute } },
     .{ bpf_loader.v2.ID,        .{ .func = bpf_loader.execute } },
     .{ bpf_loader.v3.ID,        .{ .func = bpf_loader.execute } },
-    .{ bpf_loader.v4.ID,        .{ .func = bpf_loader.execute, .gate = .enable_loader_v4 } },
     .{ system.ID,               .{ .func = system.execute } },
     .{ vote.ID,                 .{ .func = vote.execute } },
     .{ compute_budget.ID,       .{ .func = compute_budget.entrypoint } },
@@ -71,6 +70,6 @@ pub const NATIVE = sig.utils.pht(Program, &.{
 pub const PRECOMPILE = sig.utils.pht(Program, &.{
     .{ precompiles.ed25519.ID,      .{ .func = precompiles.ed25519.execute } },
     .{ precompiles.secp256k1.ID,    .{ .func = precompiles.secp256k1.execute } },
-    .{ precompiles.secp256r1.ID,    .{ .func = precompiles.secp256r1.execute, .gate = .enable_secp256r1_precompile } },
+    .{ precompiles.secp256r1.ID,    .{ .func = precompiles.secp256r1.execute } },
 });
 // zig fmt: on

@@ -51,11 +51,12 @@ pub fn GossipNode(comptime Effects: type) type {
         /// Sends snapshot sources from gossip to snapshot service
         pub fn reportSnapshotSource(
             self: Effects,
+            from: Pubkey,
             addr: std.net.Address,
             slot: Slot,
             hash: Hash,
         ) void {
-            _ = .{ self, addr, slot, hash };
+            _ = .{ self, from, addr, slot, hash };
             return undefined;
         }
     });
@@ -838,7 +839,7 @@ pub fn GossipNode(comptime Effects: type) type {
             if (i == 0) {
                 if (self.no_peers_timeout <= now -| NO_PEERS_THRESHOLD_MS) {
                     self.no_peers_timeout = now + NO_PEERS_THRESHOLD_MS;
-                    logger.debug().logf("No peers...", .{});
+                    logger.debug().log("No peers...");
 
                     const mask =
                         (@as(u65, 0) << (@as(u7, 64) - mask_bits)) | (~@as(u64, 0) >> mask_bits);

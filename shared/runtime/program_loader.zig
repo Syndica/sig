@@ -54,6 +54,24 @@ pub const ProgramMap = struct {
         defer self.lock.unlockShared();
         return self.inner.contains(address);
     }
+
+    /// Insert `program` for `address` if absent. If an entry already exists it
+    /// is left untouched (it may be in use by a concurrent reader) and the caller
+    /// retains ownership of `program` (typically deinit it). Never frees or replaces
+    /// a live map entry.
+    fn putIfAbsent(
+        self: *ProgramMap,
+        allocator: Allocator,
+        address: Pubkey,
+        program: LoadedProgram,
+    ) Allocator.Error!bool {
+        self.lock.lock();
+        defer self.lock.unlock();
+        const gop = try self.inner.getOrPut(allocator, address);
+        if (gop.found_existing) return false;
+        gop.value_ptr.* = program;
+        return true;
+    }
 };
 
 pub const LoadedProgram = union(enum(u8)) {
@@ -99,8 +117,14 @@ pub fn loadIfProgram(
     );
     errdefer loaded_program.deinit(programs_allocator);
 
-    if (try programs.fetchPut(programs_allocator, address, loaded_program)) |old_value| {
-        old_value.deinit(programs_allocator);
+    // NOTE: Two transactions that merely *invoke* the same program are not
+    // serialized by the account-lock scheduler, so a concurrent reader may
+    // already have cached this program and be running its VM against that
+    // entry right now, replacing (and freeing) it would be a use-after-free,
+    // which is why we only insert if still absent. On a lost race we drop our
+    // redundant copy instead of touching the live entry.
+    if (!try programs.putIfAbsent(programs_allocator, address, loaded_program)) {
+        loaded_program.deinit(programs_allocator);
     }
 }
 
@@ -588,4 +612,165 @@ pub fn testLoad(
     }
 
     return programs;
+}
+
+// Regression test for the program-cache use-after-free data race.
+//
+// `loadIfProgram` previously populated the per-slot shared `ProgramMap` with a check-then-act
+// sequence that was not atomic across its steps (and used `fetchPut` to replace entries):
+//
+//   if (... or programs.contains(address)) return; // 1. check   (lock released)
+//   var loaded_program = try loadProgram(...);      // 2. load    (no lock held)
+//   if (try programs.fetchPut(...)) |old|           // 3. insert, replacing and
+//       old.deinit(programs_allocator);             //    freeing any prior entry
+//
+// Two transaction workers that invoke the same not-yet-cached program run in
+// parallel (a program account is locked read-only, so the scheduler creates no
+// dependency between them). Both pass the `contains` check, both load, and the
+// second worker's `fetchPut` frees the first worker's program object while that
+// worker is still executing the VM against it (bpf_loader/execute.zig fetches the
+// program by value via `program_map.get` and runs the VM with no lock held). The
+// result is a use-after-free, corrupted execution, divergent account writes, and
+// a non-deterministic bank hash.
+//
+// Racing real threads would be flaky, so this test drives the interleaving
+// deterministically. It makes one real `loadIfProgram` call whose `AccountReader`
+// inserts a second, already-loaded copy of the program ("worker A") into the cache
+// after `loadIfProgram` passes its `contains` check but before it reaches the
+// final insert step (`fetchPut` before this fix, now `putIfAbsent`). The reader's
+// `get` runs from inside `loadProgram`, which sits between those two steps.
+//
+// Afterwards the cache must still hand out worker A's program:
+//   * buggy fetchPut-then-free-old: worker A's entry is evicted and freed, and the
+//     cache holds worker B's copy, so the cached source pointer differs from worker
+//     A's -> FAIL.
+//   * fixed put-if-absent: worker B's duplicate is discarded and worker A's program
+//     is left in place, so the pointers match -> PASS.
+
+test "loadIfProgram: concurrent first-load must not evict program worker still holds" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const program_key = Pubkey.initRandom(prng.random());
+    const program_data_key = Pubkey.initRandom(prng.random());
+    const program_deployment_slot = 42;
+    const slot = program_deployment_slot + 1;
+
+    const program_elf = try std.fs.cwd().readFileAlloc(
+        allocator,
+        sig.ELF_DATA_DIR ++ "hello_world.so",
+        std.math.maxInt(usize),
+    );
+    defer allocator.free(program_elf);
+
+    const program_bytes, const program_data_bytes = try createV3ProgramAccountData(
+        allocator,
+        program_data_key,
+        program_deployment_slot,
+        null,
+        program_elf,
+    );
+    defer allocator.free(program_bytes);
+    defer allocator.free(program_data_bytes);
+
+    const program_account = AccountSharedData{
+        .lamports = 1,
+        .owner = bpf_loader.v3.ID,
+        .data = program_bytes,
+        .executable = true,
+        .rent_epoch = std.math.maxInt(u64),
+    };
+
+    var accounts = sig.utils.collections.PubkeyMap(AccountSharedData){};
+    defer accounts.deinit(allocator);
+    try accounts.put(allocator, program_key, program_account);
+    try accounts.put(allocator, program_data_key, .{
+        .lamports = 1,
+        .owner = bpf_loader.v3.ID,
+        .data = program_data_bytes,
+        .executable = false,
+        .rent_epoch = std.math.maxInt(u64),
+    });
+
+    const environment: vm.Environment = .ALL_ENABLED;
+
+    var programs = ProgramMap.empty;
+    defer programs.deinit(allocator);
+
+    // worker A: load the program once. In the real bug this is the copy a
+    // worker fetches via `program_map.get` and runs the VM against.
+    var decoy = try loadProgram(
+        allocator,
+        &program_account,
+        AccountReader.fromMap(&accounts),
+        &environment,
+        slot,
+    );
+    const decoy_source_ptr: [*]const u8 = switch (decoy) {
+        .loaded => |l| l.source.ptr,
+        .failed => return error.FailedToLoadProgram,
+    };
+
+    // A one-shot `AccountReader` that simulates worker A publishing its program to
+    // the shared cache mid-load: its `get` runs from inside `loadProgram`, i.e.
+    // after `loadIfProgram` passed `contains` but before it reaches `putIfAbsent`. It
+    // then delegates to a real map-backed reader so worker B's own load succeeds.
+    // Same {ctx, getFn} shape that `AccountReader.fromMap`/`noop` build internally.
+    var injector = struct {
+        inner: AccountReader,
+        programs: *ProgramMap,
+        key: Pubkey,
+        decoy: LoadedProgram,
+        allocator: Allocator,
+        injected: bool = false,
+
+        fn get(
+            ctx: *const anyopaque,
+            account_allocator: Allocator,
+            pubkey: Pubkey,
+        ) AccountLoadError!?AccountSharedData {
+            const self: *@This() = @ptrCast(@alignCast(@constCast(ctx)));
+            if (!self.injected) {
+                // The map is still empty here (worker B has not inserted yet), so
+                // worker A's insert has no prior entry.
+                std.debug.assert(
+                    (try self.programs.fetchPut(self.allocator, self.key, self.decoy)) == null,
+                );
+                self.injected = true;
+            }
+            return self.inner.get(account_allocator, pubkey);
+        }
+    }{
+        .inner = AccountReader.fromMap(&accounts),
+        .programs = &programs,
+        .key = program_key,
+        .decoy = decoy,
+        .allocator = allocator,
+    };
+
+    // worker B: the real `loadIfProgram` for the same program.
+    const load_result = loadIfProgram(
+        allocator,
+        &programs,
+        program_key,
+        &program_account,
+        .{ .ctx = &injector, .getFn = @TypeOf(injector).get },
+        &environment,
+        slot,
+    );
+    // If the load failed before the reader ran, the cache never took ownership of
+    // worker A's program, so free it here to avoid a leak.
+    if (!injector.injected) decoy.deinit(allocator);
+    try load_result;
+
+    // The program the cache hands out must still be worker A's (first-writer-wins).
+    // With the buggy fetchPut-then-free-old, worker A's program was evicted and
+    // freed while a worker still referenced it, and the cache holds worker B's
+    // duplicate; a differing source pointer exposes the use-after-free.
+    const cached = programs.get(program_key) orelse return error.ProgramMissingFromCache;
+    const cached_source_ptr: [*]const u8 = switch (cached) {
+        .loaded => |l| l.source.ptr,
+        .failed => return error.ProgramLoadFailed,
+    };
+    try std.testing.expectEqual(decoy_source_ptr, cached_source_ptr);
 }

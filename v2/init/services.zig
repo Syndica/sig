@@ -14,7 +14,7 @@ pub const accounts_db = struct {
 
     pub const ReadWrite = struct {
         config: *lib.accounts_db.RootedConfig,
-        ready_snapshot_in: *lib.snapshot.SnapshotDataRing,
+        ready_snapshot_in: *lib.snapshot.SnapshotData,
         snapshot_metadata_out: *lib.accounts_db.RuntimeMetadata,
         account_pool: *lib.accounts_db.AccountPool,
         replay_lookups: *lib.accounts_db.AccountLookups,
@@ -59,11 +59,14 @@ pub const replay = struct {
     pub const ReadOnly = struct {};
 
     pub const ReadWrite = struct {
+        scratch_memory: *[lib.replay.scratch_buffer_size]u8,
         snapshot_metadata_in: *lib.accounts_db.RuntimeMetadata,
         deshredded_in: *lib.shred.DeshredRing,
         replay_transaction_pool: *lib.replay.TransactionPool,
         block_pool: *lib.replay.BlockPool,
         exec_req_response: *lib.replay.ExecReqResponse,
+        account_pool: *lib.accounts_db.AccountPool,
+        account_lookups: *lib.accounts_db.AccountLookups,
         tel: *lib.telemetry.Region,
     };
 };
@@ -101,7 +104,7 @@ pub const snapshot = struct {
 
     pub const ReadWrite = struct {
         source_from_gossip: *lib.snapshot.SnapshotSourceRing,
-        ready_snapshot_out: *lib.snapshot.SnapshotDataRing,
+        ready_snapshot_out: *lib.snapshot.SnapshotData,
         tel: *lib.telemetry.Region,
     };
 };

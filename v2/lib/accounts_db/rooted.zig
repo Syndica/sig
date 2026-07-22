@@ -102,7 +102,7 @@ pub const Rooted = struct {
             };
             defer read_file.close();
 
-            logger.info().logf("loading from existing rooted db", .{});
+            logger.info().log("loading from existing rooted db");
             self.loadExisting(
                 .from(logger),
                 runner,
@@ -164,9 +164,13 @@ pub const Rooted = struct {
 
     const SectorHeader = packed struct(u64) {
         type: enum(u3) {
-            padding, // padding data to get file aligned to block_size for writing
-            account, // holds an actual account
-            blockhashes, // holds a serialized addition to the blockhash queue
+            /// padding data to get file aligned to block_size for writing
+            padding,
+            /// holds an actual account
+            account,
+            /// holds the block_id followed by a serialized addition to the blockhash queue.
+            /// body layout: `{ block_id: Hash, [info.count]Hash }`
+            block_metadata,
             _, // TODO: add other types of sections
         },
         info: packed union {
@@ -258,6 +262,7 @@ pub const Rooted = struct {
         var timer = try std.time.Timer.start();
         var n_puts: usize = 0;
         var n_bytes_read: usize = 0;
+        var last_block_id: ?Hash = null;
 
         // read sectors until EOF
         while ((try self.io.reader.getBuffer(.from(logger))).len > 0) {
@@ -300,7 +305,13 @@ pub const Rooted = struct {
                     });
                     n_puts += 1;
                 },
-                .blockhashes => {
+                .block_metadata => {
+                    // read block_id
+                    var block_id: Hash = undefined;
+                    try self.readExisting(.from(logger), (&block_id.data).ptr, @sizeOf(Hash));
+                    last_block_id = block_id;
+
+                    // read blockhashes
                     var num_hashes = header.info.count;
                     while (num_hashes > 0) {
                         // get a buffer to write hashes into
@@ -348,6 +359,7 @@ pub const Rooted = struct {
                 self.io.reader.io_stalled = 0;
             }
         }
+        runtime_metadata.block_id = last_block_id orelse return error.NoBlockIDs;
 
         // write the slot to commit the RuntimeMetadata stuff
         const slot = self.journal.committed_slot;
@@ -383,6 +395,9 @@ pub const Rooted = struct {
         snapshot_iter: anytype, // lib.solana.snapshot.SnapshotIter(anytype),
         runtime_metadata: *RuntimeMetadata,
     ) !void {
+        const zone = tracy.Zone.init(@src(), .{ .name = "loadSnapshot" });
+        defer zone.deinit();
+
         const slot = snapshot_iter.manifest.bank_fields.slot;
         try self.beginTransaction(.from(logger), slot);
 
@@ -410,12 +425,12 @@ pub const Rooted = struct {
             if (elapsed_ns >= std.time.ns_per_s) {
                 timer.reset();
                 logger.info().logf(
-                    "wrote {} accounts (queued:{B:.4}, flushed:{B:.4}) in {D:.0} (io-stall:{D:.0})",
+                    "({:.2}%) wrote {} accounts (queued:{B:.4}, flushed:{B:.4}) (io-stall:{D:.0})",
                     .{
+                        snapshot_iter.tar_iter.buf_reader.percentCompleted(),
                         n_puts,
                         n_transfer,
                         self.io.writer.io_transferred,
-                        elapsed_ns,
                         self.io.writer.io_stalled,
                     },
                 );
@@ -426,26 +441,34 @@ pub const Rooted = struct {
             }
         }
 
-        { // write the current blockhash queue
+        { // write the block_id + current blockhash queue
             const blockhash_queue = &snapshot_iter.manifest.bank_fields.blockhash_queue;
             self.journal.blockhash_max_age = std.math.lossyCast(u32, blockhash_queue.max_age);
 
+            const block_id = snapshot_iter.manifest.extra_fields.block_id;
             const num_hashes = blockhash_queue.hashes.count;
             const hashes = blockhash_queue.hashes.array[0..num_hashes];
 
-            // write blockhashes header
+            // write block_metadata header
             const header: SectorHeader = .{
-                .type = .blockhashes,
+                .type = .block_metadata,
                 .info = .{ .count = @intCast(num_hashes) },
             };
 
             var r = std.Io.Reader.fixed(std.mem.asBytes(&header));
             try self.queueWrite(.from(logger), @sizeOf(SectorHeader), &r);
 
+            // write block_id
+            r = std.Io.Reader.fixed(std.mem.asBytes(&block_id));
+            try self.queueWrite(.from(logger), @sizeOf(Hash), &r);
+
+            // write blockhashes
             r = std.Io.Reader.fixed(std.mem.sliceAsBytes(hashes));
             try self.queueWrite(.from(logger), num_hashes * @sizeOf(Hash), &r);
 
-            // send over as metadata
+            runtime_metadata.block_id = block_id;
+
+            // send blockhashes over as metadata
             var blockhash_writer = runtime_metadata.blockhash_queue.hashes.getView(.writer);
             defer {
                 runtime_metadata.blockhash_queue.max_age = self.journal.blockhash_max_age;
@@ -683,7 +706,7 @@ pub const Rooted = struct {
 
         const entry = self.table.get(pubkey);
         if (entry.isEmpty()) { // not found. complete immediately.
-            node.result = .{ .pubkey = pubkey.*, .account_index = AccountPool.invalid_index };
+            node.result = .{ .pubkey = pubkey.*, .account_index = .invalid };
             node.next = self.ready_lookups;
             self.ready_lookups = lookup_idx;
             return true;
@@ -855,7 +878,7 @@ pub const Rooted = struct {
                 const acc_info = header.info.account;
                 if (acc_info.data_len != account.data.len) {
                     logger.err().logf(
-                        "account lookup {f} read mismatch sector size: expected {} foudn {}",
+                        "account lookup {f} read mismatch sector size: expected {} found {}",
                         .{ node.result.pubkey, account.data.len, acc_info.data_len },
                     );
                     return error.InvalidRead;
