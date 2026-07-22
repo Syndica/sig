@@ -463,28 +463,65 @@ fn buildProtoEffects(
     while (err_it.next()) |slot| try dead_slots.put(allocator, slot.*, {});
     if (dead_slots.count() > 0) out.block_parse_result = .REJECTED_INVALID_HEADER;
 
-    // Per-slot first-seen `parent_offset`, mirroring agave's
-    // first-writer-wins pin in `check_insert_data_shred` /
-    // `slot_meta.parent_slot`. Any FEC set whose declared
-    // `parent_offset` disagrees with the pin never has 32 data shreds
-    // in agave's `data_shred_cf` (the mismatched ones are rejected as
-    // `InsertDataShredError::InvalidShred`), so its harness emits no
-    // `fec_set_result` for it. Compute the pin from insertion order
-    // (`st.data_shreds` is appended in feed order via `captureShredIfNew`
-    // and hasn't been sorted yet). Also mark any slot with a
-    // parent-offset conflict as dead so the block verdict flips to
-    // REJECTED — receiver-only walks in `deriveBlockParseResult` miss
-    // this when the first-seen and mismatching FEC sets are split
-    // across a completed set (ctx destroyed) and an in-progress set.
+    // Simulate agave's per-shred admission ordering. `check_insert_data_shred`
+    // enforces, in order:
+    //   1. First-seen `parent_offset` per slot (pinned in `slot_meta.parent_slot`
+    //      by `maybe_update_parent_info`). Mismatches return `InvalidShred` —
+    //      the shred never lands in `data_shred_cf` and never bumps
+    //      `slot_meta.received`. Slot is marked dead.
+    //   2. `last_in_slot && slot_idx < slot_meta.received`. Rejected shreds are
+    //      dropped and the slot is marked dead.
+    //   3. `slot_idx >= slot_meta.last_index` (once `last_in_slot` pins it).
+    //   4. On admission, `slot_meta.received = max(slot_meta.received, slot_idx + 1)`.
+    // Sig's runtime keeps no `slot_parents` / `dead_slots` / per-slot last-
+    // index state (design decision), so the harness reconstructs the same
+    // rejection sequence from the receiver's captured admissions to know
+    // which FEC sets agave would have failed to complete.
     var first_seen_parent: std.AutoHashMapUnmanaged(Slot, u16) = .empty;
     defer first_seen_parent.deinit(allocator);
+    var suppressed_fec_sets: std.AutoHashMapUnmanaged(sig_v2.shred.FecSetId, void) = .empty;
+    defer suppressed_fec_sets.deinit(allocator);
+    var received: std.AutoHashMapUnmanaged(Slot, u32) = .empty;
+    defer received.deinit(allocator);
+    var slot_last_index: std.AutoHashMapUnmanaged(Slot, u32) = .empty;
+    defer slot_last_index.deinit(allocator);
     for (st.data_shreds.items) |ds| {
-        const gop = try first_seen_parent.getOrPut(allocator, ds.slot);
-        if (!gop.found_existing) {
-            gop.value_ptr.* = ds.parent_offset;
-        } else if (gop.value_ptr.* != ds.parent_offset) {
+        // (1) Parent-offset pin. Shreds disagreeing with the pin never
+        // reach the `received` bump in agave — skip them here too so
+        // their slot_idx doesn't spuriously advance `received`.
+        const parent_gop = try first_seen_parent.getOrPut(allocator, ds.slot);
+        if (!parent_gop.found_existing) {
+            parent_gop.value_ptr.* = ds.parent_offset;
+        } else if (parent_gop.value_ptr.* != ds.parent_offset) {
             try dead_slots.put(allocator, ds.slot, {});
+            continue;
         }
+
+        // (2) + (3) Order-dependent per-slot rejects.
+        const rejected = blk: {
+            if (slot_last_index.get(ds.slot)) |li| if (ds.slot_idx >= li) break :blk true;
+            if (ds.last_shred_in_slot) {
+                const r = received.get(ds.slot) orelse 0;
+                if (ds.slot_idx < r) break :blk true;
+            }
+            break :blk false;
+        };
+        if (rejected) {
+            try suppressed_fec_sets.put(allocator, .{
+                .slot = ds.slot,
+                .fec_set_idx = ds.fec_set_idx,
+            }, {});
+            try dead_slots.put(allocator, ds.slot, {});
+            continue;
+        }
+
+        // (4) Admitted -> update per-slot cursors.
+        if (ds.last_shred_in_slot) {
+            try slot_last_index.put(allocator, ds.slot, ds.slot_idx);
+        }
+        const gop = try received.getOrPut(allocator, ds.slot);
+        if (!gop.found_existing) gop.value_ptr.* = 0;
+        gop.value_ptr.* = @max(gop.value_ptr.*, ds.slot_idx + 1);
     }
     if (dead_slots.count() > 0) out.block_parse_result = .REJECTED_INVALID_HEADER;
 
@@ -532,6 +569,15 @@ fn buildProtoEffects(
                     expected_idx += FEC_DATA_SHREDS;
                     continue;
                 }
+            }
+
+            // Suppress FEC sets marked by the last-index walk above.
+            if (suppressed_fec_sets.contains(.{
+                .slot = r.slot,
+                .fec_set_idx = r.fec_set_index,
+            })) {
+                expected_idx += FEC_DATA_SHREDS;
+                continue;
             }
 
             try out.fec_set_results.append(allocator, .{
