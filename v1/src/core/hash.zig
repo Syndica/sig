@@ -1,7 +1,3 @@
-//! v1-only additions on top of the `Hash` type in `shared.core.hash`.
-//! Contains `SlotAndHash` and `LtHash`, neither of which is used by
-//! runtime/v2.
-
 const std = @import("std");
 const shared = @import("shared");
 

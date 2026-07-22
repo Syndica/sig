@@ -2,7 +2,6 @@ const builtin = @import("builtin");
 const std = @import("std");
 const sig = @import("../sig.zig");
 const tracy = @import("tracy");
-const shared = @import("shared");
 
 const Allocator = std.mem.Allocator;
 const Atomic = std.atomic.Value;

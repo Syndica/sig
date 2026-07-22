@@ -1,4 +1,5 @@
 const std = @import("std");
+const shared = @import("shared");
 const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
@@ -324,7 +325,7 @@ pub fn computeFeatureSet(
                 break :blk &feature_data_buf;
             } else &.{};
 
-        switch (try features.activationStateFromAccount(
+        switch (try activationStateFromAccount(
             feature_account.owner,
             feature_data,
         )) {
@@ -355,6 +356,32 @@ pub fn computeFeatureSet(
     }
 
     if (allow_new_activations) return new_activations;
+}
+
+/// Returns the activation slot from a feature account.
+/// - `.pending` if the feature is pending activation (valid 9-byte account with null slot)
+/// - `.{ .activated = slot }` if already activated
+/// - `.invalid` if the account is not a valid feature account
+///
+/// Feature accounts must have at least 9 bytes of data (bincode-serialized ?u64)
+/// An empty account (0 bytes) is not a valid pending feature
+/// [solana-sdk] https://github.com/anza-xyz/solana-sdk/blob/54449336c03ae8a99bc37745ac97ab90a77eb24b/feature-gate-interface/src/state.rs#L37
+fn activationStateFromAccount(owner: Pubkey, data: []const u8) !union(enum) {
+    pending,
+    activated: u64,
+    invalid,
+} {
+    if (data.len < 9 or
+        !owner.equals(&sig.runtime.ids.FEATURE_PROGRAM_ID)) return .invalid;
+
+    const maybe_slot = shared.bincode.readFromSlice(
+        shared.utils.allocators.failing.allocator(.{}),
+        ?u64,
+        data[0..9],
+        .{},
+    ) catch @panic("failed to deserialize feature account data");
+
+    return if (maybe_slot) |slot| .{ .activated = slot } else .pending;
 }
 
 /// Apply feature activations at the given slot.

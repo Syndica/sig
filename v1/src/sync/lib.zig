@@ -1,5 +1,3 @@
-const shared = @import("shared");
-
 pub const channel = @import("channel.zig");
 pub const mux = @import("mux.zig");
 pub const once_cell = @import("once_cell.zig");
