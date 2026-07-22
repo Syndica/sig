@@ -418,6 +418,8 @@ pub const Rooted = struct {
             }{});
         }
 
+        logger.info().logf("reading snapshot accounts", .{});
+
         var timer = try std.time.Timer.start();
         var n_puts: usize = 0;
         var n_transfer: usize = 0;
