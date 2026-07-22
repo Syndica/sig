@@ -31,12 +31,12 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon', 'v1/build.zig', 'v1/build.zig.zon') }}
 
       - name: Build Check
         run: |
           ./tools/fetch-zig-deps.py
-          zig build -Denable-tsan=false --summary all -Dno-run -Dno-bin
+          zig build --summary all -Dno-run -Dno-bin
 
   test_macos:
     runs-on: macos-15
@@ -50,23 +50,18 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon', 'v1/build.zig', 'v1/build.zig.zon') }}
 
       - name: Build Tests
         run: |
-          ./tools/fetch-zig-deps.py
+          ./tools/fetch-zig-deps.py v1/build.zig.zon
+          cd v1
           zig build test -Dno-run -Denable-tsan=false --summary all
 
       - name: Run Tests
         run: |
           set -eo pipefail
-          zig-out/bin/test 2>&1 | cat
-
-      - name: Shared Tests
-        run: |
-          ./tools/fetch-zig-deps.py shared/build.zig.zon
-          cd shared
-          zig build test -Dallow-no-sha -Dallow-no-avx512 --summary all
+          v1/zig-out/bin/test 2>&1 | cat
 
   test_macos_hashmap_ledger:
     runs-on: macos-15
@@ -80,17 +75,18 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
+          cache-key: macos-${{ hashFiles('build.zig', 'build.zig.zon', 'v1/build.zig', 'v1/build.zig.zon') }}
 
       - name: Build Tests
         run: |
-          ./tools/fetch-zig-deps.py
+          ./tools/fetch-zig-deps.py v1/build.zig.zon
+          cd v1
           zig build test -Dno-run -Denable-tsan=false --summary all -Dlong-tests -Dledger=hashmap -Dfilter="ledger"
 
       - name: Run Tests
         run: |
           set -eo pipefail
-          zig-out/bin/test 2>&1 | cat
+          v1/zig-out/bin/test 2>&1 | cat
 
   test_webzockets_macos:
     runs-on: macos-15
@@ -105,11 +101,11 @@ jobs:
         with:
           version: 0.15.2
           cache-key: macos-webzockets-${{ hashFiles('build.zig.zon',
-            'src/rpc/webzockets/build.zig', 'src/rpc/webzockets/build.zig.zon')
+            'v1/src/rpc/webzockets/build.zig', 'v1/src/rpc/webzockets/build.zig.zon')
             }}
 
       - name: Build and Run Webzockets Tests
         run: |
-          ./tools/fetch-zig-deps.py src/rpc/webzockets/build.zig.zon
-          cd src/rpc/webzockets
+          ./tools/fetch-zig-deps.py v1/src/rpc/webzockets/build.zig.zon
+          cd v1/src/rpc/webzockets
           zig build test --summary all

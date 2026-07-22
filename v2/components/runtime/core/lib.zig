@@ -1,5 +1,3 @@
-const lib = @import("lib");
-
 comptime {
     if (@import("builtin").is_test) {
         _ = @import("instruction.zig");
