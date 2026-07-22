@@ -16,10 +16,7 @@ comptime {
     }
 }
 
-// Paths the linter walks, relative to the repo root (where sig-lint is
-// invoked from). "v2/components/runtime" is the embedded runtime component
-// that used to be the standalone `shared` package; it now lives inside
-// sig itself.
+// Paths the linter walks, relative to the repo root (where sig-lint is invoked from).
 const project_paths = [_][]const u8{
     "build.zig",
     "v2/main.zig",
@@ -32,19 +29,17 @@ const project_paths = [_][]const u8{
     "tools",
 };
 
+/// Predefined roots to lint for test inclusion. Does not include dynamically
+/// located paths, which are resolved at runtime (looks in v2/components/)
 const test_inclusion_static_roots = [_][]const u8{
     "v2/lib/lib.zig",
     "tools/lint/main.zig",
 };
 
 // File-level rules (line_length, unused_declarations) are skipped for files
-// under these path prefixes. The runtime component was folded into sig
-// wholesale from an external package that never conformed to v2's style
-// rules; whitelisting the whole tree here is preferable to a per-file
-// waterfall of excluded_paths entries. `test_inclusion` still runs against
-// the runtime since it's cheap to satisfy and catches missing companions.
+// under these path prefixes.
 const file_level_lint_exclusions = [_][]const u8{
-    "v2/components/runtime/",
+    "v2/components/runtime/", // TODO(1747): conform runtime to the lints
 };
 
 /// Runs v2 lint and exits with 0 for no diagnostics, 1 for diagnostics, and 2 for CLI or internal
@@ -114,8 +109,7 @@ fn run(ctx: *core.Context) !void {
     }
 
     // Walk `v2/components/` and add each subdir's `{api,component}.zig`
-    // as a joint pair of roots. Runtime is a legacy monolithic component
-    // that predates the pattern, so skip it explicitly.
+    // as a joint pair of roots.
     var test_inclusion_roots: std.ArrayList([]const u8) = .empty;
     try test_inclusion_roots.appendSlice(ctx.arena, &test_inclusion_static_roots);
     var components_dir = try std.fs.cwd().openDir("v2/components", .{ .iterate = true });

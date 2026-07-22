@@ -54,7 +54,7 @@ pub fn build(b: *Build) void {
     // them as distinct sig_v2 packages and refuses to link the two `runtime`
     // module instances into one binary. The comments in v1/build.zig's
     // Config document each forwarded option.
-    const sig_v2_common_options = .{
+    const v2_options = .{
         .target = target,
         .optimize = optimize,
         .@"long-tests" = false,
@@ -79,17 +79,17 @@ pub fn build(b: *Build) void {
         .ledger = .hashmap,
         .@"allow-no-sha" = allow_no_sha,
         .@"allow-no-avx512" = allow_no_avx512,
-        .@"long-tests" = false,
-        .@"use-llvm" = true,
-        .@"enable-tracy" = false,
-        .@"tracy-on-demand" = false,
-        .@"tracy-no-exit" = false,
-        .@"debug-skip-shred-sig-verify" = true,
-        .@"debug-skip-shred-version-check" = false,
+        .@"long-tests" = v2_options.@"long-tests",
+        .@"use-llvm" = v2_options.@"use-llvm",
+        .@"enable-tracy" = v2_options.@"enable-tracy",
+        .@"tracy-on-demand" = v2_options.@"tracy-on-demand",
+        .@"tracy-no-exit" = v2_options.@"tracy-no-exit",
+        .@"debug-skip-shred-sig-verify" = v2_options.@"debug-skip-shred-sig-verify",
+        .@"debug-skip-shred-version-check" = v2_options.@"debug-skip-shred-version-check",
     });
     const sig_mod = sig_dep.module("sig");
 
-    const sig_v2_dep = b.dependency("sig_v2", sig_v2_common_options);
+    const sig_v2_dep = b.dependency("sig_v2", v2_options);
     const sig_v2_mod = sig_v2_dep.module("lib");
     const shred_api_mod = sig_v2_dep.module("shred_api");
     const shred_mod = sig_v2_dep.module("shred");
