@@ -1,5 +1,6 @@
-//! An implmentation of a gossip protocol instance. It uses the provided entrypoints and identity to send/recv messages,
-//! ping other nodes, and participate in the cluster to share around GossipValues.
+//! An implmentation of a gossip protocol instance. It uses the provided entrypoints
+//! and identity to send/recv messages, ping other nodes, and participate in the
+//! cluster to share around GossipValues.
 
 const std = @import("std");
 const lib = @import("lib");

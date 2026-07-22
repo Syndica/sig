@@ -10,7 +10,7 @@ const FileWriter = lib.fio.FileWriter;
 const FileReader = lib.fio.FileReader;
 
 const Table = component.Table;
-const AccountPool = component.AccountPool;
+const AccountPool = lib.AccountPool;
 const AccountLookups = api.AccountLookups;
 const RuntimeMetadata = api.RuntimeMetadata;
 

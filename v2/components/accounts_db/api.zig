@@ -1,11 +1,7 @@
 const std = @import("std");
 const lib = @import("lib");
 
-/// AccountPool lives in `lib` (not this component) because `replay`'s api
-/// embeds `AccountPool.AccountRef` in its extern request/response structs.
-/// See `v2/lib/accounts_db.zig` for the rationale.
-pub const AccountPool = lib.account_pool.AccountPool;
-
+const AccountPool = lib.AccountPool;
 const Pubkey = lib.solana.Pubkey;
 const Hash = lib.solana.Hash;
 const Slot = lib.solana.Slot;

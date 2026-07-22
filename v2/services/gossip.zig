@@ -104,7 +104,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
 
     var now = lib.clock.wallclock(.ms);
     var fba = std.heap.FixedBufferAllocator.init(&scratch_memory);
-    var node = try GossipNode(Effects).init(&fba, now, metrics, .{
+    var gossip_node = try GossipNode(Effects).init(&fba, now, metrics, .{
         .effects = effects,
         .shred_version = ro.config.cluster_info.shred_version,
         .socket_map = sockets.asSocketMap(),
@@ -114,7 +114,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     var it = rw.net_pair.recv.get(.reader);
     while (true) {
         now = lib.clock.wallclock(.ms);
-        try node.poll(.from(logger), now);
+        try gossip_node.poll(.from(logger), now);
 
         const packet = it.next() orelse {
             // TODO(ink): detect whether our output ring buffers (`packet_writer` and co)
@@ -126,7 +126,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
             continue;
         };
         try runner.activity.signalActive();
-        node.processPacket(.from(logger), now, packet);
+        gossip_node.processPacket(.from(logger), now, packet);
         it.markUsed();
     }
 }

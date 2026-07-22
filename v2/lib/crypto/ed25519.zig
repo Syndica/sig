@@ -3,13 +3,14 @@ const builtin = @import("builtin");
 const lib = @import("../lib.zig");
 const build_options = @import("build-options");
 
+const avx512 = @import("ed25519/avx512.zig");
+
 const Signature = lib.solana.Signature;
 const Pubkey = lib.solana.Pubkey;
 
 pub const pippenger = @import("ed25519/pippenger.zig");
 pub const straus = @import("ed25519/straus.zig");
 pub const generic = @import("ed25519/generic.zig");
-pub const avx512 = @import("ed25519/avx512.zig");
 pub const wycheproof = @import("ed25519/wycheproof.zig");
 
 pub const mul = straus.mul;

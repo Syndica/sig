@@ -29,8 +29,17 @@ pub const vm = @import("vm/lib.zig");
 pub const zksdk = @import("zksdk/lib.zig");
 pub const build_options = @import("build-options");
 
+/// This is a re-export of all the code that is deduplicated across v1 and v2. They
+/// live inside v2, and not this runtime component because that's where it makes the
+/// most sense of v2.
+///
+/// They are re-exported here because the runtime is the primary v2 dependency of
+/// v1, and many of these types are required to be the same exact type across v1 and
+/// v2 because of the runtime integration. Exporting them here makes it clear and
+/// explicit exactly what v1 needs from v2 instead of deeply entangling the two
+/// versions.
 pub const v2 = struct {
-    pub const lib = @import("lib");
+    const lib = @import("lib");
 
     pub const epoch_schedule = lib.solana.epoch_schedule;
     pub const features = lib.solana.features;

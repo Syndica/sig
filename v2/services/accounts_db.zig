@@ -7,7 +7,7 @@ const accounts_db = @import("accounts_db");
 const SnapshotIter = lib.solana.snapshot.SnapshotIter;
 
 const Rooted = accounts_db.Rooted;
-const AccountPool = accounts_db.AccountPool;
+const AccountPool = lib.AccountPool;
 
 comptime {
     _ = start;

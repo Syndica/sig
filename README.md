@@ -36,6 +36,7 @@ v2/                         # current multi-process implementation
 v1/                         # original single-process implementation; maintenance mode
 conformance/                # Solana/Firedancer test-vector harness; has its own build
 config/                     # example runtime config used by `zig build run`
+data/                       # test fixtures used by root `zig build` tests
 docs/                       # Docusaurus docs site and docs tooling
 tools/                      # repo-level developer, CI, lint, docs, and v2 helper tools
 ci/run-and-update-service/  # continuous runner for deploying sig automatically

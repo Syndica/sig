@@ -15,7 +15,7 @@ comptime {
     }
 }
 
-pub const account_pool = @import("account_pool.zig");
+pub const AccountPool = @import("account_pool.zig").AccountPool;
 pub const net = @import("net.zig");
 pub const clock = @import("clock.zig");
 pub const crypto = @import("crypto.zig");

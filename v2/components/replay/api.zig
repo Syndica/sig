@@ -55,7 +55,7 @@ pub const ExecRequest = extern struct {
             block_idx: BlockRef,
             tx_idx: TransactionPool.ItemId,
             n_account_refs: u8,
-            account_ref_buf: [128]lib.account_pool.AccountPool.AccountRef,
+            account_ref_buf: [128]lib.AccountPool.AccountRef,
         },
         txn_sig_verify: extern struct {
             tx_idx: TransactionPool.ItemId,
@@ -72,7 +72,7 @@ pub const ExecResponse = extern struct {
             block_idx: BlockRef,
             tx_idx: TransactionPool.ItemId,
             n_account_refs: u8,
-            account_ref_buf: [128]lib.account_pool.AccountPool.AccountRef,
+            account_ref_buf: [128]lib.AccountPool.AccountRef,
             result: TxExecResult,
         },
         txn_sig_verify: extern struct { success: bool },

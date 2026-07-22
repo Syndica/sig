@@ -1,5 +1,5 @@
 //! This file defines each service and the regions it requires. It is consumed
-//! programmtically by build.zig to auto-build a lib for each service.
+//! programmatically by build.zig to auto-build a lib for each service.
 //!
 //! - Every top-level public decl in this file must be a service definition.
 //! - Every service must be defined in this file or it will not be spawnable.
@@ -23,7 +23,7 @@ pub const accounts_db = struct {
         config: *accounts_db_api.RootedConfig,
         ready_snapshot_in: *snapshot_api.SnapshotData,
         snapshot_metadata_out: *accounts_db_api.RuntimeMetadata,
-        account_pool: *accounts_db_api.AccountPool,
+        account_pool: *lib.AccountPool,
         replay_lookups: *accounts_db_api.AccountLookups,
         tel: *lib.telemetry.Region,
     };
@@ -78,7 +78,7 @@ pub const replay = struct {
         replay_transaction_pool: *replay_api.TransactionPool,
         block_pool: *replay_api.BlockPool,
         exec_req_response: *replay_api.ExecReqResponse,
-        account_pool: *accounts_db_api.AccountPool,
+        account_pool: *lib.AccountPool,
         account_lookups: *accounts_db_api.AccountLookups,
         tel: *lib.telemetry.Region,
     };

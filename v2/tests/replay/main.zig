@@ -74,8 +74,8 @@ pub fn main() !void {
 
     var replay_scratch: Region([replay.scratch_buffer_size]u8) = try .simple();
 
-    var account_pool: Region(accounts_db.AccountPool) =
-        try .sized(@sizeOf(accounts_db.AccountPool) + account_pool_memory);
+    var account_pool: Region(lib.AccountPool) =
+        try .sized(@sizeOf(lib.AccountPool) + account_pool_memory);
     account_pool.ptr().init(account_pool_memory);
 
     var account_lookups: Region(accounts_db.AccountLookups) = try .simple();
@@ -115,7 +115,7 @@ pub fn main() !void {
     const account_pool_init = account_pool.finish();
     const account_pool_buf = try account_pool_init.memfd.mmapRaw(.rw, .{});
     defer std.posix.munmap(account_pool_buf);
-    const account_pool_ptr: *accounts_db.AccountPool = @ptrCast(account_pool_buf.ptr);
+    const account_pool_ptr: *lib.AccountPool = @ptrCast(account_pool_buf.ptr);
 
     var spawned: topology.Children(Topology) = undefined;
     try spawned.spawn(.sandboxed, .{
@@ -193,7 +193,7 @@ fn waitForReplayOutput(
     spawned: *topology.Children(Topology),
     exec_req_response: *replay.ExecReqResponse,
     account_lookups: *accounts_db.AccountLookups,
-    account_pool: *accounts_db.AccountPool,
+    account_pool: *lib.AccountPool,
     expected_transaction_count: u32,
     output_timeout_ns: u64,
     idle_timeout_ns: u64,
@@ -233,7 +233,7 @@ fn waitForReplayOutput(
 }
 
 fn serviceAccountLookups(
-    account_pool: *accounts_db.AccountPool,
+    account_pool: *lib.AccountPool,
     lookup_reader: *@FieldType(accounts_db.AccountLookups, "in").Iterator(.reader),
     lookup_writer: *@FieldType(accounts_db.AccountLookups, "out").Iterator(.writer),
 ) !void {
@@ -253,9 +253,9 @@ fn serviceAccountLookups(
 }
 
 fn createMockAccount(
-    account_pool: *accounts_db.AccountPool,
+    account_pool: *lib.AccountPool,
     pubkey: *const lib.solana.Pubkey,
-) !accounts_db.AccountPool.AccountRef {
+) !lib.AccountPool.AccountRef {
     const account_ref = try account_pool.alloc(0);
     const account = account_pool.getAccount(account_ref);
     account.* = .{

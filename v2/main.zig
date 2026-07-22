@@ -21,11 +21,11 @@ const services = @import("services");
 const topology = @import("topology");
 const tel = lib.telemetry;
 
-const accounts_db_api = @import("accounts_db_api");
-const shred_api = @import("shred_api");
-const gossip_api = @import("gossip_api");
-const snapshot_api = @import("snapshot_api");
-const replay_api = @import("replay_api");
+const accounts_db = @import("accounts_db_api");
+const shred = @import("shred_api");
+const gossip = @import("gossip_api");
+const snapshot = @import("snapshot_api");
+const replay = @import("replay_api");
 
 const Region = topology.Region;
 const ServiceRegions = topology.ServiceRegions;
@@ -211,7 +211,7 @@ pub fn main() !void {
 
     std.log.info("config: {f}", .{config.zonFmt(.{})});
 
-    const gossip_cluster_info: gossip_api.ClusterInfo =
+    const gossip_cluster_info: gossip.ClusterInfo =
         try .getFromEcho(config.gossip.port, config.cluster);
 
     const schedule_file = try std.fs.cwd().openFile(config.leader_schedule_file, .{});
@@ -221,26 +221,26 @@ pub fn main() !void {
 
     // -- Create + initialise shared memory regions -- //
 
-    const gossip_params: gossip_api.Config.InitParams = .{
+    const gossip_params: gossip.Config.InitParams = .{
         .cluster_info = gossip_cluster_info,
         // TODO: read this from identity file in signer service
         .keypair = .fromKeyPair(.generate()),
         .turbine_recv_port = config.shred_network.recv_port,
         .advertise_tvu_port = config.gossip.advertise_tvu_port,
     };
-    var gossip_config: Region(gossip_api.Config) = try .sized(gossip_params.size());
+    var gossip_config: Region(gossip.Config) = try .sized(gossip_params.size());
     gossip_params.init(gossip_config.ptr());
 
-    var shred_recv_config: Region(shred_api.RecvConfig) = try .simple();
+    var shred_recv_config: Region(shred.RecvConfig) = try .simple();
     const shred_recv_data = shred_recv_config.ptr();
     try lib.solana.LeaderSchedule.fromCommand(&shred_recv_data.leader_schedule, &reader.interface);
     shred_recv_data.shred_version = gossip_cluster_info.shred_version;
 
-    var snapshot_config: Region(snapshot_api.SnapshotConfig) = try .simple();
+    var snapshot_config: Region(snapshot.SnapshotConfig) = try .simple();
     try populateSnapshotConfig(snapshot_config.ptr(), config.snapshot, config.cluster);
 
-    var accounts_db_config: Region(accounts_db_api.RootedConfig) = try .sized(
-        @sizeOf(accounts_db_api.RootedConfig) + config.accounts_db.rooted.toBytes(),
+    var accounts_db_config: Region(accounts_db.RootedConfig) = try .sized(
+        @sizeOf(accounts_db.RootedConfig) + config.accounts_db.rooted.toBytes(),
     );
     accounts_db_config.ptr().file_len = @intCast(config.accounts_db.file.len);
     @memcpy(
@@ -258,36 +258,36 @@ pub fn main() !void {
     var net_to_gossip: Region(lib.net.Pair) = try .sized(net_to_gossip_params.size());
     net_to_gossip_params.init(net_to_gossip.ptr());
 
-    var gossip_source_to_snapshot: Region(snapshot_api.SnapshotSourceRing) = try .simple();
+    var gossip_source_to_snapshot: Region(snapshot.SnapshotSourceRing) = try .simple();
     gossip_source_to_snapshot.ptr().init();
 
-    var snapshot_ready_to_accounts_db: Region(snapshot_api.SnapshotData) = try .simple();
+    var snapshot_ready_to_accounts_db: Region(snapshot.SnapshotData) = try .simple();
     snapshot_ready_to_accounts_db.ptr().init();
 
-    var snapshot_metadata: Region(accounts_db_api.RuntimeMetadata) = try .simple();
+    var snapshot_metadata: Region(accounts_db.RuntimeMetadata) = try .simple();
     snapshot_metadata.ptr().init();
 
     const unrooted_memory = config.accounts_db.unrooted.toBytes();
-    var account_pool: Region(accounts_db_api.AccountPool) =
-        try .sized(@sizeOf(accounts_db_api.AccountPool) + unrooted_memory);
+    var account_pool: Region(lib.AccountPool) =
+        try .sized(@sizeOf(lib.AccountPool) + unrooted_memory);
     account_pool.ptr().init(unrooted_memory);
 
-    var replay_scratch: Region([replay_api.scratch_buffer_size]u8) = try .simple();
+    var replay_scratch: Region([replay.scratch_buffer_size]u8) = try .simple();
 
-    var shreds_to_replay: Region(shred_api.DeshredRing) = try .simple();
+    var shreds_to_replay: Region(shred.DeshredRing) = try .simple();
     shreds_to_replay.ptr().init();
 
-    var replay_account_lookups: Region(accounts_db_api.AccountLookups) = try .simple();
+    var replay_account_lookups: Region(accounts_db.AccountLookups) = try .simple();
     replay_account_lookups.ptr().init();
 
-    var transaction_pool: Region(replay_api.TransactionPool) =
-        try .sized(replay_api.TransactionPool.size());
+    var transaction_pool: Region(replay.TransactionPool) =
+        try .sized(replay.TransactionPool.size());
     transaction_pool.ptr().init();
 
-    var block_pool: Region(replay_api.BlockPool) = try .sized(replay_api.BlockPool.size());
+    var block_pool: Region(replay.BlockPool) = try .sized(replay.BlockPool.size());
     block_pool.ptr().init();
 
-    var exec_req_response: Region(replay_api.ExecReqResponse) = try .simple();
+    var exec_req_response: Region(replay.ExecReqResponse) = try .simple();
     exec_req_response.ptr().init();
 
     // The telemetry service owns one share; every other telemetry share belongs to a service
@@ -388,7 +388,7 @@ pub fn main() !void {
 }
 
 fn populateSnapshotConfig(
-    data: *snapshot_api.SnapshotConfig,
+    data: *snapshot.SnapshotConfig,
     cfg: Config.Snapshot,
     cluster: lib.solana.Cluster,
 ) !void {
@@ -400,7 +400,7 @@ fn populateSnapshotConfig(
         );
         return error.NoKnownValidators;
     }
-    if (cfg.known_validators.len > snapshot_api.SnapshotConfig.MAX_KNOWN_VALIDATORS) {
+    if (cfg.known_validators.len > snapshot.SnapshotConfig.MAX_KNOWN_VALIDATORS) {
         return error.TooManyKnownValidators;
     }
 
