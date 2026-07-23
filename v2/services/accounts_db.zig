@@ -73,11 +73,21 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         };
 
         var fba = std.heap.FixedBufferAllocator.init(&Global.fba_memory);
-        var snapshot_iter = try SnapshotIter(SnapshotBufReader).init(&fba, .{
+        var snapshot_iter: SnapshotIter(SnapshotBufReader) = .init(.{
             .in_ = &in,
             .runner_ = runner,
             .completion_ = &rw.ready_snapshot_in.completion,
         });
+        try snapshot_iter.checkVersion();
+        {
+            var status_cache_updates = rw.status_cache_updates_out.get(.writer);
+            defer status_cache_updates.view.close();
+            defer status_cache_updates.markUsed();
+            try snapshot_iter.readMetadata(&fba, .{
+                .runner = runner,
+                .updates = &status_cache_updates,
+            });
+        }
 
         logger.info().log("reading snapshot accounts");
         try rooted.loadSnapshot(

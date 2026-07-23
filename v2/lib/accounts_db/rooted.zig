@@ -398,7 +398,7 @@ pub const Rooted = struct {
         const zone = tracy.Zone.init(@src(), .{ .name = "loadSnapshot" });
         defer zone.deinit();
 
-        const slot = snapshot_iter.manifest.bank_fields.slot;
+        const slot = snapshot_iter.manifest.?.bank_fields.slot;
         try self.beginTransaction(.from(logger), slot);
 
         var timer = try std.time.Timer.start();
@@ -442,10 +442,10 @@ pub const Rooted = struct {
         }
 
         { // write the block_id + current blockhash queue
-            const blockhash_queue = &snapshot_iter.manifest.bank_fields.blockhash_queue;
+            const blockhash_queue = &snapshot_iter.manifest.?.bank_fields.blockhash_queue;
             self.journal.blockhash_max_age = std.math.lossyCast(u32, blockhash_queue.max_age);
 
-            const block_id = snapshot_iter.manifest.extra_fields.block_id;
+            const block_id = snapshot_iter.manifest.?.extra_fields.block_id;
             const num_hashes = blockhash_queue.hashes.count;
             const hashes = blockhash_queue.hashes.array[0..num_hashes];
 

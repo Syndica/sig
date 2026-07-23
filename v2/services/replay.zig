@@ -135,6 +135,9 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     const blockhash_states: *BlockHashStates = try allocator.create(BlockHashStates);
     @memset(blockhash_states, null);
 
+    const exec_registry: *replay.ExecutionRegistry = try allocator.create(replay.ExecutionRegistry);
+    exec_registry.init();
+
     var deshredded_iter = rw.deshredded_in.get(.reader);
     var exec_request_sender = rw.exec_req_response.request_ring.get(.writer);
     var exec_response_receiver = rw.exec_req_response.response_ring.get(.reader);
@@ -142,9 +145,11 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     try bootstrap(
         logger,
         runner,
+        rw.status_cache_updates_in,
         rw.snapshot_metadata_in,
         &forest,
         rw.block_pool,
+        exec_registry,
         exec_states,
         blockhash_states,
     );
@@ -176,39 +181,47 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 
             zone.value(response.task_id);
 
-            std.debug.assert(response.request_kind == .txn_exec); // others unimplemented
-            const response_data = response.data.txn_exec;
+            switch (response.request_kind) {
+                .txn_exec => {
+                    const response_data = response.data.txn_exec;
+                    defer rw.replay_transaction_pool.destroyId(response_data.tx_idx);
 
-            for (response_data.account_ref_buf[0..response_data.n_account_refs]) |account_ref| {
-                if (account_ref == .invalid) continue;
+                    for (response_data.account_ref_buf[0..response_data.n_account_refs]) |account_ref| {
+                        if (account_ref == .invalid) continue;
 
-                const account = rw.account_pool.getAccount(account_ref);
-                if (account.unref()) rw.account_pool.free(account_ref);
+                        const account = rw.account_pool.getAccount(account_ref);
+                        if (account.unref()) rw.account_pool.free(account_ref);
+                    }
+
+                    defer rw.replay_transaction_pool.destroyId(response_data.tx_idx);
+
+                    const block_ref = response_data.block_idx;
+                    const exec_state: *BlockExecState = &(exec_states[block_ref.index()].?);
+
+                    // We previously used the transaction number within the block as our "task_id".
+                    // Asserting that we're receiving them back in order (we have single threaded exec).
+                    std.debug.assert(response.task_id == exec_state.n_transactions_completed);
+
+                    exec_state.n_transactions_completed += 1;
+
+                    if (exec_state.finished()) {
+                        logger.info().logf(
+                            "Slot {f} ({}) complete! ({}/{})",
+                            .{
+                                rw.block_pool.indexToPtr(block_ref).slot,
+                                block_ref,
+                                exec_state.n_transactions_requested,
+                                exec_state.n_transactions_completed,
+                            },
+                        );
+                        try exec_registry.insert(
+                            response_data.block_idx,
+                            response_data.result.tx_hash.data[0..20],
+                        );
+                    }
+                },
+                .txn_sig_verify => |tag| std.debug.panic("TODO: {t} unimplemented", .{tag}),
             }
-
-            defer rw.replay_transaction_pool.destroyId(response_data.tx_idx);
-
-            const block_ref = response_data.block_idx;
-            const exec_state: *BlockExecState = &(exec_states[block_ref.index()].?);
-
-            // We previously used the transaction number within the block as our "task_id".
-            // Asserting that we're receiving them back in order (we have single threaded exec).
-            std.debug.assert(response.task_id == exec_state.n_transactions_completed);
-
-            exec_state.n_transactions_completed += 1;
-
-            if (exec_state.finished()) {
-                logger.info().logf(
-                    "Slot {f} ({}) complete! ({}/{})",
-                    .{
-                        rw.block_pool.indexToPtr(block_ref).slot,
-                        block_ref,
-                        exec_state.n_transactions_requested,
-                        exec_state.n_transactions_completed,
-                    },
-                );
-            }
-
             continue :task .idle;
         },
         .fec_set => {
@@ -292,9 +305,11 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 fn bootstrap(
     logger: tel.Logger("main"),
     runner: lib.runner.Connection,
+    status_cache_updates_in: *lib.accounts_db.StatusCacheUpdates,
     snapshot_metadata: *lib.accounts_db.RuntimeMetadata,
     forest: *MerkleForest,
     block_pool: *lib.replay.BlockPool,
+    exec_registry: *lib.replay.ExecutionRegistry,
     exec_states: *BlockExecStates,
     blockhash_states: *BlockHashStates,
 ) !void {
@@ -302,6 +317,20 @@ fn bootstrap(
     // Drain the blockhash queue into the block tree. accountsdb writes into
     // this ring blocks waiting for the reader (us).
     var root_block = bhq: {
+        const ExecutionRegistryUpdate = lib.accounts_db.StatusCacheUpdate;
+        var exec_reg_updates_buf: [512]ExecutionRegistryUpdate = undefined;
+        var exec_reg_updates: std.ArrayList(ExecutionRegistryUpdate) =
+            .initBuffer(&exec_reg_updates_buf);
+
+        var status_cache_updates = status_cache_updates_in.getView(.reader);
+        defer status_cache_updates.close();
+
+        while (true) {
+            const updates = try status_cache_updates.getBufferBlocking(runner);
+            if (updates.len == 0) break;
+            try exec_reg_updates.appendSliceBounded(updates);
+        }
+
         var blockhashes_in = snapshot_metadata.blockhash_queue.hashes.getView(.reader);
         defer blockhashes_in.close();
         var last_block: ?lib.replay.BlockRef = null;
@@ -324,6 +353,24 @@ fn bootstrap(
         }
 
         const root_block = last_block orelse return error.NoBlockhashesInSnapshot;
+
+        const max_age = 300;
+
+        const bhq_view: replay.BlockhashQueueView = .{
+            .latest_block = root_block,
+            .pool = block_pool,
+            .hashes = blockhash_states,
+        };
+        for (exec_reg_updates.items) |*update| {
+            const block_ref = bhq_view.getBlockRefIfValidForAge(
+                &update.status_map_entry.hash,
+                max_age,
+            ).opt() orelse {
+                logger.err().logf("Snapshot blockhash queue inconsistent with status cache.", .{});
+                return error.InconsistentSnapshotData;
+            };
+            try exec_registry.insert(block_ref, &update.status_map_entry.status.key_slice);
+        }
 
         break :bhq root_block;
     };
@@ -1677,6 +1724,9 @@ test "bootstrap creates root block and chains blockhashes" {
     var service_view = activity.serviceView();
     const runner: lib.runner.Connection = .{ .activity = &service_view };
 
+    var status_cache_updates: lib.accounts_db.StatusCacheUpdates = undefined;
+    status_cache_updates.init();
+
     var metadata: lib.accounts_db.RuntimeMetadata = undefined;
     metadata.init();
     metadata.block_id = .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");
@@ -1705,6 +1755,9 @@ test "bootstrap creates root block and chains blockhashes" {
     const pool: *lib.replay.BlockPool = @ptrCast(&pool_buf);
     pool.init();
 
+    const exec_registry = try allocator.create(lib.replay.ExecutionRegistry);
+    exec_registry.init();
+
     var forest: MerkleForest = try .init(allocator);
     defer forest.deinit(allocator);
 
@@ -1718,7 +1771,17 @@ test "bootstrap creates root block and chains blockhashes" {
 
     const logger = tel.Logger("main").noop;
 
-    try bootstrap(logger, runner, &metadata, &forest, pool, exec_states, blockhash_states);
+    try bootstrap(
+        logger,
+        runner,
+        &status_cache_updates,
+        &metadata,
+        &forest,
+        pool,
+        exec_registry,
+        exec_states,
+        blockhash_states,
+    );
 
     // find root in pool
     var root_opt: ?lib.replay.BlockRef = null;

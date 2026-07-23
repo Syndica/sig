@@ -261,6 +261,9 @@ pub fn main() !void {
     var snapshot_metadata: Region(lib.accounts_db.RuntimeMetadata) = try .simple();
     snapshot_metadata.ptr().init();
 
+    var status_cache_updates: Region(lib.accounts_db.StatusCacheUpdates) = try .simple();
+    status_cache_updates.ptr().init();
+
     const unrooted_memory = config.accounts_db.unrooted.toBytes();
     var account_pool: Region(lib.accounts_db.AccountPool) =
         try .sized(@sizeOf(lib.accounts_db.AccountPool) + unrooted_memory);
@@ -336,6 +339,7 @@ pub fn main() !void {
             .rw = .{
                 .scratch_memory = replay_scratch.finish(),
                 .snapshot_metadata_in = snapshot_metadata.finish(),
+                .status_cache_updates_in = status_cache_updates.finish(),
                 .deshredded_in = shreds_to_replay.finish(),
                 .replay_transaction_pool = transaction_pool.finish(),
                 .block_pool = block_pool.finish(),
@@ -359,6 +363,7 @@ pub fn main() !void {
                 .config = accounts_db_config.finish(),
                 .ready_snapshot_in = snapshot_ready_to_accounts_db.finish(),
                 .snapshot_metadata_out = snapshot_metadata.finish(),
+                .status_cache_updates_out = status_cache_updates.finish(),
                 .account_pool = account_pool.finish(),
                 .replay_lookups = replay_account_lookups.finish(),
                 .tel = telemetry_region.finish(),

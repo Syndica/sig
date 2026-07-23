@@ -62,8 +62,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
                         &reader,
                         lib.solana.transaction.VersionedTransaction,
                     );
-
-                _ = transaction;
+                const tx_hash = transaction.message.computeHash();
 
                 const response: *lib.replay.ExecResponse = response_writer.next() orelse
                     @panic("cant write");
@@ -72,7 +71,10 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
                     .request_kind = .txn_exec,
                     .data = .{
                         .txn_exec = .{
-                            .result = .{ .success = true },
+                            .result = .{
+                                .success = true,
+                                .tx_hash = tx_hash,
+                            },
                             .block_idx = data.block_idx,
                             .tx_idx = data.tx_idx,
                             .n_account_refs = data.n_account_refs,

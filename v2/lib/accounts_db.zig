@@ -89,3 +89,45 @@ pub const RuntimeMetadata = extern struct {
         }
     }
 };
+
+pub const StatusCacheUpdates = lib.ipc.Ring(512, StatusCacheUpdate);
+
+pub const StatusCacheUpdate = extern struct {
+    slot: Slot,
+    is_root: bool,
+    /// Null if the status map is empty.
+    status_map_entry: StatusMapEntry,
+
+    pub const StatusMapEntry = extern struct {
+        hash: lib.solana.Hash,
+        status: StatusEntry,
+
+        pub const StatusEntry = extern struct {
+            key_slice: [20]u8,
+            is_ok: bool,
+        };
+    };
+
+    const Header = lib.solana.snapshot.StatusCacheHeader;
+
+    pub fn from(
+        slot_delta: Header.SlotDeltaHeader,
+        status_map_entry: Header.StatusMapEntryHeader,
+        status_list_entry: Header.Status,
+    ) StatusCacheUpdate {
+        if (status_map_entry.key_index != 0) {
+            std.debug.panic("Deprecated 'key_index' field is a non-zero value ({})", .{status_map_entry.key_index});
+        }
+        return .{
+            .slot = slot_delta.slot,
+            .is_root = slot_delta.is_root,
+            .status_map_entry = .{
+                .hash = status_map_entry.hash,
+                .status = .{
+                    .key_slice = status_list_entry.key_slice,
+                    .is_ok = status_list_entry.result == .ok,
+                },
+            },
+        };
+    }
+};
