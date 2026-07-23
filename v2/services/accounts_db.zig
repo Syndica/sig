@@ -45,7 +45,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     defer in.close();
 
     if (rooted.table.count() == 0) {
-        logger.info().logf("no existing rooted db. reading from snapshot", .{});
+        logger.info().log("no existing rooted db. reading from snapshot");
 
         const SnapshotDataRingReader = @TypeOf(in);
         const SnapshotBufReader = struct {
@@ -68,7 +68,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             }
         };
 
-        logger.info().logf("reading snapshot", .{});
+        logger.info().log("reading snapshot");
         try rooted.loadSnapshot(
             .from(logger),
             runner,
@@ -114,7 +114,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             }
         } = .{ .r = rooted, .l = logger };
 
-        logger.info().logf("fetching feature accounts", .{});
+        logger.info().log("fetching feature accounts");
 
         const slot = rooted.journal.committed_slot;
         var feature_set = lib.solana.features.Set.ALL_DISABLED;
@@ -128,7 +128,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         while (it.next()) |feature| logger.info().logf("Feature(pending) {}", .{feature});
     }
 
-    logger.info().logf("accounts_db loaded - servicing replay requests", .{});
+    logger.info().log("accounts_db loaded - servicing replay requests");
 
     var replay_in = rw.replay_lookups.in.get(.reader);
     var replay_out = rw.replay_lookups.out.get(.writer);

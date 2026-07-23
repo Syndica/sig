@@ -1,0 +1,51 @@
+[package]
+name = "snapshot-generator"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+solana-runtime = { git = "https://github.com/anza-xyz/agave", tag = "v4.2.0-beta.1", features = [
+    "dev-context-only-utils",
+    "agave-unstable-api",
+] }
+solana-accounts-db = { git = "https://github.com/anza-xyz/agave", tag = "v4.2.0-beta.1" }
+solana-vote = { git = "https://github.com/anza-xyz/agave", tag = "v4.2.0-beta.1", features = [
+    "dev-context-only-utils",
+] }
+agave-fs = { git = "https://github.com/anza-xyz/agave", tag = "v4.2.0-beta.1" }
+solana-lattice-hash = { git = "https://github.com/anza-xyz/agave", tag = "v4.2.0-beta.1" }
+
+solana-account = "4.3.1"
+solana-clock = "3.0.1"
+solana-epoch-schedule = "3.2.0"
+solana-fee-calculator = "3.2.2"
+solana-hard-forks = { version = "3.1.1", features = ["serde"] }
+solana-hash = "4.4.0"
+solana-inflation = "3.1.1"
+solana-pubkey = "4.2.0"
+solana-rent = "4.2.1"
+solana-sdk-ids = "3.1.0"
+solana-sha256-hasher = "3.1.0"
+solana-slot-history = { version = "3.0.1", features = ["serde"] }
+# Pinned to match agave's workspace (avoids duplicate-type-graph errors).
+solana-stake-interface = "=4.3.0"
+
+tar = "0.4"
+
+# Used to read private fields via bincode round-trip. See blockhash_queue_json.
+bincode = "1.3"
+serde = { version = "1", features = ["derive"] }
+# preserve_order keeps logical field ordering in pretty-printed output.
+serde_json = { version = "1", features = ["preserve_order"] }
+bytemuck = "1"
+
+# For deterministic vote-account construction. See deterministic_vote_account.
+solana-keypair = "=3.1.2"
+solana-signer = "=3.0.1"
+solana-bls-signatures = { version = "=3.3.0", features = ["serde"] }
+solana-vote-interface = "=6.0.2"
+
+[dev-dependencies]
+agave-snapshots = { git = "https://github.com/anza-xyz/agave", tag = "v4.2.0-beta.1" }
+solana-genesis-config = "4.0.0"
+tempfile = "3"

@@ -209,6 +209,10 @@ pub const BankFields = extern struct {
             hash_index: u64,
         };
 
+        pub fn getHashes(self: *const BlockHashQueue) []const Hash {
+            return self.hashes[0..self.hashes_count];
+        }
+
         pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !BlockHashQueue {
             const last_hash_index = try readInt(u64, r);
             const maybe_last_hash: ?Hash = if (!(try readBool(r))) null else blk: {
@@ -724,13 +728,8 @@ pub fn SnapshotIter(comptime BufReader: type) type {
 
         const Self = @This();
 
-        /// `snapshot_metadata` is passed as `anytype` to avoid an import cycle with
-        /// `v2/lib/accounts_db.zig`. It must be `*SnapshotMetadata` — the Manifest and
-        /// StatusCache are written in place there, and the FBA is expected to live
-        /// inside `snapshot_metadata.memory`.
         pub fn init(
-            fba: *std.heap.FixedBufferAllocator,
-            snapshot_metadata: anytype,
+            snapshot_metadata: *lib.accounts_db.SnapshotMetadata,
             buf_reader: BufReader,
         ) !Self {
             var self: Self = undefined;
@@ -748,15 +747,19 @@ pub fn SnapshotIter(comptime BufReader: type) type {
 
             // read /snapshots/status_cache & /snapshots/{slot}/{slot} (can be in any order)
             {
+                var fba = std.heap.FixedBufferAllocator.init(
+                    snapshot_metadata.memory[0..].ptr[0..snapshot_metadata.memory_len],
+                );
+
                 const tar_file = (try self.tar_iter.next()) orelse return error.MissingMetadata;
                 if (std.mem.eql(u8, tar_file.name, "snapshots/status_cache")) {
-                    snapshot_metadata.status_cache = try StatusCache.read(fba, &self.tar_iter);
+                    snapshot_metadata.status_cache = try StatusCache.read(&fba, &self.tar_iter);
                     _ = (try self.tar_iter.next()) orelse return error.MissingMetadata;
-                    snapshot_metadata.manifest = try Manifest.read(fba, &self.tar_iter);
+                    snapshot_metadata.manifest = try Manifest.read(&fba, &self.tar_iter);
                 } else {
-                    snapshot_metadata.manifest = try Manifest.read(fba, &self.tar_iter);
+                    snapshot_metadata.manifest = try Manifest.read(&fba, &self.tar_iter);
                     _ = (try self.tar_iter.next()) orelse return error.MissingMetadata;
-                    snapshot_metadata.status_cache = try StatusCache.read(fba, &self.tar_iter);
+                    snapshot_metadata.status_cache = try StatusCache.read(&fba, &self.tar_iter);
                 }
             }
 
@@ -995,3 +998,126 @@ pub const ZstReader = struct {
         return n;
     }
 };
+
+// Inputs for this test were generated using https://github.com/Syndica/snapshot-generator
+//
+// Agave is used to construct and validate the snapshot and json. So the json is
+// a reliable source of truth for snapshot contents and can be used to validate
+// a snapshot deserializer.
+test "deserialized snapshot matches generated snapshot json" {
+    const allocator = std.testing.allocator;
+    const expectEqual = std.testing.expectEqual;
+    const expectEqualStrings = std.testing.expectEqualStrings;
+    const expect = std.testing.expect;
+
+    var hash_buf: [Hash.BASE58_MAX_SIZE]u8 = undefined;
+    var pubkey_buf: [Pubkey.BASE58_MAX_SIZE]u8 = undefined;
+
+    const json_path = lib.test_data_dir ++ "test-snapshot-v4.2.0-beta.1.json";
+    const snapshot_path = lib.test_data_dir ++ "test-snapshot-v4.2.0-beta.1.tar.zst";
+
+    const json_bytes = try std.fs.cwd().readFileAlloc(allocator, json_path, 8 * 1024 * 1024);
+    defer allocator.free(json_bytes);
+
+    const parsed_json: std.json.Parsed(std.json.Value) =
+        try std.json.parseFromSlice(std.json.Value, allocator, json_bytes, .{});
+    defer parsed_json.deinit();
+    const merged = parsed_json.value.object.get("merged_fields").?.object;
+    const accounts = parsed_json.value.object.get("accounts").?.object;
+
+    const zst_reader = try allocator.create(ZstReader);
+    defer allocator.destroy(zst_reader);
+    try zst_reader.init(std.fs.cwd(), snapshot_path);
+    defer zst_reader.deinit();
+
+    const SnapshotBufReader = struct {
+        zst_reader: *ZstReader,
+        buf: [128 * 1024]u8 = undefined,
+        pos: usize = 0,
+        end: usize = 0,
+
+        pub fn getBuffer(self: *@This()) []const u8 {
+            if (self.pos == self.end) {
+                self.pos = 0;
+                self.end = self.zst_reader.read(.noop, &self.buf) catch |e|
+                    std.debug.panic("ZstReader.read failed: {t}", .{e});
+            }
+            return self.buf[self.pos..self.end];
+        }
+
+        pub fn advance(self: *@This(), n: usize) void {
+            self.pos += n;
+        }
+    };
+
+    const SnapshotMetadata = lib.accounts_db.SnapshotMetadata;
+    const snapshot_fba_size = 8 * 1024 * 1024;
+    const snapshot_meta_buf = try allocator.alignedAlloc(
+        u8,
+        @enumFromInt(@alignOf(SnapshotMetadata)),
+        @sizeOf(SnapshotMetadata) + snapshot_fba_size,
+    );
+    defer allocator.free(snapshot_meta_buf);
+
+    const snapshot_metadata: *SnapshotMetadata = @ptrCast(snapshot_meta_buf.ptr);
+    snapshot_metadata.init(snapshot_fba_size);
+
+    var snapshot_reader: SnapshotBufReader = .{ .zst_reader = zst_reader };
+    var snapshot_iter =
+        try SnapshotIter(*SnapshotBufReader).init(snapshot_metadata, &snapshot_reader);
+
+    const manifest = &snapshot_metadata.manifest;
+    try expectEqual(jsonU64(merged.get("slot").?), manifest.bank_fields.slot);
+    try expectEqual(jsonU64(merged.get("slot").?), manifest.accounts_db_fields.slot);
+    try expectEqualStrings(
+        merged.get("block_id").?.string,
+        manifest.extra_fields.block_id.base58String(&hash_buf),
+    );
+
+    const blockhash_queue_json = merged.get("blockhash_queue").?.object;
+    try expectEqual(
+        jsonU64(blockhash_queue_json.get("max_age").?),
+        manifest.bank_fields.blockhash_queue.max_age,
+    );
+
+    const json_hashes = blockhash_queue_json.get("hashes").?.array.items;
+    const bhq_hashes = manifest.bank_fields.blockhash_queue.getHashes();
+    try expectEqual(json_hashes.len, bhq_hashes.len);
+    for (bhq_hashes, json_hashes) |hash, json_hash| {
+        try expectEqualStrings(json_hash.object.get("hash").?.string, hash.base58String(&hash_buf));
+    }
+
+    const account_entries = accounts.get("entries").?.array.items;
+    try expectEqual(jsonU64(accounts.get("count").?), account_entries.len);
+
+    var account_index: usize = 0;
+    while (try snapshot_iter.next()) |account| : (account_index += 1) {
+        try expect(account_index < account_entries.len);
+        const a = account_entries[account_index].object;
+
+        try expectEqual(jsonU64(a.get("slot").?), account.slot);
+        try expectEqualStrings(a.get("pubkey").?.string, account.pubkey.base58String(&pubkey_buf));
+        try expectEqualStrings(a.get("owner").?.string, account.owner.base58String(&pubkey_buf));
+        try expectEqual(jsonU64(a.get("lamports").?), account.lamports);
+        try expectEqual(jsonU64(a.get("rent_epoch").?), account.rent_epoch);
+        try expectEqual(a.get("executable").?.bool, account.data.executable);
+        try expectEqual(jsonU64(a.get("data_len").?), account.data.len);
+
+        const data = try allocator.alloc(u8, account.data.len);
+        defer allocator.free(data);
+        try snapshot_iter.readSliceAll(data);
+
+        const data_hex = try allocator.alloc(u8, data.len * 2);
+        defer allocator.free(data_hex);
+        for (data, 0..) |byte, i| {
+            data_hex[i * 2] = std.fmt.hex_charset[byte >> 4];
+            data_hex[i * 2 + 1] = std.fmt.hex_charset[byte & 0x0f];
+        }
+        try expectEqualStrings(a.get("data_hex").?.string, data_hex);
+    }
+    try expectEqual(account_entries.len, account_index);
+}
+
+fn jsonU64(value: std.json.Value) u64 {
+    return @intCast(value.integer);
+}

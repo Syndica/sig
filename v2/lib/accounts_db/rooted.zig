@@ -105,7 +105,7 @@ pub const Rooted = struct {
             };
             defer read_file.close();
 
-            logger.info().logf("loading from existing rooted db", .{});
+            logger.info().log("loading from existing rooted db");
             self.loadExisting(
                 .from(logger),
                 read_file,
@@ -380,28 +380,18 @@ pub const Rooted = struct {
         const StatusCache = snapshot.StatusCache;
         const BufReader = @TypeOf(buf_reader);
 
-        // Build the FBA over snapshot_metadata.memory. Reserve offset 0 as a
-        // null sentinel for RelativeOffset(T) so no real allocation lands there.
-        var fba = std.heap.FixedBufferAllocator.init(
-            snapshot_metadata.memory[0..].ptr[0..snapshot_metadata.memory_len],
-        );
-        _ = try fba.allocator().alloc(u8, 1);
-
-        var snapshot_iter = try snapshot.SnapshotIter(BufReader).init(
-            &fba,
-            snapshot_metadata,
-            buf_reader,
-        );
+        var snapshot_iter =
+            try snapshot.SnapshotIter(BufReader).init(snapshot_metadata, buf_reader);
 
         const slot = snapshot_metadata.manifest.bank_fields.slot;
         try self.beginTransaction(.from(logger), slot);
 
-        // Persist the Manifest + StatusCache + used-FBA-bytes as a single
+        // Persist the Manifest + StatusCache + max FBA bytes
         // contiguous blob right after the journal block. Padded to block_size
         // so account sectors start block-aligned.
         {
             const hdr_size = @sizeOf(Manifest) + @sizeOf(StatusCache);
-            const unpadded: u64 = hdr_size + fba.end_index;
+            const unpadded: u64 = hdr_size + snapshot_metadata.memory_len;
             const padded: u64 = std.mem.alignForward(u64, unpadded, block_size);
             if (padded > std.math.maxInt(u32)) return error.ManifestTooLarge;
             self.journal.manifest_bytes = @intCast(padded);
