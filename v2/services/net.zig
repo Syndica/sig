@@ -90,7 +90,6 @@ fn mainInner(
         sockets_len += 1;
     }
 
-    var timer: lib.time.Timer = .start();
     while (true) {
         // send
         for (pairs, sockets[0..sockets_len]) |pair, sock| {
@@ -99,7 +98,8 @@ fn mainInner(
 
             // TODO: use std.os.linux.sendmmsg
             while (it.next()) |p| {
-                timer.reset();
+                const obs = metrics.send_packet_latency_ns.observer();
+                defer obs.observe();
                 const bytes = try std.posix.sendto(
                     sock,
                     p.data[0..p.len],
@@ -108,7 +108,6 @@ fn mainInner(
                     p.addr.getOsSockLen(),
                 );
                 std.debug.assert(bytes == p.len);
-                metrics.send_packet_latency_ns.observe(timer.read());
             }
         }
 
@@ -119,7 +118,7 @@ fn mainInner(
 
             // TODO: use std.os.linux.recvmmsg
             while (it.peek()) |ptr| {
-                timer.reset();
+                const obs = metrics.recv_packet_latency_ns.observer();
                 var addr_len: std.posix.socklen_t = @sizeOf(std.net.Address);
                 ptr.len = @intCast(std.posix.recvfrom(
                     sock,
@@ -132,7 +131,7 @@ fn mainInner(
                     else => |e| return e,
                 });
                 _ = it.next();
-                metrics.recv_packet_latency_ns.observe(timer.read());
+                obs.observe();
             }
         }
     }

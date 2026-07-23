@@ -623,6 +623,14 @@ pub const Histogram = struct {
         _ = shard.count.fetchAdd(1, .release); // releases lock. must be last step.
     }
 
+    /// Starts a span timer that records its elapsed nanoseconds into this histogram. Call
+    /// `.observe()` on the result at the end of the span, usually with `defer`. `upper_bounds` must
+    /// then be in nanoseconds; see the unit contract on `LatencyObserver`, and `IO_LATENCY_BOUNDS`
+    /// in `snapshot/download.zig` for an example.
+    pub fn observer(self: *const Histogram) LatencyObserver(.standard, null) {
+        return .init(self);
+    }
+
     /// Swaps in the hot shard for the cold shard, such that it can be viewed as a snapshot of
     /// recent state.
     /// The returned struct is used to access this state iteratively, before resetting the cold
@@ -1029,6 +1037,14 @@ pub const LatencyHistogram = struct {
         _ = shard.count.fetchAdd(1, .release); // releases lock; must be last
     }
 
+    /// Starts a span timer that records its elapsed nanoseconds into this histogram. Call
+    /// `.observe()` on the result at the end of the span, usually with `defer` (see the `defer`
+    /// caveat on `LatencyObserver` first). The bounds come from the `Layout` and are already in
+    /// nanoseconds.
+    pub fn observer(self: *const LatencyHistogram) LatencyObserver(.latency, null) {
+        return .init(self);
+    }
+
     /// Makes the hot shard cold and vice versa, returning the pre-swap `shard_sync`.
     fn flipShard(
         self: *const LatencyHistogram,
@@ -1216,6 +1232,14 @@ pub fn VariantHistogram(comptime V: type, comptime kind: metric.HistogramKind) t
             self.get(tag).observe(value);
         }
 
+        /// Starts a span timer that records its elapsed nanoseconds into the histogram for whichever
+        /// tag `.observe(tag)` is given at the end of the span, usually with `defer`. For
+        /// `kind == .standard` the registered `upper_bounds` must be in nanoseconds; see the unit
+        /// contract on `LatencyObserver`.
+        pub fn observer(self: *const VariantHistogramSelf) LatencyObserver(kind, Value) {
+            return .init(self);
+        }
+
         /// Returns the individual `Hist` handle registered for `tag`, for operations beyond
         /// `observe` (e.g. snapshotting a single variant's distribution). `Hist` is a handle of
         /// pointers into the shared region, so the returned copy writes to the same counters.
@@ -1233,6 +1257,66 @@ pub fn VariantHistogram(comptime V: type, comptime kind: metric.HistogramKind) t
                 else => @compileError("Unsupported: " ++ @typeName(Value)),
             };
             return self.histograms[Indexer.indexOf(enum_tag)];
+        }
+    };
+}
+
+/// A timer for one span. `init` reads the monotonic clock; `observe` reads it again and records the
+/// elapsed nanoseconds into the histogram.
+///
+/// `V` selects the shape. `null` gives a plain `Histogram` or `LatencyHistogram` and an `observe()`
+/// taking no argument. A `VariantHistogram`'s value type gives `observe(tag)`, which selects the
+/// series at the end of the span, after an outcome such as an error tag is known. `tag` must be
+/// comptime-known; dispatch a runtime one with
+/// `switch (tag) { inline else => |t| obs.observe(t) }`.
+///
+/// The recorded value is always in nanoseconds, so the histogram's bounds must be in nanoseconds
+/// too. A `LatencyHistogram` derives its bounds from a `Layout`, which already is. A
+/// `kind == .standard` histogram uses whatever `upper_bounds` it was registered with. Nothing
+/// checks the unit, and bounds in another unit mislabel every bucket.
+///
+/// Holds a pointer to the histogram handle, which the caller must keep alive. Call `observe` once
+/// per observer: it does not stop or reset the timer, so a second call records a second span.
+///
+/// `defer obs.observe()` records on every exit from the enclosing scope, including `break`,
+/// `continue`, and error returns — there is no way to disarm an observer. Only use it where every
+/// exit ends a span worth recording. A scope that can leave without completing one, such as a drain
+/// loop that breaks on `error.WouldBlock`, must instead call `observe` on the success path; a
+/// `defer` there records the failed operation as if it had succeeded.
+pub fn LatencyObserver(comptime kind: metric.HistogramKind, comptime V: ?type) type {
+    // `V` is the variant histogram's value type, not its `Tag`. The two differ for a tagged union,
+    // whose `Tag` is the union's tag type, so reconstructing from `Tag` would name a different
+    // `VariantHistogram` instantiation than the caller holds.
+    const Hist = if (V) |v| VariantHistogram(v, kind) else kind.StructType();
+    return struct {
+        hist: *const Hist,
+        start_ns: u64,
+
+        const LatencyObserverSelf = @This();
+
+        pub fn init(hist: *const Hist) LatencyObserverSelf {
+            return .{
+                .hist = hist,
+                .start_ns = clock.monotonic(.ns),
+            };
+        }
+
+        /// Nanoseconds elapsed since construction. Reads the clock once;
+        /// saturating so a non-monotonic clock can never underflow.
+        pub fn elapsedNs(self: LatencyObserverSelf) u64 {
+            return clock.monotonic(.ns) -| self.start_ns;
+        }
+
+        /// Records the elapsed span, in nanoseconds. Takes no argument for a plain histogram, and a
+        /// tag for a variant histogram. Call it once per observer; see `LatencyObserver`.
+        pub const observe = if (V != null) observeTagged else observePlain;
+
+        fn observeTagged(self: LatencyObserverSelf, comptime tag: Hist.Tag) void {
+            self.hist.observe(tag, self.elapsedNs());
+        }
+
+        fn observePlain(self: LatencyObserverSelf) void {
+            self.hist.observe(self.elapsedNs());
         }
     };
 }
@@ -1485,4 +1569,180 @@ test "latency histogram: values below the window floor into bucket 0" {
         .{ .upper_bound = 1448, .cumulative_count = 3 },
         .{ .upper_bound = 1722, .cumulative_count = 3 },
     });
+}
+
+// A window of 512ns .. ~537ms. Wide enough that a measured span lands in an explicit bucket rather
+// than the implicit `+Inf` one.
+const observer_test_layout: LatencyHistogram.Layout = .{
+    .schema = 2,
+    .min_ns = 512,
+    .octaves = 20,
+};
+
+// Bounds for the `.standard` observer tests, in nanoseconds per the contract on
+// `VariantHistogram.observer`. The 1s top bound is above any span these tests measure.
+const observer_test_bounds: []const f64 = &.{
+    1 * std.time.ns_per_us,
+    1 * std.time.ns_per_ms,
+    1 * std.time.ns_per_s,
+};
+
+/// Builds a `VariantHistogram` without a metric region. The observer only needs the `Hist` handles,
+/// and registration is covered by the `variant histogram` tests in `metric.zig`.
+fn initVariantForTest(
+    comptime V: type,
+    comptime kind: metric.HistogramKind,
+    gpa: std.mem.Allocator,
+    config: kind.ConfigType(),
+) std.mem.Allocator.Error!VariantHistogram(V, kind) {
+    var vh: VariantHistogram(V, kind) = undefined;
+    var initialized: usize = 0;
+    errdefer for (vh.histograms[0..initialized]) |h| h.deinitForTest(gpa);
+    for (&vh.histograms) |*h| {
+        h.* = try .initForTest(gpa, config);
+        initialized += 1;
+    }
+    return vh;
+}
+
+/// Frees a `VariantHistogram` built by `initVariantForTest`.
+fn deinitVariantForTest(vh: anytype, gpa: std.mem.Allocator) void {
+    for (vh.histograms) |h| h.deinitForTest(gpa);
+}
+
+test "latency observer: observe records the elapsed span" {
+    const gpa = std.testing.allocator;
+
+    const hist: LatencyHistogram = try .initForTest(gpa, observer_test_layout);
+    defer hist.deinitForTest(gpa);
+
+    const obs = hist.observer();
+
+    // `elapsedNs` reads the clock but records nothing, so the histogram is still empty.
+    const early = obs.elapsedNs();
+    try std.testing.expect(obs.elapsedNs() >= early);
+    {
+        var empty = hist.swapOutSnapshot();
+        defer empty.release();
+        try std.testing.expectEqual(@as(u63, 0), empty.count);
+    }
+
+    // A second `observe` is not a no-op. It records a second span from the same start.
+    obs.observe();
+    obs.observe();
+
+    var snap = hist.swapOutSnapshot();
+    defer snap.release();
+    try std.testing.expectEqual(@as(u63, 2), snap.count);
+    // Both spans were still running when `early` was read, so each is at least that long.
+    try std.testing.expect(snap.sum >= 2 * early);
+}
+
+test "latency observer: tagged spans record into their own variant" {
+    const gpa = std.testing.allocator;
+    const Method = enum { get, put, delete };
+
+    const vh = try initVariantForTest(Method, .latency, gpa, observer_test_layout);
+    defer deinitVariantForTest(vh, gpa);
+
+    vh.observer().observe(.get);
+    vh.observer().observe(.get);
+    vh.observer().observe(.put);
+
+    inline for (.{ .{ Method.get, 2 }, .{ Method.put, 1 }, .{ Method.delete, 0 } }) |case| {
+        var snap = vh.get(case[0]).swapOutSnapshot();
+        defer snap.release();
+        try std.testing.expectEqual(@as(u63, case[1]), snap.count);
+    }
+}
+
+test "latency observer: a runtime tag dispatches through an inline switch" {
+    const gpa = std.testing.allocator;
+    const Outcome = enum { ok, err };
+
+    const vh = try initVariantForTest(Outcome, .latency, gpa, observer_test_layout);
+    defer deinitVariantForTest(vh, gpa);
+
+    // Start the timer before the outcome is known, then select the variant at the end. `observe`
+    // takes a comptime tag, so a runtime one is dispatched with `inline else`.
+    const obs = vh.observer();
+    var outcome: Outcome = .err;
+    _ = &outcome; // keep `outcome` runtime-known
+    switch (outcome) {
+        inline else => |tag| obs.observe(tag),
+    }
+
+    inline for (.{ .{ Outcome.ok, 0 }, .{ Outcome.err, 1 } }) |case| {
+        var snap = vh.get(case[0]).swapOutSnapshot();
+        defer snap.release();
+        try std.testing.expectEqual(@as(u63, case[1]), snap.count);
+    }
+}
+
+test "latency observer: a tagged union selects the variant by its tag type" {
+    const gpa = std.testing.allocator;
+    // Covers the union case of the value-type rule noted on `LatencyObserver`.
+    const Event = union(enum) { get: u32, put: []const u8, delete: void };
+    const Tag = std.meta.Tag(Event);
+
+    const vh = try initVariantForTest(Event, .latency, gpa, observer_test_layout);
+    defer deinitVariantForTest(vh, gpa);
+
+    vh.observer().observe(.get);
+    vh.observer().observe(.delete);
+
+    inline for (.{ .{ Tag.get, 1 }, .{ Tag.put, 0 }, .{ Tag.delete, 1 } }) |case| {
+        var snap = vh.get(case[0]).swapOutSnapshot();
+        defer snap.release();
+        try std.testing.expectEqual(@as(u63, case[1]), snap.count);
+    }
+}
+
+test "latency observer: a standard-kind variant records ns into its explicit bounds" {
+    const gpa = std.testing.allocator;
+    const Outcome = enum { ok, err };
+
+    const vh = try initVariantForTest(Outcome, .standard, gpa, observer_test_bounds);
+    defer deinitVariantForTest(vh, gpa);
+
+    // `Histogram` is unit-agnostic, but the span still arrives as a nanosecond count through
+    // `observe`'s int to f64 conversion. Two `elapsedNs` reads bracket the recorded value.
+    const obs = vh.observer();
+    const before = obs.elapsedNs();
+    obs.observe(.ok);
+    const after = obs.elapsedNs();
+
+    var snap = vh.get(.ok).swapOutSnapshot();
+    defer snap.release();
+    try std.testing.expectEqual(@as(u63, 1), snap.count);
+    try std.testing.expect(snap.sum >= @as(f64, @floatFromInt(before)));
+    try std.testing.expect(snap.sum <= @as(f64, @floatFromInt(after)));
+
+    // The bounds are in nanoseconds, so the span lands in an explicit bucket rather than the
+    // implicit `+Inf` one, and the final cumulative count includes it.
+    var last_cumulative: u64 = 0;
+    while (snap.nextBucket()) |bucket| last_cumulative = bucket.cumulative_count;
+    try std.testing.expectEqual(@as(u64, 1), last_cumulative);
+
+    var untouched = vh.get(.err).swapOutSnapshot();
+    defer untouched.release();
+    try std.testing.expectEqual(@as(u63, 0), untouched.count);
+}
+
+test "latency observer: a plain histogram observes through the same ns contract" {
+    const gpa = std.testing.allocator;
+
+    const hist: Histogram = try .initForTest(gpa, observer_test_bounds);
+    defer hist.deinitForTest(gpa);
+
+    const obs = hist.observer();
+    const before = obs.elapsedNs();
+    obs.observe();
+    const after = obs.elapsedNs();
+
+    var snap = hist.swapOutSnapshot();
+    defer snap.release();
+    try std.testing.expectEqual(@as(u63, 1), snap.count);
+    try std.testing.expect(snap.sum >= @as(f64, @floatFromInt(before)));
+    try std.testing.expect(snap.sum <= @as(f64, @floatFromInt(after)));
 }
