@@ -659,10 +659,11 @@ test EntryField {
 /// Type-erased formatter. Takes in a zig print format function and value(s) to be formatted and
 /// wraps them to provide planning and formatting output with quotes and escapes where needed.
 ///
-/// Formatted output from function provided must be valid UTF-8 and identical on every call (as
-/// visible by this formatter). Encoding-plan computation and output formatting invoke the formatter
-/// separately (to produce a byte length prefix), so differing output between calls corrupts that
-/// length-prefix.
+/// Formatted output from the provided formatter must be identical on every call (as observed by
+/// this wrapper). Encoding-plan computation and output formatting invoke the formatter separately
+/// (to produce a byte length prefix), so differing output between calls corrupts that length
+/// prefix. Callers should write valid UTF-8 for log consumer compatibility. UTF-8 is not
+/// validated, and non-ASCII bytes are emitted unchanged.
 pub const EntryValueFmt = struct {
     ptr: *const anyopaque,
     formatRawFn: *const fn (
