@@ -460,7 +460,7 @@ const Sig = struct {
                     service_component_imports,
                 }),
             });
-            unit_tests.add(service.name, service_mod);
+            unit_tests.add(service.name ++ "-service", service_mod);
 
             const service_lib = b.addLibrary(.{
                 .name = service.name,
