@@ -22,10 +22,9 @@ pub fn build(b: *Build) !void {
     // install (default step)
     const install_step = b.getInstallStep();
     install_step.dependOn(sig.exe.installStep());
-    install_step.dependOn(tools.shred_stream.installStep());
     install_step.dependOn(tools.lint.installStep());
     for (unit_tests.tests.items) |exe| install_step.dependOn(exe.installStep());
-    for (tools.black_box_tests) |exe| install_step.dependOn(exe.installStep());
+    for (tools.topologies) |exe| install_step.dependOn(exe.installStep());
 
     // run
     const run_step = b.step("run", "Run sig");
@@ -46,15 +45,20 @@ pub fn build(b: *Build) !void {
 
     // bb-test
     const bb_test_step = b.step("bb-test", "Run black box tests.");
-    for (tools.black_box_tests) |bbt| bbt.addToStep(bb_test_step);
-
-    // shred-stream
-    const shred_stream_step = b.step("shred-stream", "Stream shreds from an Agave ledger");
-    tools.shred_stream.addToStep(shred_stream_step);
+    for (tools.topologies, Tools.topology_descriptions) |topo, desc| {
+        if (desc.is_test) topo.addToStep(bb_test_step);
+    }
 
     // lint
     const lint_step = b.step("lint", "Run lint checks");
     tools.lint.addToStep(lint_step);
+
+    // replay-offline
+    const replay_offline_step = b.step("replay-offline", "Build the offline replay topology");
+    for (tools.topologies, Tools.topology_descriptions) |topo, desc| {
+        if (std.mem.eql(u8, desc.name, "replay-offline"))
+            replay_offline_step.dependOn(topo.installStep());
+    }
 
     // test
     const test_step = b.step("test", "Run all tests.");
@@ -333,6 +337,11 @@ const Sig = struct {
                     .{ .name = "services", .module = services_mod },
                 },
             });
+            // Only shred_streamer needs rocksdb (for reading Agave ledger).
+            if (comptime std.mem.eql(u8, service.name, "shred_streamer")) {
+                service_mod.addImport("rocksdb", deps.rocksdb);
+                service_mod.addImport("rocksdb-c", deps.rocksdb_c);
+            }
             unit_tests.add(service.name, service_mod);
 
             const service_lib = b.addLibrary(.{
@@ -340,7 +349,11 @@ const Sig = struct {
                 .root_module = service_mod,
                 .use_llvm = config.use_llvm,
             });
-            sig_init.linkLibrary(service_lib);
+            // shred_streamer is test-only (used by shred-stream-replay); don't
+            // link it into the main sig-init binary to avoid pulling in rocksdb.
+            if (!comptime std.mem.eql(u8, service.name, "shred_streamer")) {
+                sig_init.linkLibrary(service_lib);
+            }
 
             service_lib_entry.* = .{
                 .name = service.name,
@@ -367,25 +380,48 @@ const Sig = struct {
 /// Everything other than Sig itself: developer tools, ci scripts, docs,
 /// integration tests, etc.
 const Tools = struct {
-    shred_stream: Executable,
     lint: Executable,
     docs: *Build.Step.InstallDir,
-    black_box_tests: [black_box_test_descriptions.len]Executable,
+    topologies: [topology_descriptions.len]Executable,
 
-    const black_box_test_descriptions = [_]struct {
+    /// Custom topologies: executables that spawn a subset of services in a
+    /// specific configuration. Black box tests (is_test=true) run in CI via
+    /// `zig build bb-test`. Non-test topologies are standalone tools.
+    const topology_descriptions = [_]struct {
         name: []const u8,
         root_source_file: []const u8,
         services: []const []const u8,
+        /// If true, included in `zig build bb-test` and auto-run in CI.
+        is_test: bool = true,
+        /// Where the binary is installed. Tests go to bin/tests/.
+        install_dir: Build.Step.InstallArtifact.Options.Dir = .{
+            .override = .{ .custom = "bin/tests" },
+        },
     }{
         .{
-            .name = "gossip",
+            .name = "bbt-gossip",
             .root_source_file = "tests/gossip/main.zig",
             .services = &.{ "gossip", "telemetry" },
         },
         .{
-            .name = "replay",
+            .name = "bbt-replay",
             .root_source_file = "tests/replay/main.zig",
             .services = &.{ "shred_receiver", "replay", "telemetry" },
+        },
+        .{
+            .name = "replay-offline",
+            .root_source_file = "tests/shred_stream_replay/main.zig",
+            .services = &.{
+                "shred_streamer",
+                "shred_receiver",
+                "replay",
+                "exec",
+                "snapshot",
+                "accounts_db",
+                "telemetry",
+            },
+            .is_test = false,
+            .install_dir = .default,
         },
     };
 
@@ -396,26 +432,6 @@ const Tools = struct {
         unit_tests: *UnitTests,
         sig: Sig,
     ) Tools {
-        const shred_stream_exe = blk: {
-            const module = b.createModule(.{
-                .root_source_file = b.path("scripts/shred_stream.zig"),
-                .target = config.target,
-                .optimize = config.optimize,
-                .imports = &.{
-                    .{ .name = "lib", .module = sig.lib },
-                    .{ .name = "rocksdb", .module = deps.rocksdb },
-                    .{ .name = "rocksdb-c", .module = deps.rocksdb_c },
-                },
-            });
-            unit_tests.add("shred-stream", module);
-            const shred_stream_exe: Executable = .init(b, config.exe, .{
-                .name = "shred-stream",
-                .root_module = module,
-                .use_llvm = config.use_llvm,
-            }, .{});
-            break :blk shred_stream_exe;
-        };
-
         const lint_exe: Executable = .init(b, config.exe, .{
             .name = "sig-lint",
             .root_module = b.createModule(.{
@@ -429,6 +445,34 @@ const Tools = struct {
             .target = b.graph.host,
             .optimize = .Debug,
         }));
+
+        // Build all custom topologies using the same pattern.
+        var topo_exes: [topology_descriptions.len]Executable = undefined;
+        for (topology_descriptions, &topo_exes) |desc, *exe| {
+            exe.* = .init(b, .{
+                .install = config.exe.install,
+                .run = if (desc.is_test) config.exe.run else false,
+            }, .{
+                .name = desc.name,
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path(desc.root_source_file),
+                    .target = config.target,
+                    .optimize = config.optimize,
+                    .imports = &.{
+                        .{ .name = "lib", .module = sig.lib },
+                        .{ .name = "tracy", .module = deps.tracy },
+                        .{ .name = "services", .module = sig.services_mod },
+                    },
+                }),
+                .use_llvm = config.use_llvm,
+            }, .{ .dest_dir = desc.install_dir });
+
+            for (desc.services) |service_name| {
+                exe.compile.linkLibrary(for (sig.service_libs) |entry| {
+                    if (std.mem.eql(u8, entry.name, service_name)) break entry.lib;
+                } else std.debug.panic("unknown service '{s}'", .{service_name}));
+            }
+        }
 
         // generates unified docs for all modules
         // NOTE: have to specify `-Dno-bin` & `-Dno-run` in order to
@@ -481,35 +525,10 @@ const Tools = struct {
             break :blk install_docs;
         };
 
-        var bbt_exes: [black_box_test_descriptions.len]Executable = undefined;
-        for (black_box_test_descriptions, &bbt_exes) |description, *exe| {
-            exe.* = .init(b, config.exe, .{
-                .name = b.fmt("bbt-{s}", .{description.name}),
-                .root_module = b.createModule(.{
-                    .root_source_file = b.path(description.root_source_file),
-                    .target = config.target,
-                    .optimize = config.optimize,
-                    .imports = &.{
-                        .{ .name = "lib", .module = sig.lib },
-                        .{ .name = "tracy", .module = deps.tracy },
-                        .{ .name = "services", .module = sig.services_mod },
-                    },
-                }),
-                .use_llvm = config.use_llvm,
-            }, .{ .dest_dir = test_install_dir });
-
-            for (description.services) |service_name| {
-                exe.compile.linkLibrary(for (sig.service_libs) |entry| {
-                    if (std.mem.eql(u8, entry.name, service_name)) break entry.lib;
-                } else std.debug.panic("unknown service '{s}'", .{service_name}));
-            }
-        }
-
         return .{
-            .shred_stream = shred_stream_exe,
             .lint = lint_exe,
             .docs = install_docs,
-            .black_box_tests = bbt_exes,
+            .topologies = topo_exes,
         };
     }
 };

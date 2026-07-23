@@ -13,6 +13,7 @@ comptime {
         _ = @import("replay.zig");
         _ = @import("runner.zig");
         _ = @import("shred.zig");
+        _ = @import("shred_streamer.zig");
         _ = @import("snapshot.zig");
         _ = @import("solana.zig");
         _ = @import("telemetry.zig");
@@ -28,6 +29,7 @@ pub const clock = @import("clock.zig");
 pub const crypto = @import("crypto.zig");
 pub const solana = @import("solana.zig");
 pub const shred = @import("shred.zig");
+pub const shred_streamer = @import("shred_streamer.zig");
 pub const gossip = @import("gossip.zig");
 pub const ipc = @import("ipc.zig");
 pub const linux = @import("linux.zig");

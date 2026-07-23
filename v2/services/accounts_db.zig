@@ -3,8 +3,6 @@ const start = @import("start_service");
 const lib = @import("lib");
 const services = @import("services");
 
-const tel = lib.telemetry;
-
 const SnapshotIter = lib.solana.snapshot.SnapshotIter;
 
 const Rooted = lib.accounts_db.Rooted;
@@ -139,11 +137,14 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 
     var replay_in = rw.replay_lookups.in.get(.reader);
     var replay_out = rw.replay_lookups.out.get(.writer);
-    while (true) : (std.atomic.spinLoopHint()) {
+    while (true) {
+        var did_work = false;
+
         if (replay_in.peek()) |pubkey| {
             if (try rooted.queueRead(.from(logger), pubkey)) {
                 _ = replay_in.next();
                 replay_in.markUsed();
+                did_work = true;
             }
         }
         if (replay_out.peek()) |result| {
@@ -151,7 +152,12 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                 result.* = res;
                 _ = replay_out.next();
                 replay_out.markUsed();
+                did_work = true;
             }
+        }
+
+        if (!did_work) {
+            try runner.activity.signalIdleSpinning();
         }
     }
 }

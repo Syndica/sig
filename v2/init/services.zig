@@ -97,6 +97,17 @@ pub const shred_receiver = struct {
     };
 };
 
+pub const shred_streamer = struct {
+    pub const ReadOnly = struct {
+        config: *const lib.shred_streamer.Config,
+    };
+
+    pub const ReadWrite = struct {
+        shred_pair: *lib.net.Pair,
+        tel: *lib.telemetry.Region,
+    };
+};
+
 pub const snapshot = struct {
     pub const ReadOnly = struct {
         config: *const lib.snapshot.SnapshotConfig,
