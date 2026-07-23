@@ -1189,11 +1189,12 @@ pub const LatencyHistogram = struct {
 ///
 /// The histogram analogue of `Variant`, and intended to be exposed the same way: one metric name
 /// (e.g. `method_elapsed_seconds`) carrying a series per tag under a `variant="<tag>"` label, so
-/// variants can be summed together or filtered apart in Prometheus/Grafana. `Hist` is any histogram
-/// with an `observe(u64)` — `LatencyHistogram` for ns-native latencies, `Histogram` for explicit
-/// bounds. Each `Hist` carries its own layout at runtime and this type constrains none of them;
-/// giving every variant identical buckets, so the series aggregate cleanly, is the appender's job.
-pub fn VariantHistogram(comptime V: type, comptime Hist: type) type {
+/// variants can be summed together or filtered apart in Prometheus/Grafana. `kind` selects the
+/// backing histogram: `.latency` for ns-native `LatencyHistogram`, `.standard` for `Histogram`
+/// with explicit bounds. Every variant shares one `Kind`, so the series aggregate cleanly; the
+/// bucket layout itself is still supplied once by the appender.
+pub fn VariantHistogram(comptime V: type, comptime kind: metric.HistogramKind) type {
+    const Hist = kind.StructType();
     return struct {
         histograms: [Indexer.count]Hist,
         const VariantHistogramSelf = @This();
@@ -1211,33 +1212,27 @@ pub fn VariantHistogram(comptime V: type, comptime Hist: type) type {
 
         /// Records an observed value into the histogram for `tag`. For a `LatencyHistogram` the
         /// value is a latency in nanoseconds; for a `Histogram` it is a raw observation.
-        pub fn observe(self: *const VariantHistogramSelf, tag: Tag, value: u64) void {
-            self.histograms[indexFromTag(tag)].observe(value);
+        pub fn observe(self: *const VariantHistogramSelf, comptime tag: Tag, value: anytype) void {
+            self.get(tag).observe(value);
         }
 
         /// Returns the individual `Hist` handle registered for `tag`, for operations beyond
-        /// `observe` (e.g. snapshotting a single variant's distribution).
-        pub fn get(self: *const VariantHistogramSelf, tag: Tag) Hist {
-            return self.histograms[indexFromTag(tag)];
-        }
-
-        fn indexFromTag(value: Tag) usize {
-            return Indexer.indexOf(enumFromTag(value));
-        }
-
-        fn enumFromTag(value: Tag) Enum {
-            return switch (@typeInfo(Value)) {
-                .@"enum" => if (Enum == Value) value else switch (value) {
+        /// `observe` (e.g. snapshotting a single variant's distribution). `Hist` is a handle of
+        /// pointers into the shared region, so the returned copy writes to the same counters.
+        pub fn get(self: *const VariantHistogramSelf, comptime tag: Tag) Hist {
+            const enum_tag = switch (@typeInfo(Value)) {
+                .@"enum" => if (Enum == Value) tag else switch (tag) {
                     inline else => |itag| @field(Enum, @tagName(itag)),
                 },
-                .@"union" => |u_info| if (Enum == u_info.tag_type) value else switch (value) {
+                .@"union" => |u_info| if (Enum == u_info.tag_type) tag else switch (tag) {
                     inline else => |_, itag| @field(Enum, @tagName(itag)),
                 },
-                .error_set => switch (value) {
-                    inline else => |tag| @field(Enum, @errorName(tag)),
+                .error_set => switch (tag) {
+                    inline else => |t| @field(Enum, @errorName(t)),
                 },
                 else => @compileError("Unsupported: " ++ @typeName(Value)),
             };
+            return self.histograms[Indexer.indexOf(enum_tag)];
         }
     };
 }

@@ -268,13 +268,10 @@ pub const Appender = struct {
         self: Appender,
         comptime name: []const u8,
         comptime V: type,
-        comptime Hist: type,
-        comptime config: if (Hist == tel.LatencyHistogram)
-            tel.LatencyHistogram.Layout
-        else
-            []const f64,
-    ) tel.VariantHistogram(V, Hist) {
-        const Vh = tel.VariantHistogram(V, Hist);
+        comptime kind: HistogramKind,
+        comptime config: kind.ConfigType(),
+    ) tel.VariantHistogram(V, kind) {
+        const Vh = tel.VariantHistogram(V, kind);
         var vh: Vh = .{ .histograms = @splat(undefined) };
 
         inline for (&vh.histograms, 0..) |*hist_ptr, tag_index| {
@@ -283,17 +280,17 @@ pub const Appender = struct {
                 .name = name,
                 .label_count = 1,
                 .labels = switch (tag) {
-                    inline else => |itag| labels: {
+                    else => |itag| labels: {
                         const str = "variant=\"" ++ @tagName(itag) ++ "\"";
                         const no_sentinel: [str.len]u8 = str.*;
                         break :labels &no_sentinel ++ [_:'}']u8{};
                     },
                 },
             };
-            hist_ptr.* = if (Hist == tel.LatencyHistogram)
-                self.appendLatencyHistogram(id, config)
-            else
-                self.appendHistogram(id, config);
+            hist_ptr.* = switch (kind) {
+                .standard => self.appendHistogram(id, config),
+                .latency => self.appendLatencyHistogram(id, config),
+            };
         }
 
         return vh;
@@ -332,19 +329,20 @@ pub const Appender = struct {
                 else => blk: {
                     if (isVariantCounter(s_field.type)) {
                         break :blk self.appendVariantCounter(id_name, s_field.type.Value);
-                    } else if (maybeVariantHistogram(s_field.type)) |Hist| {
+                    } else if (maybeVariantHistogram(s_field.type)) |hist_kind| {
                         break :blk self.appendVariantHistogram(
                             id_name,
                             s_field.type.Value,
-                            Hist,
-                            if (Hist == tel.LatencyHistogram)
-                                field_config.layout orelse @compileError(std.fmt.comptimePrint(
-                                    "VariantHistogram metric '{s}' requires a `.layout`.\n",
-                                    .{s_field.name},
-                                ))
-                            else
-                                field_config.upper_bounds orelse
+                            hist_kind,
+                            switch (hist_kind) {
+                                .standard => field_config.upper_bounds orelse
                                     &tel.Histogram.DEFAULT_UPPER_BOUNDS,
+                                .latency => field_config.layout orelse
+                                    @compileError(std.fmt.comptimePrint(
+                                        "VariantHistogram metric '{s}' requires a `.layout`.\n",
+                                        .{s_field.name},
+                                    )),
+                            },
                         );
                     } else comptime unreachable;
                 },
@@ -464,12 +462,7 @@ pub fn FieldConfigs(comptime S: type) type {
             tel.LatencyHistogram => FieldConfigLatencyHistogram,
             else => blk: {
                 if (isVariantCounter(s_field.type)) break :blk FieldConfigBasic;
-                if (maybeVariantHistogram(s_field.type)) |Hist| {
-                    break :blk if (Hist == tel.LatencyHistogram)
-                        FieldConfigLatencyHistogram
-                    else
-                        FieldConfigHistogram;
-                }
+                if (maybeVariantHistogram(s_field.type)) |kind| break :blk kind.FieldConfigType();
                 @compileError("Unsupported: " ++ @typeName(s_field.type));
             },
         };
@@ -505,7 +498,7 @@ inline fn isVariantCounter(comptime S: type) bool {
     }
 }
 
-inline fn maybeVariantHistogram(comptime S: type) ?type {
+inline fn maybeVariantHistogram(comptime S: type) ?HistogramKind {
     comptime {
         if (!@hasDecl(S, "Value")) return null;
         if (@TypeOf(S.Value) != type) return null;
@@ -517,11 +510,38 @@ inline fn maybeVariantHistogram(comptime S: type) ?type {
         if (!@hasField(S, "histograms")) return null;
         const info = @typeInfo(@FieldType(S, "histograms"));
         if (info != .array) return null;
-        const Hist = info.array.child;
-        if (tel.VariantHistogram(S.Value, Hist) != S) return null;
-        return Hist;
+        const kind = if (info.array.child == tel.LatencyHistogram) .latency else .standard;
+        if (tel.VariantHistogram(S.Value, kind) != S) return null;
+        return kind;
     }
 }
+
+pub const HistogramKind = enum {
+    standard,
+    latency,
+
+    pub fn StructType(comptime self: HistogramKind) type {
+        return switch (self) {
+            .standard => tel.Histogram,
+            .latency => tel.LatencyHistogram,
+        };
+    }
+
+    pub fn ConfigType(comptime self: HistogramKind) type {
+        const field = switch (self) {
+            .standard => "upper_bounds",
+            .latency => "layout",
+        };
+        return @FieldType(self.StructType(), field);
+    }
+
+    pub fn FieldConfigType(comptime self: HistogramKind) type {
+        return switch (self) {
+            .standard => FieldConfigHistogram,
+            .latency => FieldConfigLatencyHistogram,
+        };
+    }
+};
 
 pub const Any = union(Kind) {
     gauge_int: *const std.atomic.Value(u64),
@@ -647,7 +667,7 @@ test "variant histogram: appendVariantHistogram registers one latency series per
     const vh = region.metricAppender().appendVariantHistogram(
         "req_latency_ns",
         Method,
-        tel.LatencyHistogram,
+        .latency,
         .{ .schema = 2, .min_ns = 512, .octaves = 4 },
     );
 
@@ -689,7 +709,7 @@ test "variant histogram: appendVariantHistogram registers one bounds series per 
     const vh = region.metricAppender().appendVariantHistogram(
         "request_size_bytes",
         Outcome,
-        tel.Histogram,
+        .standard,
         &.{ 1, 10, 100, 1000 },
     );
 
@@ -727,8 +747,8 @@ test "variant histogram: appendFields registers latency and bounds variants" {
     const Method = enum { get, put };
     const Outcome = enum { ok, err };
     const Metrics = struct {
-        latency_ns: tel.VariantHistogram(Method, tel.LatencyHistogram),
-        sizes: tel.VariantHistogram(Outcome, tel.Histogram),
+        latency_ns: tel.VariantHistogram(Method, .latency),
+        sizes: tel.VariantHistogram(Outcome, .standard),
     };
 
     const region, const buf = try testRegion(gpa);
