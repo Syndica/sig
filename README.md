@@ -31,17 +31,14 @@ Each implementation has an independent build process.
 
 ```
 build.zig, build.zig.zon    # root build for v2
-README.md                   # project overview and v2 architecture notes
 v2/                         # current multi-process implementation
 v1/                         # original single-process implementation; maintenance mode
 conformance/                # Solana/Firedancer test-vector harness; has its own build
-config/                     # example runtime config used by `zig build run`
-data/                       # test fixtures used by root `zig build` tests
-docs/                       # Docusaurus docs site and docs tooling
-tools/                      # repo-level developer, CI, lint, docs, and v2 helper tools
+config/                     # example v2 runtime config used by `zig build run`
+data/                       # test fixtures used by v2 tests
+docs/                       # docusaurus docs site and docs tooling
+tools/                      # developer tools, CI, lint, docs, and v2 helpers
 ci/run-and-update-service/  # continuous runner for deploying sig automatically
-specs/                      # planning/specification notes
-validator/                  # local validator data and assets
 ```
 
 ## Resources
@@ -52,13 +49,9 @@ validator/                  # local validator data and assets
 - [Discord](https://discord.gg/ucDSeZCmxH)
 - [Engineering Blogposts](https://blog.syndica.io/tag/engineering/)
 
-
-## Current Implementation: v2
-
-Sig v2 is a Solana validator client organized as a set of cooperating processes. Each service runs in its own sandboxed process (or a thread when profiling), and services communicate through typed shared-memory regions wired up by a small parent runner.
-
-
 ## Build & Run
+
+These instructions are for running Sig v2.
 
 ```sh
 zig build                            # builds sig, tools, and all unit tests
@@ -179,7 +172,7 @@ zig build ci
 │   │   ├─ ipc.zig, net.zig, runner.zig, solana.zig, telemetry.zig, time.zig, util.zig
 │   │   └─ collections/, crypto/, fio/, ipc/, solana/, telemetry/
 │   ├─ init/                 # topology setup and service entrypoint support
-│   │   ├─ topology.zig      # Region, ServiceRegions, Children, spawn / wait
+│   │   ├─ topology.zig      # Used in a topology's main file to initialize a topology.
 │   │   ├─ start_service.zig # panic/log/signal glue linked into every service lib
 │   │   └─ linux.zig         # Linux helpers for topology.zig
 │   ├─ tests/                # integration tests that spin up partial topologies
@@ -191,8 +184,6 @@ zig build ci
 │   ├─ scripts/
 │   └─ src/
 ├─ docs/                     # Docusaurus docs site
-├─ specs/                    # planning/specification notes
-├─ validator/                # local validator data and assets
 └─ ci/                       # deployment/runner support assets
 ```
 
@@ -200,17 +191,15 @@ zig build ci
 
 Every Zig file in v2 belongs to exactly one of these categories, and the module dependencies between categories are enforced by `build.zig`:
 
-Paths in this section are relative to `v2/` unless otherwise noted.
-
-- **main files** (`main.zig`, `tests/**/main.zig`): Start up a full topology. Only main files may import `topology` and instantiate `Children`. Only main files may import the component `_api` modules together with `services` to wire up regions.
-- **service implementations** (`services/*.zig`): One file per service, each built as a static library. A service runs in its own process (or thread) and reads/writes only the regions declared for it in `services.zig`. Services import the components that they run, may import `lib`, any component `_api`, and the component impls they run.
+- **main files** (`main.zig`, `tests/**/main.zig`): Start up a full topology. Only main files may import `topology` and instantiate `Children`. Main files use `services.zig` to wire up regions and spawn the topology.
+- **service implementations** (`services/*.zig`): One file per service, each built as a static library. A service runs in its own process and reads/writes only the regions declared for it in `services.zig`. Services import the components that they run, may import `lib`, any component `_api`, and the component impls they run. A service file is intended to be lightweight glue code that hooks up regions to components and orchestrates the component's execution in a single thread.
 - **components** (`components/{name}/`): A high-level domain (e.g. gossip, accountsdb) that is implemented as a cohesive runnable unit. A component is directly imported and run by the service where it is used. Components do not invoke each other. Each has two modules:
-  - `component`: The component itself. Only importable by services. Imports `api` and any supporting files under the same directory.
+  - `component`: The component itself. Only importable by services that declare them as dependencies. Imports `api` and any supporting files under the same directory.
   - `api`: Types used for interaction with the component by other components. visible to anyone (services, other components, main). May not import the sibling `component.zig`.
   - Other `*.zig` files in the component folder are supporting code used by `api` or `component`.
 - **lib** (`lib/`): General-purpose primitives (ipc rings, Solana types, telemetry, IO helpers, crypto). Importable everywhere. `lib` may not depend on any component or service.
-- **init** (`init/`): The plumbing that turns a topology description into running processes.
-  - `topology`: Imported only by main files.
+- **init** (`init/`): The general-purpose plumbing that turns a topology description into running processes.
+  - `topology`: Used only by main files.
   - `start_service`: Linked into every service library because it exports the process entrypoint (`svc_main_<name>`).
 - **tools** (`tools/`): Standalone developer utilities. Not part of any topology.
 
@@ -218,15 +207,15 @@ Paths in this section are relative to `v2/` unless otherwise noted.
 
 `build.zig` creates the following named modules:
 
-| module          | source                                      | may be imported by                              |
-| --------------- | ------------------------------------------- | ----------------------------------------------- |
-| `lib`           | `lib/lib.zig`                               | anything                                        |
-| `{name}_api`    | `components/{name}/api.zig`                 | services, main files, other component apis*     |
-| `{name}`        | `components/{name}/component.zig`           | only the services that opt in (see below)       |
-| `topology`      | `init/topology.zig`                         | main files                                      |
-| `start_service` | `init/start_service.zig`                    | service implementations                         |
-| `services`      | `services.zig`                              | services, main files                            |
-| `main`          | `main.zig`                                  | not imported (root of the sig executable)       |
+| module                 | source                                      | may be imported by                        |
+| ---------------------- | ------------------------------------------- | ----------------------------------------- |
+| `lib`                  | `lib/lib.zig`                               | anything                                  |
+| `{component_name}_api` | `components/{component_name}/api.zig`       | services, main files, components          |
+| `{component_name}`     | `components/{component_name}/component.zig` | only the services that run the component  |
+| `topology`             | `init/topology.zig`                         | main files                                |
+| `start_service`        | `init/start_service.zig`                    | service implementations                   |
+| `services`             | `services.zig`                              | services, main files                      |
+| `main`                 | `main.zig`                                  | not imported (root of the sig executable) |
 
 Component apis do not import each other. This would be a code smell. Anything used by multiple APIs is likely a general-purpose validator concept, and should exist in `lib/` instead.
 
