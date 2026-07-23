@@ -218,10 +218,16 @@ test "parse errors report diagnostic and skip file-level rules" {
 }
 
 fn runGit(allocator: std.mem.Allocator, cwd: []const u8, argv: []const []const u8) !void {
+    var env_map: std.process.EnvMap = .init(allocator);
+    defer env_map.deinit();
+
     const result = try std.process.Child.run(.{
         .allocator = allocator,
         .argv = argv,
         .cwd = cwd,
+        // passing an empty map suppresses the environment to prevent git from
+        // using the user's git config
+        .env_map = &env_map,
     });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);

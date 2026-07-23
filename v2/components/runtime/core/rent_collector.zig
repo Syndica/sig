@@ -177,7 +177,7 @@ pub const RentCollector = struct {
     }
 };
 
-pub const RENT_FEATURE_GATES = [_]struct { sig.core.features.Feature, u64 }{
+pub const RENT_FEATURE_GATES = [_]struct { solana.features.Feature, u64 }{
     .{ .set_lamports_per_byte_to_6333, 6333 },
     .{ .set_lamports_per_byte_to_5080, 5080 },
     .{ .set_lamports_per_byte_to_2575, 2575 },
