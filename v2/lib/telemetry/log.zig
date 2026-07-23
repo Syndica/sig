@@ -971,6 +971,7 @@ const LogfmtValueAnalyzer = struct {
         data: []const []const u8,
         splat: usize,
     ) std.Io.Writer.Error!usize {
+        std.debug.assert(data.len != 0);
         const self: *LogfmtValueAnalyzer = @alignCast(@fieldParentPtr("writer", w));
         const rest = data[0 .. data.len - 1];
         const pattern = data[data.len - 1];
@@ -1019,6 +1020,7 @@ const LogfmtEscapingWriter = struct {
         data: []const []const u8,
         splat: usize,
     ) std.Io.Writer.Error!usize {
+        std.debug.assert(data.len != 0);
         const self: *LogfmtEscapingWriter = @alignCast(@fieldParentPtr("writer", w));
         const rest = data[0 .. data.len - 1];
         const pattern = data[data.len - 1];
