@@ -17,8 +17,8 @@ pub const ResolvedArgs = extern struct {
     ro: [max_regions]?[*]align(page_size_min) const u8,
     ro_len: [max_regions]usize,
 
-    /// Opaque context created by the service initializer. Services must not inspect it, only pass it
-    /// back to `thread_crash_fn`.
+    /// Opaque context created by the service initializer. Services must not inspect it,
+    /// only pass it back to `thread_crash_fn`.
     thread_crash_ctx: ?*anyopaque,
     thread_crash_fn: ?ThreadCrashFn,
     service_idx: u16,

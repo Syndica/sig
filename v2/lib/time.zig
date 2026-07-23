@@ -32,8 +32,10 @@ pub const Instant = struct {
     }
 
     /// Returns elapsed time in nanoseconds since the `earlier` Instant.
-    /// This assumes that the `earlier` Instant represents a moment in time before or equal to `self`.
-    /// This also assumes that the time that has passed between both Instants fits inside a u64 (~585 yrs).
+    /// This assumes that the `earlier` Instant represents a moment in
+    /// time before or equal to `self`.
+    /// This also assumes that the time that has passed between both
+    /// Instants fits inside a u64 (~585 yrs).
     pub fn since(self: Instant, earlier: Instant) u64 {
         // Convert timespec diff to ns
         const seconds = @as(u64, @intCast(self.timestamp.sec - earlier.timestamp.sec));

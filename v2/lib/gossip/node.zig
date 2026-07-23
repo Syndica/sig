@@ -1,5 +1,6 @@
-//! An implmentation of a gossip protocol instance. It uses the provided entrypoints and identity to send/recv messages,
-//! ping other nodes, and participate in the cluster to share around GossipValues.
+//! An implmentation of a gossip protocol instance. It uses the provided entrypoints and
+//! identity to send/recv messages, ping other nodes, and participate in the cluster to share around
+//! GossipValues.
 
 const std = @import("std");
 const lib = @import("../lib.zig");
@@ -30,7 +31,8 @@ pub fn GossipNode(comptime Effects: type) type {
             return undefined;
         }
 
-        /// Writes out any packets prepared with calls to `writePacket`, invalidating them from the caller.
+        /// Writes out any packets prepared with calls to `writePacket`, invalidating
+        /// them from the caller.
         pub fn flushWrittenPackets(self: Effects) void {
             _ = .{self};
             return undefined;
@@ -413,7 +415,8 @@ pub fn GossipNode(comptime Effects: type) type {
                     const last_pong = peer.last_pong orelse
                         return error.UnverifiedPeer;
 
-                    // *1 for when selected during PullRequest. another *1 for recv window after that.
+                    // *1 for when selected during PullRequest.
+                    // another *1 for recv window after that.
                     if (last_pong <= now -| (ACTIVE_PONG_THRESHOLD_MS * 2))
                         return error.ExpiredPeer;
 
@@ -546,15 +549,18 @@ pub fn GossipNode(comptime Effects: type) type {
 
                     // NOTE: differs from agave.
                     //
-                    // The flow is: send PullRequest to entrypoint. It starts tracking us & sends Ping.
-                    // We respond back with Pong & future PullRequests to entrypoint get PullResponses.
+                    // The flow is: send PullRequest to entrypoint. It starts tracking
+                    // us & sends Ping.
+                    // We respond back with Pong & future PullRequests to entrypoint
+                    // get PullResponses.
                     //
-                    // But PullResponses are rejected from untracked peers, so when the entrypoint Pings
-                    // us, we need to start having a way to track it as well.
+                    // But PullResponses are rejected from untracked peers, so when the
+                    // entrypoint Pings us, we need to start having a way to track it as well.
                     _ = self.getOrTrackPeer(now, null, addr, ping.from);
                 },
                 .pong_message => |pong| {
-                    // If not a hash in window (prev, current), not worth verifying the signature either
+                    // If not a hash in window (prev, current), not worth verifying
+                    // the signature either
                     if (!self.ping_window.contains(&pong.hash)) {
                         logger.err().logf(
                             "invalid Pong hash from {f}:{f}",
@@ -663,7 +669,8 @@ pub fn GossipNode(comptime Effects: type) type {
             if (pushed_keys.len == 0) return;
             defer self.push_buf.clearRetainingCapacity();
 
-            // No active_set peers. Try to send PushMessages to entrypoints to get us into the cluster.
+            // No active_set peers. Try to send PushMessages to entrypoints to get us into
+            // the cluster.
             if (self.push_active_set.items.len == 0) {
                 for (self.config.entrypoints) |entry_addr| {
                     try self.sendPushMessagesTo(entry_addr.toNetAddress(), pushed_keys, null);
@@ -825,17 +832,18 @@ pub fn GossipNode(comptime Effects: type) type {
             }
 
             // Check if there were no peers & send to entrypoints (rate limited).
-            // If reconnect to network, entrypoint will get our ContactInfo & ping us to start tracking.
-            // We get pong, start tracking entrypoint, and start getting PullResponses from it in later
-            // calls to `sendPullRequests`.
+            // If reconnect to network, entrypoint will get our ContactInfo & ping us
+            // to start tracking.
+            // We get pong, start tracking entrypoint, and start getting PullResponses from it
+            // in later calls to `sendPullRequests`.
             //
-            // Then processPushMessages will eventually trigger, send our ContactInfo, and gets us back
-            // into the cluster receiving PushMessages from others.
+            // Then processPushMessages will eventually trigger, send our ContactInfo, and
+            // gets us back into the cluster receiving PushMessages from others.
             //
-            // That, or the entrypoint PullResponses will give back other node's ContactInfos, which we
-            // will ping in `insertValue`, they pong back, they become peers eligible to send
-            // PullRequests to, we get more PullResponses back (of potentially other node ContactInfos)
-            // & it repeats.
+            // That, or the entrypoint PullResponses will give back other node's
+            // ContactInfos, which we will ping in `insertValue`, they pong back, they become
+            // peers eligible to send PullRequests to, we get more PullResponses back (of
+            // potentially other node ContactInfos) & it repeats.
             if (i == 0) {
                 if (self.no_peers_timeout <= now -| NO_PEERS_THRESHOLD_MS) {
                     self.no_peers_timeout = now + NO_PEERS_THRESHOLD_MS;

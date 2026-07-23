@@ -41,8 +41,10 @@ pub const Activity = extern struct {
         /// has signalled idle since signalling activity.
         consecutive_idles: u64 = 0,
 
-        /// This function may need to be called multiple times consecutively before a signal is actually emitted.
-        /// See the doc comment on `Activity.signalIdle` for further commentary on what it means to be "idle".
+        /// This function may need to be called multiple times consecutively before a signal is
+        /// actually emitted.
+        /// See the doc comment on `Activity.signalIdle` for further commentary on what it
+        /// means to be "idle".
         /// Also calls `std.atomic.spinLoopHint()`.
         pub fn signalIdleSpinning(self: *ServiceView) error{Canceled}!void {
             const threshold = 1_000_000;
@@ -105,7 +107,8 @@ pub const Activity = extern struct {
     /// A service is defined as idle when all of the following conditions are met:
     /// * The service is not currently processing any inputs.
     /// * The service observes zero incoming inputs to be processed.
-    // TODO: evaluate whether it makes sense to also require "The service has no outgoing values present in its outputs."
+    // TODO: evaluate whether it makes sense to also require "The service has no outgoing
+    // values present in its outputs."
     fn signalIdle(params: struct {
         state: *std.atomic.Value(State),
     }) error{Canceled}!void {

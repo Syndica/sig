@@ -1,5 +1,6 @@
 /// Analogous to [ClusterType](https://github.com/anza-xyz/solana-sdk/blob/a467058aabc453c7d749a4993c56df293d1d75c3/cluster-type/src/lib.rs#L19)
-/// Explicit numbers are added to ensure we don't mess up the order of the fields and break bincode reading.
+/// Explicit numbers are added to ensure we don't mess up the order
+/// of the fields and break bincode reading.
 pub const Cluster = enum(u8) {
     testnet = 0,
     mainnet = 1,

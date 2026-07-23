@@ -415,7 +415,8 @@ fn populateSnapshotConfig(
             );
         }
         data.known_validators_allow_all = true;
-        // NOTE: we zero out known_validators_len to make it clear that no validator pubkeys were provided.
+        // NOTE: we zero out known_validators_len to make it clear that no validator pubkeys
+        // were provided.
         data.known_validators_len = 0;
     } else {
         data.known_validators_allow_all = false;

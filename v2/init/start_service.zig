@@ -250,10 +250,10 @@ fn handleSegfault(
         const ctx: *align(1) posix.ucontext_t = @ptrCast(ctx_ptr);
         var new_ctx: posix.ucontext_t = ctx.*;
         if (builtin.os.tag.isDarwin() and builtin.cpu.arch == .aarch64) {
-            // The kernel incorrectly writes the contents of `__mcontext_data` right after `mcontext`,
-            // rather than after the 8 bytes of padding that are supposed to sit between the two. Copy the
-            // contents to the right place so that the `mcontext` pointer will be correct after the
-            // `relocateContext` call below.
+            // The kernel incorrectly writes the contents of `__mcontext_data` right after
+            // `mcontext`, rather than after the 8 bytes of padding that are supposed to sit between
+            // the two. Copy the contents to the right place so that the `mcontext` pointer will be
+            // correct after the `relocateContext` call below.
             new_ctx.__mcontext_data = @as(*align(1) extern struct {
                 onstack: c_int,
                 sigmask: std.c.sigset_t,

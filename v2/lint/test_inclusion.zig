@@ -1,4 +1,5 @@
-//! Ensures each source directory has companion Zig file that imports tests for sibling source files.
+//! Ensures each source directory has companion Zig file that imports
+//! tests for sibling source files.
 //!
 //! For files:
 //!

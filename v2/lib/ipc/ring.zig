@@ -159,9 +159,9 @@ pub fn Ring(N: comptime_int, T: type) type {
                     return ptr;
                 }
 
-                // Using the increments done via `next()` since either 1) the .get() creating this Iterator or
-                // 2) the last markUsed() call, update the position of this side on the ring buffer, making any
-                // changes to the memory visible to the other side.
+                // Using the increments done via `next()` since either 1) the .get() creating this
+                // Iterator or 2) the last markUsed() call, update the position of this side on the
+                // ring buffer, making any changes to the memory visible to the other side.
                 pub fn markUsed(self: *const Self) void {
                     self.view.commit();
                 }

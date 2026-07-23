@@ -7,35 +7,51 @@ const Pubkey = lib.solana.Pubkey;
 const Slot = lib.solana.Slot;
 const EpochSchedule = lib.solana.EpochSchedule;
 
-/// The feature set identifier - first 4 bytes of SHA256 hash of all known (non-reverted) feature pubkeys (sorted).
+/// The feature set identifier - first 4 bytes of SHA256 hash of all
+/// known (non-reverted) feature pubkeys (sorted).
 /// This is used for client compatibility checks.
 ///
-/// Generated at build time by `shared/scripts/gen_feature_set_id.zig` to avoid comptime compiler issues.
+/// Generated at build time by `shared/scripts/gen_feature_set_id.zig`
+/// to avoid comptime compiler issues.
 ///
 /// [agave] https://github.com/anza-xyz/agave/blob/01159e4643e1d8ee86d1ed0e58ea463b338d563f/feature-set/src/lib.rs#L2318
 pub const FEATURE_SET_ID: u32 = @import("feature-set-id").FEATURE_SET_ID;
 
-/// ZonInfo represents the metadata for a feature, including its name, pubkey, description, status, and an optional note.
-/// It is used to record the history and current state of all features, including those that have been reverted.
+/// ZonInfo represents the metadata for a feature, including its name,
+/// pubkey, description, status, and an optional note.
+/// It is used to record the history and current state of all features,
+/// including those that have been reverted.
 pub const ZonInfo = struct {
     name: [:0]const u8,
     pubkey: [:0]const u8,
     description: [:0]const u8,
     status: union(enum) {
-        /// The feature has been removed from the feature set and its implementation has been removed from source.
-        /// The feature is not advertised as a supported feature for fuzzing (i.e. it will not be toggled on).
+        /// The feature has been removed from the feature set and its
+        /// implementation has been removed from source.
+        /// The feature is not advertised as a supported feature for
+        /// fuzzing (i.e. it will not be toggled on).
         reverted,
-        /// The feature is contained in the feature set but its implementation is not complete.
-        /// The feature is not advertised as a supported feature for fuzzing (i.e. it will not be toggled on).
+        /// The feature is contained in the feature set but its
+        /// implementation is not complete.
+        /// The feature is not advertised as a supported feature for
+        /// fuzzing (i.e. it will not be toggled on).
         unsupported,
-        /// The feature is contained in the feature set and its implementation is complete.
-        /// The feature is advertised as a supported feature for fuzzing (i.e. it may be toggled on and off).
+        /// The feature is contained in the feature set and its
+        /// implementation is complete.
+        /// The feature is advertised as a supported feature for fuzzing
+        /// (i.e. it may be toggled on and off).
         supported,
-        /// The feature is contained in the feature set, its implementation is complete, and the inactive path remains in source.
-        /// The feature is advertised as a hardcoded feature for fuzzing (i.e. it is always toggled on).
+        /// The feature is contained in the feature set, its
+        /// implementation is complete, and the inactive path remains
+        /// in source.
+        /// The feature is advertised as a hardcoded feature for fuzzing
+        /// (i.e. it is always toggled on).
         hardcoded_for_fuzzing,
-        /// The feature is contained in the feature set, its implementation is complete, and the inactive path has been removed from source.
-        /// The feature is advertised as a hardcoded feature for fuzzing (i.e. it is always toggled on).
+        /// The feature is contained in the feature set, its
+        /// implementation is complete, and the inactive path has been
+        /// removed from source.
+        /// The feature is advertised as a hardcoded feature for fuzzing
+        /// (i.e. it is always toggled on).
         hardcoded,
     },
     /// Optional note about the feature status.
@@ -67,9 +83,12 @@ pub const features: []const ZonInfo = blk: {
     break :blk filtered;
 };
 
-/// The `Feature` enum represents all available features that could be activated.
-/// - `unsupported` features are included to allow deliberate failure if encountered, but are not advertised for fuzzing.
-/// - `hardcoded` features have a suffix '_hardcoded' to provide comptime hint to ensure they are no longer referenced in source.
+/// The `Feature` enum represents all available features that could be
+/// activated.
+/// - `unsupported` features are included to allow deliberate failure
+///   if encountered, but are not advertised for fuzzing.
+/// - `hardcoded` features have a suffix '_hardcoded' to provide
+///   comptime hint to ensure they are no longer referenced in source.
 pub const Feature = @Type(.{
     .@"enum" = .{
         .tag_type = u64,
@@ -102,7 +121,8 @@ pub const pubkey_map: std.EnumArray(Feature, Pubkey) = blk: {
     break :blk .init(s);
 };
 
-/// Checks if the provided `id` corresponds to a known feature by comparing it against the `id`s of all known features.
+/// Checks if the provided `id` corresponds to a known feature by
+/// comparing it against the `id`s of all known features.
 pub fn isKnownFeatureId(id: u64) bool {
     for (all_features) |feature| {
         if (feature.id() == id) return true;

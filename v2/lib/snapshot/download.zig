@@ -267,8 +267,10 @@ pub const DownloadRace = struct {
 
 // TODO: can be unified with ProbeConn in some way, combine all state.
 pub const DownloadConn = struct {
-    /// Similar to `ProbeConn`'s gen. Used to prevent a late-arriving CQE for this DownloadConn when
-    /// the original peer's download was abandoned from overwritting the new peer it's now representing (i.e generations don't match).
+    /// Similar to `ProbeConn`'s gen. Used to prevent a late-arriving CQE for
+    /// this DownloadConn when the original peer's download was abandoned from
+    /// overwritting the new peer it's now representing (i.e generations don't
+    /// match).
     gen: u16,
     /// Current lifecycle in the snapshot download for this particular peer.
     /// Set to .unused when this slot is available for a new download.
@@ -348,8 +350,10 @@ pub const DownloadConn = struct {
     };
 
     const DownloadRuntimeState = struct {
-        /// The tcp socket connected to the snapshot peer. Used for HTTP GET and reading snapshot bytes.
-        /// TODO: Would be nice to transfer tcp connection from probing phase to download phase without needing to re-open.
+        /// The tcp socket connected to the snapshot peer. Used for HTTP GET
+        /// and reading snapshot bytes.
+        /// TODO: Would be nice to transfer tcp connection from probing phase
+        /// to download phase without needing to re-open.
         fd: std.posix.fd_t,
         /// The temp output file being written by this peer.
         file_fd: std.posix.fd_t,
@@ -361,7 +365,8 @@ pub const DownloadConn = struct {
         addr: Address,
         /// Pubkey of the peer being downloaded from, used for identity in logs.
         from: Pubkey,
-        /// Address used for the socket connection (must live long enough for io_uring use, hence stored here).
+        /// Address used for the socket connection (must live long enough for
+        /// io_uring use, hence stored here).
         net_addr: std.net.Address,
         /// The expected total size of the snapshot for this racer (from its probe HEAD response).
         content_len: u64,
@@ -371,11 +376,13 @@ pub const DownloadConn = struct {
         hash: Hash,
         /// The number of snapshot body bytes written to this peer's temp file.
         bytes_written: u64,
-        /// The number of bytes moved from the socket into the pipe that still need to be flushed to this peer's temp file.
+        /// The number of bytes moved from the socket into the pipe that still
+        /// need to be flushed to this peer's temp file.
         pipe_pending: u64,
         /// Monotonic per-download sequence for linked ops without a natural byte offset.
         op_seq: u16,
-        /// Set once a winner is declared so signal that this download should be stopped and cleaned up.
+        /// Set once a winner is declared so signal that this download should
+        /// be stopped and cleaned up.
         cancel_requested: bool,
     };
 
@@ -647,7 +654,8 @@ const UserData = packed struct(u64) {
     }
 };
 
-// TODO: add support for labels to metrics (should just auto-create a histogram per label, or whatever's in line with prom. spec).
+// TODO: add support for labels to metrics (should just auto-create a
+// histogram per label, or whatever's in line with prom. spec).
 pub const Metrics = struct {
     sources_received: tel.Counter,
     sources_deduped: tel.Counter,
@@ -711,7 +719,8 @@ pub const Metrics = struct {
         3 * std.time.ns_per_s, // 3s
     };
 
-    // TODO: This was to not have a big fat anon. struct with the same fields repeated. But perhaps there's a better way?
+    // TODO: This was to not have a big fat anon. struct with the same fields
+    // repeated. But perhaps there's a better way?
     pub const fields_config = blk: {
         var config: tel.metric.FieldsConfig(Metrics) = .{
             .prefix = "snapshot",
@@ -815,13 +824,15 @@ fn DedupeMapType(comptime capacity: usize) type {
 
         const GetOrPutResult = struct {
             found_existing: bool,
-            // Only use within the current event-loop turn. `clear()` invalidates map entry pointers.
+            // Only use within the current event-loop turn. `clear()`
+            // invalidates map entry pointers.
             entry: *Entry,
         };
 
         const Pending = struct {
             addr: Address,
-            // Only use within the current event-loop turn. SQEs must copy needed state, not store this pointer.
+            // Only use within the current event-loop turn. SQEs must copy
+            // needed state, not store this pointer.
             entry: *Entry,
         };
 
@@ -1013,8 +1024,9 @@ pub const Downloader = struct {
                 }
             }
 
-            // It's possible that the last cqe in the copied batch set the final result. The top-of-loop check
-            // will not run again (since the downloader is done, and no more submissions are made).
+            // It's possible that the last cqe in the copied batch set the
+            // final result. The top-of-loop check will not run again (since
+            // the downloader is done, and no more submissions are made).
             // We check again here to return.
             if (self.run_result) |result| return result;
         }
@@ -1181,7 +1193,8 @@ pub const Downloader = struct {
         fd: std.posix.fd_t,
     ) QueueSqeError!void {
         const probe = &self.probe_conns[index];
-        // NOTE: startProbe sets this slot active before queueing connect; CQE handlers cannot retire it until we return to the event loop.
+        // NOTE: startProbe sets this slot active before queueing connect;
+        // CQE handlers cannot retire it until we return to the event loop.
         const active = probe.activePtr() orelse unreachable;
         const state = active.state;
         const connecting = &active.phase.connecting;
@@ -1201,7 +1214,8 @@ pub const Downloader = struct {
         connecting.op = LinkedTimeoutOp.initOffset(0);
     }
 
-    /// Enqueues a pair of SQEs to send the HTTP HEAD request along with a timeout for the corresponding probe.
+    /// Enqueues a pair of SQEs to send the HTTP HEAD request along with a
+    /// timeout for the corresponding probe.
     /// After which we update the probe's phase to `sending`.
     fn queueProbeSendWithTimeout(
         self: *Downloader,
@@ -1217,7 +1231,8 @@ pub const Downloader = struct {
 
         const timeout_data = send_data.timeout();
 
-        // NOTE: callers either just connected or are handling a current-generation send CQE; queueing cannot retire the slot.
+        // NOTE: callers either just connected or are handling a
+        // current-generation send CQE; queueing cannot retire the slot.
         const active = probe.activePtr() orelse unreachable;
         const state = &active.state;
         const needs_request = active.phase == .connecting;
@@ -1264,7 +1279,8 @@ pub const Downloader = struct {
 
         const timeout_data = recv_data.timeout();
 
-        // NOTE: callers either just finished sending or are handling a current-generation recv CQE; queueing cannot retire the slot.
+        // NOTE: callers either just finished sending or are handling a
+        // current-generation recv CQE; queueing cannot retire the slot.
         const active = probe.activePtr() orelse unreachable;
         const receiving = probe.enterReceiving();
         std.debug.assert(offset <= receiving.recv_buf.len);
@@ -1346,7 +1362,8 @@ pub const Downloader = struct {
 
         // We've succesfully connected, so send the HTTP HEAD request.
         // Enqueuing the entries can only fail if the submission queue is full,
-        // if so we finish the probe with result .sq_full so the peer remains .pending for retry later (back pressure).
+        // if so we finish the probe with result .sq_full so the peer remains
+        // .pending for retry later (back pressure).
         self.queueProbeSendWithTimeout(data, 0) catch {
             self.finishProbe(data.index, .sq_full);
             return;
@@ -1532,8 +1549,10 @@ pub const Downloader = struct {
         const active = probe.activePtr() orelse return;
         const state = &active.state;
         if (self.dedupe_map.getPtr(state.addr)) |peer| {
-            // NOTE: We guard the update here since gossip can update peer in dedupe map while io_uring was completing this probe.
-            // If it was updated underneath us, don't update things here since another/newer probe was already issued to io_uring.
+            // NOTE: We guard the update here since gossip can update peer in
+            // dedupe map while io_uring was completing this probe.
+            // If it was updated underneath us, don't update things here since
+            // another/newer probe was already issued to io_uring.
             if (peer.slot == state.slot and peer.hash.eql(&state.hash)) {
                 peer.meta.probe_status = switch (result) {
                     .succeeded => .succeeded,
@@ -2110,8 +2129,10 @@ pub const Downloader = struct {
 
         const race = &self.download_race;
 
-        // Since this is the final stage for fsyncing the downloaded file, a failure here is likely not to resolve
-        // with retry/re-download (local storage issue). So cancel all other running downloads as well as with winner's.
+        // Since this is the final stage for fsyncing the downloaded file, a
+        // failure here is likely not to resolve with retry/re-download (local
+        // storage issue). So cancel all other running downloads as well as
+        // with winner's.
         // TODO: should we consider EINTR for retry?
         if (cqe.err() != .SUCCESS) {
             self.logger.err().logf(
@@ -2257,14 +2278,17 @@ pub const Downloader = struct {
         return null;
     }
 
-    // TODO: We can clean these by generalizing over Op and sharing them with probe's fns (redundant).
+    // TODO: We can clean these by generalizing over Op and sharing them
+    // with probe's fns (redundant).
     fn queueDownloadConnectWithTimeout(
         self: *Downloader,
         index: u8,
         fd: std.posix.fd_t,
     ) QueueSqeError!void {
         const conn = &self.download_conns[index];
-        // NOTE: startDownloadRacer sets this slot active before queueing connect; CQE handlers cannot retire it until we return to the event loop.
+        // NOTE: startDownloadRacer sets this slot active before queueing
+        // connect; CQE handlers cannot retire it until we return to the
+        // event loop.
         const active = conn.activePtr() orelse unreachable;
         const state = active.state;
         const connecting = &active.phase.connecting;
@@ -2290,7 +2314,8 @@ pub const Downloader = struct {
         offset: u16,
     ) QueueSqeError!void {
         const conn = &self.download_conns[data.index];
-        // NOTE: callers either just connected or are handling a current-generation send CQE; queueing cannot retire the slot.
+        // NOTE: callers either just connected or are handling a
+        // current-generation send CQE; queueing cannot retire the slot.
         const active = conn.activePtr() orelse unreachable;
         const state = &active.state;
         const needs_request = active.phase == .connecting;
@@ -2335,7 +2360,9 @@ pub const Downloader = struct {
         offset: u16,
     ) QueueSqeError!void {
         const conn = &self.download_conns[data.index];
-        // NOTE: callers either just finished sending or are handling a current-generation header recv CQE; queueing cannot retire the slot.
+        // NOTE: callers either just finished sending or are handling a
+        // current-generation header recv CQE; queueing cannot retire the
+        // slot.
         const active = conn.activePtr() orelse unreachable;
         const reading_headers = conn.enterReadingHeaders();
 
@@ -2359,10 +2386,13 @@ pub const Downloader = struct {
         reading_headers.op = LinkedTimeoutOp.initOffset(offset);
     }
 
-    /// handles HTTP edge case where the header recv can read past `\r\n\r\n` and already consume some snapshot body bytes into recv_buf.
+    /// handles HTTP edge case where the header recv can read past
+    /// `\r\n\r\n` and already consume some snapshot body bytes into recv_buf.
     fn queueDownloadWriteExtra(self: *Downloader, data: UserData, written: u16) QueueSqeError!void {
         const conn = &self.download_conns[data.index];
-        // NOTE: callers either just transitioned to writing_extra or are handling its current-generation CQE; queueing cannot retire the slot.
+        // NOTE: callers either just transitioned to writing_extra or are
+        // handling its current-generation CQE; queueing cannot retire the
+        // slot.
         const active = conn.activePtr() orelse unreachable;
         const state = &active.state;
         const writing_extra = &active.phase.writing_extra;
@@ -2391,7 +2421,9 @@ pub const Downloader = struct {
 
     fn queueDownloadSpliceInWithTimeout(self: *Downloader, index: u8) QueueSqeError!void {
         const conn = &self.download_conns[index];
-        // NOTE: callers either just transitioned to splicing_in or are handling an adjacent current-generation CQE; queueing cannot retire the slot.
+        // NOTE: callers either just transitioned to splicing_in or are
+        // handling an adjacent current-generation CQE; queueing cannot
+        // retire the slot.
         const active = conn.activePtr() orelse unreachable;
         const state = &active.state;
         const splicing_in = conn.enterSplicingIn();
@@ -2421,7 +2453,8 @@ pub const Downloader = struct {
 
     fn queueDownloadPollInWithTimeout(self: *Downloader, index: u8) QueueSqeError!void {
         const conn = &self.download_conns[index];
-        // NOTE: callers reach this from a current-generation splice_in CQE; queueing cannot retire the slot.
+        // NOTE: callers reach this from a current-generation splice_in CQE;
+        // queueing cannot retire the slot.
         const active = conn.activePtr() orelse unreachable;
         const state = &active.state;
         const waiting_readable = conn.enterWaitingReadable();
@@ -2447,7 +2480,8 @@ pub const Downloader = struct {
 
     fn queueDownloadSpliceOut(self: *Downloader, index: u8) QueueSqeError!void {
         const conn = &self.download_conns[index];
-        // NOTE: callers reach this while the current-generation download has pipe bytes pending; queueing cannot retire the slot.
+        // NOTE: callers reach this while the current-generation download has
+        // pipe bytes pending; queueing cannot retire the slot.
         const active = conn.activePtr() orelse unreachable;
         const state = &active.state;
         _ = conn.enterSplicingOut();
@@ -2466,7 +2500,8 @@ pub const Downloader = struct {
 
     fn queueDownloadFsync(self: *Downloader, index: u8) QueueSqeError!void {
         const conn = &self.download_conns[index];
-        // NOTE: callers reach this after a current-generation splice_out CQE completes the download; queueing cannot retire the slot.
+        // NOTE: callers reach this after a current-generation splice_out CQE
+        // completes the download; queueing cannot retire the slot.
         const active = conn.activePtr() orelse unreachable;
         const state = &active.state;
         _ = conn.enterFsyncing();
