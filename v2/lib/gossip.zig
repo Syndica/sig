@@ -5,11 +5,12 @@ const lib = @import("lib.zig");
 pub const bincode = lib.solana.bincode;
 pub const GossipNode = @import("gossip/node.zig").GossipNode;
 pub const Metrics = @import("gossip/Metrics.zig");
+pub const testing = @import("gossip/tests/testing.zig");
 comptime {
     if (@import("builtin").is_test) {
         _ = @import("gossip/Metrics.zig");
-        _ = @import("gossip/bincode.zig");
         _ = @import("gossip/node.zig");
+        _ = @import("gossip/tests.zig");
     }
 }
 

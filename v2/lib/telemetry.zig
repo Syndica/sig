@@ -6,11 +6,13 @@ const tracy = @import("tracy");
 pub const metric = @import("telemetry/metric.zig");
 pub const log = @import("telemetry/log.zig");
 pub const prometheus = @import("telemetry/prometheus.zig");
+pub const TestMetricStore = @import("telemetry/tests/TestMetricStore.zig");
 comptime {
     if (@import("builtin").is_test) {
         _ = @import("telemetry/log.zig");
         _ = @import("telemetry/metric.zig");
         _ = @import("telemetry/prometheus.zig");
+        _ = @import("telemetry/tests.zig");
     }
 }
 
@@ -49,11 +51,15 @@ pub const Region = extern struct {
         /// This is also the maximum number of log streams to support.
         service_count: u32,
 
-        /// The maximum number of bytes to allow for storing metric ids.
+        /// Byte capacity for serialized metric descriptors written during registration.
+        /// Descriptors contain the metric name, labels, kind, and value-storage index.
+        /// Metric values are stored separately.
         id_mem_len: u32,
-        /// The maximum number of (`u64`-sized) elements to support.
+        /// Number of 8-byte scalar metric slots. Each Counter or Gauge consumes one slot.
+        /// A Variant consumes one slot per tag. Histograms do not use this storage.
         gauges_len: u32,
-        /// The maximum number of histogram (`u64`-sized) elements to support.
+        /// Number of `u64` elements available for histogram backing storage.
+        /// A histogram with N buckets consumes `3 * N + 6` elements.
         histogram_data_len: u32,
 
         /// NOTE: keep in sync with `Region.getSlices`.
@@ -88,11 +94,15 @@ pub const Region = extern struct {
         /// This is also the maximum number of log streams to support.
         service_count: u32,
 
-        /// The maximum number of bytes to allow for storing metric ids.
+        /// Byte capacity for serialized metric descriptors written during registration.
+        /// Descriptors contain the metric name, labels, kind, and value-storage index.
+        /// Metric values are stored separately.
         id_mem_len: u32,
-        /// The maximum number of (`u64`-sized) elements to support.
+        /// Number of 8-byte scalar metric slots. Each Counter or Gauge consumes one slot.
+        /// A Variant consumes one slot per tag. Histograms do not use this storage.
         gauges_len: u32,
-        /// The maximum number of histogram (`u64`-sized) elements to support.
+        /// Number of `u64` elements available for histogram backing storage.
+        /// A histogram with N buckets consumes `3 * N + 6` elements.
         histogram_data_len: u32,
 
         pub fn info(self: InitParams) Info {
@@ -471,6 +481,10 @@ pub fn Variant(comptime V: type) type {
             _ = self.counts[indexFromTag(tag)].fetchAdd(amount, .monotonic);
         }
 
+        pub fn get(self: *const VariantCounterSelf, tag: Tag) u64 {
+            return self.counts[indexFromTag(tag)].load(.monotonic);
+        }
+
         /// Asserts `amount` to be less than the current value.
         pub fn decrement(self: *const VariantCounterSelf, tag: Tag, amount: u64) void {
             std.debug.assert(amount <= self.counts[indexFromTag(tag)].fetchSub(amount, .monotonic));
@@ -481,7 +495,7 @@ pub fn Variant(comptime V: type) type {
         }
 
         pub fn resetAll(self: *const VariantCounterSelf) void {
-            for (&self.counts) |*count| count.store(0, .monotonic);
+            for (self.counts) |count| count.store(0, .monotonic);
         }
 
         fn indexFromTag(value: Tag) usize {
