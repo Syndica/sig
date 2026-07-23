@@ -79,7 +79,7 @@ pub const Receiver = struct {
         self.root_slot = root_slot;
         self.max_slot = max_slot;
 
-        // TODO: this is where we would add code to prune entries outside of the new range.
+        // TODO: prune `in_progress` / `done` entries below the new root.
     }
 
     // TODO: report return values to observability
@@ -136,6 +136,12 @@ pub const Receiver = struct {
                 {
                     return error.UnexpectedDataCompleteShred;
                 }
+                // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/shred/filter.rs#L344-L349
+                if (shred.code_or_data.data.flags.last_shred_in_slot and
+                    (shred.slot_idx + 1) % FecSetCtx.fec_shred_count != 0)
+                {
+                    return error.MisalignedLastDataIndex;
+                }
             }
 
             if (shred.fec_set_idx % FecSetCtx.fec_shred_count != 0) return error.InvalidFecSetIdx;
@@ -145,6 +151,12 @@ pub const Receiver = struct {
             if (shred.variant.merkle_count > merkle_layer_count - 1) {
                 return error.MerkleCountTooLarge;
             }
+        }
+
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/blockstore.rs#L6065
+        if (shred.variant.isData()) {
+            const parent_slot = shred.slot - shred.code_or_data.data.parent_offset;
+            if (parent_slot < state.root_slot) return error.ShredParentBeforeRoot;
         }
 
         const fec_set_id: FecSetId = .{ .fec_set_idx = shred.fec_set_idx, .slot = shred.slot };
@@ -157,11 +169,24 @@ pub const Receiver = struct {
         );
         zone.text(str);
 
-        const fec_set_ctx = if (state.in_progress.getFecSetCtx(
-            &shred.signature,
-        )) |fec_set_ctx| existing_set: {
-            // fec set is already being built. This branch will be taken for 31/64 shreds (assuming
-            // zero packet loss).
+        var shred_merkle_root: Hash = undefined;
+        try shred.merkleRoot(&shred_merkle_root);
+
+        // Two-tier ctx lookup: signature fast-path (31/64 honest shreds),
+        // then `(slot, fec_set_idx)` fallback. The fallback absorbs case-A
+        // equivocation (agave-parity: signature-blind merkle-root pinning)
+        // and sig-collision-across-fec-sets under sig-verify-off fuzz. See
+        // `InProgressSets.id_map` for the invariant.
+        const resolved: ?*FecSetCtx = resolve: {
+            if (state.in_progress.getFecSetCtx(&shred.signature)) |ctx| {
+                if (state.in_progress.fecSetIdOf(ctx).eql(&fec_set_id))
+                    break :resolve ctx;
+            }
+            break :resolve state.in_progress.getCtxById(fec_set_id);
+        };
+
+        const fec_set_ctx = if (resolved) |fec_set_ctx| existing_set: {
+            // fec set is already being built.
 
             // variant should match that of the first recorded shred in the fec set
             if ((shred.variant.isData() and !shred.variant.eql(fec_set_ctx.data_variant)) or
@@ -170,77 +195,46 @@ pub const Receiver = struct {
                 return error.VariantMismatchFromFecSet;
             }
 
-            // The signature of a shred protects its merkle root. We now have a shred that matches a
-            // signature that we verified against a merkle root earlier - we just need to check if
-            // the merkle root is the same.
-            //
-            // Checking the signature again requires calculating the merkle root anyway, and is much
-            // more expensive (37us vs 1us on my CPU, as of writing).
-            //
-            // NOTE: firedancer optimises "inserting" shreds into fec sets using
-            // fd_bmtree_commitp_insert_with_proof, which may be of interest.
-            var shred_merkle_root: Hash = undefined;
-            try shred.merkleRoot(&shred_merkle_root);
+            // Case-A (matching root) admits into the merged ctx; case-B
+            // (mismatched root) rejects. Unreachable on the sig-hit path in
+            // production (signature covers the root); reachable via
+            // id-secondary hit or under sig-verify-off fuzz.
             if (!shred_merkle_root.eql(&fec_set_ctx.merkle_root))
-                // This failing implies that signature verification would fail, i.e. it isn't an
-                // equivocation problem.
                 return error.MismatchedMerkleRoot;
+            if (!shred.chainedMerkleRoot().eql(&fec_set_ctx.chained_merkle_root))
+                return error.MismatchedChainedMerkleRoot;
 
             break :existing_set fec_set_ctx;
         } else new_set: {
-            // fec set is not currently being built (likely finished already)
+            // No in-progress ctx at this signature or fec_set_id.
 
             switch (state.done.lookupStatus(fec_set_id, &shred.signature)) {
                 // fec set isn't finished, this is a new set
                 .missing => {},
                 // fec set was finished already, let's ignore it
                 .matching_signature => return .fec_set_already_finished,
-
-                // NOTE: when we detect equivocation at the shred level, we just drop the incoming
-                // shred. i.e. the first shred in a fet set "wins", and until it is fully built,
-                // all other conflicting shreds are dropped until the in-progress fec set is built.
-                //
-                // This is intention as it stops the leader from producing many equivocating shreds
-                // that would a) fill up our in-progress map, and b) starve our CPU from shred
-                // verification.
-                //
-                // TODO: once repair is implemented, repaired shreds should skip these checks to
-                // allow conflicting fec sets to be inside the in-progress map. We will need to do
-                // this to reliably repair when equivocation is detected.
-                .mismatching_signature => return error.EquivocationDifferentHashForSameFecSetId,
-            }
-
-            // if we have this FecSetId with a different signature, this means equivocation has occured
-            if (state.in_progress.containsId(fec_set_id)) {
-                // NOTE: see above note.
-                return error.EquivocationMatchingFecSetWithDifferentSignatureAlreadyInProgress;
+                // Erasure set already completed under a different signature.
+                // Same case-A/case-B discriminator as the in-progress path,
+                // post-completion.
+                .mismatching_signature => {
+                    const roots = state.done.getRoots(fec_set_id).?;
+                    if (roots.merkle_root.eql(&shred_merkle_root))
+                        return .fec_set_already_finished;
+                    return error.MerkleRootConflict;
+                },
             }
 
             // This is the first shred of a new in-progress fec set.
-
-            // The shred's merkle root must be calculated unconditionally.
-            const shred_merkle_root: Hash = blk: {
-                var shred_merkle_root: Hash = undefined;
-
-                if (!build_options.debug_skip_shred_sig_verify) {
-                    const slot_leader = leader_schedule.get(shred.slot) orelse {
-                        logger.warn().logf("slot {} missing?\n", .{shred.slot});
-                        return error.UnknownLeader;
-                    };
-
-                    try shred.merkleRoot(&shred_merkle_root);
-
-                    try shred.signature.verify(
-                        slot_leader,
-                        &shred_merkle_root.data,
-                    );
-                } else {
-                    // debug purposes only
-                    try shred.merkleRoot(&shred_merkle_root);
-                }
-
-                break :blk shred_merkle_root;
-            };
+            if (!build_options.debug_skip_shred_sig_verify) {
+                const slot_leader = leader_schedule.get(shred.slot) orelse {
+                    logger.warn().logf("slot {} missing?\n", .{shred.slot});
+                    return error.UnknownLeader;
+                };
+                shred.signature.verify(
+                    slot_leader,
+                    &shred_merkle_root.data,
+                ) catch return error.SignatureVerificationFailed;
+            }
 
             const fec_set_ctx = try state.in_progress.createFecSetCtx(fec_set_id, &shred.signature);
 
@@ -257,6 +251,7 @@ pub const Receiver = struct {
                     shred.variant.swapType(),
 
                 .merkle_root = shred_merkle_root,
+                .chained_merkle_root = shred.chainedMerkleRoot().*,
 
                 .data_shreds_received = .initEmpty(),
                 .code_shreds_received = .initEmpty(),
@@ -267,9 +262,6 @@ pub const Receiver = struct {
 
             break :new_set fec_set_ctx;
         };
-
-        // in the case that we just acquired a fec set, it is critical that we do not leak it
-        errdefer comptime unreachable;
 
         zone.value(fec_set_ctx.totalShredsReceived());
 
@@ -309,6 +301,18 @@ pub const Receiver = struct {
 
         // starting fec set reconstruction now
         // NOTE: as an optimisation we should reconstruct directly into the out buffer
+        //
+        // RS decode sets `data_shreds_received = .initFull()`; a bare error
+        // return past this point would leak a ctx whose bitset would trip
+        // `total <= fec_shred_count` on the next code shred at an unseen
+        // index. Retire on error so subsequent shreds take the `new_set`
+        // path against `done`.
+        errdefer state.in_progress.removeFinishedSet(fec_set_ctx);
+
+        // Snapshot before RS decode overwrites `data_shreds_received`; the
+        // re-validation loop below iterates only over RS-recovered indices.
+        const wire_received = fec_set_ctx.data_shreds_received;
+
         {
             const shreds_bitset, const shreds_reedsol_bufs = fec_set_ctx.erasureEncoded();
 
@@ -327,6 +331,46 @@ pub const Receiver = struct {
         }
 
         std.debug.assert(fec_set_ctx.data_shreds_received.count() == FecSetCtx.data_shreds_max);
+
+        // Structural + ctx-field re-validation over the RS-recovered region
+        // only. Signature and merkle proof live in the trailer, outside RS
+        // protection; the ctx's pinned merkle root already fixes them.
+        // [agave] https://github.com/anza-xyz/agave/blob/5efbb99925939a740cf6ff06647257d100e3e286/ledger/src/blockstore.rs#L1628
+        for (0..FecSetCtx.data_shreds_max) |idx| {
+            if (wire_received.isSet(idx)) continue;
+            var recovered_packet: Packet = .{
+                .data = fec_set_ctx.data_shreds_buf[idx],
+                .len = lib.shred.Shred.min_size,
+                .addr = std.net.Address.initIp4(.{ 0, 0, 0, 0 }, 0),
+            };
+            const recovered = Shred.fromPacketChecked(&recovered_packet) catch |err| {
+                logger.warn().logf(
+                    "RS-recovered shred failed structural re-validation: " ++
+                        "slot={} fec_set_idx={} idx={} err={s}. Dropping FEC set.",
+                    .{ shred.slot, shred.fec_set_idx, idx, @errorName(err) },
+                );
+                return error.RecoveredShredMalformed;
+            };
+            if (recovered.slot != shred.slot or
+                recovered.fec_set_idx != shred.fec_set_idx or
+                !recovered.variant.isData() or
+                !recovered.variant.eql(fec_set_ctx.data_variant) or
+                recovered.slot_idx != shred.fec_set_idx + idx)
+            {
+                logger.warn().logf(
+                    "RS-recovered shred header disagrees with ctx: slot={} " ++
+                        "fec_set_idx={} idx={} " ++
+                        "(recovered slot={} fec_set_idx={} slot_idx={} isData={}). " ++
+                        "Dropping FEC set.",
+                    .{
+                        shred.slot,                 shred.fec_set_idx,     idx,
+                        recovered.slot,             recovered.fec_set_idx, recovered.slot_idx,
+                        recovered.variant.isData(),
+                    },
+                );
+                return error.RecoveredShredMalformed;
+            }
+        }
 
         // writing out deshredded fec set
         {
@@ -366,8 +410,13 @@ pub const Receiver = struct {
 
             finished.* = .{
                 .merkle_root = fec_set_ctx.merkle_root,
-                .chained_merkle_root = shred.chainedMerkleRoot().*,
+                .chained_merkle_root = fec_set_ctx.chained_merkle_root,
                 .id = fec_set_id,
+                // All data shreds carry the same parent_offset; index 0 is
+                // populated by RS recovery above if the wire shred was missing.
+                .parent_offset = Shred.fromBufferUnchecked(
+                    &fec_set_ctx.data_shreds_buf[0],
+                ).code_or_data.data.parent_offset,
                 .data_complete = data_complete,
                 .slot_complete = slot_complete,
                 .payload_len = total_payload_len,
@@ -376,7 +425,6 @@ pub const Receiver = struct {
 
             var bytes_written: u16 = 0;
             for (&fec_set_ctx.data_shreds_buf) |*buffer| {
-                // TODO: I think we need to re-validate the data shreds that we recovered
                 const data_shred: *const Shred = Shred.fromBufferUnchecked(buffer);
                 const payload = data_shred.dataPayload();
                 @memcpy(finished.payload_buf[bytes_written..][0..payload.len], payload);
@@ -388,7 +436,12 @@ pub const Receiver = struct {
             std.debug.assert(bytes_written == total_payload_len);
         }
 
-        state.done.setDone(&shred.signature, fec_set_id);
+        state.done.setDone(
+            &shred.signature,
+            fec_set_id,
+            &fec_set_ctx.merkle_root,
+            &fec_set_ctx.chained_merkle_root,
+        );
         state.in_progress.removeFinishedSet(fec_set_ctx);
 
         tracy.frameMarkNamed("finished FEC sets");
@@ -405,6 +458,12 @@ pub const Receiver = struct {
         fec_set_already_finished,
         shred_already_seen,
     };
+};
+
+/// The two roots pinned for a completed FEC set.
+pub const FecSetRoots = struct {
+    merkle_root: Hash,
+    chained_merkle_root: Hash,
 };
 
 /// Represents a FEC (Forward Error Correction) set which has yet to be reconstructed.
@@ -425,6 +484,8 @@ pub const FecSetCtx = extern struct {
 
     // we store the first seen, and make sure later shreds have the same one
     merkle_root: Hash,
+    // Merkle root of the previous FEC set (SIMD-0340). First-seen wins.
+    chained_merkle_root: Hash,
 
     // https://github.com/firedancer-io/firedancer/blob/ecd2d6d8f5b9f926d0b9aa9360efe36ea1550ad6/src/ballet/reedsol/fd_reedsol.h#L23
     // https://github.com/solana-foundation/specs/blob/main/p2p/shred.md
@@ -513,6 +574,16 @@ const InProgressSets = struct {
     signatures: []Signature, // idx correspond with fecset idxs
 
     signature_map: SignatureMap,
+    /// Authoritative primary `(slot, fec_set_idx) → *FecSetCtx`, one entry
+    /// per live ctx. Absorbs case-A equivocation (agave admits both
+    /// same-root variants because `check_merkle_root_consistency` is
+    /// signature-blind) and sig-collision-across-fec-sets under
+    /// sig-verify-off fuzz. `signature_map` is a fast-path index only
+    /// (see `assertCounts`).
+    ///
+    /// TODO: fold away once signature uniqueness at `(slot, fec_set_idx)`
+    /// is a protocol invariant.
+    id_map: IdMap,
     eviction: Eviction,
 
     const Eviction = std.PriorityQueue(Pool.ItemId, QueueContext, QueueContext.order);
@@ -521,6 +592,7 @@ const InProgressSets = struct {
     // Key from signature-hash, rather than merkle root, as it's equivalent for lookup and we don't
     // have to compute it.
     const SignatureMap = std.ArrayHashMapUnmanaged(void, *FecSetCtx, SignatureContext, true);
+    const IdMap = std.AutoHashMapUnmanaged(FecSetId, *FecSetCtx);
 
     fn init(allocator: std.mem.Allocator, capacity: u32) !InProgressSets {
         const buf = try allocator.alloc(FecSetCtx, capacity);
@@ -538,6 +610,10 @@ const InProgressSets = struct {
         errdefer signature_map.deinit(allocator);
         try signature_map.ensureTotalCapacity(allocator, capacity);
 
+        var id_map: IdMap = .empty;
+        errdefer id_map.deinit(allocator);
+        try id_map.ensureTotalCapacity(allocator, capacity);
+
         var eviction: Eviction = .init(allocator, .{ .ids = ids });
         errdefer eviction.deinit();
         try eviction.ensureTotalCapacity(capacity);
@@ -548,6 +624,7 @@ const InProgressSets = struct {
             .ids = ids,
             .signatures = signatures,
             .signature_map = signature_map,
+            .id_map = id_map,
             .eviction = eviction,
         };
     }
@@ -557,6 +634,7 @@ const InProgressSets = struct {
         allocator.free(self.ids);
         allocator.free(self.signatures);
         self.signature_map.deinit(allocator);
+        self.id_map.deinit(allocator);
 
         self.eviction.allocator = allocator;
         self.eviction.deinit();
@@ -568,6 +646,7 @@ const InProgressSets = struct {
     fn reset(self: *InProgressSets) void {
         self.ctx_pool.reset();
         self.signature_map.clearRetainingCapacity();
+        self.id_map.clearRetainingCapacity();
         self.eviction.items.len = 0;
     }
 
@@ -598,12 +677,17 @@ const InProgressSets = struct {
         self.ids[new_idx] = id;
         self.eviction.add(new_pool_id) catch unreachable; // eviction can't be full, we *just* evicted
         self.signatures[new_idx] = signature.*;
+        // Sig-collision path: newer ctx claims the sig_map slot. See
+        // `assertCounts`.
         const result = self.signature_map.getOrPutAssumeCapacityAdapted(signature, map_ctx);
-        if (result.found_existing) unreachable; // you can't create a fecsetctx that already exists
 
         const node: *FecSetCtx = self.ctx_pool.indexToPtr(@enumFromInt(new_idx));
 
         result.value_ptr.* = node;
+
+        const id_result = self.id_map.getOrPutAssumeCapacity(id);
+        if (id_result.found_existing) unreachable; // `new_set` in processPacket only fires when this id is unoccupied
+        id_result.value_ptr.* = node;
 
         return node;
     }
@@ -641,14 +725,29 @@ const InProgressSets = struct {
         const evicted_idx = evicted_pool_idx.index();
 
         const evicted_sig: *Signature = &self.signatures[evicted_idx];
+        const evicted_id: FecSetId = self.ids[evicted_idx];
+        const evicted_ptr: *FecSetCtx = self.ctx_pool.indexToPtr(evicted_pool_idx);
         // const node: *FecSetCtx = @ptrCast(&self.ctx_pool.buf[evicted_idx]);
         self.ids[evicted_idx] =
             // an impossible FecSetID which can never be matched with
             .{ .slot = std.math.maxInt(Slot), .fec_set_idx = std.math.maxInt(u32) - 1 };
 
         self.ctx_pool.destroyId(evicted_pool_idx);
-        const removed = self.signature_map.swapRemoveContextAdapted(evicted_sig, map_ctx, map_ctx);
-        std.debug.assert(removed);
+        // Only remove the sig_map entry if it currently points at this
+        // ctx: under sig-collision the newer ctx owns the slot. See
+        // `assertCounts`.
+        if (self.signature_map.getAdapted(evicted_sig, map_ctx)) |cur| {
+            if (cur == evicted_ptr) {
+                const removed = self.signature_map.swapRemoveContextAdapted(
+                    evicted_sig,
+                    map_ctx,
+                    map_ctx,
+                );
+                std.debug.assert(removed);
+            }
+        }
+        const id_removed = self.id_map.remove(evicted_id);
+        std.debug.assert(id_removed);
 
         evicted_sig.* = undefined;
 
@@ -657,16 +756,26 @@ const InProgressSets = struct {
     }
 
     fn containsId(self: *const InProgressSets, id: FecSetId) bool {
-        return for (self.signature_map.values()) |fec_set_ctx| {
-            const pool_id = self.ctx_pool.ptrToIndex(fec_set_ctx);
-            const idx = pool_id.index();
+        return self.id_map.contains(id);
+    }
 
-            if (self.ids[idx].eql(&id)) break true;
-        } else false;
+    fn getCtxById(self: *const InProgressSets, id: FecSetId) ?*FecSetCtx {
+        return self.id_map.get(id);
+    }
+
+    /// `FecSetId` under which `ctx` was inserted. Only valid for a live
+    /// pointer from `getFecSetCtx` / `getCtxById`.
+    pub fn fecSetIdOf(self: *const InProgressSets, ctx: *FecSetCtx) FecSetId {
+        const pool_id = self.ctx_pool.ptrToIndex(ctx);
+        return self.ids[pool_id.index()];
     }
 
     fn assertCounts(self: *const InProgressSets) void {
-        std.debug.assert(self.signature_map.count() == self.eviction.items.len);
+        // id_map is the authoritative primary; signature_map is a
+        // fast-path index that may lose entries under sig-collision
+        // (newer ctx claims the slot in `createFecSetCtx`).
+        std.debug.assert(self.id_map.count() == self.eviction.items.len);
+        std.debug.assert(self.signature_map.count() <= self.eviction.items.len);
         tracy.plot(u32, "in-progress FEC sets", @intCast(self.eviction.items.len));
     }
 
@@ -886,6 +995,7 @@ test "InProgressSets basic usage" {
     // doesn't contain anything yet
     try std.testing.expect(!in_progress.containsId(set_id));
     try std.testing.expectEqual(null, in_progress.getFecSetCtx(&Signature.ZEROES));
+    try std.testing.expectEqual(null, in_progress.getCtxById(set_id));
 
     // add set
     const ctx = try in_progress.createFecSetCtx(set_id, &set_signature);
@@ -894,6 +1004,7 @@ test "InProgressSets basic usage" {
     const found_ctx = in_progress.getFecSetCtx(&set_signature) orelse unreachable;
     try std.testing.expectEqual(ctx, found_ctx);
     try std.testing.expect(in_progress.containsId(set_id));
+    try std.testing.expectEqual(ctx, in_progress.getCtxById(set_id));
 
     // context is evicted
     {
@@ -953,7 +1064,13 @@ const DoneSets = struct {
 
     // This signature+id must not be inside DoneSet already - any shred inside DoneSets should be
     // dropped early, so setDone should be unreachable in this case.
-    fn setDone(self: *DoneSets, signature: *const Signature, id: FecSetId) void {
+    fn setDone(
+        self: *DoneSets,
+        signature: *const Signature,
+        id: FecSetId,
+        merkle_root: *const Hash,
+        chained_merkle_root: *const Hash,
+    ) void {
         const done_ctx: DoneContext = .{ .done_map = &self.done_map };
 
         self.assertCounts();
@@ -976,7 +1093,12 @@ const DoneSets = struct {
         };
 
         const new_done: *DoneItem = self.done_pool.indexToPtr(new_pool_id);
-        new_done.* = .{ .id = id, .signature_hashed = hashSignature(signature) };
+        new_done.* = .{
+            .id = id,
+            .signature_hashed = hashSignature(signature),
+            .merkle_root = merkle_root.*,
+            .chained_merkle_root = chained_merkle_root.*,
+        };
         self.eviction.add(new_pool_id) catch unreachable;
         const entry = self.done_map.getOrPutAssumeCapacityAdapted(&id, done_ctx);
         std.debug.assert(!entry.found_existing);
@@ -998,12 +1120,27 @@ const DoneSets = struct {
             .mismatching_signature;
     }
 
+    /// Roots pinned for a completed FEC set, or null if `id` is unknown.
+    fn getRoots(self: *const DoneSets, id: FecSetId) ?FecSetRoots {
+        const done_ctx: DoneContext = .{ .done_map = &self.done_map };
+        const entry = self.done_map.getAdapted(&id, done_ctx) orelse return null;
+        return .{
+            .merkle_root = entry.merkle_root,
+            .chained_merkle_root = entry.chained_merkle_root,
+        };
+    }
+
     fn assertCounts(self: *const DoneSets) void {
         std.debug.assert(self.eviction.items.len == self.done_map.count());
         tracy.plot(u32, "done FEC sets", @intCast(self.eviction.items.len));
     }
 
-    const DoneItem = extern struct { signature_hashed: u32, id: FecSetId };
+    const DoneItem = extern struct {
+        signature_hashed: u32,
+        id: FecSetId,
+        merkle_root: Hash,
+        chained_merkle_root: Hash,
+    };
     const Eviction = std.PriorityQueue(Pool.ItemId, QueueContext, QueueContext.order);
     const Pool = lib.collections.Pool(DoneItem, u32);
     const DoneMap = std.ArrayHashMapUnmanaged(void, *DoneItem, DoneContext, true);
@@ -1051,19 +1188,19 @@ test "DoneSets basic usage" {
     const id_2: FecSetId = .{ .slot = 2, .fec_set_idx = 0 };
     const id_3: FecSetId = .{ .slot = 3, .fec_set_idx = 0 };
 
-    done_sets.setDone(&sig_1, id_1);
+    done_sets.setDone(&sig_1, id_1, &Hash.ZEROES, &Hash.ZEROES);
 
     try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_1, &sig_1));
     try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_2, &sig_2));
     try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_3, &sig_3));
 
-    done_sets.setDone(&sig_2, id_2);
+    done_sets.setDone(&sig_2, id_2, &Hash.ZEROES, &Hash.ZEROES);
 
     try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_1, &sig_1));
     try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
     try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_3, &sig_3));
 
-    done_sets.setDone(&sig_3, id_3);
+    done_sets.setDone(&sig_3, id_3, &Hash.ZEROES, &Hash.ZEROES);
 
     try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_1, &sig_1)); // 1 was evicted
     try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
@@ -1086,8 +1223,8 @@ test "DoneSets reset clears state without freeing" {
     const id_1: FecSetId = .{ .slot = 1, .fec_set_idx = 0 };
     const id_2: FecSetId = .{ .slot = 2, .fec_set_idx = 0 };
 
-    done_sets.setDone(&sig_1, id_1);
-    done_sets.setDone(&sig_2, id_2);
+    done_sets.setDone(&sig_1, id_1, &Hash.ZEROES, &Hash.ZEROES);
+    done_sets.setDone(&sig_2, id_2, &Hash.ZEROES, &Hash.ZEROES);
     try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_1, &sig_1));
     try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
 
@@ -1099,8 +1236,35 @@ test "DoneSets reset clears state without freeing" {
 
     // Capacity is retained — refilling to the original size must not allocate
     // (eviction.allocator is the testing failing allocator after init).
-    done_sets.setDone(&sig_1, id_1);
-    done_sets.setDone(&sig_2, id_2);
+    done_sets.setDone(&sig_1, id_1, &Hash.ZEROES, &Hash.ZEROES);
+    done_sets.setDone(&sig_2, id_2, &Hash.ZEROES, &Hash.ZEROES);
     try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_1, &sig_1));
     try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
+}
+
+test "DoneSets.getRoots returns the pinned roots" {
+    const allocator = std.testing.allocator;
+
+    var done_sets: DoneSets = try .init(allocator, 4);
+    defer done_sets.deinit(allocator);
+
+    const sig_1: Signature = .ZEROES;
+    const id_1: FecSetId = .{ .slot = 7, .fec_set_idx = 0 };
+
+    const merkle: Hash = .{ .data = @splat(0xAA) };
+    const chained: Hash = .{ .data = @splat(0xBB) };
+
+    try std.testing.expectEqual(null, done_sets.getRoots(id_1));
+
+    done_sets.setDone(&sig_1, id_1, &merkle, &chained);
+
+    const got = done_sets.getRoots(id_1) orelse return error.TestUnexpectedNull;
+    try std.testing.expect(got.merkle_root.eql(&merkle));
+    try std.testing.expect(got.chained_merkle_root.eql(&chained));
+
+    // Unknown id still misses.
+    try std.testing.expectEqual(
+        null,
+        done_sets.getRoots(.{ .slot = 7, .fec_set_idx = 32 }),
+    );
 }

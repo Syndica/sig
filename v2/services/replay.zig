@@ -89,11 +89,6 @@ const replay = lib.replay;
 
 const Hash = lib.solana.Hash;
 
-const Shred = lib.shred.Shred;
-const FecSetId = lib.shred.FecSetId;
-
-const Pool = lib.collections.Pool;
-
 comptime {
     _ = start;
 }
@@ -121,7 +116,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     var fba: std.heap.FixedBufferAllocator = .init(rw.scratch_memory);
     const allocator = fba.allocator();
 
-    var forest: MerkleForest = try .init(allocator);
+    var forest: replay.MerkleForest = try .init(allocator);
 
     const unrooted: *Unrooted = try allocator.create(Unrooted);
     unrooted.init();
@@ -223,7 +218,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             zone.value(deshredded_fec_set.id.slot);
             zone.value(deshredded_fec_set.id.fec_set_idx);
 
-            const inserted = (try insertFecSet(
+            const inserted = (try replay.insertFecSet(
                 logger,
                 deshredded_fec_set,
                 &forest,
@@ -293,7 +288,7 @@ fn bootstrap(
     logger: tel.Logger("main"),
     runner: lib.runner.Connection,
     snapshot_metadata: *lib.accounts_db.RuntimeMetadata,
-    forest: *MerkleForest,
+    forest: *replay.MerkleForest,
     block_pool: *lib.replay.BlockPool,
     exec_states: *BlockExecStates,
     blockhash_states: *BlockHashStates,
@@ -336,13 +331,14 @@ fn bootstrap(
     // create a synthetic fec-set node that doesn't have all information about
     // the fec set, but it is enough to get started processing the first block
     // after the root
-    const root_node = try insertFecSet(logger, &.{
+    const root_node = try replay.insertFecSet(logger, &.{
         .merkle_root = snapshot_metadata.block_id,
         .chained_merkle_root = .ZEROES, // cannot be determined from the snapshot
         .id = .{
             .slot = root_slot,
             .fec_set_idx = 0, // cannot be determined from the snapshot
         },
+        .parent_offset = 0, // cannot be determined from the snapshot
         .data_complete = true,
         .slot_complete = true,
         .payload_len = 0, // cannot be determined from the snapshot
@@ -355,7 +351,7 @@ fn bootstrap(
     // whose `merkle_root` happens to equal `Hash.ZEROES`.
     std.debug.assert(forest.orphan_map.swapRemoveAdapted(
         &root_node.chained_merkle_root,
-        MerkleForest.OrphanContext{ .map = &forest.orphan_map },
+        replay.MerkleForest.OrphanContext{ .map = &forest.orphan_map },
     ));
 
     // Mark the root block as fully executed so `maybeContinueBlockExec` will immediately
@@ -568,302 +564,15 @@ fn fetchBlocking(
     return response.account_index;
 }
 
-/// Finds a node's parent, and attaches the new node to it.
-///
-/// In the case of a missing parent, also adds the current node (keyed by the parent's merkle root)
-/// into the orphan map.
-///
-/// NOTE: when removing nodes from the orphan map, make sure to handle all sibling nodes.
-fn attachParent(
-    logger: tel.Logger("main"),
-    node: *MerkleNode,
-    forest: *MerkleForest,
-) ?*MerkleNode {
-    const zone = tracy.Zone.init(@src(), .{ .name = "attachParent" });
-    defer zone.deinit();
-
-    std.debug.assert(node.parent == .null);
-    const map_ctx: MerkleForest.MerkleContext = .{ .map = &forest.map };
-    const orphan_map_ctx: MerkleForest.OrphanContext = .{ .map = &forest.orphan_map };
-
-    const parent = forest.map.getAdapted(&node.chained_merkle_root, map_ctx) orelse {
-        zone.text("parent not found");
-
-        // No parent found, insert current node into orphan map (keyed by its parent's merkle-root)
-        // NOTE: it's probably a good idea to preemptively send repair requests for the parent here.
-
-        const orphan_map_result = forest.orphan_map.getOrPutAssumeCapacityAdapted(
-            &node.chained_merkle_root,
-            orphan_map_ctx,
-        );
-
-        logger.info().logf(
-            "inserting ({}:{}) into orphans, already other orphans with same parent?: {}",
-            .{ node.id.slot, node.id.fec_set_idx, orphan_map_result.found_existing },
-        );
-
-        if (orphan_map_result.found_existing) {
-            @branchHint(.unlikely);
-            // this could happen under equivocation or forking, should be unlikely to hit this.
-            // i.e. there's multiple fec sets currently missing the same parent
-
-            // NOTE: the code that finds this orphan entry later *must* attach all of the orphan's
-            // siblings
-
-            // insert at tail of the existing node's siblings
-            var orphan_sibling_tail: ?*MerkleNode = orphan_map_result.value_ptr.*;
-            while (orphan_sibling_tail) |tail_node| {
-                const next_sibling = (tail_node.sibling.opt() orelse break).ptr(&forest.pool);
-
-                if (next_sibling.id.eql(&tail_node.id)) @panic("equivocation");
-
-                orphan_sibling_tail = next_sibling;
-            }
-            std.debug.assert(orphan_sibling_tail.?.sibling == .null);
-            orphan_sibling_tail.?.sibling = .init(forest.pool.ptrToIndex(node));
-        } else {
-            orphan_map_result.value_ptr.* = node; // TODO: double check this
-        }
-
-        return null; // no parent found
-    };
-
-    if (!parent.id.mayFollowWith(&node.id)) {
-        @branchHint(.cold); // this would be malicious behaviour, chaining in an invalid order
-        zone.text("mayFollowWith check failed");
-
-        return null; // parent found, but fec set ids don't align
-    }
-
-    // insert node into tree of parent
-    {
-        std.debug.assert(node.parent == .null);
-        node.parent = .init(forest.pool.ptrToIndex(parent));
-
-        if (parent.child == .null) {
-            @branchHint(.likely); // no equivocation or forking
-
-            parent.child = .init(forest.pool.ptrToIndex(node));
-            return parent;
-        }
-
-        std.debug.assert(parent.child != .null);
-        var last_child_of_parent: *MerkleNode = parent.child.opt().?.ptr(&forest.pool);
-        while (true) {
-            // NOTE: We should get rid of this panic once we're confident that we're handling it
-            //       correctly downstream.
-            if (last_child_of_parent.id.eql(&node.id)) @panic("equivocation");
-            const next = (last_child_of_parent.sibling.opt() orelse break).ptr(&forest.pool);
-            last_child_of_parent = next;
-        }
-
-        last_child_of_parent.sibling = .init(forest.pool.ptrToIndex(node));
-        return parent;
-    }
-}
-
-fn attachChildren(node: *MerkleNode, forest: *MerkleForest) void {
-    std.debug.assert(node.child == .null);
-
-    const zone = tracy.Zone.init(@src(), .{ .name = "attachChildren" });
-    defer zone.deinit();
-
-    const orphan_map_ctx: MerkleForest.OrphanContext = .{ .map = &forest.orphan_map };
-    const map_ctx: MerkleForest.MerkleContext = .{ .map = &forest.map };
-
-    var children_head: ?*MerkleNode = forest.orphan_map.getAdapted(
-        &node.merkle_root,
-        orphan_map_ctx,
-    ) orelse return;
-
-    // Iterate over all child nodes, setting their parent node, and deleting any bad child nodes
-    {
-        var maybe_child_node: ?*MerkleNode = children_head;
-        while (maybe_child_node) |child_node| {
-            std.debug.assert(child_node.parent == .null);
-            maybe_child_node = if (child_node.sibling.opt()) |s| s.ptr(&forest.pool) else null;
-
-            if (node.id.mayFollowWith(&child_node.id)) {
-                @branchHint(.likely);
-                child_node.parent = .init(forest.pool.ptrToIndex(node));
-
-                continue;
-            }
-
-            // Invalid chaining should only happen if the leader is being malicious.
-            // I'm not sure if this branch will ever be hit, but we must still handle this case.
-            // This node is illegal, let's remove it now.
-
-            // Remove this node from the linked list of siblings
-            const next_node = if (child_node.sibling.opt()) |s| s.ptr(&forest.pool) else null;
-            const prev_node: ?*MerkleNode = node: {
-                if (child_node == children_head) break :node null;
-
-                var prev_node: ?*MerkleNode = children_head;
-                break :node while (prev_node) |n| {
-                    const next = if (n.sibling.opt()) |s| s.ptr(&forest.pool) else null;
-                    if (next == child_node) break n;
-                    prev_node = next.?;
-                } else unreachable; // either we're the head node, or we have a prev
-            };
-
-            if (prev_node) |prev| {
-                prev.sibling = if (next_node) |next|
-                    .init(forest.pool.ptrToIndex(next))
-                else
-                    .null;
-            } else {
-                // head of list is invalid, let's move it forward
-                children_head = next_node;
-            }
-
-            if (child_node.child != .null)
-                // Remove the node from the map + delete it
-                // if this orphan has invalid chaining, this means *all* of its children are also invalid
-                @panic("TODO: handle recursive removal from invalid orphan chaining");
-            const removed = forest.map.swapRemoveAdapted(&child_node.merkle_root, map_ctx);
-            std.debug.assert(removed);
-            forest.pool.destroy(child_node);
-        }
-    }
-
-    if (children_head) |c_h| node.child = .init(forest.pool.ptrToIndex(c_h));
-
-    // NOTE: this 2nd map lookup could be removed (we looked up this entry earlier)
-    const removed = forest.orphan_map.swapRemoveAdapted(&node.merkle_root, orphan_map_ctx);
-    std.debug.assert(removed);
-}
-
-// Either:
-//  a) does nothing (parent has no BlockRef)
-//  b) allocates a new BlockRef due to reaching the slot boundary
-//  c) allocates a new BlockRef due to the parent already having a child (forking/equivocation)
-//  d) carries the parent's BlockRef forward (same slot + no forking/equivocation)
-fn setChildBlockRef(
-    parent: *const MerkleNode,
-    child: *MerkleNode,
-    forest_pool: *MerkleForest.NodePool,
-    block_pool: *lib.replay.BlockPool,
-) !void {
-    std.debug.assert(child.block_ref == .null);
-    const parent_block_ref = parent.block_ref.opt() orelse return; // a)
-
-    // optionally allocate a new BlockRef
-    child.block_ref = if (parent.id.slot != child.id.slot) ref: {
-        // new slot, let's create a new BlockRef
-        const new_block = try block_pool.create();
-        new_block.* = .{
-            .parent = .init(parent_block_ref),
-            .slot = .init(child.id.slot),
-        };
-
-        break :ref .init(block_pool.ptrToIndex(new_block)); // b)
-    } else ref: {
-        // treat the first child as the canonical path
-        if (parent.child.opt()) |child_id| if (child_id == forest_pool.ptrToIndex(child)) {
-            break :ref .init(parent_block_ref); // d)
-        };
-
-        // forking/equivocation
-        const new_block = try block_pool.create();
-        new_block.* = .{
-            .parent = .init(parent_block_ref),
-            .slot = .init(child.id.slot),
-        };
-
-        break :ref .init(block_pool.ptrToIndex(new_block)); // c)
-
-    };
-}
-
-fn setChildTreeBlockRefs(
-    parent: *MerkleNode,
-    child: *MerkleNode,
-    forest_pool: *MerkleForest.NodePool,
-    block_pool: *lib.replay.BlockPool,
-) !void {
-    const zone = tracy.Zone.init(@src(), .{ .name = "setChildTreeBlockRefs" });
-    defer zone.deinit();
-
-    // If we have a BlockRef we must have a parent (except in the case of an evicted parent, which
-    // doesn't apply here)
-    std.debug.assert(child.parent != .null);
-
-    try setChildBlockRef(parent, child, forest_pool, block_pool);
-
-    // recursively apply BlockRefs to reachable merkle nodes
-    // NOTE: it is possible to do this without recursion *or* a stack, as a non-null block_ref can
-    //       be used to mark a node as visited.
-    var maybe_child = if (child.child.opt()) |id| id.ptr(forest_pool) else null;
-    while (maybe_child) |child_node| {
-        try setChildTreeBlockRefs(child, child_node, forest_pool, block_pool);
-        maybe_child = if (child_node.sibling.opt()) |id| id.ptr(forest_pool) else null;
-    }
-}
-
-fn insertFecSet(
-    logger: tel.Logger("main"),
-    // to be transformed and inserted into the forest
-    deshredded_node: *const lib.shred.DeshreddedFecSet,
-    forest: *MerkleForest,
-    // block associated parameters
-    // additional blocks may be allocated when inserting a fec set
-    block_pool: *lib.replay.BlockPool,
-) error{OutOfSpace}!?*MerkleNode {
-    const zone = tracy.Zone.init(@src(), .{ .name = "insertFecSet" });
-    defer zone.deinit();
-
-    forest.assertCounts();
-    defer forest.assertCounts();
-
-    const map_ctx: MerkleForest.MerkleContext = .{ .map = &forest.map };
-
-    const node: *MerkleNode = newly_inserted: {
-        const map_result = forest.map.getOrPutAssumeCapacityAdapted(
-            &deshredded_node.merkle_root,
-            map_ctx,
-        );
-        if (map_result.found_existing) return null; // node already known
-
-        const node = try forest.pool.create();
-        map_result.value_ptr.* = node;
-
-        node.* = .{
-            .merkle_root = deshredded_node.merkle_root,
-            .chained_merkle_root = deshredded_node.chained_merkle_root,
-            .id = deshredded_node.id,
-            .data_complete = deshredded_node.data_complete,
-            .slot_complete = deshredded_node.slot_complete,
-
-            .block_ref = .null,
-
-            .payload_len = deshredded_node.payload_len,
-            .payload_buf = deshredded_node.payload_buf,
-        };
-
-        break :newly_inserted node;
-    };
-
-    const maybe_parent = attachParent(logger, node, forest);
-    attachChildren(node, forest);
-
-    // "propagate" BlockRefs (see `setChildBlockRef` for details)
-    if (maybe_parent) |parent| {
-        try setChildTreeBlockRefs(parent, node, &forest.pool, block_pool);
-    }
-
-    return node;
-}
-
 fn maybeContinueBlockExec(
     logger: tel.Logger("main"),
     // newly inserted node (or, rarely, when called recursively, the idx=0 ancestor of the block)
-    node: *MerkleNode,
+    node: *replay.MerkleNode,
     // the block_ref of the newly inserted node
     block_ref: replay.BlockRef,
 
     // pools
-    forest_pool: *MerkleForest.NodePool,
+    forest_pool: *replay.MerkleForest.NodePool,
     block_pool: *replay.BlockPool,
     transaction_pool: *lib.replay.TransactionPool,
 
@@ -1152,7 +861,7 @@ fn maybeContinueBlockExec(
 }
 
 const BlockDeserialState = struct {
-    pos_node: *const MerkleNode,
+    pos_node: *const replay.MerkleNode,
     pos_offset: usize,
 
     n_transactions_left: ?u64,
@@ -1167,7 +876,7 @@ const BlockDeserialState = struct {
 
     const Reader = struct {
         deserial_state: *BlockDeserialState,
-        merkle_pool: *const MerkleForest.NodePool,
+        merkle_pool: *const replay.MerkleForest.NodePool,
         bytes_consumed: usize = 0,
 
         fn currentReadableSlice(self: *Reader) []const u8 {
@@ -1261,7 +970,7 @@ const BlockDeserialState = struct {
         }
     };
 
-    fn init(root_node: *const MerkleNode) BlockDeserialState {
+    fn init(root_node: *const replay.MerkleNode) BlockDeserialState {
         std.debug.assert(root_node.block_ref != .null);
         std.debug.assert(root_node.id.fec_set_idx == 0);
 
@@ -1278,13 +987,16 @@ const BlockDeserialState = struct {
         };
     }
 
-    fn getReader(self: *BlockDeserialState, merkle_pool: *const MerkleForest.NodePool) Reader {
+    fn getReader(
+        self: *BlockDeserialState,
+        merkle_pool: *const replay.MerkleForest.NodePool,
+    ) Reader {
         return .{ .deserial_state = self, .merkle_pool = merkle_pool };
     }
 
     fn nextTransaction(
         self: *BlockDeserialState,
-        merkle_pool: *const MerkleForest.NodePool,
+        merkle_pool: *const replay.MerkleForest.NodePool,
         tx_buf: *[1232]u8,
     ) !?[]const u8 {
         const zone = tracy.Zone.init(@src(), .{ .name = "nextTransaction" });
@@ -1304,7 +1016,7 @@ const BlockDeserialState = struct {
 
     fn nextTransactionInner(
         self: *BlockDeserialState,
-        merkle_pool: *const MerkleForest.NodePool,
+        merkle_pool: *const replay.MerkleForest.NodePool,
         tx_buf: *[1232]u8,
     ) !?[]const u8 {
         var reader = self.getReader(merkle_pool);
@@ -1399,358 +1111,3 @@ const BlockExecState = struct {
             self.n_transactions_completed == self.n_transactions_requested;
     }
 };
-
-/// Represents a deshredded FEC set.
-///
-/// Used as a hashmap value, and a tree node (these are the same memory)
-/// This node is also used for the keys of hashmaps. When doing so, be careful of which adapted
-/// context you use.
-///
-/// NOTE: When used inside the Pool, these may be items in a free list. However such nodes should
-/// not be in either map or the tree.
-const MerkleNode = extern struct {
-    parent: MerkleForest.NodePool.ItemId.Optional = .null,
-    child: MerkleForest.NodePool.ItemId.Optional = .null,
-    sibling: MerkleForest.NodePool.ItemId.Optional = .null,
-
-    merkle_root: Hash,
-    chained_merkle_root: Hash,
-    id: FecSetId,
-    data_complete: bool,
-    slot_complete: bool,
-
-    // allocated upon insertion of 1st fec set, copied down through children
-    // TODO: eviction
-    block_ref: lib.replay.BlockRef.Optional,
-
-    payload_len: u16,
-
-    // TODO: this shouldn't be copied, and should instead come in via a pool
-    // NOTE: it is an advantage for MerkleNode to be small! (cache locality for map lookup and tree
-    // traversal).
-    payload_buf: [32 * Shred.data_payload_max]u8,
-
-    fn payload(node: *const MerkleNode) []const u8 {
-        return node.payload_buf[0..node.payload_len];
-    }
-
-    pub fn format(node: *const MerkleNode, writer: *std.io.Writer) !void {
-        try writer.print(
-            \\ {{
-            \\     id: {}, slot_complete: {}
-            \\     parent: {}, child: {}, sibling: {}
-            \\     root: {f}, chained_root: {f}
-            \\     data_complete: {}, slot_complete: {}
-            \\     block_ref: {}
-            \\ }}
-            \\
-        , .{
-            node.id,
-            node.slot_complete,
-            node.parent,
-            node.child,
-            node.sibling,
-            node.merkle_root,
-            node.chained_merkle_root,
-            node.data_complete,
-            node.slot_complete,
-            node.block_ref,
-        });
-    }
-};
-
-// TODO: handle eviction
-/// A tree of FEC sets, which are also keyed by their merkle (and chained) merkle roots.
-const MerkleForest = struct {
-    // owns all of the memory of nodes used in the map/tree nodes
-    pool: NodePool,
-
-    // Nodes are inserted, keyed by their merkle root.
-    // New nodes can look for their parent using this map.
-    //
-    // merkle-hash -> node
-    map: MerkleMap,
-
-    // Nodes are inserted, keyed by their *chained* merkle root.
-    // New nodes can look for their child using this map.
-    //
-    // chained-merkle-hash -> node
-    orphan_map: OrphanMap,
-
-    const capacity = 4096;
-
-    // keyed by merkle root
-    const OrphanMap = std.ArrayHashMapUnmanaged(void, *MerkleNode, OrphanContext, true);
-
-    // keyed by chained merkle root
-    const MerkleMap = std.ArrayHashMapUnmanaged(void, *MerkleNode, MerkleContext, true);
-
-    const NodePool = Pool(MerkleNode, u32);
-
-    const MerkleContext = struct {
-        map: *const MerkleMap,
-
-        pub fn hash(ctx: MerkleContext, key: *const Hash) u32 {
-            _ = ctx;
-            return @bitCast(key.data[0..4].*);
-        }
-        pub fn eql(ctx: MerkleContext, a: *const Hash, _: void, key_idx: usize) bool {
-            const b: *const Hash = &ctx.map.values()[key_idx].merkle_root;
-            return a.eql(b);
-        }
-    };
-
-    const OrphanContext = struct {
-        map: *const OrphanMap,
-
-        pub fn hash(ctx: OrphanContext, key: *const Hash) u32 {
-            _ = ctx;
-            return @bitCast(key.data[0..4].*);
-        }
-        pub fn eql(ctx: OrphanContext, a: *const Hash, _: void, key_idx: usize) bool {
-            const b: *const Hash = &ctx.map.values()[key_idx].chained_merkle_root;
-            return a.eql(b);
-        }
-    };
-
-    fn init(allocator: std.mem.Allocator) !MerkleForest {
-        const pool_buf = try allocator.alloc(MerkleNode, capacity);
-        errdefer allocator.free(pool_buf);
-
-        var map: MerkleMap = .empty;
-        errdefer map.deinit(allocator);
-        try map.ensureTotalCapacity(allocator, capacity);
-
-        var orphan_map: OrphanMap = .empty;
-        errdefer orphan_map.deinit(allocator);
-        try orphan_map.ensureTotalCapacity(allocator, capacity);
-
-        return .{
-            // NOTE: the pool and the tree share the exact same buffer - this is intentional
-            .pool = .init(pool_buf[0..capacity]),
-            .map = map,
-            .orphan_map = orphan_map,
-        };
-    }
-
-    fn deinit(self: *MerkleForest, allocator: std.mem.Allocator) void {
-        allocator.free(self.pool.buf[0..self.pool.len]);
-        self.map.deinit(allocator);
-        self.orphan_map.deinit(allocator);
-    }
-
-    fn assertCounts(self: *const MerkleForest) void {
-        std.debug.assert(self.orphan_map.count() <= self.map.count());
-        tracy.plot(u32, "Merkle forest fec sets", @intCast(self.map.count()));
-        tracy.plot(u32, "Merkle forest fec sets (orphaned)", @intCast(self.orphan_map.count()));
-    }
-};
-
-test "MerkleForest tree put" {
-    var tree: MerkleForest = try .init(std.testing.allocator);
-    defer tree.deinit(std.testing.allocator);
-
-    const a_hash: Hash = .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");
-    const b_hash: Hash = .parse("BMHr4knWhDp8JhqCYhA2K5DUYQsYUVXdy2zWahzt5jLd");
-    const c_hash: Hash = .parse("2GyMeUytf6fcsfNP2QQ6F5e5qwAUoMtKUbnH6QU6bTNm");
-    const d_hash: Hash = .parse("4UahX8LzYC7xnubvP9QzRHmPPYovtcNYo7rBXKpp3ADM");
-    const e_hash: Hash = .parse("An7mDXKMpRninZw6rvqc4wnQ6ukqd3ARko6QmPitjx8B");
-
-    const a: lib.shred.DeshreddedFecSet = .{
-        .chained_merkle_root = .parse("DWCWjQciWoWDzJKwqUZ1ntKqTyXtLVt4C8aL7biBJZ4z"), // prev slot
-        .merkle_root = a_hash,
-
-        .id = .{ .slot = 409284941, .fec_set_idx = 0 },
-
-        .data_complete = true,
-        .slot_complete = false,
-
-        .payload_len = 0,
-        .payload_buf = undefined,
-    };
-
-    const b: lib.shred.DeshreddedFecSet = .{
-        .chained_merkle_root = a_hash,
-        .merkle_root = b_hash,
-
-        .id = .{ .slot = 409284941, .fec_set_idx = 32 },
-
-        .data_complete = true,
-        .slot_complete = false,
-
-        .payload_len = 0,
-        .payload_buf = undefined,
-    };
-
-    const c: lib.shred.DeshreddedFecSet = .{
-        .chained_merkle_root = b_hash,
-        .merkle_root = c_hash,
-
-        .id = .{ .slot = 409284941, .fec_set_idx = 64 },
-
-        .data_complete = true,
-        .slot_complete = false,
-
-        .payload_len = 0,
-        .payload_buf = undefined,
-    };
-
-    const d: lib.shred.DeshreddedFecSet = .{
-        .chained_merkle_root = c_hash,
-        .merkle_root = d_hash,
-
-        .id = .{ .slot = 409284941, .fec_set_idx = 96 },
-
-        .data_complete = true,
-        .slot_complete = true,
-
-        .payload_len = 0,
-        .payload_buf = undefined,
-    };
-
-    // new slot
-    const e: lib.shred.DeshreddedFecSet = .{
-        .chained_merkle_root = d_hash,
-        .merkle_root = e_hash,
-
-        .id = .{ .slot = 409284942, .fec_set_idx = 0 },
-
-        .data_complete = true,
-        .slot_complete = true,
-
-        .payload_len = 0,
-        .payload_buf = undefined,
-    };
-
-    var pool_buf: [lib.replay.BlockPool.size()]u8 align(@alignOf(lib.replay.BlockPool)) = undefined;
-    const pool: *lib.replay.BlockPool = @ptrCast(&pool_buf);
-    pool.init();
-
-    const logger = tel.Logger("main").noop;
-
-    const a_inserted = (try insertFecSet(logger, &a, &tree, pool)).?;
-    try std.testing.expect(a_inserted.parent == .null);
-    try std.testing.expect(a_inserted.child == .null);
-    try std.testing.expect(a_inserted.block_ref == .null);
-    // give the ancestor block a BlockRef, so that it may propagate
-    // NOTE: it is expected that the root-most fec set to be inserted first this way as a special
-    //       case. In a real environment this would be the last fec set in the rooted slot.
-    a_inserted.block_ref = .init(replay.BlockRef.fromInt(8053));
-
-    const expected_block_ref: replay.BlockRef.Optional = .init(replay.BlockRef.fromInt(8053));
-
-    const d_inserted = (try insertFecSet(logger, &d, &tree, pool)).?;
-    try std.testing.expect(d_inserted.parent == .null);
-    try std.testing.expect(d_inserted.child == .null);
-    try std.testing.expect(d_inserted.block_ref == .null); // no path to a => null
-
-    const b_inserted = (try insertFecSet(logger, &b, &tree, pool)).?;
-    try std.testing.expect(b_inserted.parent != .null);
-    try std.testing.expect(b_inserted.child == .null);
-    try std.testing.expect(b_inserted.block_ref == expected_block_ref);
-
-    const c_inserted = (try insertFecSet(logger, &c, &tree, pool)).?;
-    try std.testing.expect(c_inserted.parent != .null);
-    try std.testing.expect(c_inserted.child != .null);
-    try std.testing.expect(c_inserted.block_ref == expected_block_ref);
-    try std.testing.expect(d_inserted.block_ref == expected_block_ref);
-
-    const e_inserted = (try insertFecSet(logger, &e, &tree, pool)).?;
-    try std.testing.expect(e_inserted.parent != .null);
-    try std.testing.expect(e_inserted.child == .null);
-    // new slot => new BlockRef
-    try std.testing.expect(e_inserted.block_ref != .null);
-    try std.testing.expect(e_inserted.block_ref != expected_block_ref);
-
-    // We cannot insert duplicates
-    try std.testing.expectEqual(null, try insertFecSet(logger, &a, &tree, pool));
-    try std.testing.expectEqual(null, try insertFecSet(logger, &b, &tree, pool));
-    try std.testing.expectEqual(null, try insertFecSet(logger, &c, &tree, pool));
-    try std.testing.expectEqual(null, try insertFecSet(logger, &d, &tree, pool));
-    try std.testing.expectEqual(null, try insertFecSet(logger, &e, &tree, pool));
-}
-
-test "bootstrap creates root block and chains blockhashes" {
-    const allocator = std.testing.allocator;
-
-    var activity: lib.runner.Activity = .{};
-    var service_view = activity.serviceView();
-    const runner: lib.runner.Connection = .{ .activity = &service_view };
-
-    var metadata: lib.accounts_db.RuntimeMetadata = undefined;
-    metadata.init();
-    metadata.block_id = .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");
-
-    // Prefill the blockhash ring with N > 1 hashes as a single writer batch,
-    // then close the writer end so bootstrap's drain loop terminates.
-    const test_hashes = [_]Hash{
-        .parse("BMHr4knWhDp8JhqCYhA2K5DUYQsYUVXdy2zWahzt5jLd"),
-        .parse("2GyMeUytf6fcsfNP2QQ6F5e5qwAUoMtKUbnH6QU6bTNm"),
-        .parse("4UahX8LzYC7xnubvP9QzRHmPPYovtcNYo7rBXKpp3ADM"),
-        .parse("Hh8DjJdpQRGeZ6bUxYyt1PBktnFtNAwZoQuwZqGWLPfB"),
-    };
-    {
-        var writer = metadata.blockhash_queue.hashes.getView(.writer);
-        const buf = writer.getBuffer().?;
-        try std.testing.expect(buf.len >= test_hashes.len);
-        @memcpy(buf[0..test_hashes.len], &test_hashes);
-        writer.advance(test_hashes.len);
-        writer.close();
-    }
-
-    const root_slot: lib.solana.Slot = 100;
-    metadata.populateSlot(root_slot);
-
-    var pool_buf: [lib.replay.BlockPool.size()]u8 align(@alignOf(lib.replay.BlockPool)) = undefined;
-    const pool: *lib.replay.BlockPool = @ptrCast(&pool_buf);
-    pool.init();
-
-    var forest: MerkleForest = try .init(allocator);
-    defer forest.deinit(allocator);
-
-    const exec_states = try allocator.create(BlockExecStates);
-    defer allocator.destroy(exec_states);
-    @memset(exec_states, null);
-
-    const blockhash_states = try allocator.create(BlockHashStates);
-    defer allocator.destroy(blockhash_states);
-    @memset(blockhash_states, null);
-
-    const logger = tel.Logger("main").noop;
-
-    try bootstrap(logger, runner, &metadata, &forest, pool, exec_states, blockhash_states);
-
-    // find root in pool
-    var root_opt: ?lib.replay.BlockRef = null;
-    for (pool.buf(), 0..) |block, i| {
-        if (block.item.slot.opt()) |slot| if (slot == root_slot) {
-            try std.testing.expectEqual(null, root_opt);
-            root_opt = lib.replay.BlockRef.fromInt(@intCast(i));
-        };
-    }
-    const root = root_opt orelse return error.NoRoot;
-
-    try std.testing.expectEqual(root_slot, root.ptr(pool).slot.opt().?);
-    try std.testing.expect(exec_states[root.index()].?.finished());
-
-    // walk backwards from root, checking each block's hash, slot, and that the
-    // parent and child link properly.
-    var current: ?lib.replay.BlockRef = root;
-    var expected_child: ?lib.replay.BlockRef = null;
-    for (0..test_hashes.len) |i| {
-        const block_ref = current orelse return error.ParentNotSpecified;
-        const block = block_ref.ptr(pool);
-        try std.testing.expectEqual(
-            test_hashes[test_hashes.len - 1 - i],
-            blockhash_states[block_ref.index()].?,
-        );
-        try std.testing.expectEqual(
-            if (i == 0) root_slot else null,
-            block.slot.opt(),
-        );
-        try std.testing.expectEqual(expected_child, block.child.opt());
-        expected_child = block_ref;
-        current = block.parent.opt();
-    }
-    try std.testing.expectEqual(null, current);
-}

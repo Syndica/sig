@@ -103,6 +103,9 @@ pub const DeshreddedFecSet = extern struct {
     chained_merkle_root: Hash,
     /// set to a meaningless value for the bootstrap root
     id: FecSetId,
+    /// `slot - parent_slot`. Identical across a FEC set's data shreds
+    /// (merkle-hashed DataHeader field).
+    parent_offset: u16,
     data_complete: bool,
     slot_complete: bool,
     /// empty for the bootstrap root
@@ -226,8 +229,10 @@ pub const Shred = extern struct {
 
     const min_header_size = @offsetOf(Shred, "code_or_data") +
         @min(@sizeOf(DataHeader), @sizeOf(CodeHeader));
-    const min_size = 1203;
-    const max_size = 1228;
+    /// Wire packet length carrying a data shred.
+    pub const min_size = 1203;
+    /// Wire packet length carrying a code shred.
+    pub const max_size = 1228;
 
     // This might not be possible? But this definitely always works as an upper bound
     pub const data_payload_max = min_size - @sizeOf(DataHeader);
@@ -258,7 +263,9 @@ pub const Shred = extern struct {
             const payload_size = shred.code_or_data.data.size - header_size;
 
             const effective_size = min_size;
-            if (effective_size < header_size + payload_size + trailer_size)
+            const total_size =
+                @as(u32, header_size) + @as(u32, payload_size) + @as(u32, trailer_size);
+            if (total_size > effective_size)
                 return error.DataEffectiveSizeTooSmall;
 
             break :sizes .{
@@ -275,7 +282,6 @@ pub const Shred = extern struct {
             return error.PacketSizeUnderExpected3;
 
         if (shred.variant.isData()) {
-            // [firedancer] https://github.com/firedancer-io/firedancer/commit/4936f39676997d95e5d15772d3904e5942fa9864
             const parent_offset = shred.code_or_data.data.parent_offset;
             const slot = shred.slot;
             const flags = shred.code_or_data.data.flags;
@@ -286,12 +292,12 @@ pub const Shred = extern struct {
             // `discard_unexpected_data_complete_shreds` is enforced in
             // `Receiver.processPacket` (needs the activation slot).
 
-            // TODO: drop shreds with last_shred_in_slot that aren't the last data shred in the set.
-
             if (parent_offset > slot) return error.BadOffset;
 
-            if ((slot != 0 and parent_offset == 0) or (slot > 1 and parent_offset == slot))
-                return error.BadSlotOrParentOffset;
+            // `parent_offset == slot` chains to genesis (parent = 0); legal
+            // at any slot. Only `parent_offset == 0` at slot != 0 is illegal.
+            // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-rc.1/ledger/src/blockstore.rs#L6059-L6066
+            if (slot != 0 and parent_offset == 0) return error.BadSlotOrParentOffset;
             if (shred.slot_idx < shred.fec_set_idx) return error.BadSlotIdx;
         } else {
             const code_header = shred.code_or_data.code;
