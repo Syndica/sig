@@ -155,10 +155,8 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
             @panic("not enough memory and collapse failed max times");
         }
 
-        /// same as alloc but if the alloc fails due to not having enough free records
-        /// (error.AllocFailed),
-        /// it expands the records to max(min_split_size, n) and retrys (which should always
-        /// succeed)
+        /// same as alloc but if the alloc fails due to not having enough free records (error.AllocFailed),
+        /// it expands the records to max(min_split_size, n) and retrys (which should always succeed)
         pub fn allocOrExpand(self: *Self, n: u64) AllocError![]T {
             if (n == 0) return &.{};
 
@@ -264,8 +262,7 @@ pub fn RecycleBuffer(comptime T: type, default_init: T, config: struct {
             if (unused_len > config.min_split_size) {
                 // update the state of the record
                 const split_buf = record.buf[used_len..];
-                // NOTE: this record ptr is updated before the append which could invalidate the
-                // record ptr
+                // NOTE: this record ptr is updated before the append which could invalidate the record ptr
                 record.buf = record.buf[0..used_len];
                 record.len = used_len;
                 // add new unused record to the list
@@ -401,8 +398,7 @@ pub fn RecycleFBA(config: struct {
                 }
             }
 
-            // TODO(PERF, x19): allocate len+1 and store is_free at index 0, `free` could then be
-            // O(1)
+            // TODO(PERF, x19): allocate len+1 and store is_free at index 0, `free` could then be O(1)
             // otherwise, allocate a new one
             const buf = self.fba_allocator.allocator().rawAlloc(
                 n,

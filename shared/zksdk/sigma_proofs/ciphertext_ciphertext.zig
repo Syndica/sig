@@ -1,9 +1,5 @@
-//! [fd](
-// sig fmt: off
-//! https://github.com/firedancer-io/firedancer/blob/33538d3/src/flamenco/runtime/program/zksdk/instructions/fd_zksdk_ciphertext_ciphertext_equality.c)
-//! [agave](
-//! https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_ciphertext_equality.rs)
-// sig fmt: on
+//! [fd](https://github.com/firedancer-io/firedancer/blob/33538d35a623675e66f38f77d7dc86c1ba43c935/src/flamenco/runtime/program/zksdk/instructions/fd_zksdk_ciphertext_ciphertext_equality.c)
+//! [agave](https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_ciphertext_equality.rs)
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -35,8 +31,7 @@ pub const Proof = struct {
         .{ .label = "first-pubkey", .type = .validate_pubkey },
         .{ .label = "second-pubkey", .type = .validate_pubkey },
         .{ .label = "first-ciphertext", .type = .validate_ciphertext },
-        // The second ciphertext is allowed to be the identity point, as this is a common state in
-        // Token-2022.
+        // The second ciphertext is allowed to be the identity point, as this is a common state in Token-2022.
         .{ .label = "second-ciphertext", .type = .ciphertext },
         .domain(.@"ciphertext-ciphertext-equality-proof"),
 
@@ -52,10 +47,7 @@ pub const Proof = struct {
         .{ .label = "w", .type = .challenge }, // w used for batch verification
     };
 
-    /// [agave]
-    // sig fmt: off
-    /// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_ciphertext_equality.rs#L67
-    // sig fmt: on
+    /// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_ciphertext_equality.rs#L67
     pub fn init(
         first_keypair: *const ElGamalKeypair,
         second_pubkey: *const ElGamalPubkey,
@@ -137,10 +129,7 @@ pub const Proof = struct {
         };
     }
 
-    /// [agave]
-    // sig fmt: off
-    /// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_ciphertext_equality.rs#L147
-    // sig fmt: on
+    /// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_ciphertext_equality.rs#L147
     pub fn verify(
         self: Proof,
         first_pubkey: *const ElGamalPubkey,
@@ -444,10 +433,7 @@ pub const Data = struct {
     }
 };
 
-// [agave]
-// sig fmt: off
-// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_ciphertext_equality.rs#L327-L360
-// sig fmt: on
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_ciphertext_equality.rs#L327-L360
 test "correctness" {
     const first_kp = ElGamalKeypair.random();
     const second_kp = ElGamalKeypair.random();
@@ -483,10 +469,7 @@ test "correctness" {
     );
 }
 
-// [agave]
-// sig fmt: off
-// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_ciphertext_equality.rs#L362-L399
-// sig fmt: on
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_ciphertext_equality.rs#L362-L399
 test "different messages" {
     const first_kp = ElGamalKeypair.random();
     const second_kp = ElGamalKeypair.random();
@@ -527,10 +510,7 @@ test "different messages" {
     );
 }
 
-// [agave]
-// sig fmt: off
-// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_ciphertext_equality.rs#L403
-// sig fmt: on
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/sigma_proofs/ciphertext_ciphertext_equality.rs#L403
 test "proof string" {
     const first_pubkey_string = "GIKnIiKI6A6BbzxToDRqzotS8CyzKZbQzvYMkk1WQjs=";
     const first_pubkey = try ElGamalPubkey.fromBase64(first_pubkey_string);

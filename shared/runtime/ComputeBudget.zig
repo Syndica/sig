@@ -130,9 +130,7 @@ bls12_381_additional_pair_cost: u64,
 pub const DEFAULT: ComputeBudget = ComputeBudget.init(1_400_000);
 
 /// [agave]
-// sig fmt: off
 /// https://github.com/anza-xyz/agave/blob/v4.1.0-beta.1/program-runtime/src/execution_budget.rs#L162
-// sig fmt: on
 pub fn init(compute_unit_limit: u64) ComputeBudget {
     return .{
         .compute_unit_limit = compute_unit_limit,
@@ -153,9 +151,7 @@ pub fn init(compute_unit_limit: u64) ComputeBudget {
         // [agave] DEFAULT_INVOCATION_COST: the `increase_cpi_account_info_limit`
         // (SIMD-0339) feature gate was removed in agave v4.1.0-beta.1, so this
         // is now unconditionally 946.
-        // sig fmt: off
         // https://github.com/anza-xyz/agave/blob/v4.1.0-beta.1/program-runtime/src/execution_budget.rs#L33
-        // sig fmt: on
         .invoke_units = 946,
         .sha256_base_cost = 85,
         .sha256_byte_cost = 1,
@@ -201,9 +197,7 @@ pub fn init(compute_unit_limit: u64) ComputeBudget {
 /// [agave]
 /// https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/execution_budget.rs#L239-L266
 /// [fd]
-// sig fmt: off
 /// https://github.com/firedancer-io/firedancer/blob/211dfcc/src/flamenco/vm/syscall/fd_vm_syscall_crypto.c#L238-L245
-// sig fmt: on
 ///
 /// Returns the cost of a Poseidon hash syscall for a given input length.
 pub fn poseidonCost(self: ComputeBudget, len: std.math.IntFittingRange(0, 12)) u64 {

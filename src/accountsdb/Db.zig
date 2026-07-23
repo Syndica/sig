@@ -1,5 +1,4 @@
-//! Thin wrapper around Rooted and Unrooted that ties everything
-//! together to be used by the account store.
+//! Thin wrapper around Rooted and Unrooted that ties everything together to be used by the account store.
 
 const std = @import("std");
 const sig = @import("../sig.zig");
@@ -168,8 +167,7 @@ pub fn getWithModifiedSlotOwned(
     return null;
 }
 
-/// Like `get`, but returns an account with caller-owned data (allocates and copies out the account
-/// from both Unrooted and Rooted lookups).
+/// Like `get`, but returns an account with caller-owned data (allocates and copies out the account from both Unrooted and Rooted lookups).
 /// Uses the reader_rooted connection when available to avoid contention with the writer.
 pub fn getOwned(
     self: *Db,
@@ -289,8 +287,7 @@ pub const OwnerQuery = struct {
 
     pub fn deinit(self: *OwnerQuery) void {
         self.rooted_iter.deinit();
-        // Only free entries not yet yielded (some entries were already removed from the map via
-        // fetchSwapRemove).
+        // Only free entries not yet yielded (some entries were already removed from the map via fetchSwapRemove).
         for (self.unrooted_map.values()[self.unrooted_index..]) |*entry|
             entry[1].deinit(self.allocator);
         self.unrooted_map.deinit(self.allocator);

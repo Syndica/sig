@@ -132,9 +132,7 @@ pub const VoteAuthorize = union(enum(u32)) {
 
 /// Payload of `VoteAuthorize::VoterWithBLS` (SIMD-0387).
 /// [agave]
-// sig fmt: off
 /// https://github.com/anza-xyz/solana-sdk/blob/fb87296/vote-interface/src/state/vote_instruction_data.rs#L258-L269
-// sig fmt: on
 pub const VoterWithBLSArgs = struct {
     bls_pubkey: [BLS_PUBLIC_KEY_COMPRESSED_SIZE]u8,
     bls_proof_of_possession: [BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE]u8,
@@ -146,9 +144,7 @@ pub const VoterWithBLSArgs = struct {
 /// initialization in a single instruction. The instruction itself is gated
 /// on `vote_account_initialize_v2`; the executor wiring is added later.
 /// [agave]
-// sig fmt: off
 /// https://github.com/anza-xyz/solana-sdk/blob/fb87296/vote-interface/src/state/vote_instruction_data.rs#L222-L238
-// sig fmt: on
 pub const VoteInitV2 = struct {
     node_pubkey: Pubkey,
     authorized_voter: Pubkey,
@@ -523,9 +519,7 @@ pub const Instruction = union(enum(u32)) {
     /// `vote_account_initialize_v2` feature is implemented.
     ///
     /// [agave]
-    // sig fmt: off
     /// https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_processor.rs#L307-L324
-    // sig fmt: on
     initialize_account_v2: VoteInitV2,
 
     /// Update the commission collector for the vote account (SIMD-0232)
@@ -548,9 +542,7 @@ pub const Instruction = union(enum(u32)) {
     ///   1. `[SIGNER]` Withdraw authority
     ///
     /// [agave]
-    // sig fmt: off
     /// https://github.com/anza-xyz/solana-sdk/blob/3426feb/vote-interface/src/instruction.rs#L212-L221
-    // sig fmt: on
     update_commission_bps: UpdateCommissionBps,
 
     /// Deposit delegator rewards into the vote account (SIMD-0123).
@@ -558,9 +550,7 @@ pub const Instruction = union(enum(u32)) {
     /// TODO: implement when SIMD-0123 (block_revenue_sharing) lands in sig.
     ///
     /// [agave]
-    // sig fmt: off
     /// https://github.com/anza-xyz/solana-sdk/blob/3426feb/vote-interface/src/instruction.rs#L223-L228
-    // sig fmt: on
     _reserved_deposit_delegator_rewards: void,
 
     pub fn deinit(self: Instruction, allocator: std.mem.Allocator) void {

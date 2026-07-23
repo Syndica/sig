@@ -9,9 +9,7 @@ const Transaction = sig.core.Transaction;
 
 /// Intruction information which is constant across instruction execution
 /// [fd]
-// sig fmt: off
 /// https://github.com/firedancer-io/firedancer/blob/dfadb7d/src/flamenco/runtime/info/fd_instr_info.h#L14-L15
-// sig fmt: on
 pub const InstructionInfo = struct {
     program_meta: ProgramMeta,
     account_metas: AccountMetas,

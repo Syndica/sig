@@ -104,8 +104,7 @@ pub const FreezeParams = struct {
 /// execution. This finalizes some last bits of state and then calculates the
 /// hash for the slot.
 ///
-/// Analogous to [Bank::freeze](
-/// https://github.com/anza-xyz/agave/blob/b948b97/runtime/src/bank.rs#L2620)
+/// Analogous to [Bank::freeze](https://github.com/anza-xyz/agave/blob/b948b97d2a08850f56146074c0be9727202ceeff/runtime/src/bank.rs#L2620)
 pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !DistributedRewards {
     var zone = tracy.Zone.init(@src(), .{ .name = "freezeSlot" });
     zone.value(params.finalize_state.slot);
@@ -898,8 +897,7 @@ test "getRewardsAndNumPartitions: distribution block returns stake rewards" {
         .commission = null,
     };
 
-    // block_height=105, distribution_start=100, so this is a distribution block (not epoch
-    // boundary)
+    // block_height=105, distribution_start=100, so this is a distribution block (not epoch boundary)
     const result_rewards, const num_partitions = try getRewardsAndNumPartitions(
         allocator,
         &status,

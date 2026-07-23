@@ -25,8 +25,7 @@ pub const RustDuration = struct {
     }
 };
 
-/// Analogous to [PohConfig](
-/// https://github.com/anza-xyz/agave/blob/cadba68/sdk/src/poh_config.rs#L10)
+/// Analogous to [PohConfig](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/poh_config.rs#L10)
 pub const PohConfig = struct {
     /// The target tick rate of the cluster.
     target_tick_duration: RustDuration,
@@ -49,21 +48,18 @@ pub const PohConfig = struct {
     };
 };
 
-/// Analogous to [FeeRateGovernor](
-/// https://github.com/anza-xyz/agave/blob/ec9bd79/sdk/program/src/fee_calculator.rs#L55)
+/// Analogous to [FeeRateGovernor](https://github.com/anza-xyz/agave/blob/ec9bd798492c3b15d62942f2d9b5923b99042350/sdk/program/src/fee_calculator.rs#L55)
 pub const FeeRateGovernor = struct {
     /// The current cost of a signature  This amount may increase/decrease over time based on
     /// cluster processing load.
     lamports_per_signature: u64 = 0,
 
-    /// The target cost of a signature when the cluster is operating around
-    /// target_signatures_per_slot
+    /// The target cost of a signature when the cluster is operating around target_signatures_per_slot
     /// signatures.
     target_lamports_per_signature: u64,
 
     /// Used to estimate the desired processing capacity of the cluster.  As the signatures for
-    /// recent slots are fewer/greater than this value, lamports_per_signature will
-    /// decrease/increase
+    /// recent slots are fewer/greater than this value, lamports_per_signature will decrease/increase
     /// for the next slot.  A value of 0 disables lamports_per_signature fee adjustments.
     target_signatures_per_slot: u64,
 
@@ -170,7 +166,7 @@ pub const FeeRateGovernor = struct {
     }
 };
 
-/// Analogous to [Inflation](https://github.com/anza-xyz/agave/blob/55aff72/sdk/src/inflation.rs#L6)
+/// Analogous to [Inflation](https://github.com/anza-xyz/agave/blob/55aff7288e596e93d1184ba827048b1e3dc98061/sdk/src/inflation.rs#L6)
 pub const Inflation = struct {
     /// Initial inflation percentage, from time=0
     initial: f64,
@@ -254,10 +250,8 @@ pub const Inflation = struct {
     }
 };
 
-/// Analogous to [ClusterType](
-/// https://github.com/anza-xyz/solana-sdk/blob/a467058/cluster-type/src/lib.rs#L19)
-/// Explicit numbers are added to ensure we don't mess up the order of the fields and break bincode
-/// reading.
+/// Analogous to [ClusterType](https://github.com/anza-xyz/solana-sdk/blob/a467058aabc453c7d749a4993c56df293d1d75c3/cluster-type/src/lib.rs#L19)
+/// Explicit numbers are added to ensure we don't mess up the order of the fields and break bincode reading.
 pub const ClusterType = enum(u8) {
     testnet = 0,
     mainnet = 1,
@@ -303,8 +297,7 @@ pub const ClusterType = enum(u8) {
     }
 };
 
-/// Analogous to [GenesisConfig](
-/// https://github.com/anza-xyz/agave/blob/cadba68/sdk/src/genesis_config.rs#L93)
+/// Analogous to [GenesisConfig](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/genesis_config.rs#L93)
 pub const GenesisConfig = struct {
     // when the network (bootstrap validator) was started relative to the UNIX Epoch
     creation_time: UnixTimestamp,
@@ -345,8 +338,7 @@ pub const GenesisConfig = struct {
         defer allocator.free(file_bytes);
 
         // Compute hash from original file bytes
-        // [agave]
-        // https://github.com/anza-xyz/solana-sdk/blob/f2d15de/genesis-config/src/lib.rs#L144
+        // [agave] https://github.com/anza-xyz/solana-sdk/blob/f2d15de6f7a1715ff806f0c39bba8f64bf6a587d/genesis-config/src/lib.rs#L144
         var hash_bytes: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(file_bytes, &hash_bytes, .{});
 
@@ -396,10 +388,8 @@ fn yearsAsSlots(years: f64, tick_duration: RustDuration, ticks_per_slot: u64) f6
     return years * SLOTS_PER_YEAR;
 }
 
-/// Zig's `std.math.pow` may return a result that is off by up to one ULP, when comparing to glibc
-/// or musl's `pow()`.
-/// As these calculations affect consensus, that is an unacceptable difference for us, so we import
-/// libc's pow and
+/// Zig's `std.math.pow` may return a result that is off by up to one ULP, when comparing to glibc or musl's `pow()`.
+/// As these calculations affect consensus, that is an unacceptable difference for us, so we import libc's pow and
 /// use that. For reference:
 /// - `std.math.pow`: pow(0.85, 4.019250798563942) -> 7.805634650110366e-2
 /// - glibc/musl: pow(0.85, 4.019250798563942) -> 7.805634650110367e-2

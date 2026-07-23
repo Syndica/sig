@@ -143,7 +143,7 @@ pub const PruneData = struct {
 };
 
 test "sign/verify PruneData with prefix" {
-    // src: https://github.com/anza-xyz/agave/blob/8234777/gossip/src/protocol.rs#L686
+    // src: https://github.com/anza-xyz/agave/blob/82347779ffdad910ce1f4bb23949e0c46bdddd33/gossip/src/protocol.rs#L686
     const wallclock = 1736887210868;
     const keypair = try KeyPair.fromSecretKey(try SecretKey.fromBytes([_]u8{
         187, 129, 57,  32,  118, 252, 92,  64,  33,  91,  198, 4,  45,  142, 35,  144, 247,

@@ -329,13 +329,11 @@ pub fn benchmark(
             var iterations: u64 = 0;
 
             while (b: {
-                // if we haven't gone past the minimum iteration count, just continue no matter the
-                // time.
+                // if we haven't gone past the minimum iteration count, just continue no matter the time.
                 if (iterations <= B.min_iterations) break :b true;
                 // if we've surpassed the maximum iteration count, stop running.
                 if (iterations > B.max_iterations) break :b false;
-                // if we're somewhere in the middle, we continue running if we haven't run out of
-                // time.
+                // if we're somewhere in the middle, we continue running if we haven't run out of time.
                 break :b !ran_out_of_time;
             }) : (iterations += 1) {
                 switch (ResultType) {
@@ -369,8 +367,7 @@ pub fn benchmark(
                         }
                     },
                 }
-                // we've run out of time if the benchmark has been running for longer than
-                // `max_time_per_benchmark`
+                // we've run out of time if the benchmark has been running for longer than `max_time_per_benchmark`
                 ran_out_of_time = benchmark_time.read().gt(max_time_per_benchmark);
             }
             if (ran_out_of_time) logger.debug().log("ran out of time...");
@@ -406,8 +403,7 @@ pub fn benchmark(
 
             // print aggregated results, eg:
             //
-            // benchmark, read_min, read_max, read_mean, read_variance, write_min, write_max,
-            // write_mean, write_variance
+            // benchmark, read_min, read_max, read_mean, read_variance, write_min, write_max, write_mean, write_variance
             // read_write (100k), 1, 2, 3, 4, 1, 2, 3, 4
             // read_write (200k), 1, 2, 3, 4, 1, 2, 3, 4
             switch (ResultType) {

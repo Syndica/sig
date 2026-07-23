@@ -231,8 +231,7 @@ pub fn Reader(comptime role: types.Role) type {
                                 .type = msg_type,
                                 .data = self.fragment_buf.items,
                             };
-                            // Clear fragment state — data remains valid until next
-                            // nextMessage()/read cycle
+                            // Clear fragment state — data remains valid until next nextMessage()/read cycle
                             self.fragment_opcode = null;
                             return result;
                         }

@@ -210,8 +210,7 @@ pub const ErasureMeta = struct {
         return sig.utils.types.eql(self, other);
     }
 
-    /// Analogous to [status](
-    /// https://github.com/anza-xyz/agave/blob/7a9317f/ledger/src/blockstore_meta.rs#L442)
+    /// Analogous to [status](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L442)
     pub fn status(self: Self, index: *Index) union(enum) {
         can_recover,
         data_full,
@@ -233,22 +232,19 @@ pub const ErasureMeta = struct {
             .{ .still_need = num_needed };
     }
 
-    /// Analogous to [data_shreds_indices](
-    /// https://github.com/anza-xyz/agave/blob/7a9317f/ledger/src/blockstore_meta.rs#L422)
+    /// Analogous to [data_shreds_indices](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L422)
     pub fn dataShredsIndices(self: Self) [2]u64 {
         const num_data = self.config.num_data;
         return .{ self.erasure_set_index, self.erasure_set_index + num_data };
     }
 
-    /// Analogous to [code_shreds_indices](
-    /// https://github.com/anza-xyz/agave/blob/7a9317f/ledger/src/blockstore_meta.rs#L428)
+    /// Analogous to [code_shreds_indices](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L428)
     pub fn codeShredsIndices(self: Self) [2]u64 {
         const num_code = self.config.num_code;
         return .{ self.first_code_index, self.first_code_index + num_code };
     }
 
-    /// Analogous to [next_erasure_set_index](
-    /// https://github.com/anza-xyz/agave/blob/7a9317f/ledger/src/blockstore_meta.rs#L437)
+    /// Analogous to [next_erasure_set_index](https://github.com/anza-xyz/agave/blob/7a9317fe25621c211fe4ab5491b88a4757d4b6d4/ledger/src/blockstore_meta.rs#L437)
     pub fn nextErasureSetIndex(self: Self) ?u32 {
         const num_data: u32 = @intCast(self.config.num_data);
         return std.math.add(

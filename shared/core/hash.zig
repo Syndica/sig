@@ -481,7 +481,7 @@ pub const LtHash = struct {
 
     /// Computes a checksum of the LtHash, useful for when 2KiB is too large. This does feel a bit
     /// silly maybe? But Agave does this in a few places.
-    // [agave] https://github.com/anza-xyz/agave/blob/8e83183/lattice-hash/src/lt_hash.rs#L52
+    // [agave] https://github.com/anza-xyz/agave/blob/8e831839feee2b16a51575026179ef1a60f239ad/lattice-hash/src/lt_hash.rs#L52
     pub fn checksum(self: LtHash) Hash {
         var out: Hash = undefined;
 

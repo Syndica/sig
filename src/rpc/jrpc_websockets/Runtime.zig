@@ -1005,8 +1005,7 @@ fn enqueueBlockJob(
         break :blk slot -| 1;
     };
 
-    // TODO(perf): avoid arena allocation on the IO loop; use a ref-counted handle on the cached
-    // slot structure instead.
+    // TODO(perf): avoid arena allocation on the IO loop; use a ref-counted handle on the cached slot structure instead.
     var arena = std.heap.ArenaAllocator.init(self.allocator);
     const block = cached.buildConfirmedBlock(arena.allocator(), parent_slot) catch |err| {
         arena.deinit();

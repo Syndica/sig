@@ -96,16 +96,12 @@ pub const Syscall = enum {
     sol_invoke_signed_c,
     sol_invoke_signed_rust,
 
-    /// We basically just store this as an array of syscall enumerations with their murmur hash as
-    /// the value.
-    /// This makes lookups O(N) relative to the number of syscalls, however this shouldn't be a huge
-    /// problem.
-    /// The hashmap approach we had before only slightly reduced the lookup times, all of which was
-    /// wiped
+    /// We basically just store this as an array of syscall enumerations with their murmur hash as the value.
+    /// This makes lookups O(N) relative to the number of syscalls, however this shouldn't be a huge problem.
+    /// The hashmap approach we had before only slightly reduced the lookup times, all of which was wiped
     /// out by the cost of allocating it. So this is the prefered approach for now.
     ///
-    /// TODO: perhaps we can look into a PHF based approach here, although I imagine it'll just end
-    /// up
+    /// TODO: perhaps we can look into a PHF based approach here, although I imagine it'll just end up
     /// being keyed by murmur and truncated to unique bits.
     pub const Registry = struct {
         map: std.EnumArray(Syscall, ?u32),
@@ -128,8 +124,7 @@ pub const Syscall = enum {
                 const value = entry orelse continue; // disabled entries don't collide
                 if (value == bytes) break @enumFromInt(i); // assumes that the EnumArray will be in "array" mode, which it should be.
             } else return null; // no such hash
-            // TODO: consider just making a build flag for harness builds that removes this check
-            // entirely for perf
+            // TODO: consider just making a build flag for harness builds that removes this check entirely for perf
             return if (self.is_stubbed) &stubbed else map.getPtrConst(syscall).*;
         }
 
@@ -219,10 +214,7 @@ pub const Syscall = enum {
 };
 
 // logging
-/// [agave]
-// sig fmt: off
-/// https://github.com/anza-xyz/agave/blob/6f95c6a/programs/bpf_loader/src/syscalls/logging.rs#L3-L33
-// sig fmt: on
+/// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L3-L33
 pub fn log(tc: *TransactionContext, memory_map: *MemoryMap, registers: *RegisterMap) Error!void {
     const vm_addr = registers.get(.r1);
     const len = registers.get(.r2);
@@ -244,10 +236,7 @@ pub fn log(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Register
     try stable_log.programLog(tc, "{s}", .{message});
 }
 
-/// [agave]
-// sig fmt: off
-/// https://github.com/anza-xyz/agave/blob/6f95c6a/programs/bpf_loader/src/syscalls/logging.rs#L35-L56
-// sig fmt: on
+/// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L35-L56
 pub fn log64(tc: *TransactionContext, _: *MemoryMap, registers: *RegisterMap) Error!void {
     try tc.consumeCompute(tc.compute_budget.log_64_units);
 
@@ -264,10 +253,7 @@ pub fn log64(tc: *TransactionContext, _: *MemoryMap, registers: *RegisterMap) Er
     );
 }
 
-/// [agave]
-// sig fmt: off
-/// https://github.com/anza-xyz/agave/blob/6f95c6a/programs/bpf_loader/src/syscalls/logging.rs#L82-L105
-// sig fmt: on
+/// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L82-L105
 pub fn logPubkey(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
@@ -289,19 +275,13 @@ pub fn logPubkey(
     try stable_log.programLog(tc, "{f}", .{pubkey});
 }
 
-/// [agave]
-// sig fmt: off
-/// https://github.com/anza-xyz/agave/blob/6f95c6a/programs/bpf_loader/src/syscalls/logging.rs#L58-L80
-// sig fmt: on
+/// [agave] https://github.com/anza-xyz/agave/blob/6f95c6aec57c74e3bed37265b07f44fcc0ae8333/programs/bpf_loader/src/syscalls/logging.rs#L58-L80
 pub fn logComputeUnits(tc: *TransactionContext, _: *MemoryMap, _: *RegisterMap) Error!void {
     try tc.consumeCompute(tc.compute_budget.syscall_base_cost);
     try tc.log("Program consumption: {} units remaining", .{tc.compute_meter});
 }
 
-/// [agave]
-// sig fmt: off
-/// https://github.com/firedancer-io/agave/blob/66ea0a1/programs/bpf_loader/src/syscalls/logging.rs#L107
-// sig fmt: on
+/// [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/logging.rs#L107
 pub fn logData(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
@@ -339,8 +319,7 @@ pub fn logData(
     try stable_log.programData(tc, messages);
 }
 
-// [agave]
-// https://github.com/anza-xyz/agave/blob/108fcb4/programs/bpf_loader/src/syscalls/mod.rs#L816
+// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/programs/bpf_loader/src/syscalls/mod.rs#L816
 pub fn allocFree(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
@@ -389,8 +368,7 @@ pub fn allocFree(
     registers.set(.r0, memory.HEAP_START +| addr_offset);
 }
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/4d9d57c/programs/bpf_loader/src/syscalls/mod.rs#L2144
+/// [agave] https://github.com/anza-xyz/agave/blob/4d9d57c433b491689ba7793aa9339eae22c218d3/programs/bpf_loader/src/syscalls/mod.rs#L2144
 pub fn getEpochStake(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
@@ -421,7 +399,7 @@ pub fn getEpochStake(
     registers.set(.r0, tc.epoch_stake_reader.stakeForVoteAccount(vote_address.*));
 }
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/ac11e3e/instruction/src/lib.rs#L296
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/ac11e3e568952977e63bce6bb20e37f26a61e151/instruction/src/lib.rs#L296
 const ProcessedSiblingInstruction = extern struct {
     data_len: u64,
     accounts_len: u64,
@@ -506,11 +484,10 @@ pub fn getProcessedSiblingInstruction(
     return;
 }
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/95764e2/cpi/src/lib.rs#L329
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/95764e268fe33a19819e6f9f411ff9e732cbdf0d/cpi/src/lib.rs#L329
 pub const MAX_RETURN_DATA: usize = 1024;
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/4f68141/programs/bpf_loader/src/syscalls/mod.rs#L1450
+/// [agave] https://github.com/anza-xyz/agave/blob/4f68141ba70b7574da0bc185ef5d08fe33d19887/programs/bpf_loader/src/syscalls/mod.rs#L1450
 pub fn setReturnData(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
@@ -548,10 +525,7 @@ pub fn setReturnData(
     tc.return_data.data.appendSliceAssumeCapacity(return_data);
 }
 
-/// [agave]
-// sig fmt: off
-/// https://github.com/anza-xyz/agave/blob/a11b42a/programs/bpf_loader/src/syscalls/mod.rs#L1495-L1557
-// sig fmt: on
+/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L1495-L1557
 pub fn getReturnData(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
@@ -596,10 +570,7 @@ pub fn getReturnData(
     registers.set(.r0, return_data.len);
 }
 
-/// [agave]
-// sig fmt: off
-/// https://github.com/anza-xyz/agave/blob/a11b42a/programs/bpf_loader/src/syscalls/mod.rs#L1697-L1715
-// sig fmt: on
+/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L1697-L1715
 pub fn getStackHeight(
     tc: *TransactionContext,
     _: *MemoryMap,
@@ -609,10 +580,7 @@ pub fn getStackHeight(
     registers.set(.r0, tc.instruction_stack.len);
 }
 
-/// [agave]
-// sig fmt: off
-/// https://github.com/anza-xyz/agave/blob/a11b42a/programs/bpf_loader/src/syscalls/mod.rs#L1968-L1986
-// sig fmt: on
+/// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/programs/bpf_loader/src/syscalls/mod.rs#L1968-L1986
 pub fn remainingComputeUnits(
     tc: *TransactionContext,
     _: *MemoryMap,
@@ -650,8 +618,7 @@ pub fn panic(
     return SyscallError.Panic;
 }
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/7dae527/programs/bpf_loader/src/syscalls/mod.rs#L903
+/// [agave] https://github.com/anza-xyz/agave/blob/7dae527c40dd6a7ef466b8555ccf64dfdc85e57b/programs/bpf_loader/src/syscalls/mod.rs#L903
 pub fn findProgramAddress(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
@@ -721,8 +688,7 @@ pub fn findProgramAddress(
     registers.set(.r0, 1);
 }
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/7dae527/programs/bpf_loader/src/syscalls/mod.rs#L864
+/// [agave] https://github.com/anza-xyz/agave/blob/7dae527c40dd6a7ef466b8555ccf64dfdc85e57b/programs/bpf_loader/src/syscalls/mod.rs#L864
 pub fn createProgramAddress(
     tc: *TransactionContext,
     memory_map: *MemoryMap,
@@ -809,8 +775,7 @@ fn translateAndCheckProgramAddressInputs(
 /// Meant only as a helper for tests below.
 /// Invokes either createProgramAddress or findProgramAddress syscalls with VM context setup.
 ///
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/7dae527/programs/bpf_loader/src/syscalls/mod.rs#L4301
+/// [agave] https://github.com/anza-xyz/agave/blob/7dae527c40dd6a7ef466b8555ccf64dfdc85e57b/programs/bpf_loader/src/syscalls/mod.rs#L4301
 fn callProgramAddressSyscall(
     allocator: std.mem.Allocator,
     tc: *TransactionContext,

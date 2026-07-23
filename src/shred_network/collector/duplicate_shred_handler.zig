@@ -40,8 +40,7 @@ pub const DuplicateShredHandler = struct {
     /// - Send duplicate slot notifications to be handled in consensus part of replay
     /// - Store the duplicate proof in the ledger
     /// - Broadcast the duplicate proof via gossip
-    /// Analogous to [check_duplicate](
-    /// https://github.com/anza-xyz/agave/blob/aa2f078/core/src/window_service.rs#L155)
+    /// Analogous to [check_duplicate](https://github.com/anza-xyz/agave/blob/aa2f078836434965e1a5a03af7f95c6640fe6e1e/core/src/window_service.rs#L155)
     pub fn handleDuplicateSlots(
         self: *DuplicateShredHandler,
         allocator: Allocator,
@@ -53,10 +52,8 @@ pub const DuplicateShredHandler = struct {
             switch (duplicate_shred) {
                 .Exists => |shred| {
                     const shred_slot = shred.commonHeader().slot;
-                    // Unlike the other cases we have to wait until here to decide to handle the
-                    // duplicate and store
-                    // in ledger. This is because the duplicate could have been part of the same
-                    // insert batch,
+                    // Unlike the other cases we have to wait until here to decide to handle the duplicate and store
+                    // in ledger. This is because the duplicate could have been part of the same insert batch,
                     // so we wait until the batch has been written.
                     if (try self.ledger_reader.isDuplicateSlot(shred_slot)) {
                         continue; // A duplicate is already recorded, skip
@@ -407,8 +404,7 @@ test "handleDuplicateSlots: no sender configured" {
     };
     defer result.deinit();
 
-    // Should not crash. Will attempt ledger storage and gossip broadcast, but not send to
-    // consensus.
+    // Should not crash. Will attempt ledger storage and gossip broadcast, but not send to consensus.
     try handler.handleDuplicateSlots(allocator, &result);
 }
 

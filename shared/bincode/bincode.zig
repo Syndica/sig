@@ -172,11 +172,10 @@ pub fn readWithConfigAndLimit(
 
                 if (field.is_comptime) continue;
                 const field_config: FieldConfig(field.type) = getFieldConfig(T, field) orelse {
-                    // // if we dont want print statements when our tests run we need to comment
-                    // this out :(
+                    // // if we dont want print statements when our tests run we need to comment this out :(
                     // // specifically, the geyser test fail bincode deser and then recover from it
                     // errdefer {
-                    // // TODO(x19): maybe use a logger instead? (sometimes we can recover from this
+                    //     // TODO(x19): maybe use a logger instead? (sometimes we can recover from this
                     //     // and so we don't want to print)
                     //     if (builtin.mode == .Debug) {
                     //         std.debug.print("failed to deserialize field {s}\n", .{field.name});

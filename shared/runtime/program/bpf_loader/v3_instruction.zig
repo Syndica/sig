@@ -106,9 +106,7 @@ pub const Close = struct {
 /// when SIMD-0431 (`loader_v3_minimum_extend_program_size`) is active.
 ///
 /// [solana-sdk]
-// sig fmt: off
 /// https://github.com/anza-xyz/solana-sdk/blob/loader-v3-interface@v7.0.0/loader-v3-interface/src/instruction.rs#L18
-// sig fmt: on
 pub const MINIMUM_EXTEND_PROGRAM_BYTES: u32 = 10240;
 
 pub const ExtendProgram = struct {
@@ -130,9 +128,7 @@ pub const ExtendProgram = struct {
 };
 
 /// [agave]
-// sig fmt: off
 /// https://github.com/anza-xyz/agave/blob/master/sdk/program/src/loader_upgradeable_instruction.rs#L7
-// sig fmt: on
 pub const Instruction = union(enum) {
     /// Initialize a Buffer account.
     ///

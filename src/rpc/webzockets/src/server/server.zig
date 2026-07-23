@@ -170,8 +170,7 @@ pub fn Server(
             try listen_socket.bind(config.address);
             try listen_socket.listen(config.tcp_accept_backlog);
 
-            // Create pools with preheating (handshake pool has no limit, connection pool may be
-            // limited)
+            // Create pools with preheating (handshake pool has no limit, connection pool may be limited)
             var hs_pool = HandshakePool.init(allocator, config.max_handshakes);
             errdefer hs_pool.deinit();
             try hs_pool.preheat(config.initial_handshake_pool_size);
@@ -266,8 +265,7 @@ pub fn Server(
             completion: *xev.Completion,
             result: xev.AcceptError!xev.TCP,
         ) xev.CallbackAction {
-            // NOTE: in this callback we always return .disarm, even if just calling self.accept()
-            // again,
+            // NOTE: in this callback we always return .disarm, even if just calling self.accept() again,
             // because of bug with libxev kqueue backend when returning .rearm
             const self = self_opt orelse return .disarm;
 

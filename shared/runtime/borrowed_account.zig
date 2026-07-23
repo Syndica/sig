@@ -72,9 +72,7 @@ pub const BorrowedAccount = struct {
     }
 
     /// [agave]
-    // sig fmt: off
     /// https://github.com/anza-xyz/agave/blob/v4.2/transaction-context/src/instruction_accounts.rs#L351
-    // sig fmt: on
     pub fn checkCanSetDataLength(
         self: *const BorrowedAccount,
         resize_delta: i64,

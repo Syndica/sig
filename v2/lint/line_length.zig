@@ -7,6 +7,8 @@
 //! \\ this multiline string literal line may exceed the limit
 //! ```
 //!
+//! Lines containing URLs (any occurrence of "http") are exempt from length checks.
+//!
 //! Trailing line comments do not count toward line length. Lines between `// zig fmt: off`
 //! and `// zig fmt: on` are ignored, and `// sig fmt:` directives work same way.
 //!
@@ -65,6 +67,9 @@ pub fn lint(ctx: *core.Context, file: *const core.SourceFile) !void {
         {
             continue;
         }
+
+        // Lines containing URLs are exempt from line length limits.
+        if (std.mem.indexOf(u8, line, "http") != null) continue;
 
         const code_part = std.mem.trimRight(u8, beforeLineComment(line), " ");
         if (code_part.len > max_line_length) {
@@ -128,6 +133,31 @@ test "detects code and ignores comments strings fmt-off and trailing comments" {
         .ast = ast,
     };
     try lint(&ctx, &file);
+    try std.testing.expectEqual(1, ctx.diagnostics.items.len);
+}
+
+test "lines containing URLs are exempt from line length" {
+    const allocator = std.heap.page_allocator;
+    const config: cli.Config = .{};
+    var ctx: core.Context = .{ .arena = allocator, .config = config };
+
+    const source =
+        // Code line with a URL — should be exempt even though it exceeds 100 columns.
+        "const url = \"https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L471-L474\";\n" ++
+        // Inline comment with URL on a code line — also exempt.
+        "const x = 1; // see https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L471-L474\n" ++
+        // Plain long code line without URL — should be flagged.
+        "const y = 123456789012345678901234567890123456789012345678901234567890" ++
+        "12345678901234567890123456789012345678901;\n";
+    const source_z = try allocator.dupeZ(u8, source);
+    const ast = try std.zig.Ast.parse(allocator, source_z, .zig);
+    const file: core.SourceFile = .{
+        .path = "lib/example.zig",
+        .source = source_z,
+        .ast = ast,
+    };
+    try lint(&ctx, &file);
+    // Only the plain long code line should be flagged, not the URL lines.
     try std.testing.expectEqual(1, ctx.diagnostics.items.len);
 }
 

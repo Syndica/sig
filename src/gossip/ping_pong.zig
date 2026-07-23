@@ -212,8 +212,7 @@ pub const PingCache = struct {
         };
     }
 
-    /// Filters valid peers according to `PingCache` state and returns them along with any possible
-    /// pings that need to be sent out.
+    /// Filters valid peers according to `PingCache` state and returns them along with any possible pings that need to be sent out.
     ///
     /// *Note*: caller is responsible for deinit `ArrayList`(s) returned!
     pub fn filterValidPeers(

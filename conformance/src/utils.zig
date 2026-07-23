@@ -32,12 +32,8 @@ const Pubkey = sig.core.Pubkey;
 /// `tc.accounts` layout via `input_to_tx_idx` before handing them to the
 /// runtime.
 ///
-/// [agave]
-// sig fmt: off
-/// https://github.com/anza-xyz/agave/blob/master/program-runtime/src/invoke_context.rs — `mock_compile_message`
-/// [firedancer]
-/// https://github.com/firedancer-io/firedancer/blob/main/src/flamenco/runtime/tests/fd_instr_harness.c — `account_in_message` / `input_txn_idx`
-// sig fmt: on
+/// [agave] https://github.com/anza-xyz/agave/blob/master/program-runtime/src/invoke_context.rs — `mock_compile_message`
+/// [firedancer] https://github.com/firedancer-io/firedancer/blob/main/src/flamenco/runtime/tests/fd_instr_harness.c — `account_in_message` / `input_txn_idx`
 pub const CompiledMessage = struct {
     /// Fixture-index → `tc.accounts` index. `NOT_IN_MESSAGE` when the account
     /// is not part of the compiled message.
@@ -275,10 +271,8 @@ pub fn deinitTransactionContext(
 
 /// Create a `FeatureSet` based on the feature IDs provided in the protobuf message.
 ///
-/// Iterate over the feature IDs in the protobuf message and set the corresponding features in the
-/// `FeatureSet`.
-/// Unknown, unsupported, or reverted debug logs indicate Sig is not compatible with the fixtures
-/// active features.
+/// Iterate over the feature IDs in the protobuf message and set the corresponding features in the `FeatureSet`.
+/// Unknown, unsupported, or reverted debug logs indicate Sig is not compatible with the fixtures active features.
 pub fn loadFeatureSet(ctx: anytype) !FeatureSet {
     const pb_features = switch (@TypeOf(ctx)) {
         *pb.TxnContext, *const pb.TxnContext => (ctx.bank orelse return .ALL_DISABLED).features,
@@ -289,10 +283,8 @@ pub fn loadFeatureSet(ctx: anytype) !FeatureSet {
 
     var feature_set: FeatureSet = .ALL_DISABLED;
     for (pb_features.features.items) |id| {
-        // Convert the feature ID from the protobuf message to the corresponding `Feature` enum
-        // value.
-        // Log features which do not correspond to a `Feature` variant and are otherwise unknown
-        // (i.e. not present in `src/core/features.zon`).
+        // Convert the feature ID from the protobuf message to the corresponding `Feature` enum value.
+        // Log features which do not correspond to a `Feature` variant and are otherwise unknown (i.e. not present in `src/core/features.zon`).
         const feature = feature_set.getById(id) catch {
             if (build_options.log_feature_status and
                 !sig.core.features.isKnownFeatureId(id)) std.debug.print(
@@ -397,7 +389,7 @@ pub fn createInstructionInfo(
     // demotion here to match agave's `mock_compile_message` writability.
     // agave sanitizes with an empty reserved-accounts set, so only the
     // program-id demotion applies here (no sysvar/native-program demotion).
-    // [agave] https://github.com/anza-xyz/agave/blob/6dcc39f/accounts-db/src/accounts.rs#L105
+    // [agave] https://github.com/anza-xyz/agave/blob/6dcc39fcba90fbb5c924c71a1ef287c234f56c17/accounts-db/src/accounts.rs#L105
     const v3_id = sig.runtime.program.bpf_loader.v3.ID;
     const is_upgradeable_loader_present = blk: {
         if (program_id.equals(&v3_id)) break :blk true;
@@ -624,11 +616,8 @@ pub fn createInstrEffects(
     // When virtual_address_space_adjustments is active and execution failed
     // with CU meter exhausted, account data regions cannot be reliably compared,
     // so clear them.
-    // See:
-    // sig fmt: off
-    // https://github.com/firedancer-io/solfuzz-agave/blob/agave-v4.0.0-beta.6/src/utils/mod.rs#L135-L146
-    // https://github.com/firedancer-io/solfuzz-agave/blob/agave-v4.0.0-beta.6/src/instr.rs#L763-L768
-    // sig fmt: on
+    // See: https://github.com/firedancer-io/solfuzz-agave/blob/agave-v4.0.0-beta.6/src/utils/mod.rs#L135-L146
+    //      https://github.com/firedancer-io/solfuzz-agave/blob/agave-v4.0.0-beta.6/src/instr.rs#L763-L768
     const virtual_address_space_adjustments = tc.feature_set.active(
         .virtual_address_space_adjustments,
         tc.slot,
@@ -665,9 +654,7 @@ fn modifiedAccounts(
     // echo the input (unreferenced).
     //
     // [agave] `resulting_accounts` overlay in the InstrHarness:
-    // sig fmt: off
     // https://github.com/firedancer-io/agave/blob/agave-v4.2-90f63cbb-patches/svm/src/conformance/instr/harness.rs#L136-L146
-    // sig fmt: on
     var accounts: std.ArrayList(pb.AcctState) = .{};
     errdefer accounts.deinit(allocator);
 
@@ -713,8 +700,7 @@ pub fn createSyscallEffect(allocator: std.mem.Allocator, params: struct {
 }) !pb.SyscallEffects {
     // Protosol marks SyscallEffects field 8 (`log`) as `reserved`, i.e.
     // conformance target no longer emits log output in the structured result
-    // [protosol]
-    // https://github.com/firedancer-io/protosol/commit/040c98bd6468fd6dc94ab18639c9db190c8c692b
+    // [protosol] https://github.com/firedancer-io/protosol/commit/040c98bd6468fd6dc94ab18639c9db190c8c692b
     // When virtual_address_space_adjustments is enabled, Agave's cpi_common()
     // calls update_caller_account_region only after process_instruction succeeds
     // (agave: program-runtime/src/cpi.rs). On failure the `?` propagates before

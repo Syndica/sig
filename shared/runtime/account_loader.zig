@@ -122,9 +122,7 @@ pub fn loadTransactionAccounts(
     defer zone.deinit();
 
     // [agave]
-    // sig fmt: off
     // https://github.com/anza-xyz/agave/commit/d5757e29aa - formalize_loaded_transaction_data_size hardcoded
-    // sig fmt: on
     const result = loadTransactionAccountsInner(
         account_reader,
         allocator,

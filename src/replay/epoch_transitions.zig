@@ -121,12 +121,10 @@ pub fn updateEpochStakes(
     }
 }
 
-/// Burn the Validator Admission ticket from each vote account if both the VAT and Alpenglow feature
-/// flags
+/// Burn the Validator Admission ticket from each vote account if both the VAT and Alpenglow feature flags
 /// are enabled
 ///
-/// Note: This must ONLY be called after the vote accounts have been filtered
-/// (`clone_and_filter_for_vat`)
+/// Note: This must ONLY be called after the vote accounts have been filtered (`clone_and_filter_for_vat`)
 /// to the top `MAX_ALPENGLOW_VOTE_ACCOUNTS` that contain enough balance for admission.
 ///
 // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/runtime/src/bank.rs#L2435
@@ -467,7 +465,7 @@ pub fn applyFeatureActivations(
 }
 
 /// Apply built-in program feature transitions
-/// [agave] https://github.com/anza-xyz/agave/blob/b6c96e8/runtime/src/bank.rs#L5451
+/// [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank.rs#L5451
 fn applyBuiltinProgramFeatureTransitions(
     allocator: Allocator,
     slot: Slot,
@@ -479,7 +477,7 @@ fn applyBuiltinProgramFeatureTransitions(
     allow_new_activations: bool,
 ) !void {
     for (builtin_programs.BUILTINS) |builtin_program| {
-        // [agave] https://github.com/anza-xyz/agave/blob/b6c96e8/runtime/src/bank.rs#L5473-L5498
+        // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank.rs#L5473-L5498
         var is_core_bpf = false;
         if (builtin_program.core_bpf_migration_config) |core_bpf_config| {
             if (new_feature_activations.active(core_bpf_config.enable_feature_id, slot)) {
@@ -510,7 +508,7 @@ fn applyBuiltinProgramFeatureTransitions(
             }
         }
 
-        // [agave] https://github.com/anza-xyz/agave/blob/b6c96e8/runtime/src/bank.rs#L5500-L5520
+        // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank.rs#L5500-L5520
         if (builtin_program.enable_feature_id) |feature_id| {
             const should_enable_on_transition = !is_core_bpf and if (allow_new_activations)
                 new_feature_activations.active(feature_id, slot)
@@ -528,7 +526,7 @@ fn applyBuiltinProgramFeatureTransitions(
         }
     }
 
-    // [agave] https://github.com/anza-xyz/agave/blob/b6c96e8/runtime/src/bank.rs#L5526-L5540
+    // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank.rs#L5526-L5540
     for (builtin_programs.STATELESS_BUILTINS) |builtin_program| {
         const core_bpf_config = builtin_program.core_bpf_migration_config orelse continue;
         if (new_feature_activations.active(core_bpf_config.enable_feature_id, slot)) {
@@ -550,7 +548,7 @@ fn applyBuiltinProgramFeatureTransitions(
         }
     }
 
-    // [agave] https://github.com/anza-xyz/agave/blob/b6c96e8/runtime/src/bank.rs#L5542-L5551
+    // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank.rs#L5542-L5551
     for (program.precompiles.PRECOMPILES) |precompile| {
         const feature_id = precompile.required_feature orelse continue;
         if (!feature_set.active(feature_id, slot)) continue;
@@ -558,10 +556,7 @@ fn applyBuiltinProgramFeatureTransitions(
     }
 }
 
-/// [agave]
-// sig fmt: off
-/// https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank/builtins/core_bpf_migration/mod.rs#L220
-// sig fmt: on
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank/builtins/core_bpf_migration/mod.rs#L220
 fn migrateBuiltinProgramToCoreBpf(
     allocator: Allocator,
     slot: Slot,
@@ -601,10 +596,7 @@ fn migrateBuiltinProgramToCoreBpf(
         },
         .program_data_address = program_data_address,
         // Track lamports from a pre-funded programdata account (SIMD-0444).
-        // [agave]
-        // sig fmt: off
-        // https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank/builtins/core_bpf_migration/target_builtin.rs#L57-L82
-        // sig fmt: on
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank/builtins/core_bpf_migration/target_builtin.rs#L57-L82
         .program_data_account_lamports = blk: {
             if ((try slot_store.reader().get(allocator, program_data_address))) |account| {
                 defer account.deinit(allocator);
@@ -739,18 +731,12 @@ fn migrateBuiltinProgramToCoreBpf(
         &compute_budget,
         null, // no LogCollector
         // SIMD-0500: explicitly continue to allow SBPFv0/v1/v2 for core program migrations.
-        // [agave]
-        // sig fmt: off
-        // https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/runtime/src/bank/builtins/core_bpf_migration/mod.rs#L201
-        // sig fmt: on
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/runtime/src/bank/builtins/core_bpf_migration/mod.rs#L201
         false,
     );
 
     // update capitalization
-    // [agave]
-    // sig fmt: off
-    // https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank/builtins/core_bpf_migration/mod.rs#L278-L282
-    // sig fmt: on
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank/builtins/core_bpf_migration/mod.rs#L278-L282
     const lamports_to_burn = blk: {
         const base = std.math.add(
             u64,
@@ -778,20 +764,16 @@ fn migrateBuiltinProgramToCoreBpf(
     try slot_store.put(migration_config.source_buffer_address, AccountSharedData.EMPTY);
 
     // Agave asserts that 'old/new_data_size' is less than i64 max.
-    // [agave] https://github.com/anza-xyz/agave/blob/8fdea4c/runtime/src/bank.rs#L6141
+    // [agave] https://github.com/anza-xyz/agave/blob/8fdea4cea8ad35a2b00211050ac29b46fccc1188/runtime/src/bank.rs#L6141
     const old_size = std.math.cast(i64, old_data_size).?;
     const new_size = std.math.cast(i64, new_data_size).?;
     const delta_size = new_size -| old_size;
     _ = delta_size;
 
     // Update accounts_data_size_delta_off_chain
-    // TODO: We do not track accounts_data_size_delta_off_chain anywhere. If it is required we
-    // should
+    // TODO: We do not track accounts_data_size_delta_off_chain anywhere. If it is required we should
     // add it to SlotState and updated everywhere.
-    // Issue:
-    // sig fmt: off
-    // https://github.com/orgs/Syndica/projects/2?pane=issue&itemId=149662657&issue=Syndica%7Csig%7C1176
-    // sig fmt: on
+    // Issue: https://github.com/orgs/Syndica/projects/2?pane=issue&itemId=149662657&issue=Syndica%7Csig%7C1176
     // if (delta_size > 0) { accounts_data_size_delta_off_chain += delta_size }
 }
 
@@ -1835,10 +1817,7 @@ test "applyFeatureActivations: Builtin Transitions" {
 }
 
 test "SIMD-0444 relax programdata account check during migration" {
-    // [agave]
-    // sig fmt: off
-    // https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank/builtins/core_bpf_migration/target_builtin.rs#L216-L248
-    // sig fmt: on
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/runtime/src/bank/builtins/core_bpf_migration/target_builtin.rs#L216-L248
     const allocator = std.testing.allocator;
     const slot: Slot = 0;
 

@@ -49,10 +49,8 @@ pub fn execute(_: std.mem.Allocator, ic: *InstructionContext) InstructionError!v
     };
 }
 
-// sig fmt: off
 // https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0075-precompile-for-secp256r1-sigverify.md
 // https://github.com/firedancer-io/firedancer/blob/4905613/src/flamenco/runtime/program/fd_precompiles.c#L376
-// sig fmt: on
 pub fn verify(
     data: []const u8,
     all_instruction_datas: []const []const u8,

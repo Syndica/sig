@@ -76,9 +76,7 @@ pub const ComputeBudgetLimits = struct {
     }
 };
 
-// sig fmt: off
 /// Analogous to [ComputeBudgetInstruction](https://github.com/anza-xyz/solana-sdk/blob/1c1d667/compute-budget-interface/src/lib.rs#L18-L24).
-// sig fmt: on
 /// NOTE: this type uses [BORSH](https://borsh.io/) encoding.
 const ComputeBudgetInstruction = union(enum) {
     /// Deprecated variant, reserved value.

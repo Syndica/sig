@@ -23,15 +23,9 @@ pub const ZERO = Scalar.fromBytes(Edwards25519.scalar.zero);
 pub const ONE = Scalar.fromBytes(.{1} ++ .{0} ** 31);
 pub const TWO = Scalar.fromBytes(.{2} ++ .{0} ** 31);
 
-// [agave]
-// sig fmt: off
-// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/zk_elgamal_proof_program/proof_data/batched_range_proof/mod.rs#L38-L39
-// sig fmt: on
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/zk_elgamal_proof_program/proof_data/batched_range_proof/mod.rs#L38-L39
 const MAX_COMMITMENTS = 8;
-// [agave]
-// sig fmt: off
-// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/zk_elgamal_proof_program/proof_data/batched_range_proof/mod.rs#L41-L46
-// sig fmt: on
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/zk_elgamal_proof_program/proof_data/batched_range_proof/mod.rs#L41-L46
 const MAX_SINGLE_BIT_LENGTH = 64;
 
 pub fn Proof(bit_size: comptime_int) type {
@@ -312,10 +306,7 @@ pub fn Proof(bit_size: comptime_int) type {
         /// Uses the optimized verification described in section 6.2 of
         /// the [Bulletproofs](https://eprint.iacr.org/2017/1066.pdf) paper.
         ///
-        /// [agave]
-        // sig fmt: off
-        /// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/range_proof/mod.rs#L324
-        // sig fmt: on
+        /// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/range_proof/mod.rs#L324
         pub fn verify(
             self: Self,
             commitments: []const pedersen.Commitment,
@@ -326,10 +317,7 @@ pub fn Proof(bit_size: comptime_int) type {
             std.debug.assert(commitments.len == bit_lengths.len);
 
             // Explicitly reject identity commitments.
-            // [agave]
-            // sig fmt: off
-            // https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/range_proof/mod.rs#L335-L338
-            // sig fmt: on
+            // [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/range_proof/mod.rs#L335-L338
             for (commitments) |c| try c.rejectIdentity();
 
             comptime var session = Transcript.getSession(contract);
@@ -490,8 +478,7 @@ pub fn Proof(bit_size: comptime_int) type {
             }
         }
 
-        /// Compute \delta(y,z) = (z - z^{2}) \langle \mathbf{1}, {\mathbf{y}}^{n \cdot m} \rangle -
-        /// \sum_{j=0}^{m-1} z^{j+3} \cdot \langle \mathbf{1}, {\mathbf{2}}^{n \cdot m} \rangle
+        /// Compute \delta(y,z) = (z - z^{2}) \langle \mathbf{1}, {\mathbf{y}}^{n \cdot m} \rangle - \sum_{j=0}^{m-1} z^{j+3} \cdot \langle \mathbf{1}, {\mathbf{2}}^{n \cdot m} \rangle
         fn delta(bit_lengths: []const u64, y: Scalar, z: Scalar) Scalar {
             const sum_y = sumOfPowers(bit_size, y);
             const zz = z.mul(z);
@@ -733,17 +720,11 @@ pub fn Data(bit_size: comptime_int) type {
             }
 
             // Ensure that at least one commitment exists.
-            // [agave]
-            // sig fmt: off
-            // https://github.com/solana-program/zk-elgamal-proof/blob/b9aaf19/zk-sdk/src/zk_elgamal_proof_program/proof_data/batched_range_proof/mod.rs#L133-L136
-            // sig fmt: on
+            // [agave] https://github.com/solana-program/zk-elgamal-proof/blob/b9aaf19745ebb55138fb66eb176fab4e6763b9fd/zk-sdk/src/zk_elgamal_proof_program/proof_data/batched_range_proof/mod.rs#L133-L136
             if (commitments.len == 0) return error.InvalidAmountBitLength;
 
             // Validate that all of the bit-lengths are 0 < bit_length <= MAX_SINGLE_BIT_LENGTH.
-            // [agave]
-            // sig fmt: off
-            // https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/zk_elgamal_proof_program/proof_data/batched_range_proof/mod.rs#L139-L144
-            // sig fmt: on
+            // [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/zk_elgamal_proof_program/proof_data/batched_range_proof/mod.rs#L139-L144
             var batched_bit_length: u64 = 0;
             for (bit_lengths.constSlice()) |bit_length| {
                 if (bit_length == 0 or bit_length > MAX_SINGLE_BIT_LENGTH)
@@ -752,10 +733,7 @@ pub fn Data(bit_size: comptime_int) type {
             }
 
             // Ensure that all data following the terminator is strictly zeroed.
-            // [agave]
-            // sig fmt: off
-            // https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/zk_elgamal_proof_program/proof_data/batched_range_proof/mod.rs#L146-L158
-            // sig fmt: on
+            // [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/zk_elgamal_proof_program/proof_data/batched_range_proof/mod.rs#L146-L158
             const len = commitments.len;
             for (context.commitments[len..], context.bit_lengths[len..]) |commitment, length| {
                 if (!std.mem.allEqual(u8, &commitment, 0)) return error.ProofContext;
@@ -763,10 +741,7 @@ pub fn Data(bit_size: comptime_int) type {
             }
 
             // Ensure that the context contains the inputs to this particular proof.
-            // [agave]
-            // sig fmt: off
-            // https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/zk_elgamal_proof_program/proof_data/batched_range_proof/batched_range_proof_u64.rs#L90-L98
-            // sig fmt: on
+            // [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/zk_elgamal_proof_program/proof_data/batched_range_proof/batched_range_proof_u64.rs#L90-L98
             if (batched_bit_length != bit_size) {
                 return error.IllegalCommitmentLength;
             }
@@ -803,10 +778,7 @@ pub fn genPowers(comptime n: usize, x: Scalar) [n]Scalar {
     return out;
 }
 
-// [agave]
-// sig fmt: off
-// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/range_proof/mod.rs#L534
-// sig fmt: on
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/range_proof/mod.rs#L534
 test "single rangeproof" {
     const commitment, const opening = pedersen.initValue(u64, 55);
 
@@ -827,10 +799,7 @@ test "single rangeproof" {
     );
 }
 
-// [agave]
-// sig fmt: off
-// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/range_proof/mod.rs#L554
-// sig fmt: on
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/range_proof/mod.rs#L554
 test "aggregated rangeproof" {
     const comm1, const opening1 = pedersen.initValue(u64, 55);
     const comm2, const opening2 = pedersen.initValue(u64, 77);
@@ -853,10 +822,7 @@ test "aggregated rangeproof" {
     );
 }
 
-// [agave]
-// sig fmt: off
-// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/range_proof/mod.rs#L609
-// sig fmt: on
+// [agave] https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/range_proof/mod.rs#L609
 test "proof string" {
     const commitment_1_string = "qtkYT/O6bSJ9y7mtqxjZ7dOqloJwLGTcTaeG+5GlBWo=";
     const commitment_1 = try pedersen.Commitment.fromBase64(commitment_1_string);
@@ -1087,10 +1053,7 @@ test "u256 data too large" {
     );
 }
 
-// [agave]
-// sig fmt: off
-// https://github.com/solana-program/zk-elgamal-proof/pull/283/changes#diff-ffe13d09aa1ab037af79e4f00e22a353af889dd010200c0d0156d0618a4d7857R638-R673
-// sig fmt: on
+// [agave] https://github.com/solana-program/zk-elgamal-proof/pull/283/changes#diff-ffe13d09aa1ab037af79e4f00e22a353af889dd010200c0d0156d0618a4d7857R638-R673
 test "non power of two length" {
     const amount_1: u64 = std.math.maxInt(u10);
     const amount_2: u64 = std.math.maxInt(u22);

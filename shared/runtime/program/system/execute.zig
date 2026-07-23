@@ -35,9 +35,7 @@ pub fn execute(
 
     // Deserialize the instruction and dispatch to the appropriate handler
     // [agave]
-    // sig fmt: off
     // https://github.com/anza-xyz/agave/blob/faea52f/programs/system/src/system_processor.rs#L304-L308
-    // sig fmt: on
     const instruction = try ic.ixn_info.deserializeInstruction(
         allocator,
         SystemProgramInstruction,

@@ -16,8 +16,7 @@ const TransactionContext = sig.runtime.transaction_context.TransactionContext;
 /// instruction, and reporting the serialized program-input region.
 ///
 /// [agave] https://github.com/anza-xyz/agave/blob/master/svm/src/conformance/serialization.rs
-/// [solfuzz-agave]
-/// https://github.com/firedancer-io/solfuzz-agave/blob/agave-v4.1.0-beta.3/src/vm_serialization.rs
+/// [solfuzz-agave] https://github.com/firedancer-io/solfuzz-agave/blob/agave-v4.1.0-beta.3/src/vm_serialization.rs
 pub export fn sol_compat_vm_serialize_execute_v1(
     out_ptr: [*]u8,
     out_size: *u64,

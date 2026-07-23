@@ -243,8 +243,7 @@ const TransactionScheduler = struct {
     svm_gateway: SvmGateway,
     committer: Committer,
     /// Global transaction index offset for this batch of entries.
-    // [agave]
-    // https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/ledger/src/blockstore_processor.rs#L1726
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/ledger/src/blockstore_processor.rs#L1726
     base_transaction_index: usize,
     workers: std.ArrayListUnmanaged(Worker) = .{},
 
@@ -353,10 +352,7 @@ const TransactionScheduler = struct {
         transaction: ResolvedTransaction,
         /// Global transaction index within the slot (across all entries).
         /// Mirrors Agave's running counter `progress.num_txs`.
-        // [agave]
-        // sig fmt: off
-        // https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/ledger/src/blockstore_processor.rs#L1726
-        // sig fmt: on
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/ledger/src/blockstore_processor.rs#L1726
         transaction_index: usize,
         ref_count: Atomic(u32),
         waiters: std.ArrayListUnmanaged(u32),

@@ -57,8 +57,7 @@ pub fn run(seed: u64, args: []const []const u8) !void {
     //  1) fuzz_client: attacker
     //  2) gossip_client: victim
     // fuzz_client --rand-messages-> client (fuzz client sends random messages to client)
-    // fuzz_client <-pings/pongs-> client (fuzz responds to pings from the client to maintain a
-    // valid connection)
+    // fuzz_client <-pings/pongs-> client (fuzz responds to pings from the client to maintain a valid connection)
 
     const CLIENT_PORT = 9988;
     const FUZZER_PORT = 9989;

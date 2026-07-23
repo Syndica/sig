@@ -33,7 +33,7 @@ const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 /// Each fixture must therefore carry any program account it invokes; missing
 /// ones surface as `TransactionError::ProgramAccountNotFound` during account
 /// loading, matching the contract documented in `txn_execute.zig`.
-/// https://github.com/firedancer-io/agave/blob/c333aca/runtime/src/bank.rs#L4665
+/// https://github.com/firedancer-io/agave/blob/c333acac8d88168384e010c4d08462ab3c226b35/runtime/src/bank.rs#L4665
 pub fn applyFeatureActivations(
     allocator: Allocator,
     slot: u64,

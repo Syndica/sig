@@ -86,8 +86,7 @@ pub const ShredNetworkDependencies = struct {
 /// Returns a ServiceManager representing the Shred Network.
 /// This can be used to join and deinit the Shred Network.
 ///
-/// Analogous to a subset of [Tvu::new](
-/// https://github.com/anza-xyz/agave/blob/8c5a33a/core/src/turbine.rs#L119)
+/// Analogous to a subset of [Tvu::new](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/core/src/turbine.rs#L119)
 pub fn start(
     conf: ShredNetworkConfig,
     deps: ShredNetworkDependencies,

@@ -142,9 +142,7 @@ pub const ProcessedTransaction = struct {
     rent: u64,
     writes: Writes,
     err: ?TransactionError,
-    // sig fmt: off
     /// Analogous to [loaded_accounts_data_size](https://github.com/anza-xyz/agave/blob/10fe1eb/svm/src/transaction_processing_result.rs#L97).
-    // sig fmt: on
     loaded_accounts_data_size: u32,
     /// If null, the transaction did not execute, due to a failure before
     /// execution could begin.
@@ -219,9 +217,7 @@ pub fn loadAndExecuteTransaction(
     // verify the transaction is not in another block, first by checking
     // in recent blocks, then checking if it's a durable nonce.
     // [agave]
-    // sig fmt: off
     // https://github.com/firedancer-io/agave/blob/403d23b/runtime/src/bank/check_transactions.rs#L105
-    // sig fmt: on
     const maybe_nonce_info: ?LoadedAccount = switch (env.status_checker.check(
         &transaction.msg_hash,
         &transaction.recent_blockhash,

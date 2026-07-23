@@ -67,9 +67,7 @@ pub fn execute(
     // https://github.com/anza-xyz/agave/blob/a2af443/programs/bpf_loader/src/lib.rs#L458-L518
     executeBpfProgram(allocator, ic) catch |err| {
         // [agave]
-        // sig fmt: off
         // https://github.com/anza-xyz/agave/blob/a705c76/program-runtime/src/invoke_context.rs#L574-L588
-        // sig fmt: on
         // Agave always logs program failure regardless of error kind.
         try stable_log.programFailure(
             ic.tc,
@@ -398,9 +396,7 @@ pub const AccessViolationHandlerCtx = struct {
 
         // Direct-mapping: re-anchor `host_memory` to `account.data`.
         // [agave]
-        // sig fmt: off
         // https://github.com/anza-xyz/agave/blob/v4.0/transaction-context/src/transaction.rs#L541-L543
-        // sig fmt: on
         if (ctx.direct_mapping) {
             region.host_memory = .{ .mutable = account.data };
         }
@@ -785,9 +781,7 @@ pub fn executeV3DeployWithMaxDataLen(
             .{ .pubkey = program_data_key, .is_signer = true, .is_writable = true },
             // pass an extra account to avoid the overly strict UnbalancedInstruction error
             // [agave]
-            // sig fmt: off
             // https://github.com/anza-xyz/agave/blob/c5ed166/programs/bpf_loader/src/lib.rs#L668-L669
-            // sig fmt: on
             .{
                 .pubkey = ic.getAccountKeyByIndexUnchecked(
                     @intFromEnum(AccountIndex.buffer),
@@ -1180,9 +1174,7 @@ pub fn executeV3SetAuthority(
             // ELF is older than SBPFv3. Short data short-circuits to OK, matching Agave's
             // let-chain.
             // [agave]
-            // sig fmt: off
             // https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/bpf_loader/src/lib.rs#L580-L591
-            // sig fmt: on
             if (new_authority == null and
                 ic.tc.feature_set.active(.disable_sbpf_v0_v1_v2_deployment, ic.tc.slot))
             {
@@ -1597,9 +1589,7 @@ fn commonExtendProgram(
     const required_payment = blk: {
         const balance = programdata.account.lamports;
         // [agave]
-        // sig fmt: off
         // https://github.com/anza-xyz/agave/blob/5fa721b/program-runtime/src/sysvar_cache.rs#L130-L141
-        // sig fmt: on
         const rent = try ic.tc.sysvar_cache.get(sysvar.Rent);
         const min_balance = @max(1, rent.minimumBalance(new_len));
         break :blk min_balance -| balance;
@@ -1650,9 +1640,7 @@ fn commonExtendProgram(
             clock_slot,
             // SIMD-0500: explicitly continue to allow SBPFv0/v1/v2 for ExtendProgram.
             // [agave]
-            // sig fmt: off
             // https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/bpf_loader/src/lib.rs#L971
-            // sig fmt: on
             false,
         );
     }
@@ -1675,9 +1663,7 @@ fn commonExtendProgram(
 /// the execution of bpf loader instructions unless it returns an error.
 /// [agave] https://github.com/anza-xyz/agave/blob/92b11cd/programs/bpf_loader/src/lib.rs#L115
 /// [fd]
-// sig fmt: off
 /// https://github.com/firedancer-io/firedancer/blob/5e9c865/src/flamenco/runtime/program/fd_bpf_loader_program.c#L238
-// sig fmt: on
 pub fn deployProgram(
     allocator: std.mem.Allocator,
     tc: *TransactionContext,

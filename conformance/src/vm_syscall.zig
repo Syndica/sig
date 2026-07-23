@@ -31,12 +31,8 @@ pub export fn sol_compat_vm_cpi_syscall_v1(
     return sol_compat_vm_syscall_execute_v1(out_ptr, out_size, in_ptr, in_size);
 }
 
-/// [fd]
-// sig fmt: off
-/// https://github.com/firedancer-io/firedancer/blob/b5acf85/src/flamenco/runtime/tests/fd_exec_sol_compat.c#L744
-// sig fmt: on
-/// [solfuzz-agave]
-/// https://github.com/firedancer-io/solfuzz-agave/blob/0b8a797/src/vm_syscalls.rs#L45
+/// [fd] https://github.com/firedancer-io/firedancer/blob/b5acf851f523ec10a85e1b0c8756b2aea477107e/src/flamenco/runtime/tests/fd_exec_sol_compat.c#L744
+/// [solfuzz-agave] https://github.com/firedancer-io/solfuzz-agave/blob/0b8a7971055d822df3f602c287c368400a784c15/src/vm_syscalls.rs#L45
 pub export fn sol_compat_vm_syscall_execute_v1(
     out_ptr: [*]u8,
     out_size: *u64,
@@ -103,8 +99,7 @@ fn executeSyscall(
     const pb_syscall_invocation = pb_syscall_ctx.syscall_invocation orelse
         return error.NoSyscallInvocation;
 
-    // // [solfuzz-agave]
-    // https://github.com/firedancer-io/solfuzz-agave/blob/0b8a797/src/vm_syscalls.rs#L75-L87
+    // // [solfuzz-agave] https://github.com/firedancer-io/solfuzz-agave/blob/0b8a7971055d822df3f602c287c368400a784c15/src/vm_syscalls.rs#L75-L87
     // for (pb_instr_ctx.accounts.items) |acc| {
     //     if (std.mem.eql(
     //         u8,
@@ -162,7 +157,7 @@ fn executeSyscall(
     }
 
     // Program Cache Load Builtins
-    // https://github.com/firedancer-io/solfuzz-agave/blob/0b8a797/src/vm_syscalls.rs#L128-L130
+    // https://github.com/firedancer-io/solfuzz-agave/blob/0b8a7971055d822df3f602c287c368400a784c15/src/vm_syscalls.rs#L128-L130
     //
     // Loader input must be ALL fixture accounts (not just `tc.accounts`), so
     // BPF-loader programs and their programdata accounts — normally absent
@@ -312,10 +307,7 @@ fn executeSyscall(
     // writable+owned account regions auto-grown on write, matching the
     // `MemoryMapping::new_with_access_violation_handler` setup in solfuzz-agave's
     // fuzz_syscall harness.
-    // [solfuzz-agave]
-    // sig fmt: off
-    // https://github.com/firedancer-io/solfuzz-agave/blob/agave-v4.1.0-beta.1/src/vm_syscalls.rs#L289-L297
-    // sig fmt: on
+    // [solfuzz-agave] https://github.com/firedancer-io/solfuzz-agave/blob/agave-v4.1.0-beta.1/src/vm_syscalls.rs#L289-L297
     var avh_ctx: AccessViolationHandlerCtx = .{
         .tc = &tc,
         .allocator = allocator,

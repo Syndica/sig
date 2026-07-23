@@ -113,7 +113,7 @@ pub fn parseVote(
 }
 
 /// Wrapper enum matching Agave's VoteAccountType.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084/account-decoder/src/parse_vote.rs#L54
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/account-decoder/src/parse_vote.rs#L54
 pub const VoteAccountType = union(enum) {
     vote: UiVoteState,
 
@@ -132,7 +132,7 @@ pub const VoteAccountType = union(enum) {
 };
 
 /// The main vote state UI representation.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084/account-decoder/src/parse_vote.rs#L61
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/account-decoder/src/parse_vote.rs#L61
 pub const UiVoteState = struct {
     nodePubkey: Pubkey,
     authorizedWithdrawer: Pubkey,
@@ -205,34 +205,34 @@ pub const UiVoteState = struct {
 };
 
 /// Flattened vote with latency info.
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084/account-decoder/src/parse_vote.rs#L98
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/account-decoder/src/parse_vote.rs#L98
 pub const UiLandedVote = struct {
     latency: u8,
     slot: u64,
     confirmationCount: u32,
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084/account-decoder/src/parse_vote.rs#L118
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/account-decoder/src/parse_vote.rs#L118
 pub const UiAuthorizedVoter = struct {
     epoch: u64,
     authorizedVoter: Pubkey,
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084/account-decoder/src/parse_vote.rs#L125
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/account-decoder/src/parse_vote.rs#L125
 pub const UiPriorVoter = struct {
     authorizedPubkey: Pubkey,
     epochOfLastAuthorizedSwitch: u64,
     targetEpoch: u64,
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/2717084/account-decoder/src/parse_vote.rs#L133
+/// [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/account-decoder/src/parse_vote.rs#L133
 pub const UiEpochCredits = struct {
     epoch: u64,
     credits: account_codec.Stringified(u64),
     previousCredits: account_codec.Stringified(u64),
 };
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/f2d15de/vote-interface/src/state/mod.rs#L148
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/f2d15de6f7a1715ff806f0c39bba8f64bf6a587d/vote-interface/src/state/mod.rs#L148
 pub const UiBlockTimestamp = struct {
     slot: u64,
     timestamp: i64,
@@ -243,8 +243,7 @@ test "rpc.account_codec.parse_vote: parse vote accounts" {
     const allocator = std.testing.allocator;
 
     // Parse default vote state
-    // [agave]
-    // https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_vote.rs#L145-L174
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_vote.rs#L145-L174
     {
         const vote_pubkey = Pubkey{ .data = [_]u8{1} ** 32 };
 
@@ -298,8 +297,7 @@ test "rpc.account_codec.parse_vote: parse vote accounts" {
     }
 
     // Bad data returns error
-    // [agave]
-    // https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_vote.rs#L176-L177
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_vote.rs#L176-L177
     {
         const vote_pubkey = Pubkey{ .data = [_]u8{1} ** 32 };
         const bad_data = [_]u8{ 0, 0, 0, 0 };
@@ -311,8 +309,7 @@ test "rpc.account_codec.parse_vote: parse vote accounts" {
     }
 
     // UiLandedVote JSON flattening
-    // [agave]
-    // https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_vote.rs#L180-L199
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_vote.rs#L180-L199
     {
         // Verify that UiLandedVote serializes with flattened fields (no nested "lockout" object)
         // In Agave, UiLandedVote uses #[serde(flatten)] on the lockout field

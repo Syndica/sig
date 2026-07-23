@@ -48,11 +48,9 @@ pub const LeaderSchedules = struct {
     next: ?LeaderSchedule,
 
     /// Returns the schedule covering `slot`, or null if none.
-    /// Same result as Agave's [get_epoch_leader_schedule(epoch)](
-    /// https://github.com/anza-xyz/agave/blob/v3.1.8/ledger/src/leader_schedule_cache.rs#L194-L196)
+    /// Same result as Agave's [get_epoch_leader_schedule(epoch)](https://github.com/anza-xyz/agave/blob/v3.1.8/ledger/src/leader_schedule_cache.rs#L194-L196)
     /// where epoch = get_epoch(slot): both return the LeaderSchedule for the epoch containing slot.
-    /// Agave: HashMap lookup by epoch. Sig: curr/prev/next each have [start,end]; we return the one
-    /// with start <= slot <= end.
+    /// Agave: HashMap lookup by epoch. Sig: curr/prev/next each have [start,end]; we return the one with start <= slot <= end.
     pub fn getLeaderScheduleForSlot(self: *const LeaderSchedules, slot: Slot) ?*const LeaderSchedule {
         if (self.curr.contains(slot)) return &self.curr;
         if (self.prev) |*prev| if (prev.contains(slot)) return prev;
@@ -88,11 +86,9 @@ pub const LeaderSchedule = struct {
         allocator.free(self.leaders);
     }
 
-    /// [agave]
-    /// https://github.com/anza-xyz/agave/blob/v4.0.0/runtime/src/leader_schedule_utils.rs#L10-L18
+    /// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0/runtime/src/leader_schedule_utils.rs#L10-L18
     /// `enable_vote_address_leader_schedule` is always active — vote-keyed leader schedule
-    /// is unconditionally used. Feature cleanup:
-    /// https://github.com/anza-xyz/agave/commit/9056c982f7
+    /// is unconditionally used. Feature cleanup: https://github.com/anza-xyz/agave/commit/9056c982f7
     pub fn init(
         allocator: Allocator,
         leader_schedule_epoch: Epoch,
@@ -290,10 +286,8 @@ fn computeFromStakedNodes(
 
 /// Inverse of computeFromMap: builds PubkeyMap from LeaderSchedule.
 /// Maps each leader identity to the slot indices (0-based in epoch) where they lead.
-/// NOTE: Caller must fully deallocate the returned map: free each value slice with the same
-/// allocator
-/// [agave] leader_schedule_by_identity:
-/// https://github.com/anza-xyz/agave/blob/v3.1.8/ledger/src/leader_schedule_utils.rs#L38-L54
+/// NOTE: Caller must fully deallocate the returned map: free each value slice with the same allocator
+/// [agave] leader_schedule_by_identity: https://github.com/anza-xyz/agave/blob/v3.1.8/ledger/src/leader_schedule_utils.rs#L38-L54
 pub fn leaderScheduleByIdentity(
     allocator: Allocator,
     schedule: *const LeaderSchedule,

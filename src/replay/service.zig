@@ -74,14 +74,12 @@ pub const PerfSampleTracker = struct {
     prev_highest_slot: Slot,
     last_sample_time: sig.time.Timer,
 
-    /// [agave]
-    /// https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/sample_performance_service.rs#L14
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/sample_performance_service.rs#L14
     const SAMPLE_INTERVAL_SECS: u64 = 60;
 
     /// Check if the sample interval has elapsed and, if so, write a performance
     /// sample to the ledger.
-    /// [agave]
-    /// https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/sample_performance_service.rs#L44
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/core/src/sample_performance_service.rs#L44
     pub fn maybeSample(
         self: *PerfSampleTracker,
         slot_tracker: *SlotTracker,
@@ -226,7 +224,7 @@ pub fn advanceReplay(
         // to vote on after passing all consensus checks like lockout, threshold, and
         // switch proof). If the validator is locked out or fails
         // threshold checks, the processed slot is NOT updated and can go stale.
-        // See: https://github.com/anza-xyz/agave/blob/5e90042/core/src/replay_stage.rs#L2683
+        // See: https://github.com/anza-xyz/agave/blob/5e900421520a10933642d5e9a21e191a70f9b125/core/src/replay_stage.rs#L2683
         //
         // TowerConsensus implements Agave's processed slot semantics when consensus is enabled.
         const slot_update = replay_state.slot_tree.reRoot(replay_state.allocator);
@@ -413,8 +411,7 @@ pub const ReplayState = struct {
         );
         errdefer slot_tracker.deinit(deps.allocator);
         errdefer {
-            // do not free the root slot data parameter, we don't own it unless the function returns
-            // successfully
+            // do not free the root slot data parameter, we don't own it unless the function returns successfully
             var slots_lg = slot_tracker.slots.write();
             defer slots_lg.unlock();
             deps.allocator.destroy(slots_lg.mut().fetchSwapRemove(deps.root.slot).?.value);
@@ -478,8 +475,7 @@ pub const ReplayState = struct {
     }
 };
 
-/// Analogous to [`initialize_progress_and_fork_choice_with_locked_bank_forks`](
-/// https://github.com/anza-xyz/agave/blob/0315eb6/core/src/replay_stage.rs#L637)
+/// Analogous to [`initialize_progress_and_fork_choice_with_locked_bank_forks`](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L637)
 pub fn initProgressMap(
     allocator: std.mem.Allocator,
     slot_tracker: *SlotTracker,
@@ -531,8 +527,7 @@ pub const FrozenSlotsSortCtx = struct {
 /// tracker.
 ///
 /// Analogous to
-/// [generate_new_bank_forks](
-/// https://github.com/anza-xyz/agave/blob/146ebd8/core/src/replay_stage.rs#L4149)
+/// [generate_new_bank_forks](https://github.com/anza-xyz/agave/blob/146ebd8be3857d530c0946003fcd58be220c3290/core/src/replay_stage.rs#L4149)
 pub fn trackNewSlots(
     allocator: Allocator,
     logger: Logger,
@@ -736,8 +731,7 @@ pub fn newSlotFromParent(
 /// Determines which features are active for this slot by looking up the feature
 /// accounts in accountsdb.
 ///
-/// Analogous to [compute_active_feature_set](
-/// https://github.com/anza-xyz/agave/blob/785455b/runtime/src/bank.rs#L5338-L5339)
+/// Analogous to [compute_active_feature_set](https://github.com/anza-xyz/agave/blob/785455b5a3e2d8a95f878d6c80d5361dea9256db/runtime/src/bank.rs#L5338-L5339)
 // TODO: epoch boundary - handle feature activations
 pub fn getActiveFeatures(
     gpa: Allocator,

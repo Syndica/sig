@@ -78,7 +78,7 @@ pub fn StakesCacheGeneric(comptime stakes_type: StakesType) type {
         }
 
         /// Checks if the account is a vote or stake account, and updates the stakes accordingly.
-        /// [agave] https://github.com/anza-xyz/agave/blob/4807a7a/runtime/src/stakes.rs#L67
+        /// [agave] https://github.com/anza-xyz/agave/blob/4807a7a0e51148acd1b0dd0f3f52a12c40378ed3/runtime/src/stakes.rs#L67
         pub fn checkAndStore(
             self: *Self,
             allocator: Allocator,
@@ -498,8 +498,7 @@ pub const StakedNodesMap = sig.utils.collections.PubkeyMap(u64);
 /// custom deserializer if we come across a need to deserialize invalid vote
 /// accounts.
 ///
-/// Analogous to [VoteAccounts](
-/// https://github.com/anza-xyz/agave/blob/10fe1eb/vote/src/vote_account.rs#L45-L46)
+/// Analogous to [VoteAccounts](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/vote/src/vote_account.rs#L45-L46)
 pub const VoteAccounts = struct {
     /// Maps pubkeys to vote account and delegated stake.
     vote_accounts: StakeAndVoteAccountsMap = .{},
@@ -764,8 +763,7 @@ pub const VoteAccounts = struct {
         return staked_nodes;
     }
 
-    /// Analogous to [deserialize_accounts_hash_map](
-    /// https://github.com/anza-xyz/agave/blob/10fe1eb/vote/src/vote_account.rs#L431-L438)
+    /// Analogous to [deserialize_accounts_hash_map](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/vote/src/vote_account.rs#L431-L438)
     fn deserialize(
         limit_allocator: *bincode.LimitAllocator,
         reader: anytype,
@@ -832,10 +830,8 @@ pub const VoteAccounts = struct {
 pub const StakeAccount = struct {
     account: AccountSharedData,
     // When initializing the `StakeAccount` we require that the `StakeStateV2` contained in the
-    // account data is the `stake` variant which contains `meta: Meta, stake: Stake, flags:
-    // StakeFlags`.
-    // For now, only the `Stake` field of the `stake variant is used, if in future we require the
-    // `Meta` or `Flags`
+    // account data is the `stake` variant which contains `meta: Meta, stake: Stake, flags: StakeFlags`.
+    // For now, only the `Stake` field of the `stake variant is used, if in future we require the `Meta` or `Flags`
     // we can simply add them in the initialisation method.
     stake: Stake,
 
@@ -937,8 +933,7 @@ pub const VoteAccount = struct {
         return self.state.nodePubkey().*;
     }
 
-    /// Does not take ownership of `account`. vote_pubkey is the account's address when known (e.g.
-    /// from checkAndStore).
+    /// Does not take ownership of `account`. vote_pubkey is the account's address when known (e.g. from checkAndStore).
     pub fn fromAccountSharedData(
         allocator: std.mem.Allocator,
         account: AccountSharedData,
@@ -987,8 +982,7 @@ pub const VoteAccount = struct {
         @compileError("can't serialize VoteAccount with current representation");
     }
 
-    /// Deserialize the `AccountSharedData`, and attempt to deserialize `VoteStateV3` from the
-    /// account data.
+    /// Deserialize the `AccountSharedData`, and attempt to deserialize `VoteStateV3` from the account data.
     fn deserialize(
         limit_allocator: *bincode.LimitAllocator,
         reader: anytype,

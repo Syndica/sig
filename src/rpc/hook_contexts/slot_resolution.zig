@@ -18,8 +18,7 @@ pub fn validateMinContextSlot(slot: Slot, min_context_slot: ?Slot) !void {
 /// bank, and if that bank is missing from `BankForks`, falls back to root bank.
 /// [agave] `get_bank_with_config()` then validates `min_context_slot` against
 /// the *selected* bank slot (after fallback).
-/// - bank selection/fallback:
-/// https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L345-L394
+/// - bank selection/fallback: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L345-L394
 /// - min context validation: https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L270-L285
 ///
 /// Sig resolves in slot-space (`SlotTracker`) instead of bank-space, so we

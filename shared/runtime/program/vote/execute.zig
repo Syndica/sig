@@ -345,9 +345,7 @@ fn isInitAccountV2Enabled(ic: *InstructionContext) bool {
 /// instruction account pending validation via `validateAndResolveKey`.
 ///
 /// [agave]
-// sig fmt: off
 /// https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_state/mod.rs#L876-L912
-// sig fmt: on
 const NewCommissionCollector = union(enum) {
     vote_account,
     new_account: BorrowedAccount,
@@ -367,9 +365,7 @@ const NewCommissionCollector = union(enum) {
     /// be a writable, system-program-owned, rent-exempt account.
     ///
     /// [agave]
-    // sig fmt: off
     /// https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_state/mod.rs#L883-L912
-    // sig fmt: on
     pub fn validateAndResolveKey(
         self: *const NewCommissionCollector,
         rent: *const Rent,
@@ -497,9 +493,7 @@ fn executeIntializeAccountV2(
     }
 
     // [agave]
-    // sig fmt: off
     // https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_state/mod.rs#L1014-L1043
-    // sig fmt: on
     const inflation_rewards_collector_key = try inflation_rewards_collector
         .validateAndResolveKey(&rent, vote_account);
     const block_revenue_collector_key = try block_revenue_collector
@@ -621,26 +615,20 @@ fn authorize(
             }
 
             // [agave]
-            // sig fmt: off
             // https://github.com/anza-xyz/agave/blob/01e50dc/programs/vote/src/vote_state/mod.rs#L697-L701
-            // sig fmt: on
             const target_epoch = std.math.add(u64, clock.leader_schedule_epoch, 1) catch {
                 return InstructionError.InvalidAccountData;
             };
 
             // [agave]
-            // sig fmt: off
             // https://github.com/anza-xyz/solana-sdk/blob/4e30766/vote-interface/src/state/mod.rs#L872
-            // sig fmt: on
             const epoch_authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(
                 allocator,
                 clock.epoch,
             );
 
             // [agave]
-            // sig fmt: off
             // https://github.com/anza-xyz/agave/blob/01e50dc/programs/vote/src/vote_state/mod.rs#L701-L709
-            // sig fmt: on
             // The current authorized withdrawer or the epoch authorized voter must sign the
             // transaction.
             validateIsSigner(vote_state.withdrawerKey().*, signers) catch {
@@ -671,17 +659,13 @@ fn authorize(
             // 34_500 CUs are consumed regardless of the verification
             // result, matching agave's `consume_pop_compute_units`.
             // [agave]
-            // sig fmt: off
             // https://github.com/anza-xyz/agave/blob/a64b635/programs/vote/src/vote_state/mod.rs#L736-L770
-            // sig fmt: on
             if (!is_with_bls_enabled) {
                 return InstructionError.InvalidInstructionData;
             }
 
             // [agave]
-            // sig fmt: off
             // https://github.com/anza-xyz/agave/blob/a64b635/programs/vote/src/vote_state/mod.rs#L732-L763
-            // sig fmt: on
             try verifyBlsProofOfPossession(
                 ic.tc,
                 &vote_account.pubkey,
@@ -920,9 +904,7 @@ fn updateValidatorIdentity(
 
     vote_state.nodePubkeyMut().* = new_identity;
     // [agave]
-    // sig fmt: off
     // https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_state/mod.rs#L828-L832
-    // sig fmt: on
     // Before SIMD-0232, block_revenue_collector is always synced with node_pubkey.
     // After SIMD-0232, the collector can be set independently.
     if (!ic.tc.feature_set.active(.custom_commission_collector, ic.tc.slot)) {
@@ -982,9 +964,7 @@ fn executeUpdateCommissionCollector(
 }
 
 /// [agave]
-// sig fmt: off
 /// https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_state/mod.rs#L1102-L1144
-// sig fmt: on
 fn updateCommissionCollector(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -1558,9 +1538,7 @@ fn getVoteStateChecked(
             // rather than letting bincode propagate a generic error on a short or
             // zero-tagged buffer. This guard is target-independent.
             // [agave]
-            // sig fmt: off
             // https://github.com/anza-xyz/solana-sdk/blob/vote-interface@v5.1.1/vote-interface/src/state/vote_state_versions.rs#L155
-            // sig fmt: on
             {
                 const data = vote_account.constAccountData();
                 if (data.len < @sizeOf(u32)) return InstructionError.InvalidAccountData;
@@ -1644,9 +1622,7 @@ fn setVoteState(
     switch (state.*) {
         .v4 => |v4_state| {
             // [agave]
-            // sig fmt: off
             // https://github.com/anza-xyz/agave/blob/v4.0.0-beta.4/programs/vote/src/vote_state/handler.rs#L655-L673
-            // sig fmt: on
             // [SIMD-0185] v4: check rent exempt first, then resize, then serialize v4.
             if (account.constAccountData().len < VoteStateV4.MAX_VOTE_STATE_SIZE) {
                 if (!rent.isExempt(account.account.lamports, VoteStateV4.MAX_VOTE_STATE_SIZE)) {
@@ -7234,9 +7210,7 @@ test "update_commission_collector not writable" {
 // InvalidAccountData rather than letting bincode surface a generic error from
 // the truncated body.
 // [agave]
-// sig fmt: off
 // https://github.com/anza-xyz/solana-sdk/blob/ddbf343/vote-interface/src/state/vote_state_versions.rs#L155
-// sig fmt: on
 test "vote_program: authorize zero-tag short data returns InvalidAccountData" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;

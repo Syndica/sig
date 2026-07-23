@@ -160,9 +160,7 @@ pub const Serializer = struct {
             // their data length just produce an access violation that the
             // loader maps to AccountDataTooSmall / ReadonlyDataModified.
             // [agave]
-            // sig fmt: off
             // https://github.com/anza-xyz/agave/blob/v4.0/program-runtime/src/serialization.rs#L28-L34
-            // sig fmt: on
             const payload: ?u16 = if (account.checkDataIsMutable() == null)
                 index_in_transaction
             else
@@ -206,9 +204,7 @@ pub const Serializer = struct {
     }
 
     /// [agave]
-    // sig fmt: off
     /// https://github.com/anza-xyz/agave/blob/01e50dc/program-runtime/src/serialization.rs#L154-L155
-    // sig fmt: on
     pub fn pushRegion(self: *Serializer, is_writable: bool) error{OutOfMemory}!void {
         const range_size = self.buffer.items.len -| self.region_start;
 
@@ -536,9 +532,7 @@ fn serializeParametersAligned(
                 );
 
                 // [agave]
-                // sig fmt: off
                 // https://github.com/anza-xyz/agave/blob/cfcee8181f/program-runtime/src/serialization.rs#L484
-                // sig fmt: on
                 _ = serializer.write(
                     u64,
                     std.mem.nativeToLittle(u64, std.math.maxInt(u64)),
@@ -1053,9 +1047,7 @@ test serializeParameters {
         // [agave]
         // https://github.com/anza-xyz/agave/blob/01e50dc/program-runtime/src/serialization.rs#L981
         // [agave]
-        // sig fmt: off
         // https://github.com/anza-xyz/agave/blob/01e50dc/program-runtime/src/serialization.rs#L893-L894
-        // sig fmt: on
 
         try deserializeParameters(
             allocator,

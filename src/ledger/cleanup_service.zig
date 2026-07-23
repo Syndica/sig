@@ -69,9 +69,7 @@ pub fn run(
 ///   simply return `Ok` without actually running the ledger cleanup.
 ///   In this case, `purge_interval` will remain unchanged.
 ///
-// sig fmt: off
-/// Analogous to the [`cleanup_ledger`](https://github.com/anza-xyz/agave/blob/6476d5f/ledger/src/blockstore_cleanup_service.rs#L198) in agave:
-// sig fmt: on
+/// Analogous to the [`cleanup_ledger`](https://github.com/anza-xyz/agave/blob/6476d5fac0c30d1f49d13eae118b89be78fb15d2/ledger/src/blockstore_cleanup_service.rs#L198) in agave:
 pub fn cleanLedger(
     logger: Logger,
     ledger_state: *sig.ledger.Ledger,
@@ -142,8 +140,7 @@ const SlotsToCleanResult = struct {
 /// - `total_shreds` (u64): the total estimated number of shreds before the
 ///   `root`.
 ///
-/// Analogous to the [`find_slots_to_clean`](
-/// https://github.com/anza-xyz/agave/blob/6476d5f/ledger/src/blockstore_cleanup_service.rs#L103)
+/// Analogous to the [`find_slots_to_clean`](https://github.com/anza-xyz/agave/blob/6476d5fac0c30d1f49d13eae118b89be78fb15d2/ledger/src/blockstore_cleanup_service.rs#L103)
 fn findSlotsToClean(
     ledger_state: *sig.ledger.Ledger,
     max_root: Slot,
@@ -199,8 +196,7 @@ fn findSlotsToClean(
 
 /// NOTE: this purges the range within [from_slot, to_slot] inclusive
 ///
-/// analog to [`run_purge_with_stats`](
-/// https://github.com/anza-xyz/agave/blob/26692e6/ledger/src/blockstore/blockstore_purge.rs#L202)
+/// analog to [`run_purge_with_stats`](https://github.com/anza-xyz/agave/blob/26692e666454d340a6691e2483194934e6a8ddfc/ledger/src/blockstore/blockstore_purge.rs#L202)
 pub fn purgeSlots(db: *LedgerDB, from_slot: Slot, to_slot: Slot) !bool {
     var write_batch = try db.initWriteBatch();
     defer write_batch.deinit();
@@ -230,8 +226,7 @@ fn writePurgeRange(write_batch: *LedgerDB.WriteBatch, from_slot: Slot, to_slot: 
     var delete_count: u32 = 0; // sanity check
 
     // NOTE: we need to conver the slot into keys for the column families
-    // this is only used in this and one other function and should not change, so its ok to hard
-    // code it
+    // this is only used in this and one other function and should not change, so its ok to hard code it
     try purgeRangeWithCount(write_batch, schema.slot_meta, from_slot, to_slot, &delete_count);
     try purgeRangeWithCount(write_batch, schema.dead_slots, from_slot, to_slot, &delete_count);
     try purgeRangeWithCount(write_batch, schema.duplicate_slots, from_slot, to_slot, &delete_count);
@@ -256,7 +251,7 @@ fn writePurgeRange(write_batch: *LedgerDB.WriteBatch, from_slot: Slot, to_slot: 
     );
     // NOTE: for `address_signatures`, agave doesnt key based on slot for some reason
     // (permalink comment seems incorrect)
-    // https://github.com/anza-xyz/agave/blob/da02962/ledger/src/ledger_db.rs#L962
+    // https://github.com/anza-xyz/agave/blob/da029625d180dd1d396d26b74a5c281b7786e8c9/ledger/src/ledger_db.rs#L962
     try purgeRangeWithCount(
         write_batch,
         schema.address_signatures,
@@ -286,8 +281,7 @@ fn writePurgeRange(write_batch: *LedgerDB.WriteBatch, from_slot: Slot, to_slot: 
         &delete_count,
     );
     // slot is not indexed in this method, so this is a full purge
-    // NOTE: do we want to do this? why not just keep the data, since it will be updated/put-back
-    // eventually
+    // NOTE: do we want to do this? why not just keep the data, since it will be updated/put-back eventually
     try purgeRangeWithCount(write_batch, schema.program_costs, Pubkey.ZEROES, Pubkey.ZEROES, &delete_count);
 
     // make sure we covered all the column families
@@ -314,8 +308,7 @@ fn purgeFilesInRange(db: *LedgerDB, from_slot: Slot, to_slot: Slot) !void {
     var delete_count: u32 = 0; // sanity check
 
     // NOTE: we need to conver the slot into keys for the column families
-    // this is only used in this and one other function and should not change, so its ok to hard
-    // code it
+    // this is only used in this and one other function and should not change, so its ok to hard code it
     try purgeFileRangeWithCount(db, schema.slot_meta, from_slot, to_slot, &delete_count);
     try purgeFileRangeWithCount(db, schema.dead_slots, from_slot, to_slot, &delete_count);
     try purgeFileRangeWithCount(db, schema.duplicate_slots, from_slot, to_slot, &delete_count);
@@ -340,7 +333,7 @@ fn purgeFilesInRange(db: *LedgerDB, from_slot: Slot, to_slot: Slot) !void {
     );
     // NOTE: for `address_signatures`, agave doesnt key based on slot for some reason
     // (permalink comment seems incorrect?)
-    // https://github.com/anza-xyz/agave/blob/da02962/ledger/src/ledger_db.rs#L962
+    // https://github.com/anza-xyz/agave/blob/da029625d180dd1d396d26b74a5c281b7786e8c9/ledger/src/ledger_db.rs#L962
     try purgeFileRangeWithCount(
         db,
         schema.address_signatures,
@@ -370,8 +363,7 @@ fn purgeFilesInRange(db: *LedgerDB, from_slot: Slot, to_slot: Slot) !void {
         &delete_count,
     );
     // slot is not indexed in this method, so this is a full purge
-    // NOTE: do we want to do this? why not just keep the data, since it will be updated/put-back
-    // eventually
+    // NOTE: do we want to do this? why not just keep the data, since it will be updated/put-back eventually
     try purgeFileRangeWithCount(
         db,
         schema.program_costs,

@@ -27,11 +27,9 @@ pub const failing = struct {
         assert,
     };
 
-    /// Returns a comptime-known stateless allocator where each method fails in the specified
-    /// manner.
+    /// Returns a comptime-known stateless allocator where each method fails in the specified manner.
     /// By default each method is a simple failure or noop, and can be escalated to a panic which is
-    /// enabled in safe and unsafe modes, or to an assertion which triggers checked illegal
-    /// behaviour.
+    /// enabled in safe and unsafe modes, or to an assertion which triggers checked illegal behaviour.
     pub inline fn allocator(config: Config) Allocator {
         const S = struct {
             fn alloc(_: *anyopaque, _: usize, _: Alignment, _: usize) ?[*]u8 {

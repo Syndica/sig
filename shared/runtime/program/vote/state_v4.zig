@@ -33,9 +33,7 @@ const VOTE_CREDITS_MAXIMUM_PER_SLOT = state.VOTE_CREDITS_MAXIMUM_PER_SLOT;
 const BLS_PUBLIC_KEY_COMPRESSED_SIZE = state.BLS_PUBLIC_KEY_COMPRESSED_SIZE;
 
 /// SIMD-0185:
-// sig fmt: off
 /// https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0185-vote-account-v4.md
-// sig fmt: on
 pub const VoteStateV4 = struct {
     /// The validator identity that signs the votes in this account.
     node_pubkey: Pubkey,

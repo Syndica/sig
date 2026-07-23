@@ -294,12 +294,8 @@ pub fn proofOfPossessionVerify(
     proof_compressed: *const [96]u8,
     pubkey_compressed: *const [48]u8,
 ) PoPError!void {
-    // Match firedancer's defensive minimum length to reject messages which do not contain a bls
-    // pubkey (48 bytes).
-    // See:
-    // sig fmt: off
-    // https://github.com/firedancer-io/firedancer/blob/4ec9ff6/src/ballet/bls/fd_bls12_381.c#L514-L521
-    // sig fmt: on
+    // Match firedancer's defensive minimum length to reject messages which do not contain a bls pubkey (48 bytes).
+    // See: https://github.com/firedancer-io/firedancer/blob/4ec9ff65bd8441f447759268301f2cd05a31855a/src/ballet/bls/fd_bls12_381.c#L514-L521
     if (msg.len < 48) return error.MessageTooShort;
 
     // 1. Decompress public key into G1 affine and validate.
@@ -486,12 +482,8 @@ test "proofOfPossessionVerify: self-signed round trip verifies and tampers fail"
     );
 }
 
-// Cross-check against against firedancer (alpenglow vector) to ensure our wire-up and DST usage
-// matches.
-// [firedancer]
-// sig fmt: off
-// https://github.com/firedancer-io/firedancer/blob/f213d05/src/ballet/bls/test_bls12_381.c#L1162-L1166
-// sig fmt: on
+// Cross-check against against firedancer (alpenglow vector) to ensure our wire-up and DST usage matches.
+// [firedancer] https://github.com/firedancer-io/firedancer/blob/f213d050148bf2a01f879a17f61547aa212b528d/src/ballet/bls/test_bls12_381.c#L1162-L1166
 test "proofOfPossessionVerify: firedancer alpenglow vector verifies" {
     var msg: [89]u8 = undefined;
     var proof: [96]u8 = undefined;

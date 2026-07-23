@@ -1,5 +1,4 @@
-// this uses variables instead of raw data because otherwise ZLS gets unresponsive when the file is
-// open
+// this uses variables instead of raw data because otherwise ZLS gets unresponsive when the file is open
 
 pub const handle_chaining_basic_shreds: [96][]const u8 = blk: {
     const zero900: [900]u8 = .{0} ** 900;

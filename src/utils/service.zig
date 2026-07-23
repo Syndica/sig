@@ -188,8 +188,7 @@ pub fn runService(
                 "{s} has {s}ed: {!} {any}",
                 .{ name, event_name, result, maybe_trace },
             );
-            // reset the stack trace so that if it returns an error in a loop it doesn't try to
-            // infinitely
+            // reset the stack trace so that if it returns an error in a loop it doesn't try to infinitely
             // increment the stack trace index and concatenate the previous traces.
             if (maybe_trace) |trace| trace.index = 0;
         }

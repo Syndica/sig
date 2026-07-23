@@ -145,9 +145,7 @@ fn processVerifyProof(
         proof_data.verify() catch {
             // TODO: log error as well
             // [fd]
-            // sig fmt: off
             // https://github.com/firedancer-io/firedancer/blob/e0de87d/src/flamenco/runtime/program/zksdk/fd_zksdk.c#L209-L210
-            // sig fmt: on
             try tc.log("proof_verification failed", .{});
             return InstructionError.InvalidInstructionData;
         };
@@ -161,9 +159,7 @@ fn processVerifyProof(
         proof_data.verify() catch {
             // TODO: log error as well
             // [fd]
-            // sig fmt: off
             // https://github.com/firedancer-io/firedancer/blob/e0de87d/src/flamenco/runtime/program/zksdk/fd_zksdk.c#L209-L210
-            // sig fmt: on
             try tc.log("proof_verification failed", .{});
             return InstructionError.InvalidInstructionData;
         };

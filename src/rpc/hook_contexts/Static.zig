@@ -1,6 +1,4 @@
-//! The Static RPC hook context. These methods serve fixed values
-//! that are determined at startup and remain constant (e.g. genesis
-//! hash).
+//! The Static RPC hook context. These methods serve fixed values that are determined at startup and remain constant (e.g. genesis hash).
 
 const std = @import("std");
 const sig = @import("../../sig.zig");

@@ -112,8 +112,7 @@ pub fn acceptAndServeConnection(server_ctx: *server.Context) AcceptAndServeConne
         .POST => try handlePost(server_ctx, &request, logger, head_info, conn.address),
         .OPTIONS => {
             // CORS preflight response.
-            // [agave]
-            // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc_service.rs#L842-L845
+            // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc_service.rs#L842-L845
             request.respond("", .{
                 .status = .no_content,
                 .keep_alive = false,
@@ -288,17 +287,14 @@ fn handleGetOrHead(
                         error.HttpExpectationFailed => return,
                         error.WriteFailed => return error.SystemIoError,
                     };
-                    // flush the headers, so that if this is a head request, we can mock the
-                    // response without doing unnecessary work
+                    // flush the headers, so that if this is a head request, we can mock the response without doing unnecessary work
                     response.flush() catch {
                         return error.SystemIoError;
                     };
 
                     if (!response.isEliding()) {
-                        // use a length which is still a multiple of 2, greater than the send_buffer
-                        // length,
-                        // in order to almost always force the http server method to flush, instead
-                        // of
+                        // use a length which is still a multiple of 2, greater than the send_buffer length,
+                        // in order to almost always force the http server method to flush, instead of
                         // pointlessly copying data into the send buffer.
                         const read_buffer_len = comptime std.mem.alignForward(
                             usize,
@@ -322,10 +318,8 @@ fn handleGetOrHead(
                         std.debug.assert(
                             response.state.content_length == archive_len,
                         );
-                        // NOTE: in order to avoid needing to actually spend time writing the
-                        // response body,
-                        // just trick the API into thinking we already wrote the entire thing by
-                        // setting this
+                        // NOTE: in order to avoid needing to actually spend time writing the response body,
+                        // just trick the API into thinking we already wrote the entire thing by setting this
                         // to 0.
                         response.state = .{ .content_length = 0 };
                     }
@@ -548,10 +542,7 @@ fn handleRpcRequest(
         // getHealth requires special handling: unhealthy states must be returned as
         // JSON-RPC errors with code -32005, matching agave's behavior.
         // See: https://github.com/anza-xyz/agave/blob/master/rpc/src/rpc.rs#L2806-L2818
-        // See:
-        // sig fmt: off
-        // https://github.com/anza-xyz/agave/blob/master/rpc-client-api/src/custom_error.rs#L149-L159
-        // sig fmt: on
+        // See: https://github.com/anza-xyz/agave/blob/master/rpc-client-api/src/custom_error.rs#L149-L159
         .getHealth => {
             const allocator = json_arena;
             const result = server_ctx.rpc_hooks.call(
@@ -602,10 +593,7 @@ fn handleRpcRequest(
         },
         // sendTransaction requires special handling: preflight simulation failures must be
         // returned as JSON-RPC errors with code -32002, matching agave's behavior.
-        // See:
-        // sig fmt: off
-        // https://github.com/anza-xyz/agave/blob/master/rpc-client-api/src/custom_error.rs#L130-L136
-        // sig fmt: on
+        // See: https://github.com/anza-xyz/agave/blob/master/rpc-client-api/src/custom_error.rs#L130-L136
         .sendTransaction => {
             const allocator = json_arena;
             const result = server_ctx.rpc_hooks.call(

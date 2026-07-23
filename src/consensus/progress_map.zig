@@ -46,8 +46,7 @@ const replay_stage = struct {
             }
         }
 
-        /// Order of threshold against `fraction_num / fraction_denom` without conversion to
-        /// floating point.
+        /// Order of threshold against `fraction_num / fraction_denom` without conversion to floating point.
         pub fn orderAgainstFraction(
             self: @This(),
             fraction_num: anytype,
@@ -111,7 +110,7 @@ fn Saturating(comptime T: type) type {
     };
 }
 
-/// AUDIT: https://github.com/anza-xyz/agave/blob/cb32984/core/src/consensus/progress_map.rs
+/// AUDIT: https://github.com/anza-xyz/agave/blob/cb32984a9b0d5c2c6f7775bed39b66d3a22e3c46/core/src/consensus/progress_map.rs
 pub const ProgressMap = struct {
     map: std.AutoArrayHashMapUnmanaged(Slot, ForkProgress),
 
@@ -217,8 +216,7 @@ pub const ForkProgress = struct {
     is_dead: bool,
     fork_stats: ForkStats,
     propagated_stats: PropagatedStats,
-    // TODO Remove replay_stats? Does not look like it is used to make any application decision,
-    // just logging.
+    // TODO Remove replay_stats? Does not look like it is used to make any application decision, just logging.
     replay_stats: stubs.Arc(stubs.RwLock(blockstore_processor.ReplaySlotStats)),
     replay_progress: stubs.Arc(stubs.RwLock(blockstore_processor.ConfirmationProgress)),
     retransmit_info: RetransmitInfo,
@@ -314,8 +312,7 @@ pub const ForkProgress = struct {
 
     /// Helper init function to init the progress from the parent progress and
     /// other data about the current slot that agave stores in its bank.
-    /// Analogous to [new_from_bank](
-    /// https://github.com/anza-xyz/agave/blob/161fc19/core/src/consensus/progress_map.rs#L143)
+    /// Analogous to [new_from_bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/core/src/consensus/progress_map.rs#L143)
     pub fn initFromParent(
         allocator: std.mem.Allocator,
         params: struct {
@@ -829,24 +826,20 @@ pub const blockstore_processor = struct {
     /// Measures different parts of the slot confirmation processing pipeline.
     pub const ConfirmationTiming = struct {
         /// Moment when the `ConfirmationTiming` instance was created.  Used to track the total wall
-        /// clock time from the moment the first shard for the slot is received and to the moment
-        /// the
+        /// clock time from the moment the first shard for the slot is received and to the moment the
         /// slot is complete.
         started: sig.time.Instant,
 
-        /// Wall clock time used by the slot confirmation code, including PoH/signature
-        /// verification,
+        /// Wall clock time used by the slot confirmation code, including PoH/signature verification,
         /// and replay.  As replay can run in parallel with the verification, this value can not be
         /// recovered from the `replay_elapsed` and or `{poh,transaction}_verify_elapsed`.  This
-        /// includes failed cases, when `confirm_slot_entries` exist with an error. In microseconds.
+        /// includes failed cases, when `confirm_slot_entries` exist with an error.  In microseconds.
         /// When unified scheduler is enabled, replay excludes the transaction execution, only
         /// accounting for task creation and submission to the scheduler.
         confirmation_elapsed: u64,
 
-        /// Wall clock time used by the entry replay code. Does not include the PoH or the
-        /// transaction
-        /// signature/precompiles verification, but can overlap with the PoH and signature
-        /// verification.
+        /// Wall clock time used by the entry replay code.  Does not include the PoH or the transaction
+        /// signature/precompiles verification, but can overlap with the PoH and signature verification.
         /// In microseconds.
         /// When unified scheduler is enabled, replay excludes the transaction execution, only
         /// accounting for task creation and submission to the scheduler.
@@ -855,8 +848,7 @@ pub const blockstore_processor = struct {
         /// Wall clock times, used for the PoH verification of entries.  In microseconds.
         poh_verify_elapsed: u64,
 
-        /// Wall clock time, used for the signature verification as well as precompiles
-        /// verification.
+        /// Wall clock time, used for the signature verification as well as precompiles verification.
         /// In microseconds.
         transaction_verify_elapsed: u64,
 
@@ -903,7 +895,7 @@ pub const blockstore_processor = struct {
 
     /// Measures times related to transaction execution in a slot.
     pub const BatchExecutionTiming = struct {
-        /// Time used by transaction execution. Accumulated across multiple threads that are running
+        /// Time used by transaction execution.  Accumulated across multiple threads that are running
         /// `execute_batch()`.
         totals: timings.ExecuteTimings,
 
@@ -911,20 +903,14 @@ pub const blockstore_processor = struct {
         /// [`ConfirmationTiming::replay_elapsed`] includes this time.  In microseconds.
         wall_clock_us: Saturating(u64),
 
-        /// Time used to execute transactions, via `execute_batch()`, in the thread that consumed
-        /// the
-        /// most time (in terms of total_thread_us) among rayon threads. Note that the slowest
-        /// thread
-        /// is determined each time a given group of batches is newly processed. So, this is a
-        /// coarse
-        /// approximation of wall-time single-threaded linearized metrics, discarding all metrics
-        /// other
-        /// than the arbitrary set of batches mixed with various transactions, which replayed
-        /// slowest
+        /// Time used to execute transactions, via `execute_batch()`, in the thread that consumed the
+        /// most time (in terms of total_thread_us) among rayon threads. Note that the slowest thread
+        /// is determined each time a given group of batches is newly processed. So, this is a coarse
+        /// approximation of wall-time single-threaded linearized metrics, discarding all metrics other
+        /// than the arbitrary set of batches mixed with various transactions, which replayed slowest
         /// as a whole for each rayon processing session.
         ///
-        /// When unified scheduler is enabled, this field isn't maintained, because it's not batched
-        /// at
+        /// When unified scheduler is enabled, this field isn't maintained, because it's not batched at
         /// all.
         slowest_thread: ThreadExecuteTimings,
 
@@ -1636,8 +1622,7 @@ test "is_propagated" {
 
     // Insert new ForkProgress for slot 10 (not a leader slot) and its
     // previous leader slot 9 (leader slot)
-    // try progress_map.map.put(allocator, 10, ForkProgress.init(allocator, Hash.default(), 9, null,
-    // 0, 0));
+    // try progress_map.map.put(allocator, 10, ForkProgress.init(allocator, Hash.default(), 9, null, 0, 0));
     try progress_map.map.ensureUnusedCapacity(allocator, 1);
     progress_map.map.putAssumeCapacity(10, try .init(allocator, .{
         .now = .now(),

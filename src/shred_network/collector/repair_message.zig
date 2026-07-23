@@ -12,15 +12,13 @@ const Pubkey = sig.core.Pubkey;
 const Signature = sig.core.Signature;
 const Slot = sig.core.Slot;
 
-/// Analogous to [SIGNED_REPAIR_TIME_WINDOW](
-/// https://github.com/anza-xyz/agave/blob/8c5a33a/core/src/repair/serve_repair.rs#L89)
+/// Analogous to [SIGNED_REPAIR_TIME_WINDOW](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/core/src/repair/serve_repair.rs#L89)
 const SIGNED_REPAIR_TIME_WINDOW_SECS: u64 = 600;
 
 /// Internal representation of a repair request.
 /// Does not contain any header or identification, only info about the desired shreds.
 ///
-/// Analogous to [ShredRepairType](
-/// https://github.com/anza-xyz/agave/blob/8c5a33a/core/src/repair/serve_repair.rs#L95)
+/// Analogous to [ShredRepairType](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/core/src/repair/serve_repair.rs#L95)
 pub const RepairRequest = union(enum) {
     /// Requesting `MAX_ORPHAN_REPAIR_RESPONSES` parent shreds
     orphan: Slot,
@@ -43,8 +41,7 @@ pub const RepairRequest = union(enum) {
 /// - serialize message
 /// - sign message
 ///
-/// Analogous to [ServeRepair::map_repair_request](
-/// https://github.com/anza-xyz/agave/blob/8c5a33a/core/src/repair/serve_repair.rs#L1141)
+/// Analogous to [ServeRepair::map_repair_request](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/core/src/repair/serve_repair.rs#L1141)
 pub fn serializeRepairRequest(
     buf: []u8,
     request: RepairRequest,
@@ -103,8 +100,7 @@ pub const RepairMessageType = enum(u8) {
 /// Messaging data that is directly serialized and sent over repair sockets.
 /// Contains any header/identification as needed.
 ///
-/// Analogous to [RepairProtocol](
-/// https://github.com/anza-xyz/agave/blob/8c5a33a/core/src/repair/serve_repair.rs#L221)
+/// Analogous to [RepairProtocol](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/core/src/repair/serve_repair.rs#L221)
 pub const RepairMessage = union(RepairMessageType) {
     pong: Pong,
     window_index: struct {
@@ -155,8 +151,7 @@ pub const RepairMessage = union(RepairMessageType) {
         }
     }
 
-    /// Analogous to [ServeRepair::verify_signed_packet](
-    /// https://github.com/anza-xyz/agave/blob/8c5a33a/core/src/repair/serve_repair.rs#L847)
+    /// Analogous to [ServeRepair::verify_signed_packet](https://github.com/anza-xyz/agave/blob/8c5a33a81a0504fd25d0465bed35d153ff84819f/core/src/repair/serve_repair.rs#L847)
     pub fn verify(
         self: RepairMessage,
         /// bincode serialized data, from which this struct was deserialized
@@ -236,8 +231,7 @@ test "signed/serialized RepairRequest is valid" {
             nonce,
         );
 
-        // deserializing the repair request should return an identical struct and verification
-        // should succeed.
+        // deserializing the repair request should return an identical struct and verification should succeed.
         var deserialized = try bincode.readFromSlice(allocator, RepairMessage, serialized, .{});
         try deserialized.verify(serialized, recipient, timestamp);
 

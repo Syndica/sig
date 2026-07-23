@@ -231,9 +231,7 @@ pub const TransactionContext = struct {
     }
 
     /// [agave]
-    // sig fmt: off
     /// https://github.com/anza-xyz/agave/blob/faea52f/program-runtime/src/invoke_context.rs#L100-L105
-    // sig fmt: on
     pub fn consumeUnchecked(self: *TransactionContext, compute: u64) void {
         self.consumed_units +|= compute;
         self.compute_meter -|= compute;

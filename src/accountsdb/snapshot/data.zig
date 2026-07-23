@@ -42,8 +42,7 @@ pub fn bincodeAllocationLimit(file_size: u64) usize {
     return @max(scaled, MIN_BINCODE_LIMIT);
 }
 
-/// Analogous to [ObsoleteIncrementalSnapshotPersistence](
-/// https://github.com/anza-xyz/agave/blob/68c1077/runtime/src/serde_snapshot.rs#L88)
+/// Analogous to [ObsoleteIncrementalSnapshotPersistence](https://github.com/anza-xyz/agave/blob/68c1077841eb5a2f0adb2b50f6cfa92a12b8d894/runtime/src/serde_snapshot.rs#L88)
 pub const ObsoleteIncrementalSnapshotPersistence = struct {
     /// slot of full snapshot
     full_slot: Slot,
@@ -77,8 +76,7 @@ pub const ObsoleteIncrementalSnapshotPersistence = struct {
 };
 
 // NOTE: Agave has since moved away from having these in "Extra" fields.
-/// Analogous to [ExtraFieldsToDeserialize](
-/// https://github.com/anza-xyz/agave/blob/8d1ef48/runtime/src/serde_snapshot.rs#L396).
+/// Analogous to [ExtraFieldsToDeserialize](https://github.com/anza-xyz/agave/blob/8d1ef48c785a5d9ee5c0df71dc520ee1a49d8168/runtime/src/serde_snapshot.rs#L396).
 pub const ExtraFields = struct {
     lamports_per_signature: u64,
     snapshot_persistence: ?ObsoleteIncrementalSnapshotPersistence,
@@ -239,8 +237,7 @@ pub const ExtraFields = struct {
     }
 };
 
-/// Analogous to [SerializableAccountStorageEntry](
-/// https://github.com/anza-xyz/agave/blob/cadba68/runtime/src/serde_snapshot/storage.rs#L11)
+/// Analogous to [SerializableAccountStorageEntry](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/runtime/src/serde_snapshot/storage.rs#L11)
 pub const AccountFileInfo = struct {
     /// note: serialized id is a usize but in code it's FileId (u32)
     id: FileId,
@@ -249,15 +246,13 @@ pub const AccountFileInfo = struct {
 
     pub const @"!bincode-config:id" = FileId.BincodeConfig;
 
-    /// Analogous to [AppendVecError](
-    /// https://github.com/anza-xyz/agave/blob/91a4ecf/accounts-db/src/append_vec.rs#L74)
+    /// Analogous to [AppendVecError](https://github.com/anza-xyz/agave/blob/91a4ecfff78423433cc0001362cea8fed860dcb9/accounts-db/src/append_vec.rs#L74)
     pub const ValidateError = error{
         FileSizeTooSmall,
         FileSizeTooLarge,
         OffsetOutOfBounds,
     };
-    /// Analogous to [sanitize_len_and_size](
-    /// https://github.com/anza-xyz/agave/blob/91a4ecf/accounts-db/src/append_vec.rs#L376)
+    /// Analogous to [sanitize_len_and_size](https://github.com/anza-xyz/agave/blob/91a4ecfff78423433cc0001362cea8fed860dcb9/accounts-db/src/append_vec.rs#L376)
     pub fn validate(self: *const AccountFileInfo, file_size: usize) ValidateError!void {
         if (file_size == 0) {
             return error.FileSizeTooSmall;
@@ -282,8 +277,7 @@ pub const AccountFileInfo = struct {
     }
 };
 
-/// Analogous to [BankHashInfo](
-/// https://github.com/anza-xyz/agave/blob/2de7b56/runtime/src/serde_snapshot.rs#L115)
+/// Analogous to [BankHashInfo](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L115)
 pub const BankHashInfo = struct {
     obsolete_accounts_delta_hash: Hash = Hash.ZEROES,
     obsolete_accounts_hash: Hash = Hash.ZEROES,
@@ -298,8 +292,7 @@ pub const BankHashInfo = struct {
     }
 };
 
-/// Analogous to [BankHashStats](
-/// https://github.com/anza-xyz/agave/blob/4c921ca/accounts-db/src/accounts_db.rs#L1299)
+/// Analogous to [BankHashStats](https://github.com/anza-xyz/agave/blob/4c921ca276bbd5997f809dec1dd3937fb06463cc/accounts-db/src/accounts_db.rs#L1299)
 pub const BankHashStats = struct {
     num_updated_accounts: u64,
     num_removed_accounts: u64,
@@ -350,14 +343,12 @@ pub const BankHashStats = struct {
     }
 };
 
-/// Analogous to [AccountsDbFields](
-/// https://github.com/anza-xyz/agave/blob/2de7b56/runtime/src/serde_snapshot.rs#L77)
+/// Analogous to [AccountsDbFields](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L77)
 pub const AccountsDbFields = struct {
     file_map: FileMap,
 
     /// NOTE: this is not a meaningful field
-    /// NOTE: at the time of writing, a test snapshots we use actually have this field set to 601 on
-    /// disk,
+    /// NOTE: at the time of writing, a test snapshots we use actually have this field set to 601 on disk,
     /// so be sure to keep that in mind while testing.
     stored_meta_write_version: u64,
 
@@ -365,7 +356,7 @@ pub const AccountsDbFields = struct {
     bank_hash_info: BankHashInfo,
 
     /// NOTE: these are currently always empty?
-    /// https://github.com/anza-xyz/agave/blob/9c899a7/runtime/src/serde_snapshot.rs#L815-L825
+    /// https://github.com/anza-xyz/agave/blob/9c899a72414993dc005f11afb5df10752b10810b/runtime/src/serde_snapshot.rs#L815-L825
     rooted_slots: []const Slot,
     rooted_slot_hashes: []const SlotAndHash,
 
@@ -599,8 +590,7 @@ pub const Manifest = struct {
     }
 };
 
-/// Analogous to [TransactionError](
-/// https://github.com/anza-xyz/agave/blob/cadba68/sdk/src/transaction/error.rs#L14)
+/// Analogous to [TransactionError](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/sdk/src/transaction/error.rs#L14)
 const TransactionError = union(enum) {
     /// An account is already being processed in another transaction in a way
     /// that does not support parallelism
@@ -616,8 +606,7 @@ const TransactionError = union(enum) {
     /// Attempt to load a program that does not exist
     ProgramAccountNotFound,
 
-    /// The from `Pubkey` does not have sufficient balance to pay the fee to schedule the
-    /// transaction
+    /// The from `Pubkey` does not have sufficient balance to pay the fee to schedule the transaction
     InsufficientFundsForFee,
 
     /// This account may not be used to pay transaction fees
@@ -724,8 +713,7 @@ const Result = union(enum) {
     Error: TransactionError,
 };
 
-/// Analogous to [Status](
-/// https://github.com/anza-xyz/agave/blob/cadba68/runtime/src/status_cache.rs#L24)
+/// Analogous to [Status](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/runtime/src/status_cache.rs#L24)
 pub const Status = struct {
     i: usize,
     j: []const KeySliceResult,
@@ -736,16 +724,14 @@ pub const Status = struct {
     };
 };
 pub const HashStatusMap = std.AutoArrayHashMapUnmanaged(Hash, Status);
-/// Analogous to [SlotDelta](
-/// https://github.com/anza-xyz/agave/blob/cadba68/runtime/src/status_cache.rs#L35)
+/// Analogous to [SlotDelta](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/runtime/src/status_cache.rs#L35)
 pub const BankSlotDelta = struct {
     slot: Slot,
     is_root: bool,
     status: HashStatusMap,
 };
 
-/// Analogous to [StatusCache](
-/// https://github.com/anza-xyz/agave/blob/cadba68/runtime/src/status_cache.rs#L39)
+/// Analogous to [StatusCache](https://github.com/anza-xyz/agave/blob/cadba689cb44db93e9c625770cafd2fc0ae89e33/runtime/src/status_cache.rs#L39)
 pub const StatusCache = struct {
     bank_slot_deltas: []const BankSlotDelta,
 
@@ -784,8 +770,7 @@ pub const StatusCache = struct {
         bincode.free(allocator, self);
     }
 
-    /// [verify_slot_deltas](
-    /// https://github.com/anza-xyz/agave/blob/ed500b5/runtime/src/snapshot_bank_utils.rs#L709)
+    /// [verify_slot_deltas](https://github.com/anza-xyz/agave/blob/ed500b5afc77bc78d9890d96455ea7a7f28edbf9/runtime/src/snapshot_bank_utils.rs#L709)
     pub fn validate(
         self: *const StatusCache,
         allocator: std.mem.Allocator,
@@ -842,8 +827,7 @@ pub const StatusCache = struct {
 
 /// information on a full snapshot including the filename, slot, and hash
 ///
-/// Analogous to [SnapshotArchiveInfo](
-/// https://github.com/anza-xyz/agave/blob/59bf180/runtime/src/snapshot_archive_info.rs#L44)
+/// Analogous to [SnapshotArchiveInfo](https://github.com/anza-xyz/agave/blob/59bf1809fe5115f0fad51e80cc0a19da1496e2e9/runtime/src/snapshot_archive_info.rs#L44)
 pub const FullSnapshotFileInfo = struct {
     slot: Slot,
     hash: Hash,
@@ -872,8 +856,7 @@ pub const FullSnapshotFileInfo = struct {
         InvalidExtension,
     };
 
-    /// Matches with the regex:
-    /// `^snapshot-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$`.
+    /// Matches with the regex: `^snapshot-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$`.
     pub fn parseFileNameTarZst(
         filename: []const u8,
     ) ParseFileNameTarZstError!FullSnapshotFileInfo {
@@ -966,11 +949,9 @@ pub const FullSnapshotFileInfo = struct {
     }
 };
 
-/// information on an incremental snapshot including the filename, base slot (full snapshot), slot,
-/// and hash
+/// information on an incremental snapshot including the filename, base slot (full snapshot), slot, and hash
 ///
-/// Analogous to [IncrementalSnapshotArchiveInfo](
-/// https://github.com/anza-xyz/agave/blob/59bf180/runtime/src/snapshot_archive_info.rs#L103)
+/// Analogous to [IncrementalSnapshotArchiveInfo](https://github.com/anza-xyz/agave/blob/59bf1809fe5115f0fad51e80cc0a19da1496e2e9/runtime/src/snapshot_archive_info.rs#L103)
 pub const IncrementalSnapshotFileInfo = struct {
     base_slot: Slot,
     slot: Slot,
@@ -1010,10 +991,7 @@ pub const IncrementalSnapshotFileInfo = struct {
         InvalidExtension,
     };
 
-    /// Matches against regex:
-    // sig fmt: off
-    /// `^incremental-snapshot-(?P<base_slot>[[:digit:]]+)-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$`.
-    // sig fmt: on
+    /// Matches against regex: `^incremental-snapshot-(?P<base_slot>[[:digit:]]+)-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)\.(?P<ext>tar\.zst)$`.
     pub fn parseFileNameTarZst(
         filename: []const u8,
     ) ParseFileNameTarZstError!IncrementalSnapshotFileInfo {
@@ -1050,10 +1028,7 @@ pub const IncrementalSnapshotFileInfo = struct {
         InvalidHash,
     };
 
-    /// Matches with the regex:
-    // sig fmt: off
-    /// `incremental-snapshot-(?P<base_slot>[[:digit:]]+)-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)`.
-    // sig fmt: on
+    /// Matches with the regex: `incremental-snapshot-(?P<base_slot>[[:digit:]]+)-(?P<slot>[[:digit:]]+)-(?P<hash>[[:alnum:]]+)`.
     /// Returns the full snapshot info based on the parsed section, and the index to the
     /// remainder of the unparsed section of `filename`, which the caller can check for
     /// the expected extension.
@@ -1223,14 +1198,10 @@ pub const SnapshotFiles = struct {
                 continue;
             }
             if (latest_incremental.slot == _incremental.slot) {
-                // TODO: if they have the same slot, that means they have different hashes, despite
-                // it being
-                // impossible for a given slot range to possess two different hashes; we have no way
-                // at this
-                // stage to unambiguously decide which of the two snapshots we want to select, since
-                // either
-                // could be valid. For now, we panic, but we should gracefully report this in some
-                // way.
+                // TODO: if they have the same slot, that means they have different hashes, despite it being
+                // impossible for a given slot range to possess two different hashes; we have no way at this
+                // stage to unambiguously decide which of the two snapshots we want to select, since either
+                // could be valid. For now, we panic, but we should gracefully report this in some way.
                 std.debug.panic("TODO: report this error gracefully in some way ({s} vs {s})", .{
                     latest_incremental.snapshotArchiveName().constSlice(),
                     _incremental.snapshotArchiveName().constSlice(),
@@ -1247,8 +1218,7 @@ pub const SnapshotFiles = struct {
 
 /// Represents the full manifest optionally combined with an incremental manifest.
 ///
-/// Analogous to [SnapshotBankFields](
-/// https://github.com/anza-xyz/agave/blob/2de7b56/runtime/src/serde_snapshot.rs#L299)
+/// Analogous to [SnapshotBankFields](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L299)
 pub const FullAndIncrementalManifest = struct {
     full: Manifest,
     incremental: ?Manifest,
@@ -1466,8 +1436,7 @@ pub const generate = struct {
         try sig.utils.tar.writeTarHeader(archive_writer, .directory, "accounts/", 0);
     }
 
-    /// Writes the account file header - follow this up by writing the file content to
-    /// `archive_writer`,
+    /// Writes the account file header - follow this up by writing the file content to `archive_writer`,
     /// and then follow that up with `writeAccountFilePadding(archive_writer, file_info.length)`.
     /// Do this for each account file included in the snapshot.
     pub fn writeAccountFileHeader(

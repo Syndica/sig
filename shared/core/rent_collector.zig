@@ -35,7 +35,7 @@ pub const CollectedInfo = struct {
     pub const NoneCollected: CollectedInfo = .{ .rent_amount = 0, .account_data_len_reclaimed = 0 };
 };
 
-// [agave] https://github.com/anza-xyz/solana-sdk/blob/801ac25/rent-collector/src/lib.rs#L21
+// [agave] https://github.com/anza-xyz/solana-sdk/blob/801ac25f6d35d94736ed576425e44f9ec63de809/rent-collector/src/lib.rs#L21
 pub const RentCollector = struct {
     epoch: Epoch,
     epoch_schedule: EpochSchedule,

@@ -228,10 +228,7 @@ fn buildTxWithMeta(
             .pre_token_balances = try cloneTokenBals(arena, entry.pre_token_balances),
             .post_token_balances = try cloneTokenBals(arena, entry.post_token_balances),
             // Per-transaction rewards are always empty in Agave.
-            // [agave]
-            // sig fmt: off
-            // https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/transaction_status_service.rs#L190
-            // sig fmt: on
+            // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/transaction_status_service.rs#L190
             .rewards = &.{},
             .loaded_addresses = .{
                 .writable = try arena.dupe(sig.core.Pubkey, entry.loaded_addresses.writable),

@@ -92,8 +92,7 @@ pub fn insertBankHash(
     try self.ledger.db.put(schema.bank_hash, slot, data);
 }
 
-/// Analogous to [set_dead_slot](
-/// https://github.com/anza-xyz/agave/blob/2a2f6b9/ledger/src/blockstore.rs#L4028)
+/// Analogous to [set_dead_slot](https://github.com/anza-xyz/agave/blob/2a2f6b976d4a7f5cb2b2552564a603e03eba8bae/ledger/src/blockstore.rs#L4028)
 pub fn setDeadSlot(
     self: *const ResultWriter,
     slot: Slot,
@@ -113,8 +112,7 @@ pub fn writePerfSample(
 
 /// Store a duplicate slot proof for the given slot.
 ///
-/// Analogous to [store_duplicate_slot](
-/// https://github.com/anza-xyz/agave/blob/60ba168/ledger/src/blockstore.rs#L4005)
+/// Analogous to [store_duplicate_slot](https://github.com/anza-xyz/agave/blob/60ba168d54d7ac6683f8f2e41a0e325f29d9ab2b/ledger/src/blockstore.rs#L4005)
 pub fn storeDuplicateSlot(
     self: *const ResultWriter,
     slot: Slot,
@@ -144,8 +142,7 @@ pub fn setDuplicateConfirmedSlotsAndHashes(
     try setter.commit();
 }
 
-/// Returns a struct which can be used to enact the same operation as
-/// `setDuplicateConfirmedSlotsAndHashes`, incrementally.
+/// Returns a struct which can be used to enact the same operation as `setDuplicateConfirmedSlotsAndHashes`, incrementally.
 pub fn setDuplicateConfirmedSlotsAndHashesIncremental(
     self: *const ResultWriter,
 ) !SetDuplicateConfirmedSlotsAndHashesIncremental {
@@ -440,8 +437,7 @@ pub fn setAndChainConnectedOnRootAndNextSlots(
     try self.ledger.db.commit(&write_batch);
 }
 
-/// Analogous to [insert_optimistic_slot](
-/// https://github.com/anza-xyz/agave/blob/f149dec/ledger/src/blockstore.rs#L3937)
+/// Analogous to [insert_optimistic_slot](https://github.com/anza-xyz/agave/blob/f149dec1d2c98c74305c6d34b494379994731377/ledger/src/blockstore.rs#L3937)
 pub fn insertOptimisticSlot(
     self: *const ResultWriter,
     slot: Slot,

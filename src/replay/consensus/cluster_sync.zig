@@ -155,29 +155,19 @@ pub const SlotData = struct {
     duplicate_slots: DuplicateSlots,
     latest_validator_votes: LatestValidatorVotes,
 
-    // sig fmt: off
-    /// Analogous to [DuplicateSlotsTracker](https://github.com/anza-xyz/agave/blob/0315eb6/core/src/repair/cluster_slot_state_verifier.rs#L18)
-    // sig fmt: on
+    /// Analogous to [DuplicateSlotsTracker](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L18)
     pub const DuplicateSlots = collections.SortedSetUnmanaged(Slot);
 
-    // sig fmt: off
-    /// Analogous to [DuplicateSlotsToRepair](https://github.com/anza-xyz/agave/blob/0315eb6/core/src/repair/cluster_slot_state_verifier.rs#L19)
-    // sig fmt: on
+    /// Analogous to [DuplicateSlotsToRepair](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L19)
     pub const DuplicateSlotsToRepair = std.AutoArrayHashMapUnmanaged(Slot, Hash);
 
-    // sig fmt: off
-    /// Analogous to [PurgeRepairSlotCounter](https://github.com/anza-xyz/agave/blob/0315eb6/core/src/repair/cluster_slot_state_verifier.rs#L20)
-    // sig fmt: on
+    /// Analogous to [PurgeRepairSlotCounter](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L20)
     pub const PurgeRepairSlotCounters = collections.SortedMapUnmanaged(Slot, usize);
 
-    // sig fmt: off
-    /// Analogous to [EpochSlotsFrozenSlots](https://github.com/anza-xyz/agave/blob/0315eb6/core/src/repair/cluster_slot_state_verifier.rs#L22)
-    // sig fmt: on
+    /// Analogous to [EpochSlotsFrozenSlots](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L22)
     pub const EpochSlotsFrozenSlots = collections.SortedMapUnmanaged(Slot, Hash);
 
-    // sig fmt: off
-    /// Analogous to [DuplicateConfirmedSlots](https://github.com/anza-xyz/agave/blob/0315eb6/core/src/repair/cluster_slot_state_verifier.rs#L24)
-    // sig fmt: on
+    /// Analogous to [DuplicateConfirmedSlots](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L24)
     pub const DuplicateConfirmedSlots = collections.SortedMapUnmanaged(Slot, Hash);
 
     pub const empty: SlotData = .{
@@ -206,9 +196,7 @@ pub const SlotData = struct {
     }
 };
 
-// sig fmt: off
-/// Analogous to [UnfrozenGossipVerifiedVoteHashes](https://github.com/anza-xyz/agave/blob/0315eb6/core/src/unfrozen_gossip_verified_vote_hashes.rs#L8)
-// sig fmt: on
+/// Analogous to [UnfrozenGossipVerifiedVoteHashes](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/unfrozen_gossip_verified_vote_hashes.rs#L8)
 pub const UnfrozenGossipVerifiedVoteHashes = struct {
     votes_per_slot: sig.utils.collections.SortedMapUnmanaged(Slot, HashToVotesMap),
 
@@ -226,8 +214,7 @@ pub const UnfrozenGossipVerifiedVoteHashes = struct {
         votes_per_slot.deinit(allocator);
     }
 
-    /// Update `latest_validator_votes_for_frozen_slots` if gossip has seen a newer vote for a
-    /// frozen slot.
+    /// Update `latest_validator_votes_for_frozen_slots` if gossip has seen a newer vote for a frozen slot.
     pub fn addVote(
         self: *UnfrozenGossipVerifiedVoteHashes,
         allocator: std.mem.Allocator,
@@ -237,8 +224,7 @@ pub const UnfrozenGossipVerifiedVoteHashes = struct {
         is_frozen: bool,
         latest_validator_votes_for_frozen_slots: *LatestValidatorVotes,
     ) !void {
-        // If this is a frozen slot, then we need to update the
-        // `latest_validator_votes_for_frozen_slots`
+        // If this is a frozen slot, then we need to update the `latest_validator_votes_for_frozen_slots`
         const was_added, //
         const maybe_latest_frozen_vote_slot //
         = if (is_frozen) try latest_validator_votes_for_frozen_slots.checkAddVote(
@@ -267,8 +253,7 @@ pub const UnfrozenGossipVerifiedVoteHashes = struct {
             // 1) `vote_slot` was not yet frozen
             // 2) and `vote_slot` >= than the latest frozen vote slot.
 
-            // Thus we want to record this vote for later, in case a slot with this `vote_slot` +
-            // hash gets
+            // Thus we want to record this vote for later, in case a slot with this `vote_slot` + hash gets
             // frozen later
             const vps_gop = try self.votes_per_slot.getOrPut(allocator, vote_slot);
             errdefer if (!vps_gop.found_existing) {
@@ -498,8 +483,7 @@ pub const EpochSlotsFrozenState = struct {
     }
 };
 
-/// Analogous to [process_ancestor_hashes_duplicate_slots](
-/// https://github.com/anza-xyz/agave/blob/0315eb6/core/src/replay_stage.rs#L1627)
+/// Analogous to [process_ancestor_hashes_duplicate_slots](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L1627)
 fn processAncestorHashesDuplicateSlots(
     allocator: std.mem.Allocator,
     logger: replay.service.Logger,
@@ -568,8 +552,7 @@ fn processAncestorHashesDuplicateSlots(
 /// This only tracks duplicate slot confirmations on the exact
 /// single slots and does not account for votes on their descendants. Used solely
 /// for duplicate slot recovery.
-/// Analogous to [process_duplicate_confirmed_slots](
-/// https://github.com/anza-xyz/agave/blob/0315eb6/core/src/replay_stage.rs#L1866)
+/// Analogous to [process_duplicate_confirmed_slots](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L1866)
 fn processDuplicateConfirmedSlots(
     allocator: std.mem.Allocator,
     logger: replay.service.Logger,
@@ -632,8 +615,7 @@ fn processDuplicateConfirmedSlots(
     }
 }
 
-/// Analogous to [process_gossip_verified_vote_hashes](
-/// https://github.com/anza-xyz/agave/blob/0315eb6/core/src/replay_stage.rs#L1917)
+/// Analogous to [process_gossip_verified_vote_hashes](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L1917)
 fn processGossipVerifiedVoteHashes(
     allocator: std.mem.Allocator,
     gossip_verified_vote_hashes: []const GossipVerifiedVoteHash,
@@ -659,8 +641,7 @@ fn processGossipVerifiedVoteHashes(
     }
 }
 
-/// Analogous to [process_popular_pruned_forks](
-/// https://github.com/anza-xyz/agave/blob/0315eb6/core/src/replay_stage.rs#L1828)
+/// Analogous to [process_popular_pruned_forks](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L1828)
 fn processPrunedButPopularForks(
     logger: replay.service.Logger,
     pruned_but_popular_forks_receiver: *sig.sync.Channel(Slot),
@@ -697,8 +678,7 @@ fn processPrunedButPopularForks(
 }
 
 /// Checks for and handle forks with duplicate slots.
-/// Analogous to [process_duplicate_slots](
-/// https://github.com/anza-xyz/agave/blob/0315eb6/core/src/replay_stage.rs#L1938)
+/// Analogous to [process_duplicate_slots](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/replay_stage.rs#L1938)
 fn processDuplicateSlots(
     allocator: std.mem.Allocator,
     logger: replay.service.Logger,
@@ -753,8 +733,7 @@ fn processDuplicateSlots(
 
 /// Finds the duplicate confirmed hash for a slot.
 ///
-/// 1) If `maybe_slot_frozen_hash != null and isDuplicateConfirmed(maybe_slot_frozen_hash.?)`,
-/// `return maybe_slot_frozen_hash.?`
+/// 1) If `maybe_slot_frozen_hash != null and isDuplicateConfirmed(maybe_slot_frozen_hash.?)`, `return maybe_slot_frozen_hash.?`
 /// 2) If `maybe_duplicate_confirmed_hash != null`, `return maybe_duplicate_confirmed_hash.?`
 /// 3) Else return null
 ///
@@ -798,11 +777,8 @@ fn getDuplicateConfirmedHash(
     return slot_frozen_hash;
 }
 
-// sig fmt: off
-/// Analogous to [check_slot_agrees_with_cluster](https://github.com/anza-xyz/agave/blob/0315eb6/core/src/repair/cluster_slot_state_verifier.rs#L848)
-// sig fmt: on
-/// NOTE: Where in agave the different modes of operation are represented as tagged union variants,
-/// here they're simply different functions inside this namespace.
+/// Analogous to [check_slot_agrees_with_cluster](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L848)
+/// NOTE: Where in agave the different modes of operation are represented as tagged union variants, here they're simply different functions inside this namespace.
 pub const check_slot_agrees_with_cluster = struct {
     /// aka `BankFrozen` in agave.
     pub fn slotFrozen(
@@ -1249,8 +1225,7 @@ pub const check_slot_agrees_with_cluster = struct {
                 );
             },
             .unprocessed => {
-                // If the slot was not popular pruned, we would never have made it here, as the slot
-                // is
+                // If the slot was not popular pruned, we would never have made it here, as the slot is
                 // yet to be replayed
                 std.debug.assert(is_popular_pruned);
                 // The cluster sample found the troublesome slot which caused this fork to be pruned
@@ -1267,9 +1242,7 @@ pub const check_slot_agrees_with_cluster = struct {
     }
 };
 
-// sig fmt: off
-/// Analogous to [apply_state_change](https://github.com/anza-xyz/agave/blob/0315eb6/core/src/repair/cluster_slot_state_verifier.rs#L793),
-// sig fmt: on
+/// Analogous to [apply_state_change](https://github.com/anza-xyz/agave/blob/0315eb6adc87229654159448344972cbe484d0c7/core/src/repair/cluster_slot_state_verifier.rs#L793),
 /// or more concretely, each function is analogous to a variant in the `ResultingStateChange`
 /// tagged union, a list of which is supplied to the function, representing a list of these
 /// function calls.

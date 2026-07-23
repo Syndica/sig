@@ -64,9 +64,8 @@ const cloneMapAndValues = sig.utils.collections.cloneMapAndValues;
 /// fd_slot_bank, excluding data that is epoch-scoped or not constant during a
 /// slot.
 ///
-/// [Bank](https://github.com/anza-xyz/agave/blob/161fc19/runtime/src/bank.rs#L744)
-/// [fd_slot_bank](
-/// https://github.com/firedancer-io/firedancer/blob/9a18101/src/flamenco/types/fd_types.h#L2270)
+/// [Bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank.rs#L744)
+/// [fd_slot_bank](https://github.com/firedancer-io/firedancer/blob/9a18101ee6e1094f27c7fb81da9ef3a7b9efb18b/src/flamenco/types/fd_types.h#L2270)
 pub const SlotConstants = struct {
     /// The slot that this one builds off of. `parent_slot == slot - 1`, unless
     /// there is forking or skipped slots.
@@ -185,9 +184,8 @@ pub const SlotConstants = struct {
 /// Contains reference counted data in the reward_status. Beware of races cause by
 /// acquisition and deinitialization across threads.
 ///
-/// [Bank](https://github.com/anza-xyz/agave/blob/161fc19/runtime/src/bank.rs#L744)
-/// [fd_slot_bank](
-/// https://github.com/firedancer-io/firedancer/blob/9a18101/src/flamenco/types/fd_types.h#L2270)
+/// [Bank](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank.rs#L744)
+/// [fd_slot_bank](https://github.com/firedancer-io/firedancer/blob/9a18101ee6e1094f27c7fb81da9ef3a7b9efb18b/src/flamenco/types/fd_types.h#L2270)
 pub const SlotState = struct {
     /// FIFO queue of `recent_blockhash` items
     blockhash_queue: RwMux(BlockhashQueue),
@@ -349,8 +347,7 @@ pub const SlotState = struct {
         return self.tick_height.load(.monotonic);
     }
 
-    /// Identical to fromBankFields however it does not validate stake and vote accounts. The
-    /// credits
+    /// Identical to fromBankFields however it does not validate stake and vote accounts. The credits
     /// observed field for stake accounts is set to zero. To create a test where credits observed is
     /// set for stake accounts, create an DB with the correct stake states and use fromBankFields.
     pub fn fromBankFieldsForTest(
@@ -396,7 +393,7 @@ pub fn parseStakes(
     errdefer stake_accounts.deinit(allocator);
 
     // Validate stake accounts cache against accounts DB
-    // [agave] https://github.com/anza-xyz/agave/blob/b6c96e8/runtime/src/stakes.rs#L196-L236
+    // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/stakes.rs#L196-L236
     const keys = stakes.stake_accounts.keys();
     const values = stakes.stake_accounts.values();
     for (keys, values) |key, value| {
@@ -406,13 +403,10 @@ pub fn parseStakes(
         defer account.deinit(allocator);
 
         // Stake accounts may be orphaned in the sense that they reference closed, uninitialized, or
-        // invalid vote accounts. Such stake accounts are still considered valid and remain in the
-        // stakes
+        // invalid vote accounts. Such stake accounts are still considered valid and remain in the stakes
         // cache until they are explicitly removed (eg, via deactivation and withdrawal). Since the
-        // vote accounts cache contains ALL valid vote accounts, if a stake account references a
-        // vote
-        // account which is not cached, the vote account must either be closed, uninitialized or
-        // invalid.
+        // vote accounts cache contains ALL valid vote accounts, if a stake account references a vote
+        // account which is not cached, the vote account must either be closed, uninitialized or invalid.
         const voter_pubkey = value.voter_pubkey;
         if (stakes.vote_accounts.getAccount(voter_pubkey) == null) {
             if (try account_reader.get(allocator, voter_pubkey)) |vote_account| {
@@ -460,17 +454,13 @@ pub fn parseStakes(
     }
 
     // NOTE: Validate vote accounts currently only performs partial verification. It does not fully
-    // verify that the account in accounts db matches the account in the snapshot stakes cache
-    // because
-    // our internal VoteAccount representation does not contain the full account info or data.
-    // Instead
-    // we verify that the VoteStateV3, account lamports, and account owner are valid. We do not
-    // verify
+    // verify that the account in accounts db matches the account in the snapshot stakes cache because
+    // our internal VoteAccount representation does not contain the full account info or data. Instead
+    // we verify that the VoteStateV3, account lamports, and account owner are valid. We do not verify
     // that the account rent_epoch, executable flag are consistent, or that the serialised data is
     // identical (potential for trailing bytes...).
     //
-    // This could be addressed by deserializing the full vote account as it is stored in the
-    // snapshot,
+    // This could be addressed by deserializing the full vote account as it is stored in the snapshot,
     // and converting to our lighter weight type after validation.
     const voters = try stakes.vote_accounts.clone(allocator);
     errdefer voters.deinit(allocator);
@@ -540,8 +530,7 @@ pub fn parseStakesForTest(
 
 /// Used for serialization of aggregated bank data, for example in snapshots.
 ///
-/// Analogous to [DeserializableVersionedBank](
-/// https://github.com/anza-xyz/agave/blob/9c899a7/runtime/src/serde_snapshot.rs#L134).
+/// Analogous to [DeserializableVersionedBank](https://github.com/anza-xyz/agave/blob/9c899a72414993dc005f11afb5df10752b10810b/runtime/src/serde_snapshot.rs#L134).
 pub const BankFields = struct {
     blockhash_queue: BlockhashQueue,
     ancestors: Ancestors,
@@ -566,8 +555,7 @@ pub const BankFields = struct {
     block_height: u64,
     collector_id: Pubkey,
     collector_fees: u64,
-    /// This is a FeeCalculator in Agave which is just a wrapped u64 containing lamports per
-    /// signature.
+    /// This is a FeeCalculator in Agave which is just a wrapped u64 containing lamports per signature.
     /// Lamports per signature is already stored in `fee_rate_governor`, so
     fee_calculator: u64,
     fee_rate_governor: FeeRateGovernor,
@@ -764,8 +752,7 @@ pub fn ancestorsRandom(
     return ancestors;
 }
 
-/// Analogous to [UnusedAccounts](
-/// https://github.com/anza-xyz/agave/blob/2de7b56/runtime/src/serde_snapshot.rs#L123)
+/// Analogous to [UnusedAccounts](https://github.com/anza-xyz/agave/blob/2de7b565e8b1101824a5e3bac74f3a8cce88ea72/runtime/src/serde_snapshot.rs#L123)
 pub const UnusedAccounts = struct {
     unused1: sig.utils.collections.PubkeyMap(void),
     unused2: sig.utils.collections.PubkeyMap(void),

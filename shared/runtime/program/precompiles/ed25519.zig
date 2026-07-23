@@ -52,9 +52,7 @@ pub fn execute(_: std.mem.Allocator, ic: *InstructionContext) InstructionError!v
 }
 
 // https://github.com/anza-xyz/agave/blob/a8aef04/sdk/src/ed25519_instruction.rs#L88
-// sig fmt: off
 // https://github.com/firedancer-io/firedancer/blob/af74882/src/flamenco/runtime/program/fd_precompiles.c#L118
-// sig fmt: on
 pub fn verify(
     data: []const u8,
     all_instruction_datas: []const []const u8,

@@ -59,9 +59,7 @@ pub fn execute(_: std.mem.Allocator, ic: *InstructionContext) InstructionError!v
     };
 }
 
-// sig fmt: off
 // https://github.com/firedancer-io/firedancer/blob/af74882/src/flamenco/runtime/program/fd_precompiles.c#L227
-// sig fmt: on
 // https://github.com/anza-xyz/agave/blob/a8aef04/sdk/src/secp256k1_instruction.rs#L925
 pub fn verify(
     data: []const u8,

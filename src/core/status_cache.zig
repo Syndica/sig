@@ -35,7 +35,7 @@ const Fork = struct {
 pub const Status = enum { pending, failed, succeeded };
 
 /// This is internally locking and thread safe.
-/// [agave] https://github.com/anza-xyz/agave/blob/b6eacb1/runtime/src/status_cache.rs#L39
+/// [agave] https://github.com/anza-xyz/agave/blob/b6eacb135037ab1021683d28b67a3c60e9039010/runtime/src/status_cache.rs#L39
 pub const StatusCache = struct {
     state: RwMux(State),
 
@@ -119,10 +119,8 @@ pub const StatusCache = struct {
         state.mut().slot_deltas.deinit(allocator);
     }
 
-    /// Returns the fork for the given key and blockhash, if it exists and is in the ancestors or
-    /// roots.
-    /// The returned fork is owned by the caller, allocation only occurs if the inner transaction
-    /// error
+    /// Returns the fork for the given key and blockhash, if it exists and is in the ancestors or roots.
+    /// The returned fork is owned by the caller, allocation only occurs if the inner transaction error
     /// contains an instruction error of the borsh variant which stores a heap string.
     fn getFork(
         self: *StatusCache,
@@ -179,7 +177,7 @@ pub const StatusCache = struct {
     /// Like `getFork`, but iterates all blockhashes in the cache.
     /// Used when the caller doesn't know which blockhash the transaction used
     /// (e.g. RPC `getSignatureStatuses`).
-    /// [agave] https://github.com/anza-xyz/agave/blob/b6eacb1/runtime/src/status_cache.rs#L146
+    /// [agave] https://github.com/anza-xyz/agave/blob/b6eacb135037ab1021683d28b67a3c60e9039010/runtime/src/status_cache.rs#L146
     pub fn getForkAnyBlockhash(
         self: *StatusCache,
         allocator: std.mem.Allocator,

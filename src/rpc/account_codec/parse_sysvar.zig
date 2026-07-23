@@ -81,10 +81,7 @@ pub fn parseSysvar(
         // (the `Rent` sysvar's `exemption_threshold`/`burn_percent` fields are
         // deprecated). The first u64 of the on-chain account is still `lamports_per_byte_year`
         // on the wire, which v4.1 renames to `lamports_per_byte`, the value is unchanged.
-        // [agave]
-        // sig fmt: off
-        // https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/account-decoder/src/parse_sysvar.rs#L56-L125
-        // sig fmt: on
+        // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/account-decoder/src/parse_sysvar.rs#L56-L125
         return SysvarAccountType{
             .rent = UiRent{
                 .lamportsPerByte = Stringified(u64).init(rent.lamports_per_byte_year),
@@ -250,8 +247,7 @@ pub const UiFees = struct {
     feeCalculator: UiFeeCalculator,
 };
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/account-decoder/src/parse_sysvar.rs#L120
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/account-decoder/src/parse_sysvar.rs#L120
 pub const UiRent = struct {
     lamportsPerByte: Stringified(u64),
 };

@@ -28,9 +28,7 @@ pub fn executeInstruction(
     defer zone.deinit();
 
     // [agave]
-    // sig fmt: off
     // https://github.com/anza-xyz/agave/blob/a705c76/program-runtime/src/invoke_context.rs#L471-L474
-    // sig fmt: on
     try pushInstruction(tc, instruction_info);
 
     processNextInstruction(allocator, tc) catch |err| {
@@ -67,9 +65,7 @@ pub fn executeNativeCpiInstruction(
 /// [agave]
 /// https://github.com/anza-xyz/agave/blob/a705c76/program-runtime/src/invoke_context.rs#L471-L475
 /// [fd]
-// sig fmt: off
 /// https://github.com/firedancer-io/firedancer/blob/dfadb7d/src/flamenco/runtime/fd_executor.c#L1034-L1035
-// sig fmt: on
 pub fn pushInstruction(
     tc: *TransactionContext,
     initial_instruction_info: InstructionInfo,
@@ -81,11 +77,9 @@ pub fn pushInstruction(
     const program_id = instruction_info.program_meta.pubkey;
 
     // [agave]
-    // sig fmt: off
     // https://github.com/anza-xyz/agave/blob/92b11cd/program-runtime/src/invoke_context.rs#L245-L283
     // [fd]
     // https://github.com/firedancer-io/firedancer/blob/dfadb7d/src/flamenco/runtime/fd_executor.c#L1048-L1070
-    // sig fmt: on
     const stack = tc.instruction_stack.constSlice();
     if (stack.len > 0) {
         // Reentrancy is only forbidden when the caller (current top of stack)
@@ -196,9 +190,7 @@ fn processNextInstruction(
 
     // Emulate Agave's program_map by checking the feature gates here.
     // [fd]
-    // sig fmt: off
     // https://github.com/firedancer-io/firedancer/blob/31e08b0/src/flamenco/runtime/fd_executor.c#L179-L187
-    // sig fmt: on
     if (builtin.gate) |gate| if (!tc.feature_set.active(gate, tc.slot)) {
         return InstructionError.UnsupportedProgramId;
     };
@@ -216,9 +208,7 @@ fn processNextInstruction(
         // [agave]
         // https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/invoke_context.rs#L549
         // [fd]
-        // sig fmt: off
         // https://github.com/firedancer-io/firedancer/blob/913e472/src/flamenco/runtime/fd_executor.c#L1347-L1359
-        // sig fmt: on
         try stable_log.programInvoke(
             ic.tc,
             program_id,
@@ -266,9 +256,7 @@ pub fn popInstruction(
 
     // TODO: pop syscall context and record trace log
     // [agave]
-    // sig fmt: off
     // https://github.com/anza-xyz/agave/blob/a705c76/program-runtime/src/invoke_context.rs#L291-L294
-    // sig fmt: on
 
     // [agave]
     // https://github.com/anza-xyz/solana-sdk/blob/e1554f4/transaction-context/src/lib.rs#L407-L409

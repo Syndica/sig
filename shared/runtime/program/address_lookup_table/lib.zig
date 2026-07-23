@@ -90,9 +90,7 @@ pub const LookupTableMeta = struct {
 };
 
 // [agave]
-// sig fmt: off
 // https://github.com/anza-xyz/agave/blob/d300f37/sdk/program/src/address_lookup_table/state.rs#L133-L134
-// sig fmt: on
 pub const AddressLookupTable = struct {
     meta: LookupTableMeta,
     addresses: []const Pubkey,
@@ -111,9 +109,7 @@ pub const AddressLookupTable = struct {
     }
 
     // [agave]
-    // sig fmt: off
     // https://github.com/anza-xyz/agave/blob/d300f37/sdk/program/src/address_lookup_table/state.rs#L224
-    // sig fmt: on
     /// NOTE: This AddressLookupTable's 'addresses' slice will point to inside 'data' - consider
     /// if you need to clone the buffer (see deserializeOwned).
     pub fn deserialize(
@@ -150,9 +146,7 @@ pub const AddressLookupTable = struct {
 
 // --- instruction types ---
 
-// sig fmt: off
 // https://github.com/anza-xyz/agave/blob/7e8a1dd/sdk/program/src/address_lookup_table/instruction.rs#L13
-// sig fmt: on
 pub const Instruction = union(enum) {
     /// Create an address lookup table
     ///
@@ -198,9 +192,7 @@ pub const Instruction = union(enum) {
     CloseLookupTable,
 };
 
-// sig fmt: off
 // https://github.com/anza-xyz/agave/blob/7e8a1dd/sdk/program/src/address_lookup_table/instruction.rs#L21
-// sig fmt: on
 pub const CreateLookupTable = struct {
     /// A recent slot must be used in the derivation path
     /// for each initialized table. When closing table accounts,
@@ -214,9 +206,7 @@ pub const CreateLookupTable = struct {
     bump_seed: u8,
 };
 
-// sig fmt: off
 // https://github.com/anza-xyz/agave/blob/7e8a1dd/sdk/program/src/address_lookup_table/instruction.rs#L51
-// sig fmt: on
 pub const ExtendLookupTable = struct {
     new_addresses: []const Pubkey,
 };

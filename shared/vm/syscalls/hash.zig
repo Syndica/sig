@@ -75,25 +75,16 @@ pub fn poseidon(
 
     const enforce_padding = tc.feature_set.active(.poseidon_enforce_padding, tc.slot);
 
-    // [agave]
-    // sig fmt: off
-    // https://github.com/firedancer-io/agave/blob/66ea0a1/programs/bpf_loader/src/syscalls/mod.rs#L1815-L1825
-    // sig fmt: on
+    // [agave] https://github.com/firedancer-io/agave/blob/66ea0a11f2f77086d33253b4028f6ae7083d78e4/programs/bpf_loader/src/syscalls/mod.rs#L1815-L1825
     var hasher = phash.Hasher.init(endianness);
     for (slices.constSlice()) |slice| {
         // Makes sure the input is a valid size, soft-error if it isn't.
-        // [fd]
-        // sig fmt: off
-        // https://github.com/firedancer-io/firedancer/blob/d848e9b/src/ballet/bn254/fd_poseidon.c#L105-L108
-        // sig fmt: on
+        // [fd] https://github.com/firedancer-io/firedancer/blob/d848e9b27a80cc344772521689671ef05de28653/src/ballet/bn254/fd_poseidon.c#L105-L108
         if (slice.len == 0 or slice.len > 32) {
             registers.set(.r0, 1);
             return;
         }
-        // [fd]
-        // sig fmt: off
-        // https://github.com/firedancer-io/firedancer/blob/d848e9b/src/ballet/bn254/fd_poseidon.c#L102-L104
-        // sig fmt: on
+        // [fd] https://github.com/firedancer-io/firedancer/blob/d848e9b27a80cc344772521689671ef05de28653/src/ballet/bn254/fd_poseidon.c#L102-L104
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/syscalls/src/lib.rs#L1789
         // SIMD-367 enforces the input length to be 32 bytes.
         if (enforce_padding and slice.len != 32) {

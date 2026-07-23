@@ -7,12 +7,8 @@ const protobuf = @import("protobuf");
 const EMIT_LOGS = false;
 const STACK_SIZE = 32 * 1024 * 1024;
 
-/// [fd]
-// sig fmt: off
-/// https://github.com/firedancer-io/firedancer/blob/61e3d2e/src/flamenco/runtime/tests/harness/fd_exec_sol_compat.c#L583
-// sig fmt: on
-/// [solfuzz-agave]
-/// https://github.com/firedancer-io/solfuzz-agave/blob/7d039a8/src/txn_fuzzer.rs#L46
+/// [fd] https://github.com/firedancer-io/firedancer/blob/61e3d2e21419fc71002aa1c037ab637cea85416d/src/flamenco/runtime/tests/harness/fd_exec_sol_compat.c#L583
+/// [solfuzz-agave] https://github.com/firedancer-io/solfuzz-agave/blob/7d039a85e55227fdd7ae5c9d0e1c36c7cf5b01f5/src/txn_fuzzer.rs#L46
 pub export fn sol_compat_txn_execute_v1(
     out_ptr: [*]u8,
     out_size: *u64,
@@ -145,8 +141,7 @@ fn executeTxnContext(
     const fixture_slot: Slot = if (clock) |c| c.slot else 10;
 
     // TODO: use??
-    // const fee_collector = Pubkey.parseRuntime("1111111111111111111111111111111111") catch
-    // unreachable;
+    // const fee_collector = Pubkey.parseRuntime("1111111111111111111111111111111111") catch unreachable;
 
     // Load genesis config
     var genesis_config = GenesisConfig.default(allocator);
@@ -219,7 +214,7 @@ fn executeTxnContext(
     var capitalization: Atomic(u64) = .init(0);
 
     // Bank::new_with_paths(...)
-    // https://github.com/firedancer-io/agave/blob/10fe1eb/runtime/src/bank.rs#L1162
+    // https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/bank.rs#L1162
     {
         try ancestors.addSlot(allocator, 0);
         try ancestors.addSlot(allocator, fixture_slot);
@@ -230,7 +225,7 @@ fn executeTxnContext(
         // bank.feature_set = feature_set;
 
         // Bank::process_genesis_config(...)
-        // https://github.com/firedancer-io/agave/blob/10fe1eb/runtime/src/bank.rs#L2727
+        // https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/bank.rs#L2727
         {
             // Set the feee rate governor
             fee_rate_governor = genesis_config.fee_rate_governor;
@@ -284,7 +279,7 @@ fn executeTxnContext(
         }
 
         // Bank::finish_init(...)
-        // https://github.com/firedancer-io/agave/blob/10fe1eb/runtime/src/bank.rs#L4863
+        // https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/bank.rs#L4863
         {
             // Set reward pool pubkeys
             std.debug.assert(genesis_config.rewards_pools.count() == 0);
@@ -331,12 +326,10 @@ fn executeTxnContext(
             // rather than executing against a synthetic native-loader stub.
             //
             // [solfuzz-agave] call site:
-            // sig fmt: off
-            // https://github.com/firedancer-io/solfuzz-agave/blob/agave-v4.1.0-beta.1/src/txn.rs#L364
-            // sig fmt: on
+            //   https://github.com/firedancer-io/solfuzz-agave/blob/agave-v4.1.0-beta.1/src/txn.rs#L364
             // [agave] `Bank::new_for_txn_tests` (note: only `apply_activated_features`
             // is invoked, not `add_builtin_program_accounts`):
-            //   https://github.com/firedancer-io/agave/blob/c333aca/runtime/src/bank.rs#L1822-L1918
+            //   https://github.com/firedancer-io/agave/blob/c333acac8d88168384e010c4d08462ab3c226b35/runtime/src/bank.rs#L1822-L1918
 
             vm_environment = vm.Environment.initV1(
                 &feature_set,
@@ -352,8 +345,7 @@ fn executeTxnContext(
             try epoch_stakes_map.put(allocator, e, .EMPTY);
         }
 
-        // NOTE: Agave fills the sysvar cache here, we should not need for txn fuzzing as the sysvar
-        // cache is only used in the SVM, so we can
+        // NOTE: Agave fills the sysvar cache here, we should not need for txn fuzzing as the sysvar cache is only used in the SVM, so we can
         // populate immediately before executing transactions. (I think....)
     }
 
@@ -430,8 +422,7 @@ fn executeTxnContext(
         // epoch_stakes = epoch_stakes;
 
         // Create new transaction processor
-        // const transaction_processor =
-        // TransactionBatchProcessor::new_from(&parent.transaction_processor, slot, epoch);
+        // const transaction_processor = TransactionBatchProcessor::new_from(&parent.transaction_processor, slot, epoch);
 
         // Clone rewards pool pubkeys
         // const rewards_pools = parent.rewards_pools.clone();
@@ -468,10 +459,9 @@ fn executeTxnContext(
             );
 
             // stakes_cache.activateEpoch();
-            // Since the stakes cache is empty, we don't need to actually do anything here except
-            // add
+            // Since the stakes cache is empty, we don't need to actually do anything here except add
             // an entry for the parent epoch with zero stakes.
-            // https://github.com/firedancer-io/agave/blob/10fe1eb/runtime/src/stakes.rs#L297
+            // https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/stakes.rs#L297
             {
                 const stakes, var stakes_guard = stakes_cache.stakes.writeWithLock();
                 defer stakes_guard.unlock();
@@ -489,8 +479,7 @@ fn executeTxnContext(
 
             const leader_schedule_epoch = epoch_schedule.getLeaderScheduleEpoch(slot);
             // Since stakes cache is empty, we just need to insert an empty stakes entry
-            // into the epoch stakes map at the leader schedule epoch stakes map if it is not
-            // present
+            // into the epoch stakes map at the leader schedule epoch stakes map if it is not present
             // updateEpochStakes(leader_schedule_epoch);
             if (!epoch_stakes_map.contains(leader_schedule_epoch))
                 try epoch_stakes_map.put(
@@ -521,8 +510,7 @@ fn executeTxnContext(
         } else {
             const leader_schedule_epoch = epoch_schedule.getLeaderScheduleEpoch(slot);
             // Since stakes cache is empty, we just need to insert an empty stakes entry
-            // into the epoch stakes map at the leader schedule epoch stakes map if it is not
-            // present
+            // into the epoch stakes map at the leader schedule epoch stakes map if it is not present
             // updateEpochStakes(leader_schedule_epoch);
             if (!epoch_stakes_map.contains(leader_schedule_epoch)) {
                 try epoch_stakes_map.put(allocator, leader_schedule_epoch, .EMPTY);
@@ -530,8 +518,7 @@ fn executeTxnContext(
         }
 
         // Bank::distribute_partitioned_epoch_rewards(...)
-        // Effectively noop for txn fuzzing purposes since height <
-        // distribution_starting_block_height
+        // Effectively noop for txn fuzzing purposes since height < distribution_starting_block_height
         // See: EpochRewards Debug Log: 0a73c09ab08f77e00b0faa8cf0d70408113b0a92_265678.fix
         // try bank_methods.distributePartitionedEpochRewards();
 
@@ -567,10 +554,8 @@ fn executeTxnContext(
     //     .accounts_db = &accounts_db,
     // });
 
-    // Remove address lookup table, stake, and config program accounts by inserting empty accounts
-    // (zero-lamports)
-    // TODO: investigate: agave uses parent_slot here, but that causes more test failures in our
-    // code.
+    // Remove address lookup table, stake, and config program accounts by inserting empty accounts (zero-lamports)
+    // TODO: investigate: agave uses parent_slot here, but that causes more test failures in our code.
     try account_store.put(slot, program.address_lookup_table.ID, .EMPTY);
     try account_store.put(slot, program.config.ID, .EMPTY);
     try account_store.put(slot, program.stake.ID, .EMPTY);
@@ -677,7 +662,7 @@ fn executeTxnContext(
     // fixture's `bank.total_epoch_stake`, so the `sol_get_epoch_stake` syscall
     // (null vote pubkey) returns that total. Leaving it at 0 made the syscall
     // return 0 and could spuriously trap programs that divide by the result.
-    // [agave] https://github.com/firedancer-io/agave/blob/0acaab9/runtime/src/epoch_stakes.rs#L256
+    // [agave] https://github.com/firedancer-io/agave/blob/0acaab9e8095346c703b47283accfb3e79c99917/runtime/src/epoch_stakes.rs#L256
     const current_epoch_stakes: EpochStakes = blk: {
         var stakes: EpochStakes = .EMPTY;
         if (pb_txn_ctx.bank) |bank| stakes.total_stake = bank.total_epoch_stake;
@@ -713,8 +698,7 @@ fn executeTxnContext(
             blockhash_queue.last_hash.?,
         ),
 
-        // TODO: these values are highly suspicious, we need to note down somewhere how exactly
-        // agave
+        // TODO: these values are highly suspicious, we need to note down somewhere how exactly agave
         // juggles the many different versions of lamports_per_signature.
         .next_lamports_per_signature = last_lamports_per_signature,
         .last_lamports_per_signature = last_lamports_per_signature,
@@ -1161,8 +1145,7 @@ fn accountFromAccountSharedData(
     };
 }
 
-/// A copy of sig hashSlot which is customized to match the behaviour of bank.rehash in
-/// solfuzz-agave.
+/// A copy of sig hashSlot which is customized to match the behaviour of bank.rehash in solfuzz-agave.
 /// Specifically the returned hash is the initial hash combined with the identity hash,
 /// as there is no parent lt hash in the txn fuzzing context.
 pub fn hashSlot(
@@ -1214,7 +1197,7 @@ pub fn hashSlot(
 //     try writer.print("Hash:  {}\n", .{state.hash});
 //     try writer.print("Parent Slot: {}\n", .{state.parent_slot});
 //     try writer.print("Parent Hash: {any}\n", .{state.parent_hash});
-// try writeSlice(allocator, writer, "Ancestors: ", "\n", Slot, state.ancestors.ancestors.keys());
+//     try writeSlice(allocator, writer, "Ancestors: ", "\n", Slot, state.ancestors.ancestors.keys());
 //     try writeAccounts(allocator, writer, state.accounts_db);
 //     try writer.print("\n", .{});
 // }

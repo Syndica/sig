@@ -12,8 +12,7 @@ const hashToU64 = sig.gossip.pull_request.hashToU64;
 pub const GOSSIP_SHARDS_BITS: u32 = 12;
 pub const GOSSIP_SHARDS_LEN: u32 = 1 << GOSSIP_SHARDS_BITS;
 
-/// Analogous to [CrdsShards](
-/// https://github.com/solana-labs/solana/blob/e0203f2/gossip/src/crds_shards.rs#L11)
+/// Analogous to [CrdsShards](https://github.com/solana-labs/solana/blob/e0203f22dc83cb792fa97f91dbe6e924cbd08af1/gossip/src/crds_shards.rs#L11)
 pub const GossipTableShards = struct {
     // shards[k] includes gossip values which the first shard_bits of their hash
     // value is equal to k. Each shard is a mapping from gossip values indices to
@@ -57,8 +56,7 @@ pub const GossipTableShards = struct {
         return @intCast(hash >> shift_bits);
     }
 
-    /// see filterGossipVersionedDatas for more readable (but inefficient) version of what this fcn
-    /// is doing
+    /// see filterGossipVersionedDatas for more readable (but inefficient) version  of what this fcn is doing
     pub fn find(self: *const Self, alloc: std.mem.Allocator, mask: u64, mask_bits: u32) error{OutOfMemory}!std.array_list.Managed(usize) {
         const ones = (~@as(u64, 0) >> @as(u6, @intCast(mask_bits)));
         const match_mask = mask | ones;

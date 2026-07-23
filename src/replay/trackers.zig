@@ -19,7 +19,7 @@ const Tower = sig.consensus.tower.Tower;
 /// minimal information about slots to serve its core focus, rather than the
 /// kitchen-sink style approach of storing everything under the sun.
 ///
-/// [BankForks](https://github.com/anza-xyz/agave/blob/161fc19/runtime/src/bank_forks.rs#L75)
+/// [BankForks](https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank_forks.rs#L75)
 ///
 /// This struct is thread safe for concurrent reads / exclusive writes on slots.
 pub const SlotTracker = struct {
@@ -303,8 +303,7 @@ pub const SlotTracker = struct {
 
     /// Removes all tracked slots other than state_root and its descendants.
     ///
-    /// Analogous to [prune_non_rooted](
-    /// https://github.com/anza-xyz/agave/blob/4412582/runtime/src/bank_forks.rs#L591)
+    /// Analogous to [prune_non_rooted](https://github.com/anza-xyz/agave/blob/441258229dfed75e45be8f99c77865f18886d4ba/runtime/src/bank_forks.rs#L591)
     pub fn prune(
         self: *SlotTracker,
         maybe_thread_pool: ?*ThreadPool,
@@ -432,7 +431,7 @@ pub const CommitmentTracker = struct {
 /// Thread-safe for concurrent reads / exclusive writes.
 ///
 /// Analogous to BlockCommitmentCache in agave.
-/// https://github.com/anza-xyz/agave/blob/b6eacb1/rpc-client-api/src/response.rs#L452
+/// https://github.com/anza-xyz/agave/blob/b6eacb135037ab1021683d28b67a3c60e9039010/rpc-client-api/src/response.rs#L452
 pub const CommitmentStakes = struct {
     state: RwMux(State),
     transaction: Transaction,
@@ -476,7 +475,7 @@ pub const CommitmentStakes = struct {
 
     /// Returns the commitment data for a given slot along with the total active stake.
     ///
-    /// [agave] https://github.com/anza-xyz/agave/blob/b6eacb1/runtime/src/commitment.rs#L82
+    /// [agave] https://github.com/anza-xyz/agave/blob/b6eacb135037ab1021683d28b67a3c60e9039010/runtime/src/commitment.rs#L82
     pub fn getBlockCommitment(self: *CommitmentStakes, slot: Slot) BlockCommitment {
         var state = self.state.read();
         defer state.unlock();
@@ -489,7 +488,7 @@ pub const CommitmentStakes = struct {
     /// Returns the lowest confirmation depth at which >2/3 of total stake
     /// has confirmed the given slot. Returns null if the slot is not tracked.
     ///
-    /// [agave] https://github.com/anza-xyz/agave/blob/765ee54/runtime/src/commitment.rs#L140
+    /// [agave] https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/runtime/src/commitment.rs#L140
     pub fn getConfirmationCount(self: *CommitmentStakes, slot: Slot) ?usize {
         return self.getLockoutCount(slot, VOTE_THRESHOLD_SIZE);
     }
@@ -497,7 +496,7 @@ pub const CommitmentStakes = struct {
     /// Returns the lowest level at which at least `minimum_stake_percentage` of the total epoch
     /// stake is locked out.
     ///
-    /// [agave] https://github.com/anza-xyz/agave/blob/765ee54/runtime/src/commitment.rs#L146
+    /// [agave] https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/runtime/src/commitment.rs#L146
     fn getLockoutCount(
         self: *CommitmentStakes,
         slot: Slot,
@@ -620,8 +619,7 @@ pub const CommitmentStakes = struct {
         /// When `ancestors` is `null` the old (unfiltered) behaviour is used
         /// so that call-sites without a StatusCache still work.
         ///
-        /// Analogous to [AggregateCommitmentService::aggregate_commitment_for_vote_account](
-        /// https://github.com/anza-xyz/agave/blob/765ee54/core/src/commitment_service.rs#L226)
+        /// Analogous to [AggregateCommitmentService::aggregate_commitment_for_vote_account](https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/core/src/commitment_service.rs#L226)
         pub fn observeVoteAccount(
             self: *Transaction,
             tower: *const Tower,
@@ -675,8 +673,7 @@ pub const CommitmentStakes = struct {
         /// Compute the highest root slot where cumulative stake exceeds 2/3
         /// of total stake, matching Agave's `get_highest_super_majority_root`.
         ///
-        /// [agave]
-        /// https://github.com/anza-xyz/agave/blob/765ee54/core/src/commitment_service.rs#L27
+        /// [agave] https://github.com/anza-xyz/agave/blob/765ee54adc4f574b1cd4f03a5500bf46c0af0817/core/src/commitment_service.rs#L27
         fn highestSuperMajorityRoot(self: *const Transaction) Slot {
             if (self.total_stake == 0) return 0;
 

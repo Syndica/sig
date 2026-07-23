@@ -87,9 +87,7 @@ pub const Finalize = struct {
 };
 
 /// [agave]
-// sig fmt: off
 /// https://docs.rs/solana-loader-v4-interface/latest/src/solana_loader_v4_interface/instruction.rs.html#15
-// sig fmt: on
 pub const Instruction = union(enum) {
     /// Write ELF data into an undeployed program account.
     ///

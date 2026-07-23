@@ -24,8 +24,7 @@ const POSEIDON_PARAMETERS_BN254_X5 = 0;
 const POSEIDON_ENDIANNESS_BIG_ENDIAN = 0;
 const POSEIDON_ENDIANNESS_LITTLE_ENDIAN = 1;
 
-/// Mirrors this Agave test:
-/// https://github.com/anza-xyz/agave/blob/e87917a/programs/sbf/c/src/poseidon/poseidon.c#L8
+/// Mirrors this Agave test: https://github.com/anza-xyz/agave/blob/e87917adab5468fe13287147800922a3191d0040/programs/sbf/c/src/poseidon/poseidon.c#L8
 export fn entrypoint() u64 {
     // Two inputs: ones and twos (big-endian).
     {

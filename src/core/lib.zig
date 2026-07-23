@@ -27,12 +27,10 @@ pub const transaction = shared.core.transaction;
 pub const transaction_error = shared.core.transaction_error;
 pub const epoch_tracker = @import("epoch_tracker.zig");
 
-/// TODO: Change EpochStakes to use EpochStakes(.stake) everywhere except in the `epoch_stakes`
-/// field
+/// TODO: Change EpochStakes to use EpochStakes(.stake) everywhere except in the `epoch_stakes` field
 /// of `BankFields` for serialization purposes. When initialising an epoch stakes for production we
 /// will need to load the accounts from accounts db to convert from `EpochStakes(.delegation)` to
-/// `EpochStakes(.stake)`. Because we need to load the `credits_observed` value which is contained
-/// in
+/// `EpochStakes(.stake)`. Because we need to load the `credits_observed` value which is contained in
 /// the stake account data which is a serialized `StakesStateV2`. This process also validates that
 /// the stake accounts are valid.
 /// NOTE: In the short term we may be able to get away with using `EpochStakes(.delegation)` if
@@ -43,8 +41,7 @@ pub const EpochStakesMap = epoch_stakes.EpochStakesMapGeneric(.delegation);
 pub const VersionedEpochStakes = epoch_stakes.VersionedEpochStakes;
 
 /// TODO: The `StakesCache` should ultimately be either a `.stake` or `.account` variant. This
-/// change requires populating the `StakesCache` loading accounts from the accounts db,
-/// deserializing
+/// change requires populating the `StakesCache` loading accounts from the accounts db, deserializing
 /// the account state, and creating either a `Stake` or `StakeAccount`. For now we will use the
 /// `.delegation` variant for simplicity.
 pub const StakesCache = stakes.StakesCacheGeneric(.stake);

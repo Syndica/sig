@@ -64,9 +64,7 @@ pub fn checkFeePayer(
     var payer_account = try accounts.get(allocator, fee_payer_key) orelse
         return .{ .err = .AccountNotFound };
     // [agave]
-    // sig fmt: off
     // https://github.com/anza-xyz/agave/commit/d5757e29aa - formalize_loaded_transaction_data_size hardcoded
-    // sig fmt: on
     const payer_loaded_size = account_loader.TRANSACTION_ACCOUNT_BASE_SIZE +| payer_account.data.len;
     errdefer payer_account.deinit(allocator);
 
@@ -94,9 +92,7 @@ pub fn checkFeePayer(
     // when they do.
     //
     // [agave]
-    // sig fmt: off
     // https://github.com/anza-xyz/agave/blob/b6c96e8/runtime/src/bank/check_transactions.rs#L106-L112
-    // sig fmt: on
 
     const fee_budget_limits = FeeBudgetLimits.fromComputeBudgetLimits(compute_budget_limits.*);
     const fee_details = FeeDetails.init(
@@ -242,9 +238,7 @@ pub const FeeBudgetLimits = struct {
     prioritization_fee: u64,
 
     // [agave]
-    // sig fmt: off
     // https://github.com/anza-xyz/agave/blob/3e9af14/compute-budget/src/compute_budget_limits.rs#L20
-    // sig fmt: on
     const MICRO_LAMPORTS_PER_LAMPORT = 1_000_000;
     const DEFAULT_HEAP_COST = 8;
 

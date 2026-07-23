@@ -14,8 +14,7 @@ pub const DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET: u64 = DEFAULT_SLOTS_PER_EPOCH;
 /// Based on `MAX_LOCKOUT_HISTORY` from `vote_program`.
 pub const MINIMUM_SLOTS_PER_EPOCH: u64 = 32;
 
-/// Analogous to [EpochSchedule](
-/// https://github.com/anza-xyz/agave/blob/5a9906e/sdk/program/src/epoch_schedule.rs#L35)
+/// Analogous to [EpochSchedule](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/sdk/program/src/epoch_schedule.rs#L35)
 pub const EpochSchedule = extern struct {
     /// The maximum number of slots in each epoch.
     slots_per_epoch: u64,

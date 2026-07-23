@@ -520,8 +520,7 @@ fn shouldInsertCodeShred(
 
         // invalid merkle root
         if (state.merkle_root_metas.get(erasure_set_id)) |merkle_root_meta| {
-            // TODO: this does not look in the database, so it's only checking this batch. is that
-            // desired?
+            // TODO: this does not look in the database, so it's only checking this batch. is that desired?
             // A previous shred has been inserted in this batch or in ledger
             // Compare our current shred against the previous shred for potential
             // conflicts

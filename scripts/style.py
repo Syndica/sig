@@ -208,24 +208,9 @@ def line_length(args, files_to_check):
             if fmt_off:
                 continue
 
-            # Multi-line strings (\\) are exempt from line length.
-            if stripped.strip().startswith("\\" + "\\"):
+            if stripped.strip().startswith(("//", "\\" + "\\")):
                 continue
 
-            # Check comments (// and ///) at full line length.
-            if stripped.strip().startswith("//"):
-                if len(line.rstrip()) > MAX_LINE_LENGTH:
-                    print(f"{path}:{i + 1} is too long: {len(line.rstrip())}")
-                    lines_found += 1
-                    if path not in unique_files:
-                        unique_files[path] = 1
-                    else:
-                        unique_files[path] += 1
-                    print(line)
-                continue
-
-            # Check code lines (measure the code part before any
-            # inline comment).
             code_part = line.split("//", 1)[0].rstrip()
             if len(code_part) > MAX_LINE_LENGTH + 1:  # +1 for \n
                 print(f"{path}:{i + 1} is too long: {len(code_part)}")

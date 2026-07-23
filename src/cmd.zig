@@ -270,7 +270,7 @@ pub fn main() !void {
         //     params.gossip_base.apply(&current_config);
         //     params.gossip_node.apply(&current_config);
         //
-        // current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
+        //     current_config.accounts_db.snapshot_dir = try current_config.derivePathFromValidatorDir(
         //         gpa,
         //         params.snapshot_dir,
         //         "accounts_db",
@@ -3467,15 +3467,10 @@ const ReplayAndConsensusServiceState = struct {
                     .signing = .{
                         .node = params.app_base.my_keypair,
                         .authorized_voters = if (params.voting_enabled)
-                            // TODO: Parse authorized voter keypairs from CLI args
-                            // (--authorized-voter)
+                            // TODO: Parse authorized voter keypairs from CLI args (--authorized-voter)
                             // For now, default to using the node keypair as the authorized voter
-                            // (same as Agave's default behavior when no --authorized-voter is
-                            // specified)
-                            // ref
-                            // sig fmt: off
-                            // https://github.com/anza-xyz/agave/blob/67a1cc9/validator/src/commands/run/execute.rs#L136-L138
-                            // sig fmt: on
+                            // (same as Agave's default behavior when no --authorized-voter is specified)
+                            // ref https://github.com/anza-xyz/agave/blob/67a1cc9ef4222187820818d95325a0c8e700312f/validator/src/commands/run/execute.rs#L136-L138
                             (&params.app_base.my_keypair)[0..1]
                         else
                             &.{},
@@ -3674,8 +3669,7 @@ fn loggingPanic(message: []const u8, first_trace_addr: ?usize) noreturn {
     std.debug.defaultPanic(message, first_trace_addr);
 }
 
-/// NOTE: This only populates the leader schedule, and leaves the epoch stake & features empty (ie
-/// ALL_DISABLED).
+/// NOTE: This only populates the leader schedule, and leaves the epoch stake & features empty (ie ALL_DISABLED).
 const RpcLeaderScheduleService = struct {
     allocator: std.mem.Allocator,
     logger: RpcLeaderScheduleServiceLogger,
@@ -3720,16 +3714,14 @@ const RpcLeaderScheduleService = struct {
         defer response.deinit();
         const slot = try response.result();
 
-        // Get the current epoch, and the epoch whose stakes were used to compute the leader
-        // schedule
+        // Get the current epoch, and the epoch whose stakes were used to compute the leader schedule
         // for the current epoch.
         const epoch = self.epoch_tracker.epoch_schedule.getEpoch(slot);
         const leader_schedule_epoch = self.epoch_tracker.epoch_schedule.getEpoch(
             slot -| self.epoch_tracker.epoch_schedule.leader_schedule_slot_offset,
         );
 
-        // Iterate from the leader schedule epoch to the current epoch, and populate any missing
-        // epochs in the epoch tracker.
+        // Iterate from the leader schedule epoch to the current epoch, and populate any missing epochs in the epoch tracker.
         for (leader_schedule_epoch..epoch + 1) |e| {
             // TODO: make this a little helper
             const is_next = blk: {

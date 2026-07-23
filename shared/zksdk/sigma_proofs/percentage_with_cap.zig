@@ -1,9 +1,5 @@
-//! [fd](
-// sig fmt: off
-//! https://github.com/firedancer-io/firedancer/blob/33538d3/src/flamenco/runtime/program/zksdk/instructions/fd_zksdk_percentage_with_cap.c)
-// sig fmt: on
-//! [agave](
-//! https://github.com/anza-xyz/agave/blob/5a9906e/zk-sdk/src/sigma_proofs/percentage_with_cap.rs)
+//! [fd](https://github.com/firedancer-io/firedancer/blob/33538d35a623675e66f38f77d7dc86c1ba43c935/src/flamenco/runtime/program/zksdk/instructions/fd_zksdk_percentage_with_cap.c)
+//! [agave](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/zk-sdk/src/sigma_proofs/percentage_with_cap.rs)
 
 const std = @import("std");
 const builtin = @import("builtin");

@@ -146,8 +146,7 @@ pub const UiDelegation = struct {
 /// Returns true if the stake account data represents a stake whose lockup is
 /// in force or whose withdraw authority is a known autostake authority.
 ///
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/non_circulating_supply.rs#L48-L69
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/non_circulating_supply.rs#L48-L69
 pub fn isNonCirculatingStake(
     arena: std.mem.Allocator,
     data: *const sig.accounts_db.buffer_pool.AccountDataHandle,
@@ -176,8 +175,7 @@ pub fn isNonCirculatingStake(
     return false;
 }
 
-// [agave]
-// https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_stake.rs#L142-L209
+// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/account-decoder/src/parse_stake.rs#L142-L209
 test "rpc.account_codec.parse_stake: parse stake accounts" {
     const allocator = std.testing.allocator;
 

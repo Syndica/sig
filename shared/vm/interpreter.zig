@@ -127,7 +127,7 @@ pub const Vm = struct {
             };
         }
 
-        // https://github.com/anza-xyz/sbpf/blob/615f120/src/vm.rs#L380-L385
+        // https://github.com/anza-xyz/sbpf/blob/615f120f70d3ef387aab304c5cdf66ad32dae194/src/vm.rs#L380-L385
         const instruction_count = if (self.executable.config.enable_instruction_meter) blk: {
             self.transaction_context.consumeUnchecked(self.instruction_count);
             break :blk initial_meter -| self.transaction_context.compute_meter;
@@ -891,8 +891,7 @@ pub const Vm = struct {
                     self.registers.set(.pc, pc + 1);
                 },
                 1 => {
-                    // [agave]
-                    // https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/interpreter.rs#L555-L562
+                    // [agave] https://github.com/anza-xyz/sbpf/blob/v0.14.4/src/interpreter.rs#L555-L562
                     // Agave's runtime only checks `is_pc_in_program(target_pc)`;
                     // the function-start-marker invariant is the verifier's job.
                     const target_pc = sbpf.Version.computeTargetPc(.v3, pc, inst);
@@ -969,8 +968,7 @@ pub const Vm = struct {
 
     /// Returns `true` when the instruction executed stops the VM.
     ///
-    /// NOTE: no `inline`, since we tail call. But looking at the codegen, it does inline the tail
-    /// call.
+    /// NOTE: no `inline`, since we tail call. But looking at the codegen, it does inline the tail call.
     fn step(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
         return @call(
             // self-hosted x86_64 backend does not support .always_tail
@@ -1047,7 +1045,7 @@ pub const Vm = struct {
 /// Contains either an error encountered while executing the program, or the
 /// result, which is the value of the `r0` register at the time of exit.
 ///
-/// [agave] https://github.com/anza-xyz/sbpf/blob/615f120/src/error.rs#L170-L171
+/// [agave] https://github.com/anza-xyz/sbpf/blob/615f120f70d3ef387aab304c5cdf66ad32dae194/src/error.rs#L170-L171
 pub const Result = union(enum) {
     err: ExecutionError,
     ok: u64,

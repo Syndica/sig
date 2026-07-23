@@ -300,7 +300,7 @@ fn parseLenient(
     // solfuzz-agave's Cargo.lock) and has since been upstreamed to
     // anza-xyz/sbpf `main` (post v0.20.0).
     //
-    // [sbpf] https://github.com/firedancer-io/sbpf/blob/6cd6372/src/elf.rs#L307-L321
+    // [sbpf] https://github.com/firedancer-io/sbpf/blob/6cd6372eb4ee631f792642f97fe825bc269aaf58/src/elf.rs#L307-L321
     const text_range = Elf64.Range.get(text_shdr);
     const text_len = text_range.hi - text_range.lo;
     const text_bytes = switch (ro_section) {
@@ -355,13 +355,12 @@ const SectionAttributes = packed struct(u64) {
     _32: u32 = 0,
 };
 
-/// [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf_parser/mod.rs#L132
+/// [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf_parser/mod.rs#L132
 const Elf64 = struct {
     bytes: []const u8,
     header: elf.Elf64_Ehdr,
 
-    // The following fields are align(1) because there's no guarantee of alignment inside of the ELF
-    // sections.
+    // The following fields are align(1) because there's no guarantee of alignment inside of the ELF sections.
     shdrs: []align(1) const elf.Elf64_Shdr,
     phdrs: []align(1) const elf.Elf64_Phdr,
 
@@ -388,7 +387,7 @@ const Elf64 = struct {
 
     /// Same as Elf64Shdr::file_range().
     ///
-    /// [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf_parser/mod.rs#L87-L94
+    /// [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf_parser/mod.rs#L87-L94
     const Range = struct {
         lo: u64,
         hi: u64,
@@ -411,13 +410,13 @@ const Elf64 = struct {
         }
     };
 
-    /// [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf_parser/mod.rs#L120-L130
+    /// [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf_parser/mod.rs#L120-L130
     fn checkOverlap(a_start: usize, a_end: usize, b_start: usize, b_end: usize) !void {
         if (a_end <= b_start or b_end <= a_start) return;
         return error.Overlap;
     }
 
-    /// [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf_parser/mod.rs#L148-L149
+    /// [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf_parser/mod.rs#L148-L149
     fn parse(bytes: []const u8) !Elf64 {
         // Elf64::parse_file_header
         if (bytes.len < @sizeOf(elf.Elf64_Ehdr)) return error.OutOfBounds;
@@ -441,7 +440,7 @@ const Elf64 = struct {
         }
 
         // Elf64::parse_program_header_table
-        // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf_parser/mod.rs#L164-L166
+        // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf_parser/mod.rs#L164-L166
         const phdr_start = header.e_phoff;
         const phdr_size = try mul(u64, header.e_phnum, @sizeOf(elf.Elf64_Phdr));
         const phdr_end = try add(u64, header.e_phoff, phdr_size);
@@ -454,7 +453,7 @@ const Elf64 = struct {
         if (!std.mem.isAligned(phdr_start, 8)) return error.InvalidAlignment;
 
         // Elf64::parse_section_header_table
-        // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf_parser/mod.rs#L167-L168
+        // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf_parser/mod.rs#L167-L168
         const shdr_start = header.e_shoff;
         const shdr_size = try mul(u64, header.e_shnum, @sizeOf(elf.Elf64_Shdr));
         const shdr_end = try add(u64, header.e_shoff, shdr_size);
@@ -468,7 +467,7 @@ const Elf64 = struct {
         );
         if (!std.mem.isAligned(header.e_shoff, 8)) return error.InvalidAlignment;
 
-        // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf_parser/mod.rs#L174-L175
+        // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf_parser/mod.rs#L174-L175
         if (shdrs.len == 0 or shdrs[0].sh_type != elf.SHT_NULL) {
             return error.InvalidSectionHeader;
         }
@@ -494,7 +493,7 @@ const Elf64 = struct {
             .dt_rel_sz = 0,
         };
 
-        // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf_parser/mod.rs#L179-L197
+        // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf_parser/mod.rs#L179-L197
         {
             var vaddr: u64 = 0;
             for (0..header.e_phnum) |i| {
@@ -514,7 +513,7 @@ const Elf64 = struct {
             }
         }
 
-        // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf_parser/mod.rs#L198-L217
+        // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf_parser/mod.rs#L198-L217
         {
             var offset: u64 = 0;
             for (0..header.e_shnum) |i| {
@@ -538,7 +537,7 @@ const Elf64 = struct {
         }
 
         // Parse sections
-        // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf_parser/mod.rs#L240-L241
+        // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf_parser/mod.rs#L240-L241
         {
             if (header.e_shstrndx == elf.SHT_NULL) {
                 return error.NoSectionNameStringTable;
@@ -573,12 +572,12 @@ const Elf64 = struct {
         }
 
         // Parse dynamic
-        // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf_parser/mod.rs#L241
+        // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf_parser/mod.rs#L241
         {
             var dynamic_table_start: ?u64 = null;
             var dynamic_table_end: ?u64 = null;
 
-            // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf_parser/mod.rs#L365-L372
+            // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf_parser/mod.rs#L365-L372
             if (self.phndx_dyn) |dyn| {
                 const dyn_ph = self.phdrs[dyn];
                 dynamic_table_start = dyn_ph.p_offset;
@@ -624,7 +623,7 @@ const Elf64 = struct {
             }
 
             // solana_sbpf::elf_parser::Elf64::parse_dynamic_relocations
-            // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf_parser/mod.rs#L409-L410
+            // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf_parser/mod.rs#L409-L410
             relocs: {
                 const vaddr = dynamic_table[elf.DT_REL];
                 if (vaddr == 0) break :relocs;
@@ -637,8 +636,7 @@ const Elf64 = struct {
                 if (size == 0) return error.InvalidDynamicSectionTable;
 
                 // program_header_for_vaddr
-                // [sbpf]
-                // https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf_parser/mod.rs#L430-L445
+                // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf_parser/mod.rs#L430-L445
                 const maybe_phdr: ?elf.Elf64_Phdr = for (0..header.e_phnum) |i| {
                     const phdr = self.phdrs[i];
                     const p_vaddr0 = phdr.p_vaddr;
@@ -674,15 +672,13 @@ const Elf64 = struct {
                 self.dt_rel_sz = size;
             }
 
-            // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf_parser/mod.rs#L410
+            // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf_parser/mod.rs#L410
             dynsym: {
-                // [sbpf]
-                // https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf_parser/mod.rs#L452-L456
+                // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf_parser/mod.rs#L452-L456
                 const vaddr = dynamic_table[elf.DT_SYMTAB];
                 if (vaddr == 0) break :dynsym;
 
-                // [sbpf]
-                // https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf_parser/mod.rs#L457-L462
+                // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf_parser/mod.rs#L457-L462
                 const shdr_sym: elf.Elf64_Shdr = for (self.shdrs, 0..) |shdr, i| {
                     if (shdr.sh_addr == vaddr) {
                         self.dynsymtab = i;
@@ -690,8 +686,7 @@ const Elf64 = struct {
                     }
                 } else return error.InvalidDynamicSectionTable;
 
-                // [sbpf]
-                // https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf_parser/mod.rs#L463-L465
+                // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf_parser/mod.rs#L463-L465
                 {
                     if (shdr_sym.sh_type != elf.SHT_SYMTAB and shdr_sym.sh_type != elf.SHT_DYNSYM) {
                         return error.InvalidSectionHeader;
@@ -729,8 +724,7 @@ const Elf64 = struct {
         var writable_err = false;
         var oob_err = false;
         for (self.shdrs, 0..) |shdr, i| {
-            // This can't actually fail, as we've already iterated through the names of sections in
-            // `parse`.
+            // This can't actually fail, as we've already iterated through the names of sections in `parse`.
             const name = try getStringInSection(
                 self.bytes,
                 section_names_shdr,
@@ -738,7 +732,7 @@ const Elf64 = struct {
                 SECTION_NAME_LENGTH_MAXIMUM,
             );
 
-            // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf.rs#L793-L803
+            // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf.rs#L793-L803
             if (std.mem.eql(u8, name, ".text")) {
                 if (shndx_text == null) {
                     text_section = shdr;
@@ -746,7 +740,7 @@ const Elf64 = struct {
                 } else return error.NotOneTextSection;
             }
 
-            // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf.rs#L808-L820
+            // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf.rs#L808-L820
             if (std.mem.startsWith(u8, name, ".bss")) {
                 writable_err = true;
             }
@@ -759,7 +753,7 @@ const Elf64 = struct {
                 }
             }
 
-            // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf.rs#L821-L831
+            // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf.rs#L821-L831
             const shdr_end = add(u64, shdr.sh_offset, shdr.sh_size);
             if (shdr_end) |end| {
                 if (end > self.bytes.len) oob_err = true;
@@ -767,12 +761,12 @@ const Elf64 = struct {
                 oob_err = true;
             }
         }
-        // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf.rs#L803-L806
+        // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf.rs#L803-L806
         if (shndx_text == null) return error.NotOneTextSection;
         if (writable_err) return error.WritableSectionNotSupported;
         if (oob_err) return error.OutOfBounds;
 
-        // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf.rs#L831-L835
+        // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf.rs#L831-L835
         if (!(text_section.sh_addr <= header.e_entry and
             header.e_entry < (text_section.sh_addr +| text_section.sh_size)))
         {
@@ -788,9 +782,8 @@ const Elf64 = struct {
     }
 
     /// Perform relocations on the ELF file provided in `bytes`.
-    /// The provided `bytes` must match be a mutable copy of the original bytes used to construct
-    /// `self`.
-    /// [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf.rs#L966-L967
+    /// The provided `bytes` must match be a mutable copy of the original bytes used to construct `self`.
+    /// [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf.rs#L966-L967
     fn relocate(
         self: *const Elf64,
         allocator: std.mem.Allocator,
@@ -856,10 +849,8 @@ const Elf64 = struct {
                         addr +|= memory.REGION_SIZE;
                     }
 
-                    // This is a LDDW instruction, which takes up the space of two regular
-                    // instructions.
-                    // We need to split up the address into two 32-bit chunks, and write to each of
-                    // the
+                    // This is a LDDW instruction, which takes up the space of two regular instructions.
+                    // We need to split up the address into two 32-bit chunks, and write to each of the
                     // slot's immediate field.
                     {
                         const imm_low_offset = imm_offset;
@@ -974,7 +965,7 @@ const Elf64 = struct {
         }
     }
 
-    /// [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf.rs#L840
+    /// [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf.rs#L840
     fn parseRoSections(
         self: *Elf64,
         allocator: std.mem.Allocator,
@@ -1033,12 +1024,12 @@ const Elf64 = struct {
             ro_sections +|= 1;
 
             // Determine whether the section header has invalid offset metadata.
-            // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf.rs#L880-L883
+            // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf.rs#L880-L883
             if (!invalid_offsets and shdr.sh_addr != shdr.sh_offset) {
                 invalid_offsets = true;
             }
 
-            // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf.rs#L884-L888
+            // [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf.rs#L884-L888
             const vaddr_end = shdr.sh_addr +| memory.BYTECODE_START;
             if ((config.reject_broken_elfs and invalid_offsets) or vaddr_end > memory.STACK_START) {
                 return error.OutOfBounds;
@@ -1101,7 +1092,7 @@ const Elf64 = struct {
         return ro_section;
     }
 
-    /// [sbpf] https://github.com/anza-xyz/sbpf/blob/58c4758/src/elf_parser/mod.rs#L468
+    /// [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf_parser/mod.rs#L468
     fn getStringInSection(
         bytes: []const u8,
         section_header: elf.Elf64_Shdr,

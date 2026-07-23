@@ -9,9 +9,7 @@ comptime {
 }
 
 /// [agave]
-// sig fmt: off
 /// https://github.com/solana-program/zk-elgamal-proof/blob/zk-sdk%40v5.0.0/zk-sdk/src/zk_elgamal_proof_program/proof_data/mod.rs#L48
-// sig fmt: on
 pub const ProofType = enum(u8) {
     /// Empty proof type used to distinguish if a proof context account is initialized
     uninitialized,

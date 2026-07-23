@@ -459,9 +459,7 @@ pub const AuthorizedVoters = struct {
     }
 
     /// [agave]
-    // sig fmt: off
     /// https://github.com/anza-xyz/solana-sdk/blob/4e30766/vote-interface/src/authorized_voters.rs#L22
-    // sig fmt: on
     pub fn getAuthorizedVoter(self: *AuthorizedVoters, epoch: Epoch) ?Pubkey {
         if (self.getOrCalculateAuthorizedVoterForEpoch(epoch)) |entry| {
             return entry[0];
@@ -471,9 +469,7 @@ pub const AuthorizedVoters = struct {
     }
 
     /// [agave]
-    // sig fmt: off
     /// https://github.com/anza-xyz/solana-sdk/blob/4e30766/vote-interface/src/authorized_voters.rs#L27
-    // sig fmt: on
     pub fn getAndCacheAuthorizedVoterForEpoch(
         self: *AuthorizedVoters,
         allocator: Allocator,
@@ -498,9 +494,7 @@ pub const AuthorizedVoters = struct {
     }
 
     /// [agave]
-    // sig fmt: off
     /// https://github.com/anza-xyz/solana-sdk/blob/4e30766/vote-interface/src/authorized_voters.rs#L42
-    // sig fmt: on
     pub fn purgeAuthorizedVoters(
         self: *AuthorizedVoters,
         allocator: Allocator,
@@ -590,9 +584,7 @@ pub const AuthorizedVoters = struct {
     }
 
     /// [agave]
-    // sig fmt: off
     /// https://github.com/anza-xyz/solana-sdk/blob/4e30766/vote-interface/src/authorized_voters.rs#L90
-    // sig fmt: on
     ///
     /// Returns the authorized voter at the given epoch if the epoch is >= the
     /// current epoch, and a bool indicating whether the entry for this epoch
@@ -721,9 +713,7 @@ pub const CircBufV1 = struct {
 };
 
 /// [agave]
-// sig fmt: off
 /// https://github.com/anza-xyz/solana-sdk/blob/vote-interface@v6.0.0/vote-interface/src/state/vote_state_versions.rs#L18
-// sig fmt: on
 /// [SIMD-0185] v4 added with discriminant 3.
 ///
 /// Variant 0 is a zero-sized `uninitialized` marker, mirroring how
@@ -744,9 +734,7 @@ pub const VoteStateVersions = union(enum(u32)) {
     v4: VoteStateV4,
 
     /// [agave]
-    // sig fmt: off
     /// https://github.com/anza-xyz/solana-sdk/blob/4e30766/vote-interface/src/state/vote_state_versions.rs#L80
-    // sig fmt: on
     pub fn landedVotesFromLockouts(
         allocator: Allocator,
         lockouts: []const Lockout,
@@ -861,9 +849,7 @@ pub const VoteStateVersions = union(enum(u32)) {
     }
 
     /// [agave]
-    // sig fmt: off
     /// https://github.com/anza-xyz/solana-sdk/blob/vote-interface@v6.0.0/vote-interface/src/state/vote_state_versions.rs#L117
-    // sig fmt: on
     /// [SIMD-0185] v4 is never uninitialized.
     pub fn isUninitialized(self: VoteStateVersions) bool {
         switch (self) {
@@ -1329,9 +1315,7 @@ pub const VoteState = union(enum(u32)) {
 };
 
 /// [agave]
-// sig fmt: off
 /// https://github.com/anza-xyz/solana-sdk/blob/4e30766/vote-interface/src/state/vote_state_1_14_11.rs#L16
-// sig fmt: on
 pub const VoteState1_14_11 = struct {
     /// the node that votes in this account
     node_pubkey: Pubkey,
@@ -1542,9 +1526,7 @@ pub const VoteStateV3 = struct {
     }
 
     /// [agave]
-    // sig fmt: off
     /// https://github.com/anza-xyz/solana-sdk/blob/4e30766/vote-interface/src/state/vote_state_versions.rs#L84
-    // sig fmt: on
     pub fn isUninitialized(self: VoteStateV3) bool {
         return self.voters.count() == 0;
     }

@@ -49,8 +49,7 @@ test "put/get data consistency for merkle root" {
     try std.testing.expectEqualSlices(u8, &root.data, &output.merkle_root.?.data);
 }
 
-// Analogous to [test_get_rooted_block](
-// https://github.com/anza-xyz/agave/blob/a72f981/ledger/src/blockstore.rs#L8271)
+// Analogous to [test_get_rooted_block](https://github.com/anza-xyz/agave/blob/a72f981370c3f566fc1becf024f3178da041547a/ledger/src/blockstore.rs#L8271)
 test "insert shreds and transaction statuses then get blocks" {
     const allocator = std.testing.allocator;
 

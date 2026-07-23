@@ -1,6 +1,4 @@
-//! The Account RPC hook context. Contains references to the
-//! necessary state in the validator required for reading out
-//! account data and for serving RPC.
+//! The Account RPC hook context. Contains references to the necessary state in the validator required for reading out account data and for serving RPC.
 
 const std = @import("std");
 const tracy = @import("tracy");
@@ -388,8 +386,7 @@ pub fn getFeeForMessage(
         slot,
     ) catch return empty_result) orelse return empty_result;
 
-    // Look up lamports_per_signature from the blockhash queue, or from nonce account if durable
-    // nonce.
+    // Look up lamports_per_signature from the blockhash queue, or from nonce account if durable nonce.
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/bank.rs#L2732-L2741
     const maybe_bq_lps: ?u64 = blk: {
         const bq, var bq_guard = slot_ref.state().blockhash_queue.readWithLock();
@@ -415,10 +412,8 @@ pub fn getFeeForMessage(
     if (bq_lps != 0) {
         const feature_set = &slot_ref.constants().feature_set;
 
-        // [agave] process_compute_budget_instructions(message.program_instructions_iter(),
-        // &self.feature_set).unwrap_or_default()
-        // In Agave, execute+sanitize is a single call; on ANY error, ComputeBudgetLimits::default()
-        // is used.
+        // [agave] process_compute_budget_instructions(message.program_instructions_iter(), &self.feature_set).unwrap_or_default()
+        // In Agave, execute+sanitize is a single call; on ANY error, ComputeBudgetLimits::default() is used.
         var budget_limits = ComputeBudgetLimits.DEFAULT;
         const details = compute_budget.execute(&message);
         if (details == .ok) {
@@ -591,8 +586,7 @@ pub fn getTokenAccountsByDelegate(
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2150
     const resolved = try params.filter.resolve(arena, slot_reader);
 
-    // Build auto-filters: delegate option tag + delegate address + tokenAccountState + optional
-    // mint.
+    // Build auto-filters: delegate option tag + delegate address + tokenAccountState + optional mint.
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/rpc/src/rpc.rs#L2152
     const delegate_option_tag = [4]u8{ 0x01, 0x00, 0x00, 0x00 }; // COption<Pubkey>::Some, little-endian u32
     var filters: [4]RpcFilterType = undefined;
@@ -782,8 +776,7 @@ pub fn getSupply(
     const slot_reader = self.account_reader.forSlot(ancestors).toOwnedReader();
 
     // Read the Clock sysvar to check lockup conditions.
-    // [agave]
-    // https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/non_circulating_supply.rs#L18-L22
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/non_circulating_supply.rs#L18-L22
     const clock = try account_codec.getSysvar(sig.runtime.sysvar.Clock, arena, slot_reader) orelse
         return error.SlotNotAvailable;
 
@@ -793,8 +786,7 @@ pub fn getSupply(
         .ensureUnusedCapacity(arena, non_circulating_supply.non_circulating_accounts.len);
 
     // Sum lamports for the static non-circulating accounts.
-    // [agave]
-    // https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/non_circulating_supply.rs#L24-L29
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/non_circulating_supply.rs#L24-L29
     for (&non_circulating_supply.non_circulating_accounts) |*raw| {
         if (slot_reader.get(arena, .{ .data = raw.* }) catch null) |account| {
             non_circulating_lamports += account.lamports;
@@ -803,8 +795,7 @@ pub fn getSupply(
     }
 
     // Iterate all stake accounts and collect non-circulating ones not already in the static set.
-    // [agave]
-    // https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/non_circulating_supply.rs#L30-L46
+    // [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/runtime/src/non_circulating_supply.rs#L30-L46
     var owner_iter = try slot_reader.getByOwner(arena, &sig.runtime.program.stake.ID);
     defer owner_iter.deinit();
 
@@ -1722,8 +1713,7 @@ test "getTokenSupply - resolves commitment slot" {
 // [agave] When an account larger than MAX_BASE58_INPUT_LEN (128 bytes) is requested with
 // base58 encoding, every method that encodes accounts must surface the same JSON-RPC error:
 //   code:    -32600 (invalid_request)
-// message: "Encoded binary (base 58) data should be less than 128 bytes, please use Base64
-// encoding."
+//   message: "Encoded binary (base 58) data should be less than 128 bytes, please use Base64 encoding."
 // The encoder returns `error.Base58DataTooLarge` (account_codec/lib.zig); the conformance
 // mapping happens in the shared `Hooks.set` wrapper (rpc/hooks.zig:mapError). These tests
 // drive the full path — real hook context + Hooks.call + mapError — for the simple-account
