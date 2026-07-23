@@ -10,12 +10,16 @@ const FileReader = lib.fio.FileReader;
 const Table = lib.accounts_db.Table;
 const AccountPool = lib.accounts_db.AccountPool;
 const AccountLookups = lib.accounts_db.AccountLookups;
+
 const SnapshotMetadata = lib.snapshot.SnapshotMetadata;
 
 const Pubkey = lib.solana.Pubkey;
 const Slot = lib.solana.Slot;
 const Epoch = lib.solana.Epoch;
-const Hash = lib.solana.Hash;
+
+const Manifest = lib.solana.snapshot.Manifest;
+const StatusCache = lib.solana.snapshot.StatusCache;
+const SnapshotIter = lib.solana.snapshot.SnapshotIter;
 
 /// The rooted database stores data on disk in the form of
 /// [journal][manifest+status_cache+FBA blob][ring of account sectors].
@@ -366,22 +370,14 @@ pub const Rooted = struct {
     pub fn loadSnapshot(
         self: *Rooted,
         logger: tel.Logger("Rooted.loadSnapshot"),
-        runner: lib.runner.Connection,
         snapshot_metadata: *SnapshotMetadata,
         buf_reader: anytype,
     ) !void {
         const zone = tracy.Zone.init(@src(), .{ .name = "loadSnapshot" });
         defer zone.deinit();
 
-        _ = runner; // reserved for future backpressure hooks
-
-        const snapshot = lib.solana.snapshot;
-        const Manifest = snapshot.Manifest;
-        const StatusCache = snapshot.StatusCache;
         const BufReader = @TypeOf(buf_reader);
-
-        var snapshot_iter =
-            try snapshot.SnapshotIter(BufReader).init(snapshot_metadata, buf_reader);
+        var snapshot_iter = try SnapshotIter(BufReader).init(snapshot_metadata, buf_reader);
 
         const slot = snapshot_metadata.manifest.bank_fields.slot;
         try self.beginTransaction(.from(logger), slot);

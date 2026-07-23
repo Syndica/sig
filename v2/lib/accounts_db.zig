@@ -10,9 +10,6 @@ comptime {
 }
 
 const Pubkey = lib.solana.Pubkey;
-const Epoch = lib.solana.Epoch;
-const Hash = lib.solana.Hash;
-const Slot = lib.solana.Slot;
 
 pub const AccountPool = @import("accounts_db/pool.zig").AccountPool;
 pub const Rooted = @import("accounts_db/rooted.zig").Rooted;
