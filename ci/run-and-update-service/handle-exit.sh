@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euxo pipefail
 
-BASE_DIR=/home/sig/sig
+BASE_DIR=/home/sig/sig/v1
 
 log() { local level=$1; local message=$2;
     local timestamp="$(date -u +"%Y-%m-%dT%H:%M:%S.%3NZ")"

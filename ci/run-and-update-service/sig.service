@@ -4,7 +4,7 @@ After=network.target
 
 [Service]
 EnvironmentFile=/etc/sig.conf
-WorkingDirectory=/home/sig/sig
+WorkingDirectory=/home/sig/sig/v1
 ExecStart=/home/sig/sig/ci/run-and-update-service/run.sh $CLI_ARGS
 Restart=always
 User=sig

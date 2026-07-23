@@ -1,0 +1,13 @@
+# turn this file into a whitelist
+*
+
+# the files to include in git
+!.gitignore
+!genesis.bin
+!incremental-snapshot-1-4-43FT6mnmRW9XbxpCzqH3ogYexHXboG7d8vmf3gBLvLrR.tar.zst
+!snapshot-1-5pgMpQj4MZYWauD1VnoNfmGAdUQCe6VVCSCQMNbDoxf7.tar.zst
+!test_account_file
+!shreds
+!blocks
+!shreds/**
+!blocks/**

@@ -1,10 +1,11 @@
 //! Fixture loading for replay tests. Loads a fixture from disk and returns it as a Fixture struct.
 const std = @import("std");
 const lib = @import("lib");
+const shred_api = @import("shred_api");
 
 pub const FEC_SHRED_COUNT = 32;
 
-const FIXTURE_DIR = "tests/replay/fixtures";
+const FIXTURE_DIR = "v2/tests/replay/fixtures";
 const FIXTURE_INDEX_PATH = "index.zon";
 const MAX_ZON_FILE_SIZE = 1024 * 1024;
 
@@ -155,7 +156,7 @@ fn loadFecSetPackets(
         packet.len = @intCast(chunk.len);
         packet.addr = .initIp4(.{ 127, 0, 0, 1 }, 0);
 
-        const shred = try lib.shred.Shred.fromPacketChecked(&packet);
+        const shred = try shred_api.Shred.fromPacketChecked(&packet);
         try std.testing.expectEqual(manifest.slot, shred.slot);
         try std.testing.expectEqual(manifest.fec_set_index, shred.fec_set_idx);
         try std.testing.expectEqual(manifest.shreds.shred_version, shred.version);

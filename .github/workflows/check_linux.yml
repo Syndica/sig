@@ -31,12 +31,13 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: kcov-${{ hashFiles('build.zig', 'build.zig.zon', 'v2/build.zig', 'v2/build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
+          cache-key: kcov-${{ hashFiles('build.zig', 'build.zig.zon', 'v1/build.zig', 'v1/build.zig.zon') }}
 
       - name: Pre-download zig dependencies
         run: |
-          ./scripts/fetch-zig-deps.py
-          ./scripts/fetch-zig-deps.py v2/build.zig.zon
+          ./tools/fetch-zig-deps.py
+          ./tools/fetch-zig-deps.py v1/build.zig.zon
+          cd v1
           zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36 -Denable-tsan=false -Dno-network-tests -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: Set up kcov
@@ -45,30 +46,32 @@ jobs:
           echo "$PWD/kcov-v43-bin-linux-x86_64/bin" >> "$GITHUB_PATH"
 
       - name: Build
-        run: zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36
-          -Denable-tsan=false -Dno-network-tests -Dallow-no-sha -Dallow-no-avx512 --summary all
+        run: |
+          cd v1
+          zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36 -Denable-tsan=false -Dno-network-tests -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: Collect v1 coverage
-        run: bash scripts/kcov_ci.sh
+        run: |
+          cd v1
+          bash scripts/kcov_ci.sh
 
       - name: Collect v2 coverage
         run: |
-          cd v2
           zig build test -Dkcov --summary all
 
       - name: Debug coverage reports
         run: |
           echo "=== v1 report ==="
-          head -15 kcov-merged/kcov-merged/cobertura.xml
+          head -15 v1/kcov-merged/kcov-merged/cobertura.xml
           echo ""
           echo "--- v1 filename samples ---"
-          grep 'filename=' kcov-merged/kcov-merged/cobertura.xml | head -3
+          grep 'filename=' v1/kcov-merged/kcov-merged/cobertura.xml | head -3
           echo ""
           echo "=== v2 report ==="
-          head -15 v2/zig-out/kcov/kcov-merged/cobertura.xml
+          head -15 zig-out/kcov/kcov-merged/cobertura.xml
           echo ""
           echo "--- v2 filename samples ---"
-          grep 'filename=' v2/zig-out/kcov/kcov-merged/cobertura.xml | head -3
+          grep 'filename=' zig-out/kcov/kcov-merged/cobertura.xml | head -3
 
       - name: Generate local coverage report
         if: github.event_name == 'pull_request'
@@ -80,8 +83,8 @@ jobs:
 
           # Run diff-cover on both v1 and v2 cobertura reports
           diff-cover \
-            kcov-merged/kcov-merged/cobertura.xml \
-            v2/zig-out/kcov/kcov-merged/cobertura.xml \
+            v1/kcov-merged/kcov-merged/cobertura.xml \
+            zig-out/kcov/kcov-merged/cobertura.xml \
             --compare-branch="$BASE_REF" \
             --format markdown:diff-coverage.md \
             --fail-under 0
@@ -123,8 +126,8 @@ jobs:
           chmod +x codecov
           ./codecov --verbose upload-coverage \
             --fail-on-error \
-            --dir kcov-merged/kcov-merged \
-            --dir v2/zig-out/kcov/kcov-merged \
+            --dir v1/kcov-merged/kcov-merged \
+            --dir zig-out/kcov/kcov-merged \
             --commit-sha "$UPLOAD_SHA"
 
   gossip_and_fuzz:
@@ -139,15 +142,16 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: selfhosted-release-${{ hashFiles('build.zig', 'build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
+          cache-key: selfhosted-release-${{ hashFiles('build.zig', 'build.zig.zon', 'v1/build.zig', 'v1/build.zig.zon') }}
 
       - name: Build
         run: |
-          ./scripts/fetch-zig-deps.py
-          zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -Dallow-no-sha -Dallow-no-avx512 -p workspace/zig-out-release --summary all
+          ./tools/fetch-zig-deps.py v1/build.zig.zon
+          cd v1
+          zig build sig fuzz -Dno-run -Denable-tsan=false -Doptimize=ReleaseSafe -Dallow-no-sha -Dallow-no-avx512 -p ../workspace/zig-out-release --summary all
 
       - name: Run Gossip
-        run: bash scripts/gossip_test.sh 120 workspace/zig-out-release/bin/sig
+        run: bash v1/scripts/gossip_test.sh 120 workspace/zig-out-release/bin/sig
 
       - name: Run Gossip Service Fuzzer
         run: workspace/zig-out-release/bin/fuzz --seed 19 gossip-service 10000
@@ -173,21 +177,23 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon', 'v1/build.zig', 'v1/build.zig.zon') }}
 
       - name: Build
         run: |
-          ./scripts/fetch-zig-deps.py
-          zig build -Denable-tsan=true -Dallow-no-sha -Dallow-no-avx512 -p workspace/zig-out --summary all
+          ./tools/fetch-zig-deps.py v1/build.zig.zon
+          cd v1
+          zig build -Denable-tsan=true -Dallow-no-sha -Dallow-no-avx512 -p ../workspace/zig-out --summary all
 
       - name: Build Tests
-        run:
-          zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests
-          -Dallow-no-sha -Dallow-no-avx512 --summary all
+        run: |
+          cd v1
+          zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dno-network-tests -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: Run Tests
         run: |
           set -eo pipefail
+          cd v1
           zig-out/bin/test 2>&1 | cat
 
   linux_misc_checks:
@@ -202,7 +208,7 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon', 'v2/build.zig', 'v2/build.zig.zon', 'shared/build.zig', 'shared/build.zig.zon') }}
+          cache-key: selfhosted-${{ hashFiles('build.zig', 'build.zig.zon', 'v1/build.zig', 'v1/build.zig.zon') }}
 
       - name: Install Python PIP
         run: |
@@ -211,42 +217,34 @@ jobs:
 
       - name: Lint (Zig)
         run: |
-          zig fmt --check src/ shared/ build.zig
+          zig fmt --check build.zig build.zig.zon v2 tools v1/src v1/build.zig v1/build.zig.zon
           cd conformance/
           zig fmt --check src/ build.zig
 
       - name: Check style
         run: |
-          python3 scripts/style.py --check src
-          python3 scripts/style.py --check shared
-          python3 scripts/style.py --check conformance/src
+          python3 tools/style.py --check v1/src
+          python3 tools/style.py --check conformance/src
 
       - name: Check docs
         run: python3 docs/check.py ./
 
-      - name: Shared tests
-        run: |
-          ./scripts/fetch-zig-deps.py shared/build.zig.zon
-          cd shared
-          zig build test -Dallow-no-sha -Dallow-no-avx512 --summary all
-
       - name: V2 checks
         run: |
-          ./scripts/fetch-zig-deps.py v2/build.zig.zon
-          cd v2/
           zig build ci -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: Build and test hashmap ledger (linux)
         run: |
           set -eo pipefail
-          ./scripts/fetch-zig-deps.py
+          ./tools/fetch-zig-deps.py v1/build.zig.zon
+          cd v1
           zig build test -Dno-run -Dlong-tests -Denable-tsan=true -Dledger=hashmap -Dfilter="ledger" -Dallow-no-sha -Dallow-no-avx512 --summary all
           zig-out/bin/test 2>&1 | cat
 
       - name: Webzockets tests (linux)
         run: |
-          ./scripts/fetch-zig-deps.py src/rpc/webzockets/build.zig.zon
-          cd src/rpc/webzockets
+          ./tools/fetch-zig-deps.py v1/src/rpc/webzockets/build.zig.zon
+          cd v1/src/rpc/webzockets
           zig build test --summary all
 
       - uses: dtolnay/rust-toolchain@1.96.1 # keep version in sync with the cache key
@@ -256,15 +254,15 @@ jobs:
       - name: Cache snapshot-generator cargo artifacts
         uses: actions/cache@v4
         with:
-          key: snapshot-generator-${{ runner.os }}-rust-1.96.1-${{ hashFiles('scripts/snapshot-generator/Cargo.lock') }}
+          key: snapshot-generator-${{ runner.os }}-rust-1.96.1-${{ hashFiles('tools/snapshot-generator/Cargo.lock') }}
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            scripts/snapshot-generator/target
+            tools/snapshot-generator/target
 
       - name: Check snapshot-generator
         run: |
-          cd scripts/snapshot-generator
+          cd tools/snapshot-generator
           ./check
 
   solana_conformance:
@@ -285,7 +283,7 @@ jobs:
 
       - name: Build Conformance
         run: |
-          ./scripts/fetch-zig-deps.py conformance/build.zig.zon
+          ./tools/fetch-zig-deps.py conformance/build.zig.zon
           cd conformance
           zig build -Dallow-no-sha -Dallow-no-avx512 -Ddisable-feature-status-logs --summary all
 
@@ -345,7 +343,7 @@ jobs:
 
       - name: Build Sig target and Agave target
         run: |
-          ./scripts/fetch-zig-deps.py conformance/build.zig.zon
+          ./tools/fetch-zig-deps.py conformance/build.zig.zon
           cd conformance
           zig build solfuzz_sig -Dallow-no-sha -Dallow-no-avx512 --summary all
           . commits.env
