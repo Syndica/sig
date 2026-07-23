@@ -5,6 +5,9 @@ const ipc = @import("ipc.zig");
 const util = @import("util.zig");
 const accounts_db = @import("accounts_db.zig");
 
+const unrooted = @import("replay/unrooted.zig");
+const account_fetcher = @import("replay/account_fetcher.zig");
+
 const VersionedTransaction = solana.transaction.VersionedTransaction;
 
 // This is a bit large currently because of the unrooted store
@@ -13,6 +16,10 @@ pub const scratch_buffer_size = 3 * 1024 * 1024 * 1024;
 pub const TransactionPool = collections.SharedPool(TransactionRecord, 10_000);
 
 pub const BlockPool = collections.SharedPool(Node, 1024);
+
+pub const Unrooted = unrooted.Unrooted;
+
+pub const AccountFetcher = account_fetcher.AccountFetcher;
 
 /// Transaction bytes plus their validated wire layout.
 ///

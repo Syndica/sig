@@ -26,11 +26,24 @@ pub const RootedConfig = extern struct {
 };
 
 pub const AccountLookups = extern struct {
-    in: lib.ipc.Ring(256, Request),
-    out: lib.ipc.Ring(256, Result),
+    pub const capacity = 256;
 
-    pub const Request = Pubkey;
+    in: lib.ipc.Ring(capacity, Request),
+    out: lib.ipc.Ring(capacity, Result),
+
+    /// Request-supplied id to match responses to requests.
+    /// Opaque to accounts_db service, so it's usage is up to the callers.
+    pub const RequestUserData = u32;
+
+    pub const Request = extern struct {
+        /// Opaque to accounts_db service, so it's usage is up to the callers.
+        req_user_data: RequestUserData,
+        pubkey: Pubkey,
+    };
+
     pub const Result = extern struct {
+        /// Matches the `req_user_data` field of the Request that this Result is responding to.
+        req_user_data: RequestUserData,
         pubkey: Pubkey,
         account_index: AccountPool.AccountRef, // .invalid if not found
     };

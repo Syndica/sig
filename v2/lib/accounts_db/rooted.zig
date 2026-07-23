@@ -689,7 +689,7 @@ pub const Rooted = struct {
     pub fn queueRead(
         self: *Rooted,
         logger: tel.Logger("Rooted.queueRead"),
-        pubkey: *const Pubkey,
+        request: *const AccountLookups.Request,
     ) !bool {
         const lookup_idx = self.free_lookups;
         if (lookup_idx == invalid_lookup_index) {
@@ -704,16 +704,27 @@ pub const Rooted = struct {
             self.free_lookups = lookup_idx;
         }
 
-        const entry = self.table.get(pubkey);
+        node.result.req_user_data = request.req_user_data;
+        node.result.pubkey = request.pubkey;
+
+        const entry = self.table.get(&request.pubkey);
         if (entry.isEmpty()) { // not found. complete immediately.
-            node.result = .{ .pubkey = pubkey.*, .account_index = .invalid };
+            node.result = .{
+                .req_user_data = request.req_user_data,
+                .pubkey = request.pubkey,
+                .account_index = .invalid,
+            };
             node.next = self.ready_lookups;
             self.ready_lookups = lookup_idx;
             return true;
         }
 
         const acc_idx = try self.account_pool.alloc(entry.len);
-        node.result = .{ .pubkey = pubkey.*, .account_index = acc_idx };
+        node.result = .{
+            .req_user_data = request.req_user_data,
+            .pubkey = request.pubkey,
+            .account_index = acc_idx,
+        };
 
         // prepare the account (these must be set before self.account_pool.free() on the same index)
         const account = self.account_pool.getAccount(acc_idx);
@@ -732,7 +743,10 @@ pub const Rooted = struct {
     }
 
     // Consume
-    pub fn pollRead(self: *Rooted, logger: tel.Logger("Rooted.pollReady")) !?LookupResult {
+    pub fn pollRead(
+        self: *Rooted,
+        logger: tel.Logger("Rooted.pollReady"),
+    ) !?LookupResult {
         // check if lookup in ready queue
         var lookup_idx = self.ready_lookups;
         if (lookup_idx >= self.lookup_nodes.len) {
@@ -931,3 +945,206 @@ pub const Rooted = struct {
         }
     }
 };
+
+const RootedTestState = struct {
+    tmp: std.testing.TmpDir,
+    rooted: *Rooted,
+    table_memory: []u8,
+    account_pool_memory: []align(@alignOf(AccountPool)) u8,
+    account_pool: *AccountPool,
+    runtime_metadata: RuntimeMetadata,
+
+    const test_table_memory_len = 64 * 1024;
+    const test_account_pool_memory_len = 64 * 1024;
+    const test_file_name = "rooted-test.db";
+
+    const Account = struct {
+        pubkey: Pubkey,
+        owner: Pubkey,
+        lamports: u64,
+        rent_epoch: Epoch,
+        executable: bool,
+        data: []const u8,
+    };
+
+    fn init(logger: tel.Logger("Rooted.test")) !RootedTestState {
+        const gpa = std.testing.allocator;
+
+        var tmp = std.testing.tmpDir(.{});
+        errdefer tmp.cleanup();
+
+        const rooted = try gpa.create(Rooted);
+        errdefer gpa.destroy(rooted);
+
+        const table_memory = try gpa.alloc(u8, test_table_memory_len);
+        errdefer gpa.free(table_memory);
+        @memset(table_memory, 0);
+
+        const account_pool_memory = try gpa.alignedAlloc(
+            u8,
+            .of(AccountPool),
+            @sizeOf(AccountPool) + test_account_pool_memory_len,
+        );
+        errdefer gpa.free(account_pool_memory);
+
+        const account_pool: *AccountPool = @ptrCast(account_pool_memory.ptr);
+        account_pool.init(test_account_pool_memory_len);
+
+        var runtime_metadata: RuntimeMetadata = undefined;
+        runtime_metadata.init();
+
+        var activity: lib.runner.Activity = .{};
+        var service_view = activity.serviceView();
+        try rooted.init(
+            .from(logger),
+            .{ .activity = &service_view },
+            tmp.dir,
+            test_file_name,
+            table_memory,
+            account_pool,
+            &runtime_metadata,
+        );
+
+        return .{
+            .tmp = tmp,
+            .rooted = rooted,
+            .table_memory = table_memory,
+            .account_pool_memory = account_pool_memory,
+            .account_pool = account_pool,
+            .runtime_metadata = runtime_metadata,
+        };
+    }
+
+    fn deinit(self: *RootedTestState) void {
+        const gpa = std.testing.allocator;
+
+        self.rooted.deinit();
+        gpa.destroy(self.rooted);
+        gpa.free(self.table_memory);
+        gpa.free(self.account_pool_memory);
+        self.tmp.cleanup();
+    }
+
+    fn putAccounts(
+        self: *RootedTestState,
+        logger: tel.Logger("Rooted.test"),
+        accounts: []const Account,
+    ) !void {
+        try self.rooted.beginTransaction(.from(logger), 1);
+        for (accounts) |account| {
+            var data_reader = std.Io.Reader.fixed(account.data);
+            try self.rooted.put(.from(logger), &data_reader, .{
+                .slot = 1,
+                .pubkey = account.pubkey,
+                .owner = account.owner,
+                .lamports = account.lamports,
+                .rent_epoch = account.rent_epoch,
+                .executable = account.executable,
+                .data_len = account.data.len,
+            });
+        }
+        try self.rooted.commitTransaction(.from(logger));
+    }
+};
+
+test "rooted lookup preserves request id for missing account" {
+    const logger = tel.Logger("Rooted.test").noop;
+    var state = try RootedTestState.init(logger);
+    defer state.deinit();
+
+    const id: AccountLookups.RequestUserData = 1234;
+    const missing_pk = Pubkey.parse("SysvarC1ock11111111111111111111111111111111");
+
+    try std.testing.expect(try state.rooted.queueRead(.from(logger), &.{
+        .req_user_data = id,
+        .pubkey = missing_pk,
+    }));
+
+    const result = (try state.rooted.pollRead(.from(logger))).?;
+    try std.testing.expectEqual(id, result.req_user_data);
+    try std.testing.expectEqual(AccountPool.AccountRef.invalid, result.account_index);
+}
+
+test "rooted preserves user data across multiple concurrent reads" {
+    const logger = tel.Logger("Rooted.test").noop;
+    var state = try RootedTestState.init(logger);
+    defer state.deinit();
+
+    const user_data = [_]AccountLookups.RequestUserData{ 10, 20, 30 };
+    const accounts = [_]RootedTestState.Account{
+        .{
+            .pubkey = Pubkey.parse("F4GpAFr6vrxU3Y887F3XWkXRgybCVjZNk63m72f6pump"),
+            .owner = Pubkey.parse("11111111111111111111111111111111"),
+            .lamports = 42,
+            .rent_epoch = 0,
+            .executable = false,
+            .data = "first rooted account",
+        },
+        .{
+            .pubkey = Pubkey.parse("9oDndFiC7RW42vZcmSzacTKMWE9kgeqnzwXDGLSkpump"),
+            .owner = Pubkey.parse("ComputeBudget111111111111111111111111111111"),
+            .lamports = 84,
+            .rent_epoch = 1,
+            .executable = false,
+            .data = "second rooted account data",
+        },
+        .{
+            .pubkey = Pubkey.parse("USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB"),
+            .owner = Pubkey.parse("SysvarRent111111111111111111111111111111111"),
+            .lamports = 126,
+            .rent_epoch = 2,
+            .executable = true,
+            .data = "third rooted account payload",
+        },
+    };
+
+    try state.putAccounts(logger, &accounts);
+
+    // Queue all three before polling.
+    for (accounts, user_data) |account, req_user_data| {
+        try std.testing.expect(try state.rooted.queueRead(.from(logger), &.{
+            .req_user_data = req_user_data,
+            .pubkey = account.pubkey,
+        }));
+    }
+
+    var seen: [3]bool = @splat(false);
+    var released: usize = 0;
+
+    var completed: usize = 0;
+    while (completed < user_data.len) {
+        const result = try state.rooted.pollRead(.from(logger)) orelse continue;
+
+        const account_index = for (user_data, 0..) |req_user_data, i| {
+            if (result.req_user_data == req_user_data) {
+                try std.testing.expect(!seen[i]);
+                seen[i] = true;
+                break i;
+            }
+        } else {
+            return error.UnexpectedRequestUserData;
+        };
+        const expected = accounts[account_index];
+
+        completed += 1;
+
+        try std.testing.expect(result.account_index != .invalid);
+        const account = state.account_pool.getAccount(result.account_index);
+        defer if (account.unref()) state.account_pool.free(result.account_index);
+        released += 1;
+
+        try std.testing.expect(result.pubkey.equals(&expected.pubkey));
+        try std.testing.expect(account.pubkey.equals(&expected.pubkey));
+        try std.testing.expect(account.owner.equals(&expected.owner));
+        try std.testing.expectEqual(expected.lamports, account.lamports);
+        try std.testing.expectEqual(expected.rent_epoch, account.rent_epoch);
+        try std.testing.expectEqual(expected.executable, account.data.executable);
+        try std.testing.expectEqualStrings(expected.data, account.getData());
+    }
+
+    try std.testing.expectEqual(accounts.len, released);
+    try std.testing.expectEqual(
+        [_]bool{ true, true, true },
+        seen,
+    );
+}
