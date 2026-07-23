@@ -22,6 +22,7 @@ const AccountStore = sig.accounts_db.AccountStore;
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
+const LAMPORTS_PER_SIGNATURE = sig.runtime.check_transactions.LAMPORTS_PER_SIGNATURE;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
@@ -1131,7 +1132,7 @@ pub const TestState = struct {
             .ancestors = ancestors,
             .slot = 0,
             .max_age = max_age,
-            .lamports_per_signature = 5000,
+            .lamports_per_signature = LAMPORTS_PER_SIGNATURE,
             .blockhash_queue = .init(blockhash_queue),
             .feature_set = .ALL_DISABLED,
             .rent_collector = .DEFAULT,
