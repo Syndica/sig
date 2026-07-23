@@ -119,11 +119,11 @@ This section explains how to approach fixing conformance failures—the strategy
 The conformance system works as follows:
 
 - **Test vectors** are binary `.fix` files in `env/test-vectors/`, each encoding a program input (a transaction, an instruction, an ELF, etc.) along with the expected output that agave produces.
-- **Harnesses** in `src/` deserialize those inputs and feed them into sig's runtime. The harness code is the layer between the test framework and sig's actual logic in `../src/`.
+- **Harnesses** in `src/` deserialize those inputs and feed them into sig's runtime. The harness code is the layer between the test framework and sig's actual logic in `../v2/`.
 - **solana-conformance** (a Rust CLI binary) orchestrates test execution, compares outputs, and writes results to `env/test-outputs/`.
 - **solfuzz-agave** (`env/solfuzz-agave/`) contains the equivalent harnesses for agave. You can run the tests against agave to regenerate expected outputs, or add print statements to agave for comparison.
 
-The sig source code is in `../src/`. The agave source code is in `env/agave/`. Both can be edited for debugging—just recompile the respective harness afterward.
+The sig source code is in `../v2/`. The agave source code is in `env/agave/`. Both can be edited for debugging—just recompile the respective harness afterward.
 
 ## Workflow
 
@@ -166,7 +166,7 @@ Instruction errors in the output are encoded as integers. The mapping is:
 proto value = intFromEnum(InstructionError) + 1
 ```
 
-The full table is in `../src/core/instruction.zig` in the `intFromInstructionError` function. Some common ones:
+The full table is in `../v2/lib/solana/instruction.zig` in the `intFromInstructionError` function. Some common ones:
 
 | Proto value | InstructionError       |
 | ----------- | ---------------------- |
@@ -185,14 +185,14 @@ The full table is in `../src/core/instruction.zig` in the `intFromInstructionErr
 
 Once you know what error sig produces versus what agave produces, trace the code paths in both:
 
-- **Sig's harness** is in `src/`. It calls into sig's runtime at `../src/runtime/`.
+- **Sig's harness** is in `src/`. It calls into sig's runtime at `../v2/components/runtime/runtime/`.
 - **Agave's harness** is in `env/solfuzz-agave/src/`. It calls into agave at `env/agave/`.
 
 For a given failing instruction, find the program's execute function in both codebases and compare them. Common places to look:
 
-- `../src/runtime/program/<program>/` — sig's builtin/native program implementations
-- `../src/runtime/executor.zig` — instruction dispatch, feature gate checking
-- `../src/runtime/program/lib.zig` — the static maps of native programs and precompiles
+- `../v2/components/runtime/runtime/program/<program>/` — sig's builtin/native program implementations
+- `../v2/components/runtime/runtime/executor.zig` — instruction dispatch, feature gate checking
+- `../v2/components/runtime/runtime/program/lib.zig` — the static maps of native programs and precompiles
 - `env/agave/programs/<program>/src/lib.rs` — agave's equivalent
 
 ### 5. Add print statements for deeper inspection
@@ -225,7 +225,7 @@ if !feature_set.enable_some_feature {
 }
 ```
 
-Sometimes agave changes the features' pubkeys. Check `env/agave/feature-set/src/lib.rs` for agave's feature pubkeys. In sig, feature pubkeys are listed in `../src/core/features.zon`.
+Sometimes agave changes the features' pubkeys. Check `env/agave/feature-set/src/lib.rs` for agave's feature pubkeys. In sig, feature pubkeys are listed in `../v2/lib/solana/features.zon`.
 
 ### Validation differences
 
