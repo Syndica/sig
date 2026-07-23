@@ -182,15 +182,6 @@ pub fn main() !void {
     var net_to_shred: Region(lib.net.Pair) = try .sized(net_pair_params.size());
     net_pair_params.init(net_to_shred.ptr());
 
-    // Keep a local mapping of the Pair so we can detect when the
-    // shred_streamer closes the writer side (streaming complete).
-    const pair_ptr = try net_to_shred.memfd.mmapStaticSize(
-        .rw,
-        lib.net.Pair,
-        .{},
-    );
-    defer std.posix.munmap(@ptrCast(pair_ptr));
-
     // shred.RecvConfig: leader_schedule is zeroed — relies on
     // -Ddebug-skip-shred-sig-verify build flag for offline use.
     var shred_recv_config: Region(lib.shred.RecvConfig) = try .simple();
@@ -328,11 +319,11 @@ pub fn main() !void {
         },
     });
 
-    // Wait for shred_streamer to finish streaming. It signals
-    // completion by closing the writer side of the recv ring.
-    // We can't rely on children.isActive() alone because some
-    // services (e.g., accounts_db) never signal idle.
-    while (!pair_ptr.recv.tail.closed.load(.acquire)) {
+    // Wait for all services to finish their work and go idle.
+    // In offline replay the pipeline drains naturally:
+    //   shred_streamer → shred_receiver → replay → exec
+    // Once every service reports idle, cancel and clean up.
+    while (children.isActive()) {
         std.atomic.spinLoopHint();
     }
 
