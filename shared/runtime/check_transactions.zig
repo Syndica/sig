@@ -917,6 +917,9 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
     try std.testing.expectEqual(0, fee_details.prioritization_fee);
     try std.testing.expectEqual(1_000, rollback_nonce_account.lamports);
     try std.testing.expectEqual(0, rollback_nonce_account.rent_epoch);
-    try std.testing.expectEqual(1_000_000 - LAMPORTS_PER_SIGNATURE, rollback_fee_payer_account.lamports);
+    try std.testing.expectEqual(
+        1_000_000 - LAMPORTS_PER_SIGNATURE,
+        rollback_fee_payer_account.lamports,
+    );
     try std.testing.expectEqual(std.math.maxInt(u64), rollback_fee_payer_account.rent_epoch);
 }
