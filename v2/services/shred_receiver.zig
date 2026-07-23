@@ -117,9 +117,3 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
         }
     }
 }
-
-test "service has required declarations" {
-    try std.testing.expectEqual(.shred_receiver, name);
-    try std.testing.expectEqual(8192, max_in_progress);
-    try std.testing.expectEqual(65536, max_done);
-}

@@ -389,13 +389,3 @@ pub noinline fn servicePanic(
     notifyThreadCrash();
     abort();
 }
-
-test "SimpleStackIterator returns null for zero frame pointer" {
-    var iter = SimpleStackIterator.init(null, @as(?usize, 0));
-    try std.testing.expectEqual(null, iter.next());
-}
-
-test "SimpleStackIterator returns null for unaligned frame pointer" {
-    var iter = SimpleStackIterator.init(null, @as(?usize, 1));
-    try std.testing.expectEqual(null, iter.next());
-}

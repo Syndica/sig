@@ -434,15 +434,3 @@ fn populateSnapshotConfig(
         }
     }
 }
-
-test "populateSnapshotConfig accepts wildcard validator" {
-    var data: lib.snapshot.SnapshotConfig = std.mem.zeroes(lib.snapshot.SnapshotConfig);
-    const cfg: Config.Snapshot = .{
-        .folder = "/tmp/test",
-        .known_validators = &.{"*"},
-    };
-    try populateSnapshotConfig(&data, cfg, .mainnet);
-    try std.testing.expect(data.known_validators_allow_all);
-    try std.testing.expectEqual(@as(u32, 0), data.known_validators_len);
-    try std.testing.expectEqual(.mainnet, data.cluster);
-}

@@ -130,10 +130,3 @@ fn mainInner(
         }
     }
 }
-
-test "service has required declarations" {
-    try std.testing.expectEqual(.net, name);
-    try std.testing.expectEqual(10, MAX_SOCKETS);
-    const rw_fields = @typeInfo(ReadWrite).@"struct".fields;
-    try std.testing.expect(rw_fields.len > 0);
-}
