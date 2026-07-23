@@ -539,10 +539,12 @@ pub const Manifest = struct {
         allocator: std.mem.Allocator,
         file: std.fs.File,
     ) !Manifest {
-        const stat = try file.stat();
-        const size = stat.size;
-        const contents = try file.readToEndAllocOptions(allocator, size, size, .@"1", null);
+        const size = (try file.stat()).size;
+        const contents = try allocator.alloc(u8, @intCast(size));
         defer allocator.free(contents);
+
+        var file_reader = file.reader(&.{});
+        try file_reader.interface.readSliceAll(contents);
 
         var fbs = std.io.fixedBufferStream(contents);
         return decodeFromBincode(allocator, fbs.reader(), .{

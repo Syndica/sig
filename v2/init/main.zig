@@ -182,13 +182,25 @@ pub fn main() !void {
         const cfg_file = try std.fs.cwd().openFile(cfg_path, .{});
         defer cfg_file.close();
 
-        const cfg_str = try cfg_file.readToEndAllocOptions(allocator, 1024 * 1024, null, .@"1", 0);
-        defer allocator.free(cfg_str);
+        var file_reader = cfg_file.reader(&.{});
+        const file_size = try file_reader.getSize();
+
+        if (file_size > 1024 * 1024) return error.ConfigFileTooBig;
+        const cfg_bytes = try allocator.allocSentinel(u8, @intCast(file_size), 0);
+        defer allocator.free(cfg_bytes);
+
+        try file_reader.interface.readSliceAll(cfg_bytes);
 
         var diag: std.zon.parse.Diagnostics = .{};
         defer diag.deinit(allocator);
 
-        const config = std.zon.parse.fromSlice(Config, allocator, cfg_str, &diag, .{}) catch |err| {
+        const config = std.zon.parse.fromSlice(
+            Config,
+            allocator,
+            cfg_bytes,
+            &diag,
+            .{},
+        ) catch |err| {
             std.log.err("{f}", .{diag});
             return err;
         };
