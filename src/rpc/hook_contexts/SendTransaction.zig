@@ -457,6 +457,7 @@ fn simulateRuntimeTransaction(
     var svm_gateway = try SvmGateway.init(arena, .{
         .slot = preflight_slot,
         .max_age = sig.core.BlockhashQueue.MAX_PROCESSING_AGE / 2,
+        .lamports_per_signature = slot_constants.fee_rate_governor.lamports_per_signature,
         .blockhash_queue = &slot_state.blockhash_queue,
         .account_store = self.account_store.forSlot(preflight_slot, &slot_constants.ancestors),
         .ancestors = &slot_constants.ancestors,
