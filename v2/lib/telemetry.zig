@@ -6,6 +6,7 @@ const tracy = @import("tracy");
 pub const metric = @import("telemetry/metric.zig");
 pub const log = @import("telemetry/log.zig");
 pub const prometheus = @import("telemetry/prometheus.zig");
+pub const TestLogStore = @import("telemetry/tests/TestLogStore.zig");
 pub const TestMetricStore = @import("telemetry/tests/TestMetricStore.zig");
 comptime {
     if (@import("builtin").is_test) {
@@ -313,6 +314,17 @@ pub fn Logger(comptime scope_str: []const u8) type {
                     };
                 }
 
+                /// Labels this message as an alert for the specified audience.
+                pub fn alert(
+                    self: *const EntrySelf,
+                    comptime audience: log_zig.Alert,
+                ) Entry(entry_count + 1) {
+                    const AlertValue = struct {
+                        const value = @tagName(audience);
+                    };
+                    return self.field("alert", &AlertValue.value);
+                }
+
                 /// Returns the field format string for common types: strings,
                 /// numbers, and types with `format` functions.
                 ///
@@ -384,6 +396,8 @@ pub fn Logger(comptime scope_str: []const u8) type {
                         },
                     }
 
+                    if (self.logger.sink == .noop) return;
+
                     const message: log_zig.Message = .{
                         .epoch_millis = clock.wallclock(.ms),
                         .scope = scope,
@@ -392,16 +406,20 @@ pub fn Logger(comptime scope_str: []const u8) type {
                         .level = self.level,
                     };
 
+                    var field_value_plan_storage: [entry_count]log_zig.EntryValueFmt.EncodingPlan =
+                        undefined;
+                    const encoding = message.computeEncodingPlan(&field_value_plan_storage);
+
                     switch (self.logger.sink) {
-                        .noop => return,
+                        // already determined not a noop, this is just for exhaustive switch
+                        .noop => unreachable,
                         .writer => |w| {
-                            _ = message.write(w) catch |e| switch (e) {
+                            message.write(w, encoding) catch |e| switch (e) {
                                 error.WriteFailed => {},
                             };
                         },
                         .swap_buffer => |sb| {
-                            const expected_header = message.computeHeader();
-                            const encoded_len = expected_header.encodedLength();
+                            const encoded_len = encoding.header.encodedLength();
 
                             // NOTE: although the retry path is highly unlikely assuming the swapbuffer is sufficiently large,
                             // there's an extremely slim but non-zero chance it could happen.
@@ -421,12 +439,11 @@ pub fn Logger(comptime scope_str: []const u8) type {
                                 );
 
                             var fbw: std.Io.Writer = .fixed(writable.slice);
-                            const message_header = message.write(&fbw) catch |e| switch (e) {
+                            message.write(&fbw, encoding) catch |e| switch (e) {
                                 // we already know there's enough space in the buffer for the message.
                                 error.WriteFailed => unreachable,
                             };
-                            std.debug.assert(message_header.encodedLength() == encoded_len);
-                            std.debug.assert(std.meta.eql(message_header, expected_header));
+                            std.debug.assert(fbw.buffered().len == encoded_len);
                             writable.commit(encoded_len);
                         },
                     }
