@@ -20,7 +20,6 @@ const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransact
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 const SysvarCache = sig.runtime.SysvarCache;
-const LAMPORTS_PER_SIGNATURE = sig.runtime.check_transactions.LAMPORTS_PER_SIGNATURE;
 const TransactionExecutionEnvironment =
     sig.runtime.transaction_execution.TransactionExecutionEnvironment;
 const TransactionResult = sig.runtime.transaction_execution.TransactionResult;
@@ -88,6 +87,7 @@ pub const SvmGateway = struct {
         // Simple inputs to copy into the svm
         slot: u64,
         max_age: u64,
+        lamports_per_signature: u64,
 
         // Borrowed values to pass by reference into the SVM.
         account_store: SlotAccountStore,
@@ -190,7 +190,7 @@ pub const SvmGateway = struct {
             // https://github.com/anza-xyz/agave/blob/161fc1965bdb4190aa2d7e36c7c745b4661b10ed/runtime/src/bank.rs#L2893-L2896
             .last_lamports_per_signature = last_lamports_per_signature,
 
-            .lamports_per_signature = LAMPORTS_PER_SIGNATURE,
+            .lamports_per_signature = self.params.lamports_per_signature,
         };
     }
 };

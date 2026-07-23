@@ -22,6 +22,7 @@ const AccountStore = sig.accounts_db.AccountStore;
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
+const LAMPORTS_PER_SIGNATURE = sig.runtime.check_transactions.LAMPORTS_PER_SIGNATURE;
 const SlotHashes = sig.runtime.sysvar.SlotHashes;
 const TransactionError = sig.ledger.transaction_status.TransactionError;
 
@@ -541,6 +542,7 @@ fn prepareSlot(
     var svm_gateway = try SvmGateway.init(state.allocator, .{
         .slot = slot,
         .max_age = sig.core.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2,
+        .lamports_per_signature = slot_info.constants().fee_rate_governor.lamports_per_signature,
         .blockhash_queue = &slot_info.state().blockhash_queue,
         .account_store = state.account_store.forSlot(slot, &slot_info.constants().ancestors),
         .ancestors = &slot_info.constants().ancestors,
@@ -1083,6 +1085,7 @@ pub const TestState = struct {
     // svm params
     slot: u64,
     max_age: u64,
+    lamports_per_signature: u64,
     blockhash_queue: sig.sync.RwMux(sig.core.BlockhashQueue),
     feature_set: sig.core.FeatureSet,
     rent_collector: sig.core.RentCollector,
@@ -1129,6 +1132,7 @@ pub const TestState = struct {
             .ancestors = ancestors,
             .slot = 0,
             .max_age = max_age,
+            .lamports_per_signature = LAMPORTS_PER_SIGNATURE,
             .blockhash_queue = .init(blockhash_queue),
             .feature_set = .ALL_DISABLED,
             .rent_collector = .DEFAULT,
@@ -1165,6 +1169,7 @@ pub const TestState = struct {
         return .{
             .slot = self.slot,
             .max_age = self.max_age,
+            .lamports_per_signature = self.lamports_per_signature,
             .blockhash_queue = &self.blockhash_queue,
             .account_store = self.accountStore().forSlot(self.slot, &self.ancestors),
             .ancestors = &self.ancestors,
