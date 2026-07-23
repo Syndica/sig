@@ -5,7 +5,6 @@
 //! 4) delta LT
 //!
 
-const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
 const tracy = @import("tracy");
@@ -26,16 +25,12 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     var request_reader = rw.exec_req_response.request_ring.get(.reader);
     var response_writer = rw.exec_req_response.response_ring.get(.writer);
 
-    var deserialised_buf: [16 * 1024]u8 = undefined;
-    var deserial_fba: std.heap.FixedBufferAllocator = .init(&deserialised_buf);
-
     while (true) {
         const request: *const lib.replay.ExecRequest = request_reader.next() orelse {
             try runner.activity.signalIdleSpinning();
             continue;
         };
         defer request_reader.markUsed();
-        defer deserial_fba.reset();
         try runner.activity.signalActive();
 
         const zone = tracy.Zone.init(@src(), .{});
@@ -53,16 +48,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
                 zone.value(slot);
                 tracy.plot(u48, "exec slot", @intCast(slot));
 
-                var reader =
-                    std.io.Reader.fixed(ro.replay_transaction_pool.indexToConstPtr(data.tx_idx));
-
-                const transaction: lib.solana.transaction.VersionedTransaction =
-                    try lib.solana.bincode.read(
-                        &deserial_fba,
-                        &reader,
-                        lib.solana.transaction.VersionedTransaction,
-                    );
-
+                const transaction = ro.replay_transaction_pool.indexToConstPtr(data.tx_idx).view();
                 _ = transaction;
 
                 const response: *lib.replay.ExecResponse = response_writer.next() orelse

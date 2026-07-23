@@ -114,6 +114,9 @@ const BlockHashStates = [lib.replay.BlockPool.capacity]?Hash;
 const AccountRef = lib.accounts_db.AccountPool.AccountRef;
 const Pubkey = lib.solana.Pubkey;
 
+const VersionedTransaction = lib.solana.transaction.VersionedTransaction;
+const MAX_ACCOUNT_ADDRESSES = VersionedTransaction.MAX_ACCOUNT_ADDRESSES;
+
 pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     rw.tel.signalReady();
@@ -949,18 +952,18 @@ fn maybeContinueBlockExec(
     // Read transactions until we can't anymore, sending to exec as we go
     while (true) {
         const tx_ref = try transaction_pool.createId();
-        // TODO: this is a major leak risk, should use comptime errdefer unreachable
+        errdefer transaction_pool.destroyId(tx_ref);
 
-        const tx_buf: *[1232]u8 = transaction_pool.indexToPtr(tx_ref);
+        const tx_record = transaction_pool.indexToPtr(tx_ref);
 
-        const tx = try block_deserial_state.nextTransaction(
+        const transaction = try block_deserial_state.nextTransaction(
             forest_pool,
-            tx_buf,
+            tx_record,
         ) orelse {
             transaction_pool.destroyId(tx_ref);
             break;
         };
-        tracy.plot(u16, "transaction size", @intCast(tx.len));
+        tracy.plot(u16, "transaction size", @intCast(transaction.layout.payload_len));
 
         // index within the block
         const tx_index: u32 = exec_state.n_transactions_requested;
@@ -970,100 +973,108 @@ fn maybeContinueBlockExec(
         // NOTE: in the future this should be "sent" to the transaction scheduler, not to exec
         // directly
         {
-            // TODO: replace this with something custom, this is slow - we only need to extract the
-            // accounts (including ALT accounts) here.
-            var deserialised_buf: [16 * 1024]u8 = undefined;
-            var deserial_fba: std.heap.FixedBufferAllocator = .init(&deserialised_buf);
-            var reader = std.io.Reader.fixed(tx);
-            const transaction: lib.solana.transaction.VersionedTransaction =
-                try lib.solana.bincode.read(
-                    &deserial_fba,
-                    &reader,
-                    lib.solana.transaction.VersionedTransaction,
-                );
+            var held_accounts_buf: [MAX_ACCOUNT_ADDRESSES]AccountRef = undefined;
 
-            var held_accounts_buf: [128]AccountRef = undefined;
-            var held_accounts: u8 = 0;
+            const static_keys = transaction.staticAccountKeys();
+            const static_count = static_keys.len;
+            const loaded_writable_count: usize = transaction.layout.loaded_writable_count;
+            const total_account_count: usize = transaction.totalAccountCount();
 
-            const account_keys: []const Pubkey = switch (transaction.message) {
-                inline else => |txn| txn.account_keys.items,
-            };
+            std.debug.assert(
+                total_account_count <= held_accounts_buf.len,
+            );
 
-            for (account_keys) |*k| {
-                held_accounts_buf[held_accounts] = fetchBlocking(
+            for (static_keys, 0..) |*key, i| {
+                held_accounts_buf[i] = fetchBlocking(
                     unrooted,
-                    k,
+                    key,
                     block_ref,
                     block_pool,
                     account_pool,
                     rooted_lookups,
                 );
-                held_accounts += 1;
             }
 
-            const address_lookups: []const lib.solana.transaction.AddressLookup =
-                switch (transaction.message) {
-                    .legacy => &.{},
-                    .v0 => |v0| v0.address_table_lookups.items,
-                };
+            // Loaded writable accounts immediately follow the static accounts.
+            // Loaded readonly accounts immediately follow all loaded writable accounts.
+            var writable_cursor = static_count;
+            var readonly_cursor = static_count + loaded_writable_count;
 
-            const Pass = enum { write, read };
+            var atls_iter = transaction.addressTableLookups();
+            while (try atls_iter.next()) |lookup| {
+                const table_account_ref = fetchBlocking(
+                    unrooted,
+                    lookup.account_key,
+                    block_ref,
+                    block_pool,
+                    account_pool,
+                    rooted_lookups,
+                );
 
-            // looked up accounts are writable first, then readable
-            for (@as([]const Pass, &.{ .write, .read })) |pass| {
-                for (address_lookups) |lookup| {
-                    const account_ref = fetchBlocking(
+                if (table_account_ref == .invalid)
+                    @panic("missing address lookup table / TODO: handle bad blocks");
+
+                const table_account: *lib.accounts_db.AccountPool.Account =
+                    account_pool.getAccount(table_account_ref);
+
+                defer if (table_account.unref()) account_pool.free(table_account_ref);
+
+                // NOTE: this is *not* a conformant implementation of an Address Lookup Table
+                // lookup; we need to respect the fields in the ALT account's header.
+                // Here we are just skipping over the header (56 bytes), which means we could be
+                // fetching accounts which are not yet active in the ALT.
+                const table_data = table_account.getData();
+                const header_len = 56;
+                if (table_data.len < header_len or (table_data.len - header_len) % Pubkey.SIZE != 0)
+                    @panic("invalid ALT / TODO: handle bad blocks");
+
+                const address_bytes = table_data[header_len..];
+                const address_count = address_bytes.len / Pubkey.SIZE;
+                const address_ptr: [*]const Pubkey = @ptrCast(address_bytes);
+
+                const table_pubkeys = address_ptr[0..address_count];
+
+                for (lookup.writable_indexes) |account_idx| {
+                    if (account_idx >= table_pubkeys.len)
+                        @panic("bad ALT lookup / TODO: handle bad blocks");
+                    const account_pk: *const Pubkey = &address_ptr[account_idx];
+
+                    std.debug.assert(writable_cursor < static_count + loaded_writable_count);
+
+                    held_accounts_buf[writable_cursor] = fetchBlocking(
                         unrooted,
-                        &lookup.account_key,
+                        account_pk,
                         block_ref,
                         block_pool,
                         account_pool,
                         rooted_lookups,
                     );
+                    writable_cursor += 1;
+                }
 
-                    if (account_ref == .invalid)
-                        @panic("missing address lookup table / TODO: handle bad blocks");
+                for (lookup.readonly_indexes) |account_idx| {
+                    if (account_idx >= table_pubkeys.len)
+                        @panic("bad ALT lookup / TODO: handle bad blocks");
+                    const account_pk: *const Pubkey = &address_ptr[account_idx];
 
-                    const ALT_account: *lib.accounts_db.AccountPool.Account =
-                        account_pool.getAccount(account_ref);
+                    std.debug.assert(readonly_cursor < total_account_count);
 
-                    defer if (ALT_account.unref()) account_pool.free(account_ref);
-
-                    // NOTE: this is *not* a conformant implementation of an Address Lookup Table
-                    // lookup; we need to respect the fields in the ALT account's header.
-                    // Here we are just skipping over the header (56 bytes), which means we could be
-                    // fetching accounts which are not yet active in the ALT.
-                    const ALT_data = ALT_account.getData();
-                    const header_len = 56;
-                    if (ALT_data.len < header_len or (ALT_data.len - header_len) % 32 != 0)
-                        @panic("invalid ALT / TODO: handle bad blocks");
-                    const ALT_pubkeys: []const Pubkey = @ptrCast(ALT_data[header_len..]);
-
-                    const indexes = switch (pass) {
-                        .write => lookup.writable_indexes.items,
-                        .read => lookup.readonly_indexes.items,
-                    };
-
-                    for (indexes) |account_idx| {
-                        if (account_idx >= ALT_pubkeys.len)
-                            @panic("bad ALT lookup / TODO: handle bad blocks");
-                        const account_pk: *const Pubkey = &ALT_pubkeys[account_idx];
-
-                        if (held_accounts >= held_accounts_buf.len)
-                            @panic("too many accounts for transaction / TODO: handle bad blocks");
-
-                        held_accounts_buf[held_accounts] = fetchBlocking(
-                            unrooted,
-                            account_pk,
-                            block_ref,
-                            block_pool,
-                            account_pool,
-                            rooted_lookups,
-                        );
-                        held_accounts += 1;
-                    }
+                    held_accounts_buf[readonly_cursor] = fetchBlocking(
+                        unrooted,
+                        account_pk,
+                        block_ref,
+                        block_pool,
+                        account_pool,
+                        rooted_lookups,
+                    );
+                    readonly_cursor += 1;
                 }
             }
+
+            std.debug.assert(writable_cursor == static_count + loaded_writable_count);
+            std.debug.assert(readonly_cursor == total_account_count);
+
+            const held_accounts: u8 = @intCast(total_account_count);
 
             const request: *lib.replay.ExecRequest = exec_request_sender.next() orelse
                 @panic("no space");
@@ -1285,14 +1296,14 @@ const BlockDeserialState = struct {
     fn nextTransaction(
         self: *BlockDeserialState,
         merkle_pool: *const MerkleForest.NodePool,
-        tx_buf: *[1232]u8,
-    ) !?[]const u8 {
+        tx_record: *lib.replay.TransactionRecord,
+    ) !?lib.solana.transaction.VersionedTransaction.View {
         const zone = tracy.Zone.init(@src(), .{ .name = "nextTransaction" });
         defer zone.deinit();
 
         const backup = self.*;
 
-        return nextTransactionInner(self, merkle_pool, tx_buf) catch |err| switch (err) {
+        return nextTransactionInner(self, merkle_pool, tx_record) catch |err| switch (err) {
             error.EndOfStream => {
                 zone.text("EndOfStream");
                 self.* = backup;
@@ -1305,8 +1316,8 @@ const BlockDeserialState = struct {
     fn nextTransactionInner(
         self: *BlockDeserialState,
         merkle_pool: *const MerkleForest.NodePool,
-        tx_buf: *[1232]u8,
-    ) !?[]const u8 {
+        tx_record: *lib.replay.TransactionRecord,
+    ) !?lib.solana.transaction.VersionedTransaction.View {
         var reader = self.getReader(merkle_pool);
 
         // microblock deserialisation state machine
@@ -1367,17 +1378,27 @@ const BlockDeserialState = struct {
                     continue :loopback .num_hashes;
                 }
 
-                var pre_state = self.*;
+                var transaction_start_state = self.*;
 
-                const tx_bytes_read = try lib.solana.transaction
-                    .VersionedTransaction.parse(&reader);
+                const layout = try VersionedTransaction.parse(&reader);
+
+                std.debug.assert(layout.payload_len <= tx_record.payload.len);
+
+                var copy_reader = transaction_start_state.getReader(merkle_pool);
+
+                try copy_reader.advanceBytes(
+                    .copy,
+                    tx_record.payload[0..layout.payload_len],
+                    {},
+                );
+
+                // publish the layout to the transaction record.
+                tx_record.layout = layout;
 
                 self.n_transactions_left.? -= 1;
-
-                var tx_reader = pre_state.getReader(merkle_pool);
-                try tx_reader.advanceBytes(.copy, tx_buf[0..tx_bytes_read], {});
                 self.next_read = .transaction;
-                return tx_buf[0..tx_bytes_read];
+
+                return tx_record.view();
             },
         }
     }
