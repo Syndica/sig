@@ -411,7 +411,15 @@ const Tools = struct {
         .{
             .name = "replay-offline",
             .root_source_file = "tests/shred_stream_replay/main.zig",
-            .services = &.{ "shred_streamer", "shred_receiver", "replay", "exec", "snapshot", "accounts_db", "telemetry" },
+            .services = &.{
+                "shred_streamer",
+                "shred_receiver",
+                "replay",
+                "exec",
+                "snapshot",
+                "accounts_db",
+                "telemetry",
+            },
             .is_test = false,
             .install_dir = .default,
         },
