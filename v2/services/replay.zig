@@ -292,7 +292,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 fn bootstrap(
     logger: tel.Logger("main"),
     runner: lib.runner.Connection,
-    snapshot_metadata: *lib.accounts_db.SnapshotMetadata,
+    snapshot_metadata: *lib.snapshot.SnapshotMetadata,
     forest: *MerkleForest,
     block_pool: *lib.replay.BlockPool,
     exec_states: *BlockExecStates,
@@ -1679,7 +1679,7 @@ test "bootstrap creates root block and chains blockhashes" {
     // `bank_fields.blockhash_queue.{hashes,hashes_count}` and `extra_fields.block_id`.
     // Everything else can be zero-initialized. `memory_len = 0` because none of
     // the fields used here go through a RelativeSlice/RelativeOffset.
-    var metadata = std.mem.zeroes(lib.accounts_db.SnapshotMetadata);
+    var metadata = std.mem.zeroes(lib.snapshot.SnapshotMetadata);
     metadata.init(0);
     metadata.manifest.extra_fields.block_id =
         .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");

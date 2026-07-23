@@ -10,7 +10,7 @@ const FileReader = lib.fio.FileReader;
 const Table = lib.accounts_db.Table;
 const AccountPool = lib.accounts_db.AccountPool;
 const AccountLookups = lib.accounts_db.AccountLookups;
-const SnapshotMetadata = lib.accounts_db.SnapshotMetadata;
+const SnapshotMetadata = lib.snapshot.SnapshotMetadata;
 
 const Pubkey = lib.solana.Pubkey;
 const Slot = lib.solana.Slot;

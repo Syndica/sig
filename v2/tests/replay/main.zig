@@ -57,8 +57,8 @@ pub fn main() !void {
     exec_req_response_region.ptr().init();
 
     const snapshot_fba_size = 256 * 1024 * 1024;
-    var snapshot_metadata: Region(lib.accounts_db.SnapshotMetadata) =
-        try .sized(@sizeOf(lib.accounts_db.SnapshotMetadata) + snapshot_fba_size);
+    var snapshot_metadata: Region(lib.snapshot.SnapshotMetadata) =
+        try .sized(@sizeOf(lib.snapshot.SnapshotMetadata) + snapshot_fba_size);
     snapshot_metadata.ptr().init(snapshot_fba_size);
     snapshot_metadata.ptr().manifest.extra_fields.block_id = first_shred.chainedMerkleRoot().*;
     {

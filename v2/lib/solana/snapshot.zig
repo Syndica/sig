@@ -729,7 +729,7 @@ pub fn SnapshotIter(comptime BufReader: type) type {
         const Self = @This();
 
         pub fn init(
-            snapshot_metadata: *lib.accounts_db.SnapshotMetadata,
+            snapshot_metadata: *lib.snapshot.SnapshotMetadata,
             buf_reader: BufReader,
         ) !Self {
             var self: Self = undefined;
@@ -1050,7 +1050,7 @@ test "deserialized snapshot matches generated snapshot json" {
         }
     };
 
-    const SnapshotMetadata = lib.accounts_db.SnapshotMetadata;
+    const SnapshotMetadata = lib.snapshot.SnapshotMetadata;
     const snapshot_fba_size = 8 * 1024 * 1024;
     const snapshot_meta_buf = try allocator.alignedAlloc(
         u8,

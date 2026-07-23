@@ -15,7 +15,7 @@ pub const accounts_db = struct {
     pub const ReadWrite = struct {
         config: *lib.accounts_db.RootedConfig,
         ready_snapshot_in: *lib.snapshot.SnapshotData,
-        snapshot_metadata_out: *lib.accounts_db.SnapshotMetadata,
+        snapshot_metadata_out: *lib.snapshot.SnapshotMetadata,
         account_pool: *lib.accounts_db.AccountPool,
         replay_lookups: *lib.accounts_db.AccountLookups,
         tel: *lib.telemetry.Region,
@@ -60,7 +60,7 @@ pub const replay = struct {
 
     pub const ReadWrite = struct {
         scratch_memory: *[lib.replay.scratch_buffer_size]u8,
-        snapshot_metadata_in: *lib.accounts_db.SnapshotMetadata,
+        snapshot_metadata_in: *lib.snapshot.SnapshotMetadata,
         deshredded_in: *lib.shred.DeshredRing,
         replay_transaction_pool: *lib.replay.TransactionPool,
         block_pool: *lib.replay.BlockPool,
@@ -78,7 +78,7 @@ pub const shred_receiver = struct {
 
     pub const ReadWrite = struct {
         /// Gets slot (& soon leader-schedule info) from replay / runtime init.
-        snapshot_metadata: *lib.accounts_db.SnapshotMetadata,
+        snapshot_metadata: *lib.snapshot.SnapshotMetadata,
 
         /// Transaction Validation Unit (TVU) UDP socket, i.e. where we receive
         /// shreds. This is typically port 8002. While we've obtained a net

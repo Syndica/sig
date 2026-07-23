@@ -259,8 +259,8 @@ pub fn main() !void {
     var snapshot_ready_to_accounts_db: Region(lib.snapshot.SnapshotData) = try .simple();
     snapshot_ready_to_accounts_db.ptr().init();
 
-    var snapshot_metadata: Region(lib.accounts_db.SnapshotMetadata) = try .sized(
-        @sizeOf(lib.accounts_db.SnapshotMetadata) + config.accounts_db.metadata.toBytes(),
+    var snapshot_metadata: Region(lib.snapshot.SnapshotMetadata) = try .sized(
+        @sizeOf(lib.snapshot.SnapshotMetadata) + config.accounts_db.metadata.toBytes(),
     );
     snapshot_metadata.ptr().init(config.accounts_db.metadata.toBytes());
 
