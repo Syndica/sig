@@ -3,13 +3,6 @@
 
     .cluster = .testnet,
     .leader_schedule_file = "",
-    .gossip = .{
-        .port = 0,
-        .advertise_tvu_port = false,
-    },
-    .shred_network = .{
-        .recv_port = 0,
-    },
     .telemetry = .{
         .port = 9110,
         .log_level = .info,

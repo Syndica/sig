@@ -17,7 +17,8 @@
 //! Usage:
 //!   shred-stream-replay <config.zon> --ledger <path> [--start-slot N] [--end-slot N] ...
 //!
-//! The first argument is a .zon config file (same format as the main validator).
+//! The first argument is a .zon config file (same format as the main validator,
+//! network fields like gossip/shred_network are ignored if present).
 //! Remaining arguments are passed through to the shred_streamer service via
 //! shared memory. Build with -Ddebug-skip-shred-sig-verify
 //! -Ddebug-skip-shred-version-check for testing without a leader schedule.
@@ -30,9 +31,9 @@ const topology = lib.topology;
 
 const Region = topology.Region;
 
-/// Config for the offline replay topology. Same format as the main validator
-/// config (`v2/init/main.zig`) so the same .zon file can be shared.
-/// Network-related fields (gossip, shred_network) are parsed but unused.
+/// Config for the offline replay topology. Only declares fields relevant to
+/// shred-stream-replay. Unknown fields (e.g., gossip, shred_network) are
+/// silently ignored so that the main validator .zon config can be reused.
 const Config = struct {
     sandboxing_mode: SandboxingMode = .threaded,
 
@@ -41,24 +42,12 @@ const Config = struct {
     /// Not used in offline mode (leader schedule is skipped with debug flags).
     leader_schedule_file: []const u8 = "",
 
-    gossip: Gossip = .{ .port = 0, .advertise_tvu_port = false },
-    shred_network: ShredNetwork = .{ .recv_port = 0 },
-
     telemetry: Telemetry,
 
     snapshot: Snapshot,
     accounts_db: AccountsDb,
 
     const SandboxingMode = enum { sandboxed, threaded };
-
-    const Gossip = struct {
-        port: u16,
-        advertise_tvu_port: bool,
-    };
-
-    const ShredNetwork = struct {
-        recv_port: u16,
-    };
 
     const Telemetry = struct {
         port: u16,
@@ -156,7 +145,9 @@ pub fn main() !void {
         var diag: std.zon.parse.Diagnostics = .{};
         defer diag.deinit(allocator);
 
-        const c = std.zon.parse.fromSlice(Config, allocator, cfg_str, &diag, .{}) catch |err| {
+        const c = std.zon.parse.fromSlice(Config, allocator, cfg_str, &diag, .{
+            .ignore_unknown_fields = true,
+        }) catch |err| {
             std.log.err("{f}", .{diag});
             return err;
         };
