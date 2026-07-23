@@ -177,6 +177,14 @@ pub const RentCollector = struct {
     }
 };
 
+pub const RENT_FEATURE_GATES = [_]struct { sig.core.features.Feature, u64 }{
+    .{ .set_lamports_per_byte_to_6333, 6333 },
+    .{ .set_lamports_per_byte_to_5080, 5080 },
+    .{ .set_lamports_per_byte_to_2575, 2575 },
+    .{ .set_lamports_per_byte_to_1322, 1322 },
+    .{ .set_lamports_per_byte_to_696, 696 },
+};
+
 pub fn defaultCollector(epoch: Epoch) RentCollector {
     return .testDefault(epoch);
 }
