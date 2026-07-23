@@ -274,7 +274,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     }
 }
 
-/// Reads all the RuntimeMetadata provided by accountsdb from the snapshot or
+/// Reads all the SnapshotMetadata provided by accountsdb from the snapshot or
 /// its internal state. This bootstraps replay with information about its
 /// starting root slot, and some older info like the history of blockhashes.
 /// This data populates the block tree, some other structures indexed by
@@ -292,52 +292,50 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 fn bootstrap(
     logger: tel.Logger("main"),
     runner: lib.runner.Connection,
-    snapshot_metadata: *lib.accounts_db.RuntimeMetadata,
+    snapshot_metadata: *lib.snapshot.SnapshotMetadata,
     forest: *MerkleForest,
     block_pool: *lib.replay.BlockPool,
     exec_states: *BlockExecStates,
     blockhash_states: *BlockHashStates,
 ) !void {
-    var num_hashes: usize = 0;
-    // Drain the blockhash queue into the block tree. accountsdb writes into
-    // this ring blocks waiting for the reader (us).
-    var root_block = bhq: {
-        var blockhashes_in = snapshot_metadata.blockhash_queue.hashes.getView(.reader);
-        defer blockhashes_in.close();
-        var last_block: ?lib.replay.BlockRef = null;
-        while (true) {
-            const hashes = try blockhashes_in.getBufferBlocking(runner);
-            if (hashes.len == 0) break; // blockhashes_out closed their end
-            for (hashes) |*hash| {
-                const block = try block_pool.createId();
-                block.ptr(block_pool).* = .{
-                    .slot = .null, // cannot be determined from the snapshot
-                    .child = .null,
-                    .parent = .init(last_block),
-                };
-                if (last_block) |p| p.ptr(block_pool).child = .init(block);
-                blockhash_states[block.index()] = hash.*;
-                last_block = block;
-                num_hashes += 1;
-            }
-            blockhashes_in.advance(hashes.len);
-        }
-
-        const root_block = last_block orelse return error.NoBlockhashesInSnapshot;
-
-        break :bhq root_block;
-    };
-    logger.info().logf("loaded {} blockhashes from accountsdb snapshot data", .{num_hashes});
-
+    // Acquire barrier — pairs with accounts_db's `populateSlot` (Release). Once
+    // this returns, `snapshot_metadata.manifest` / `.status_cache` / all their
+    // trailing FBA data are fully published and safe to read from this process.
     const root_slot = try snapshot_metadata.getSlotBlocking(runner);
-    root_block.ptr(block_pool).slot = .init(root_slot);
     logger.info().logf("got the root slot from the snapshot: {}", .{root_slot});
+
+    const manifest = &snapshot_metadata.manifest;
+    const bhq = &manifest.bank_fields.blockhash_queue;
+    const hashes = bhq.hashes[0..bhq.hashes_count];
+
+    // Populate the block tree with one BlockRef per recent blockhash, chained by
+    // parent/child pointers. The last one is the root block for this replay.
+    var root_block = bhq_load: {
+        var last_block: ?lib.replay.BlockRef = null;
+        for (hashes) |*hash| {
+            const block = try block_pool.createId();
+            block.ptr(block_pool).* = .{
+                .slot = .null, // cannot be determined from the snapshot
+                .child = .null,
+                .parent = .init(last_block),
+            };
+            if (last_block) |p| p.ptr(block_pool).child = .init(block);
+            blockhash_states[block.index()] = hash.*;
+            last_block = block;
+        }
+        break :bhq_load last_block orelse return error.NoBlockhashesInSnapshot;
+    };
+    logger.info().logf("loaded {} blockhashes from accountsdb snapshot data", .{hashes.len});
+
+    root_block.ptr(block_pool).slot = .init(root_slot);
+
+    const block_id = manifest.extra_fields.block_id;
 
     // create a synthetic fec-set node that doesn't have all information about
     // the fec set, but it is enough to get started processing the first block
     // after the root
     const root_node = try insertFecSet(logger, &.{
-        .merkle_root = snapshot_metadata.block_id,
+        .merkle_root = block_id,
         .chained_merkle_root = .ZEROES, // cannot be determined from the snapshot
         .id = .{
             .slot = root_slot,
@@ -369,7 +367,7 @@ fn bootstrap(
 
     logger.info().logf(
         "finished bootstrapping replay at slot {} (block_id={f})",
-        .{ root_slot, snapshot_metadata.block_id },
+        .{ root_slot, block_id },
     );
 }
 
@@ -1677,26 +1675,26 @@ test "bootstrap creates root block and chains blockhashes" {
     var service_view = activity.serviceView();
     const runner: lib.runner.Connection = .{ .activity = &service_view };
 
-    var metadata: lib.accounts_db.RuntimeMetadata = undefined;
-    metadata.init();
-    metadata.block_id = .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");
+    // We only need the parts of the Manifest that bootstrap actually reads:
+    // `bank_fields.blockhash_queue.{hashes,hashes_count}` and `extra_fields.block_id`.
+    // Everything else can be zero-initialized. `memory_len = 0` because none of
+    // the fields used here go through a RelativeSlice/RelativeOffset.
+    var metadata = std.mem.zeroes(lib.snapshot.SnapshotMetadata);
+    metadata.init(0);
+    metadata.manifest.extra_fields.block_id =
+        .parse("ByzshhkRgXWnTkHjapkkqaKgEFnsg8ceY3bw4MWBzFE");
 
-    // Prefill the blockhash ring with N > 1 hashes as a single writer batch,
-    // then close the writer end so bootstrap's drain loop terminates.
     const test_hashes = [_]Hash{
         .parse("BMHr4knWhDp8JhqCYhA2K5DUYQsYUVXdy2zWahzt5jLd"),
         .parse("2GyMeUytf6fcsfNP2QQ6F5e5qwAUoMtKUbnH6QU6bTNm"),
         .parse("4UahX8LzYC7xnubvP9QzRHmPPYovtcNYo7rBXKpp3ADM"),
         .parse("Hh8DjJdpQRGeZ6bUxYyt1PBktnFtNAwZoQuwZqGWLPfB"),
     };
-    {
-        var writer = metadata.blockhash_queue.hashes.getView(.writer);
-        const buf = writer.getBuffer().?;
-        try std.testing.expect(buf.len >= test_hashes.len);
-        @memcpy(buf[0..test_hashes.len], &test_hashes);
-        writer.advance(test_hashes.len);
-        writer.close();
-    }
+    @memcpy(
+        metadata.manifest.bank_fields.blockhash_queue.hashes[0..test_hashes.len],
+        &test_hashes,
+    );
+    metadata.manifest.bank_fields.blockhash_queue.hashes_count = test_hashes.len;
 
     const root_slot: lib.solana.Slot = 100;
     metadata.populateSlot(root_slot);

@@ -56,15 +56,17 @@ pub fn main() !void {
     var exec_req_response_region: Region(lib.replay.ExecReqResponse) = try .simple();
     exec_req_response_region.ptr().init();
 
-    var snapshot_metadata: Region(lib.accounts_db.RuntimeMetadata) = try .simple();
-    snapshot_metadata.ptr().init();
-    snapshot_metadata.ptr().block_id = first_shred.chainedMerkleRoot().*;
+    const snapshot_fba_size = 256 * 1024 * 1024;
+    var snapshot_metadata: Region(lib.snapshot.SnapshotMetadata) =
+        try .sized(@sizeOf(lib.snapshot.SnapshotMetadata) + snapshot_fba_size);
+    snapshot_metadata.ptr().init(snapshot_fba_size);
+    snapshot_metadata.ptr().manifest.extra_fields.block_id = first_shred.chainedMerkleRoot().*;
     {
-        var writer = snapshot_metadata.ptr().blockhash_queue.hashes.getView(.writer);
-        const blockhashes = writer.getBuffer().?;
-        blockhashes[0] = lib.solana.Hash.ZEROES;
-        writer.advance(1);
-        writer.close();
+        const bhq = &snapshot_metadata.ptr().manifest.bank_fields.blockhash_queue;
+        bhq.max_age = 300;
+        bhq.hashes[0] = .ZEROES;
+        bhq.hashes_count = 1;
+        bhq.last_hash = .ZEROES;
     }
     snapshot_metadata.ptr().populateSlot(fixture.manifest.shreds.parent_slot);
 

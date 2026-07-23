@@ -159,6 +159,15 @@ pub fn Ring(N: comptime_int, T: type) type {
                     return ptr;
                 }
 
+                /// Same as next(), but blocks until an element is available.
+                /// Returns `error.Closed` instead of null, if the other side is closed.
+                pub fn nextBlocking(self: *Self, runner: lib.runner.Connection) !Ptr {
+                    const buf = try self.view.getBufferBlocking(runner);
+                    if (buf.len == 0) return error.Closed;
+                    self.view.bump(1);
+                    return &buf[0];
+                }
+
                 // Using the increments done via `next()` since either 1) the .get() creating this Iterator or
                 // 2) the last markUsed() call, update the position of this side on the ring buffer, making any
                 // changes to the memory visible to the other side.

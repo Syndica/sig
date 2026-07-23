@@ -10,14 +10,19 @@ const FileReader = lib.fio.FileReader;
 const Table = lib.accounts_db.Table;
 const AccountPool = lib.accounts_db.AccountPool;
 const AccountLookups = lib.accounts_db.AccountLookups;
-const RuntimeMetadata = lib.accounts_db.RuntimeMetadata;
+
+const SnapshotMetadata = lib.snapshot.SnapshotMetadata;
 
 const Pubkey = lib.solana.Pubkey;
 const Slot = lib.solana.Slot;
 const Epoch = lib.solana.Epoch;
-const Hash = lib.solana.Hash;
 
-/// The rooted database stores data on disk in the form of [journal][ring of sector data].
+const Manifest = lib.solana.snapshot.Manifest;
+const StatusCache = lib.solana.snapshot.StatusCache;
+const SnapshotIter = lib.solana.snapshot.SnapshotIter;
+
+/// The rooted database stores data on disk in the form of
+/// [journal][manifest+status_cache+FBA blob][ring of account sectors].
 /// TODO: The ring aspect is not implemented, so for now it grows indefinitely.
 pub const Rooted = struct {
     table: Table,
@@ -65,6 +70,8 @@ pub const Rooted = struct {
         committed_slot: u32 align(1),
         committed_offset: u64 align(1),
         blockhash_max_age: u32 align(1),
+        /// Padded on-disk size of the SnapshotMetadata blob. 0 means "no metadata yet".
+        manifest_bytes: u32 align(1),
 
         const empty: Journal = .{
             .magic = .valid,
@@ -73,6 +80,7 @@ pub const Rooted = struct {
             .committed_slot = 0,
             .committed_offset = 0,
             .blockhash_max_age = 300,
+            .manifest_bytes = 0,
         };
     };
     comptime {
@@ -83,12 +91,11 @@ pub const Rooted = struct {
     pub fn init(
         self: *Rooted,
         logger: tel.Logger("Rooted.init"),
-        runner: lib.runner.Connection,
         dir: std.fs.Dir,
         path: []const u8,
         table_memory: []u8,
         account_pool: *AccountPool,
-        runtime_metadata: *RuntimeMetadata,
+        snapshot_metadata: *SnapshotMetadata,
     ) !void {
         const seed: u64 = 0; // TODO: maybe in RootedConfig?
         self.put_batch = .empty;
@@ -105,9 +112,8 @@ pub const Rooted = struct {
             logger.info().log("loading from existing rooted db");
             self.loadExisting(
                 .from(logger),
-                runner,
                 read_file,
-                runtime_metadata,
+                snapshot_metadata,
             ) catch |err| switch (err) {
                 error.InvalidJournal => {
                     self.journal = .empty; // reset any modifications from loadExisting()
@@ -168,9 +174,6 @@ pub const Rooted = struct {
             padding,
             /// holds an actual account
             account,
-            /// holds the block_id followed by a serialized addition to the blockhash queue.
-            /// body layout: `{ block_id: Hash, [info.count]Hash }`
-            block_metadata,
             _, // TODO: add other types of sections
         },
         info: packed union {
@@ -197,9 +200,8 @@ pub const Rooted = struct {
     fn loadExisting(
         self: *Rooted,
         logger: tel.Logger("Rooted.loadExisting"),
-        runner: lib.runner.Connection,
         file: std.fs.File,
-        runtime_metadata: *RuntimeMetadata,
+        snapshot_metadata: *SnapshotMetadata,
     ) !void {
         const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.loadExisting" });
         defer zone.deinit();
@@ -253,18 +255,29 @@ pub const Rooted = struct {
             logger.info().logf("read journal: {any}", .{self.journal});
         }
 
-        var blockhash_writer = runtime_metadata.blockhash_queue.hashes.getView(.writer);
-        defer {
-            runtime_metadata.blockhash_queue.max_age = self.journal.blockhash_max_age;
-            blockhash_writer.close(); // close when done.
+        // read the persisted Manifest + StatusCache + FBA blob back into place.
+        // Layout on disk: [Journal (block_size)][manifest+status_cache+memory (manifest_bytes)][account sectors...]
+        {
+            const disk_bytes = self.journal.manifest_bytes;
+            const hdr_size = @sizeOf(lib.solana.snapshot.Manifest) +
+                @sizeOf(lib.solana.snapshot.StatusCache);
+            const total_capacity = hdr_size + snapshot_metadata.memory_len;
+            if (disk_bytes == 0 or disk_bytes > total_capacity) {
+                logger.err().logf("invalid manifest_bytes: disk={}, capacity={}", .{
+                    disk_bytes, total_capacity,
+                });
+                return error.InvalidJournal;
+            }
+
+            const dst: [*]u8 = @ptrCast(&snapshot_metadata.manifest);
+            try self.readExisting(.from(logger), dst, disk_bytes);
         }
 
         var timer = try std.time.Timer.start();
         var n_puts: usize = 0;
         var n_bytes_read: usize = 0;
-        var last_block_id: ?Hash = null;
 
-        // read sectors until EOF
+        // read account sectors until EOF
         while ((try self.io.reader.getBuffer(.from(logger))).len > 0) {
             const file_offset = self.io.reader.getOffset();
             if (file_offset >= self.journal.committed_offset) break; // ignore overrun file data
@@ -305,38 +318,6 @@ pub const Rooted = struct {
                     });
                     n_puts += 1;
                 },
-                .block_metadata => {
-                    // read block_id
-                    var block_id: Hash = undefined;
-                    try self.readExisting(.from(logger), (&block_id.data).ptr, @sizeOf(Hash));
-                    last_block_id = block_id;
-
-                    // read blockhashes
-                    var num_hashes = header.info.count;
-                    while (num_hashes > 0) {
-                        // get a buffer to write hashes into
-                        const hash_buf: []Hash = try blockhash_writer.getBufferBlocking(runner);
-                        if (hash_buf.len == 0) {
-                            // blockhash_reader closed their end. just skip the hashes then.
-                            try self.readExisting(
-                                .from(logger),
-                                null,
-                                @sizeOf(Hash) * num_hashes,
-                            );
-                            break;
-                        }
-
-                        // read hashes into blockhash_writer to send over
-                        const take = @min(num_hashes, hash_buf.len);
-                        try self.readExisting(
-                            .from(logger),
-                            @ptrCast(hash_buf.ptr),
-                            @sizeOf(Hash) * take,
-                        );
-                        blockhash_writer.advance(take);
-                        num_hashes -= take;
-                    }
-                },
                 _ => return error.InvalidSector,
             }
 
@@ -359,11 +340,9 @@ pub const Rooted = struct {
                 self.io.reader.io_stalled = 0;
             }
         }
-        runtime_metadata.block_id = last_block_id orelse return error.NoBlockIDs;
 
-        // write the slot to commit the RuntimeMetadata stuff
-        const slot = self.journal.committed_slot;
-        runtime_metadata.populateSlot(slot);
+        // release the readiness barrier now that Manifest + accounts are loaded.
+        snapshot_metadata.populateSlot(self.journal.committed_slot);
 
         self.table.flushPuts(&self.put_batch);
         logger.info().logf("loaded rooted db: {} accounts", .{self.table.count()});
@@ -391,15 +370,41 @@ pub const Rooted = struct {
     pub fn loadSnapshot(
         self: *Rooted,
         logger: tel.Logger("Rooted.loadSnapshot"),
-        runner: lib.runner.Connection,
-        snapshot_iter: anytype, // lib.solana.snapshot.SnapshotIter(anytype),
-        runtime_metadata: *RuntimeMetadata,
+        snapshot_metadata: *SnapshotMetadata,
+        buf_reader: anytype,
     ) !void {
         const zone = tracy.Zone.init(@src(), .{ .name = "loadSnapshot" });
         defer zone.deinit();
 
-        const slot = snapshot_iter.manifest.bank_fields.slot;
+        const BufReader = @TypeOf(buf_reader);
+        var snapshot_iter = try SnapshotIter(BufReader).init(snapshot_metadata, buf_reader);
+
+        const slot = snapshot_metadata.manifest.bank_fields.slot;
         try self.beginTransaction(.from(logger), slot);
+
+        // Persist the Manifest + StatusCache + max FBA bytes
+        // contiguous blob right after the journal block. Padded to block_size
+        // so account sectors start block-aligned.
+        {
+            const hdr_size = @sizeOf(Manifest) + @sizeOf(StatusCache);
+            const unpadded: u64 = hdr_size + snapshot_metadata.memory_len;
+            const padded: u64 = std.mem.alignForward(u64, unpadded, block_size);
+            if (padded > std.math.maxInt(u32)) return error.ManifestTooLarge;
+            self.journal.manifest_bytes = @intCast(padded);
+
+            const base: [*]const u8 = @ptrCast(&snapshot_metadata.manifest);
+            var r = std.Io.Reader.fixed(base[0..unpadded]);
+            try self.queueWrite(.from(logger), unpadded, &r);
+
+            const pad_len = padded - unpadded;
+            if (pad_len > 0) try self.queueWrite(.from(logger), pad_len, struct {
+                pub fn readSliceAll(_: @This(), b: []u8) !void {
+                    @memset(b, 0);
+                }
+            }{});
+        }
+
+        logger.info().logf("reading snapshot accounts", .{});
 
         var timer = try std.time.Timer.start();
         var n_puts: usize = 0;
@@ -409,7 +414,7 @@ pub const Rooted = struct {
             n_transfer += @sizeOf(AccountMeta) + @sizeOf(SectorHeader) + acc.data.len;
             try self.put(
                 .from(logger),
-                snapshot_iter, // data reader
+                &snapshot_iter, // data reader
                 .{
                     .slot = acc.slot,
                     .pubkey = acc.pubkey,
@@ -441,54 +446,8 @@ pub const Rooted = struct {
             }
         }
 
-        { // write the block_id + current blockhash queue
-            const blockhash_queue = &snapshot_iter.manifest.bank_fields.blockhash_queue;
-            self.journal.blockhash_max_age = std.math.lossyCast(u32, blockhash_queue.max_age);
-
-            const block_id = snapshot_iter.manifest.extra_fields.block_id;
-            const num_hashes = blockhash_queue.hashes.count;
-            const hashes = blockhash_queue.hashes.array[0..num_hashes];
-
-            // write block_metadata header
-            const header: SectorHeader = .{
-                .type = .block_metadata,
-                .info = .{ .count = @intCast(num_hashes) },
-            };
-
-            var r = std.Io.Reader.fixed(std.mem.asBytes(&header));
-            try self.queueWrite(.from(logger), @sizeOf(SectorHeader), &r);
-
-            // write block_id
-            r = std.Io.Reader.fixed(std.mem.asBytes(&block_id));
-            try self.queueWrite(.from(logger), @sizeOf(Hash), &r);
-
-            // write blockhashes
-            r = std.Io.Reader.fixed(std.mem.sliceAsBytes(hashes));
-            try self.queueWrite(.from(logger), num_hashes * @sizeOf(Hash), &r);
-
-            runtime_metadata.block_id = block_id;
-
-            // send blockhashes over as metadata
-            var blockhash_writer = runtime_metadata.blockhash_queue.hashes.getView(.writer);
-            defer {
-                runtime_metadata.blockhash_queue.max_age = self.journal.blockhash_max_age;
-                blockhash_writer.close(); // close when done.
-            }
-
-            var i: usize = 0;
-            while (i < hashes.len) {
-                const buf = try blockhash_writer.getBufferBlocking(runner);
-                if (buf.len == 0) break; // reader closed somehow
-
-                const take = @min(buf.len, hashes.len - i);
-                @memcpy(buf[0..take], hashes[i..][0..take]);
-                blockhash_writer.advance(take);
-                i += take;
-            }
-        }
-
-        // write the slot to commit the RuntimeMetadata stuff
-        runtime_metadata.populateSlot(slot);
+        // release the readiness barrier now that Manifest + accounts are loaded.
+        snapshot_metadata.populateSlot(slot);
 
         try self.commitTransaction(.from(logger));
         logger.info().logf("populated from snapshot: {} accounts", .{self.table.count()});

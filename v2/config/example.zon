@@ -23,5 +23,6 @@
         .file = "./validator/accounts.db",
         .rooted = .{ .gb = 8 }, // mainnet needs 64, testnet only 8 or so
         .unrooted = .{ .gb = 8 }, // TODO
+        .metadata = .{ .gb = 1 },
     },
 }

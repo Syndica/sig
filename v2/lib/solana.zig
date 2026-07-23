@@ -6,6 +6,7 @@ comptime {
         _ = @import("solana/features.zig");
         _ = @import("solana/hash.zig");
         _ = @import("solana/ids.zig");
+        _ = @import("solana/inflation.zig");
         _ = @import("solana/leader_schedule.zig");
         _ = @import("solana/pubkey.zig");
         _ = @import("solana/signature.zig");
@@ -29,6 +30,7 @@ pub const Signature = @import("solana/signature.zig").Signature;
 pub const Cluster = @import("solana/cluster.zig").Cluster;
 pub const LeaderSchedule = @import("solana/leader_schedule.zig").LeaderSchedule;
 pub const EpochSchedule = @import("solana/epoch_schedule.zig").EpochSchedule;
+pub const Inflation = @import("solana/inflation.zig").Inflation;
 
 pub const Lamports = u64;
 pub const Nonce = u32;
