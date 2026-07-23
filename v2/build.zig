@@ -22,7 +22,7 @@ pub fn build(b: *Build) !void {
     // install (default step)
     const install_step = b.getInstallStep();
     install_step.dependOn(sig.exe.installStep());
-    install_step.dependOn(tools.shred_stream_replay.installStep());
+    install_step.dependOn(tools.replay_offline.installStep());
     install_step.dependOn(tools.lint.installStep());
     for (unit_tests.tests.items) |exe| install_step.dependOn(exe.installStep());
     for (tools.black_box_tests) |exe| install_step.dependOn(exe.installStep());
@@ -51,6 +51,10 @@ pub fn build(b: *Build) !void {
     // lint
     const lint_step = b.step("lint", "Run lint checks");
     tools.lint.addToStep(lint_step);
+
+    // replay-offline
+    const replay_offline_step = b.step("replay-offline", "Build the offline replay topology");
+    replay_offline_step.dependOn(tools.replay_offline.installStep());
 
     // test
     const test_step = b.step("test", "Run all tests.");
@@ -372,7 +376,7 @@ const Sig = struct {
 /// Everything other than Sig itself: developer tools, ci scripts, docs,
 /// integration tests, etc.
 const Tools = struct {
-    shred_stream_replay: Executable,
+    replay_offline: Executable,
     lint: Executable,
     docs: *Build.Step.InstallDir,
     black_box_tests: [black_box_test_descriptions.len]Executable,
@@ -415,8 +419,8 @@ const Tools = struct {
             .optimize = .Debug,
         }));
 
-        // shred-stream-replay: standalone tool, not auto-run in CI
-        const shred_stream_replay_exe = blk: {
+        // replay-offline: full validator minus networking, not auto-run in CI
+        const replay_offline_exe = blk: {
             const module = b.createModule(.{
                 .root_source_file = b.path("tests/shred_stream_replay/main.zig"),
                 .target = config.target,
@@ -428,7 +432,7 @@ const Tools = struct {
                 },
             });
             const exe: Executable = .init(b, .{ .install = config.exe.install, .run = false }, .{
-                .name = "shred-stream-replay",
+                .name = "replay-offline",
                 .root_module = module,
                 .use_llvm = config.use_llvm,
             }, .{});
@@ -524,7 +528,7 @@ const Tools = struct {
         }
 
         return .{
-            .shred_stream_replay = shred_stream_replay_exe,
+            .replay_offline = replay_offline_exe,
             .lint = lint_exe,
             .docs = install_docs,
             .black_box_tests = bbt_exes,

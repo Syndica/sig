@@ -1,4 +1,4 @@
-//! Topology launcher for offline shred stream replay.
+//! Topology launcher for offline replay.
 //!
 //! Streams raw shreds from an Agave ledger through the full validator pipeline
 //! (shred_receiver → replay → exec) with accounts_db and snapshot services,
@@ -15,7 +15,7 @@
 //!   - An Agave ledger (RocksDB) to stream shreds from.
 //!
 //! Usage:
-//!   shred-stream-replay <config.zon> --ledger <path> [--start-slot N] [--end-slot N] ...
+//!   replay-offline <config.zon> --ledger <path> [--start-slot N] [--end-slot N] ...
 //!
 //! The first argument is a .zon config file (same format as the main validator,
 //! network fields like gossip/shred_network are ignored if present).
@@ -106,7 +106,7 @@ pub fn main() !void {
 
     if (argv.len < 2) {
         std.debug.print(
-            "usage: shred-stream-replay <config.zon>" ++
+            "usage: replay-offline <config.zon>" ++
                 " [shred-streamer-args...]\n\n" ++
                 "  <config.zon>  Path to validator config file" ++
                 " (same format as main validator).\n" ++
