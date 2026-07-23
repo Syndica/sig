@@ -26,8 +26,10 @@ pub const RootedConfig = extern struct {
 };
 
 pub const AccountLookups = extern struct {
-    in: lib.ipc.Ring(256, Request),
-    out: lib.ipc.Ring(256, Result),
+    pub const capacity = 256;
+
+    in: lib.ipc.Ring(capacity, Request),
+    out: lib.ipc.Ring(capacity, Result),
 
     /// Request-supplied id to match responses to requests.
     /// Opaque to accounts_db service, so it's usage is up to the callers.
