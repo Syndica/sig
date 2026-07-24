@@ -30,12 +30,7 @@ pub fn serviceMain(
     const metrics = metric_appender.appendFields(Metrics, .{
         .prefix = @tagName(name),
         .fields = .{
-            .recv_packet_latency_ns = .{ .layout = .{
-                .schema = 2,
-                .min_ns = 512,
-                .octaves = 12,
-            } },
-            .send_packet_latency_ns = .{ .layout = .{
+            .packet_latency_ns = .{ .layout = .{
                 .schema = 2,
                 .min_ns = 512,
                 .octaves = 12,
@@ -53,8 +48,9 @@ pub fn serviceMain(
 }
 
 const Metrics = struct {
-    recv_packet_latency_ns: tel.LatencyHistogram,
-    send_packet_latency_ns: tel.LatencyHistogram,
+    packet_latency_ns: tel.VariantHistogram(PacketLatencyKind, .latency),
+
+    const PacketLatencyKind = enum { recv, send };
 };
 
 const MAX_SOCKETS = 10;
@@ -98,8 +94,8 @@ fn mainInner(
 
             // TODO: use std.os.linux.sendmmsg
             while (it.next()) |p| {
-                const obs = metrics.send_packet_latency_ns.observer();
-                defer obs.observe();
+                const obs = metrics.packet_latency_ns.observer();
+                defer obs.observe(.send);
                 const bytes = try std.posix.sendto(
                     sock,
                     p.data[0..p.len],
@@ -118,7 +114,7 @@ fn mainInner(
 
             // TODO: use std.os.linux.recvmmsg
             while (it.peek()) |ptr| {
-                const obs = metrics.recv_packet_latency_ns.observer();
+                const obs = metrics.packet_latency_ns.observer();
                 var addr_len: std.posix.socklen_t = @sizeOf(std.net.Address);
                 ptr.len = @intCast(std.posix.recvfrom(
                     sock,
@@ -131,7 +127,7 @@ fn mainInner(
                     else => |e| return e,
                 });
                 _ = it.next();
-                obs.observe();
+                obs.observe(.recv);
             }
         }
     }
