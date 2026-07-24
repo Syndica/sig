@@ -479,6 +479,69 @@ pub fn Logger(comptime scope_str: []const u8) type {
     };
 }
 
+test "logf drops entries more verbose than max_level" {
+    var buf: [4096]u8 = undefined;
+
+    for (std.enums.values(log.Level)) |max_level| {
+        for (std.enums.values(log.Level)) |level| {
+            var fbw: std.Io.Writer = .fixed(&buf);
+            const logger: Logger("gate") = .{
+                .sink = .{ .writer = &fbw },
+                .max_level = max_level,
+            };
+            logger.entry(level).log("message");
+
+            if (level.order(max_level) == .gt) {
+                // Nothing may reach the sink; `streamLogs` would have dropped it anyway.
+                try std.testing.expectEqual(0, fbw.buffered().len);
+                continue;
+            }
+
+            // Everything at or below `max_level` is written whole and unaltered.
+            var fbr: std.Io.Reader = .fixed(fbw.buffered());
+            const header = try fbr.takeStruct(log.Message.Header, endian);
+            const slices = header.getSlicesFromFixedBuffer(&fbr) orelse
+                return error.TestExpectedNonNull;
+            try std.testing.expectEqual(.valid, header.magic);
+            try std.testing.expectEqual(level, header.level);
+            try std.testing.expectEqualStrings("gate", slices.scope);
+            try std.testing.expectEqualStrings("message", slices.msg);
+            try std.testing.expectEqual(0, fbr.bufferedLen());
+        }
+    }
+}
+
+test "max_level survives withScope and from" {
+    const base: Logger("base") = .{ .sink = .noop, .max_level = .debug };
+    try std.testing.expectEqual(.debug, base.withScope("scoped").max_level);
+    try std.testing.expectEqual(.debug, Logger("other").from(base).max_level);
+}
+
+test "acquireLogger takes max_level from the region's filters" {
+    const gpa = std.testing.allocator;
+
+    // `.warn` rather than the `Info.max_log_level` field default, so that leaving the
+    // field untouched would not pass.
+    const params: Region.InitParams = .{
+        .port = 0,
+        .log_filters_encoded = comptime log.Filter.parseListStrLitIntoBinary(.warn, "").?,
+        .service_count = 1,
+        .id_mem_len = 0,
+        .gauges_len = 0,
+        .histogram_data_len = 0,
+    };
+    try std.testing.expectEqual(.warn, params.info().max_log_level);
+
+    // NOTE: dominated by the single `log.MessageStream`'s swap buffer; only the name
+    // and the encoded filters are ever touched here.
+    const region_buf = try gpa.alignedAlloc(u8, .of(u64), params.info().regionSize());
+    defer gpa.free(region_buf);
+
+    const region: *Region = @ptrCast(region_buf.ptr);
+    region.init(params);
+    try std.testing.expectEqual(.warn, region.acquireLogger("service", "scope").max_level);
+}
+
 pub const Counter = struct {
     value: *std.atomic.Value(u64),
 
