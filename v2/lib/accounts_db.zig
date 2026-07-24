@@ -9,13 +9,17 @@ comptime {
     }
 }
 
+const rooted = @import("accounts_db/rooted.zig");
+
 const Pubkey = lib.solana.Pubkey;
 const Hash = lib.solana.Hash;
 const Slot = lib.solana.Slot;
 
 pub const AccountPool = @import("accounts_db/pool.zig").AccountPool;
-pub const Rooted = @import("accounts_db/rooted.zig").Rooted;
+pub const Rooted = rooted.Rooted;
 pub const Table = @import("accounts_db/table.zig").Table;
+
+pub const RootedTestState = rooted.RootedTestState;
 
 pub const RootedConfig = extern struct {
     file_len: u32,

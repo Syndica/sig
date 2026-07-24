@@ -94,12 +94,15 @@ pub fn UnrootedType(comptime config: Config) type {
                 if (old_account_ref != .invalid) {
                     zone.text("replace");
 
-                    std.debug.assert(pubkey.equals(&account_pool.getAccount(old_account_ref).pubkey));
+                    std.debug.assert(
+                        pubkey.equals(&account_pool.getAccount(old_account_ref).pubkey),
+                    );
                 } else {
                     zone.text("insert");
 
                     self.len += 1;
-                    if (self.len > max_mutations_per_block) @panic("max_mutations_per_block exceeded");
+                    if (self.len > max_mutations_per_block)
+                        @panic("max_mutations_per_block exceeded");
                 }
 
                 found_entry.* = new_account_ref;
@@ -114,6 +117,24 @@ pub fn UnrootedType(comptime config: Config) type {
             //       attackers using pre-made keys to cause bad clustering
             self.seed = 123;
             for (&self.maps) |*map| map.* = .{};
+        }
+
+        /// Insert an account into the unrooted store for one block.
+        /// Returns the replaced account ref, which the caller must unref/free.
+        pub fn put(
+            self: *Self,
+            block: lib.replay.BlockRef,
+            account_pool: *lib.accounts_db.AccountPool,
+            new_account_ref: AccountRef,
+        ) AccountRef {
+            const block_index = block.index();
+            std.debug.assert(block_index < max_blocks);
+
+            return self.maps[block_index].put(
+                self.seed,
+                account_pool,
+                new_account_ref,
+            );
         }
 
         /// Get an account purely from the unrooted store.

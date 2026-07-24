@@ -22,6 +22,8 @@ const Unrooted = lib.replay.Unrooted;
 const Pubkey = lib.solana.Pubkey;
 const AccountRef = AccountPool.AccountRef;
 
+const RootedTestState = lib.accounts_db.RootedTestState;
+
 pub const UserData = u64;
 const UserDataType = UserData;
 
@@ -496,13 +498,79 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
     };
 }
 
-test "rooted miss completes as not found" {
-    const TestUnrooted = lib.replay.UnrootedType(.{
-        .max_blocks = 4,
-        .max_mutations_per_block = 8,
-    });
-    const TestFetcher = AccountFetcherType(TestUnrooted);
+// Smaller for unit tests.
+const TestUnrooted = lib.replay.UnrootedType(.{
+    .max_blocks = 4,
+    .max_mutations_per_block = 8,
+});
 
+const TestFetcher = AccountFetcherType(TestUnrooted);
+
+const FetcherTestState = struct {
+    account_lookups: AccountLookups,
+
+    block_pool_memory: [BlockPool.size()]u8 align(@alignOf(BlockPool)),
+    block_pool: *BlockPool,
+
+    unrooted: TestUnrooted,
+    fetcher: TestFetcher,
+
+    fn init(
+        self: *FetcherTestState,
+        account_pool: *AccountPool,
+    ) !void {
+        self.account_lookups.init();
+
+        self.block_pool = @ptrCast(&self.block_pool_memory);
+        self.block_pool.init();
+
+        self.unrooted.init();
+
+        try self.fetcher.init(
+            std.testing.allocator,
+            account_pool,
+            &self.account_lookups,
+            &self.unrooted,
+            self.block_pool,
+        );
+    }
+
+    fn deinit(self: *FetcherTestState) void {
+        self.fetcher.deinit();
+    }
+
+    fn addBlock(
+        self: *FetcherTestState,
+        parent: ?BlockRef,
+        slot: u64,
+    ) !BlockRef {
+        const block_ref = try self.block_pool.createId();
+        block_ref.ptr(self.block_pool).* = .{
+            .parent = .init(parent),
+            .slot = .init(slot),
+        };
+        return block_ref;
+    }
+
+    fn respond(
+        self: *FetcherTestState,
+        request: AccountLookups.Request,
+        account_ref: AccountRef,
+    ) !void {
+        var writer = self.account_lookups.out.get(.writer);
+        const response = writer.next() orelse
+            return error.ResponseRingFull;
+
+        response.* = .{
+            .req_user_data = request.req_user_data,
+            .pubkey = request.pubkey,
+            .account_index = account_ref,
+        };
+        writer.markUsed();
+    }
+};
+
+test "rooted miss completes as not found" {
     var account_pool: AccountPool = undefined;
     account_pool.init(0);
 
@@ -572,4 +640,320 @@ test "rooted miss completes as not found" {
     try std.testing.expect(completion.pubkey.equals(&pubkey));
     try std.testing.expectEqual(AccountRef.invalid, completion.account_ref);
     try std.testing.expect(fetcher.popCompletion() == null);
+}
+
+test "duplicate requests share rooted fetch and receive owned references" {
+    const logger = lib.telemetry.Logger("Rooted.test").noop;
+
+    var rooted_state = try RootedTestState.init(logger);
+    defer rooted_state.deinit();
+
+    const expected: RootedTestState.Account = .{
+        .pubkey = Pubkey.parse("F4GpAFr6vrxU3Y887F3XWkXRgybCVjZNk63m72f6pump"),
+        .owner = Pubkey.parse("11111111111111111111111111111111"),
+        .lamports = 42,
+        .rent_epoch = 3,
+        .executable = false,
+        .data = "rooted account data",
+    };
+
+    try rooted_state.putAccounts(logger, &.{expected});
+
+    var state: FetcherTestState = undefined;
+    try state.init(rooted_state.account_pool);
+    defer state.deinit();
+
+    const block_ref = try state.addBlock(null, 2);
+
+    try state.fetcher.submit(.{
+        .block_ref = block_ref,
+        .pubkey = expected.pubkey,
+        .user_data = 10,
+    });
+    try state.fetcher.submit(.{
+        .block_ref = block_ref,
+        .pubkey = expected.pubkey,
+        .user_data = 20,
+    });
+
+    // Both submissions share one fetch entry and one queued Rooted request.
+    try std.testing.expectEqual(@as(usize, 1), state.fetcher.active_fetches.count());
+
+    const entry_id = state.fetcher.rooted_head.opt() orelse
+        return error.MissingRootedFetchEntry;
+    try std.testing.expectEqual(entry_id, state.fetcher.rooted_tail.opt().?);
+
+    const entry = entry_id.ptr(&state.fetcher.entry_pool);
+    try std.testing.expectEqual(.queued_rooted, entry.state);
+
+    const first_waiter_id = entry.waiter_head.opt() orelse
+        return error.MissingFirstWaiter;
+    const second_waiter_id = first_waiter_id.ptr(&state.fetcher.waiter_pool).next.opt() orelse
+        return error.MissingSecondWaiter;
+    try std.testing.expectEqual(second_waiter_id, entry.waiter_tail.opt().?);
+    try std.testing.expectEqual(.null, second_waiter_id.ptr(&state.fetcher.waiter_pool).next);
+
+    try std.testing.expect(state.fetcher.poll());
+
+    var request_reader = state.account_lookups.in.get(.reader);
+    const request = request_reader.next() orelse
+        return error.MissingRootedRequest;
+
+    try std.testing.expect(request.pubkey.equals(&expected.pubkey));
+    try std.testing.expect(request_reader.next() == null);
+
+    try std.testing.expect(try rooted_state.rooted.queueRead(
+        .from(logger),
+        request,
+    ));
+    request_reader.markUsed();
+
+    const rooted_result = while (true) {
+        break try rooted_state.rooted.pollRead(.from(logger)) orelse
+            continue;
+    };
+
+    var response_writer = state.account_lookups.out.get(.writer);
+    response_writer.next().?.* = rooted_result;
+    response_writer.markUsed();
+
+    try std.testing.expect(state.fetcher.poll());
+
+    const first = state.fetcher.popCompletion() orelse
+        return error.MissingCompletion;
+    const second = state.fetcher.popCompletion() orelse
+        return error.MissingCompletion;
+
+    try std.testing.expectEqual(@as(UserData, 10), first.user_data);
+    try std.testing.expectEqual(@as(UserData, 20), second.user_data);
+    try std.testing.expectEqual(first.account_ref, second.account_ref);
+    try std.testing.expect(first.account_ref != .invalid);
+
+    const account =
+        rooted_state.account_pool.getAccount(first.account_ref);
+
+    try std.testing.expect(account.pubkey.equals(&expected.pubkey));
+    try std.testing.expectEqual(expected.lamports, account.lamports);
+    try std.testing.expectEqualStrings(expected.data, account.getData());
+
+    // FetchEntry has retired; both completion callers own one ref.
+    try std.testing.expectEqual(
+        @as(u32, 2),
+        account.ref_count.load(.monotonic),
+    );
+
+    try std.testing.expect(!account.unref());
+    try std.testing.expect(account.unref());
+    rooted_state.account_pool.free(first.account_ref);
+}
+
+test "unrooted accounts bypass rooted and tombstones return invalid" {
+    const memory_len = 64 * 1024;
+    const memory = try std.testing.allocator.alignedAlloc(
+        u8,
+        .of(AccountPool),
+        @sizeOf(AccountPool) + memory_len,
+    );
+    defer std.testing.allocator.free(memory);
+
+    const account_pool: *AccountPool = @ptrCast(memory.ptr);
+    account_pool.init(memory_len);
+
+    var state: FetcherTestState = undefined;
+    try state.init(account_pool);
+    defer state.deinit();
+
+    const block_ref = try state.addBlock(null, 1);
+
+    const found_pk = Pubkey.parse("9oDndFiC7RW42vZcmSzacTKMWE9kgeqnzwXDGLSkpump");
+    const tombstone_pk = Pubkey.parse("USD1ttGY1N17NEEHLmELoaybftRBUSErhqYiQzvEmuB");
+
+    const found_ref = try account_pool.alloc(0);
+    account_pool.getAccount(found_ref).* = .{
+        .ref_count = .init(1),
+        .pubkey = found_pk,
+        .owner = .ZEROES,
+        .lamports = 100,
+        .rent_epoch = 0,
+        .data = .{
+            .executable = false,
+            .len = 0,
+        },
+    };
+
+    const tombstone_ref = try account_pool.alloc(0);
+    account_pool.getAccount(tombstone_ref).* = .{
+        .ref_count = .init(1),
+        .pubkey = tombstone_pk,
+        .owner = .ZEROES,
+        .lamports = 0,
+        .rent_epoch = 0,
+        .data = .{
+            .executable = false,
+            .len = 0,
+        },
+    };
+
+    try std.testing.expectEqual(
+        AccountRef.invalid,
+        state.unrooted.put(block_ref, account_pool, found_ref),
+    );
+    try std.testing.expectEqual(
+        AccountRef.invalid,
+        state.unrooted.put(block_ref, account_pool, tombstone_ref),
+    );
+
+    // Drop the original owners; Unrooted now owns one reference each.
+    try std.testing.expect(!account_pool.getAccount(found_ref).unref());
+    try std.testing.expect(!account_pool.getAccount(tombstone_ref).unref());
+
+    try state.fetcher.submit(.{
+        .block_ref = block_ref,
+        .pubkey = found_pk,
+        .user_data = 1,
+    });
+    try state.fetcher.submit(.{
+        .block_ref = block_ref,
+        .pubkey = tombstone_pk,
+        .user_data = 2,
+    });
+
+    // Neither request should reach Rooted.
+    var rooted_reader = state.account_lookups.in.get(.reader);
+    try std.testing.expect(rooted_reader.next() == null);
+
+    const found = state.fetcher.popCompletion().?;
+    const tombstone = state.fetcher.popCompletion().?;
+
+    try std.testing.expectEqual(found_ref, found.account_ref);
+    try std.testing.expectEqual(AccountRef.invalid, tombstone.account_ref);
+
+    // Release completion ownership.
+    try std.testing.expect(
+        !account_pool.getAccount(found.account_ref).unref(),
+    );
+
+    // Release the references owned by Unrooted before ending the test.
+    try std.testing.expect(account_pool.getAccount(found_ref).unref());
+    account_pool.free(found_ref);
+
+    try std.testing.expect(account_pool.getAccount(tombstone_ref).unref());
+    account_pool.free(tombstone_ref);
+}
+
+test "rooted responses complete by request id out of order" {
+    var account_pool: AccountPool = undefined;
+    account_pool.init(0);
+
+    var state: FetcherTestState = undefined;
+    try state.init(&account_pool);
+    defer state.deinit();
+
+    const block_ref = try state.addBlock(null, 1);
+    const first_pk = Pubkey.parse("SysvarC1ock11111111111111111111111111111111");
+    const second_pk = Pubkey.parse("SysvarRent111111111111111111111111111111111");
+
+    try state.fetcher.submit(.{
+        .block_ref = block_ref,
+        .pubkey = first_pk,
+        .user_data = 11,
+    });
+    try state.fetcher.submit(.{
+        .block_ref = block_ref,
+        .pubkey = second_pk,
+        .user_data = 22,
+    });
+
+    try std.testing.expect(state.fetcher.poll());
+
+    var reader = state.account_lookups.in.get(.reader);
+    const first_request = reader.next().?.*;
+    const second_request = reader.next().?.*;
+    reader.markUsed();
+
+    // Return the second lookup first.
+    try state.respond(second_request, .invalid);
+    try state.respond(first_request, .invalid);
+
+    try std.testing.expect(state.fetcher.poll());
+
+    const first_completion = state.fetcher.popCompletion().?;
+    const second_completion = state.fetcher.popCompletion().?;
+
+    try std.testing.expectEqual(
+        @as(UserData, 22),
+        first_completion.user_data,
+    );
+    try std.testing.expect(
+        first_completion.pubkey.equals(&second_pk),
+    );
+
+    try std.testing.expectEqual(
+        @as(UserData, 11),
+        second_completion.user_data,
+    );
+    try std.testing.expect(
+        second_completion.pubkey.equals(&first_pk),
+    );
+}
+
+test "rooted request remains queued while lookup ring is full" {
+    var account_pool: AccountPool = undefined;
+    account_pool.init(0);
+
+    var state: FetcherTestState = undefined;
+    try state.init(&account_pool);
+    defer state.deinit();
+
+    // Occupy the entire Rooted request ring.
+    var filler = state.account_lookups.in.get(.writer);
+    for (0..AccountLookups.capacity) |i| {
+        filler.next().?.* = .{
+            .req_user_data = @intCast(i),
+            .pubkey = .ZEROES,
+        };
+    }
+    filler.markUsed();
+
+    const block_ref = try state.addBlock(null, 1);
+    const pubkey = Pubkey.parse("SysvarC1ock11111111111111111111111111111111");
+
+    try state.fetcher.submit(.{
+        .block_ref = block_ref,
+        .pubkey = pubkey,
+        .user_data = 77,
+    });
+
+    // The entry remains on rooted_head because no ring slot is available.
+    try std.testing.expect(!state.fetcher.poll());
+    try std.testing.expect(state.fetcher.popCompletion() == null);
+
+    // Drain the filler requests.
+    var reader = state.account_lookups.in.get(.reader);
+    for (0..AccountLookups.capacity) |_| {
+        _ = reader.next() orelse return error.MissingFillerRequest;
+    }
+    reader.markUsed();
+
+    // The next poll can now publish the real request.
+    try std.testing.expect(state.fetcher.poll());
+
+    var actual_reader = state.account_lookups.in.get(.reader);
+    const request = actual_reader.next().?.*;
+    actual_reader.markUsed();
+
+    try std.testing.expect(request.pubkey.equals(&pubkey));
+
+    try state.respond(request, .invalid);
+    try std.testing.expect(state.fetcher.poll());
+
+    const completion = state.fetcher.popCompletion().?;
+    try std.testing.expectEqual(
+        @as(UserData, 77),
+        completion.user_data,
+    );
+    try std.testing.expectEqual(
+        AccountRef.invalid,
+        completion.account_ref,
+    );
 }

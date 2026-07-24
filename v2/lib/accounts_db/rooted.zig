@@ -946,7 +946,7 @@ pub const Rooted = struct {
     }
 };
 
-const RootedTestState = struct {
+pub const RootedTestState = struct {
     tmp: std.testing.TmpDir,
     rooted: *Rooted,
     table_memory: []u8,
@@ -958,7 +958,7 @@ const RootedTestState = struct {
     const test_account_pool_memory_len = 64 * 1024;
     const test_file_name = "rooted-test.db";
 
-    const Account = struct {
+    pub const Account = struct {
         pubkey: Pubkey,
         owner: Pubkey,
         lamports: u64,
@@ -967,7 +967,7 @@ const RootedTestState = struct {
         data: []const u8,
     };
 
-    fn init(logger: tel.Logger("Rooted.test")) !RootedTestState {
+    pub fn init(logger: tel.Logger("Rooted.test")) !RootedTestState {
         const gpa = std.testing.allocator;
 
         var tmp = std.testing.tmpDir(.{});
@@ -1015,7 +1015,7 @@ const RootedTestState = struct {
         };
     }
 
-    fn deinit(self: *RootedTestState) void {
+    pub fn deinit(self: *RootedTestState) void {
         const gpa = std.testing.allocator;
 
         self.rooted.deinit();
@@ -1025,7 +1025,7 @@ const RootedTestState = struct {
         self.tmp.cleanup();
     }
 
-    fn putAccounts(
+    pub fn putAccounts(
         self: *RootedTestState,
         logger: tel.Logger("Rooted.test"),
         accounts: []const Account,
