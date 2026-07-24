@@ -6,11 +6,13 @@ const tracy = @import("tracy");
 pub const metric = @import("telemetry/metric.zig");
 pub const log = @import("telemetry/log.zig");
 pub const prometheus = @import("telemetry/prometheus.zig");
+pub const prometheus_proto = @import("telemetry/prometheus_proto.zig");
 comptime {
     if (@import("builtin").is_test) {
         _ = @import("telemetry/log.zig");
         _ = @import("telemetry/metric.zig");
         _ = @import("telemetry/prometheus.zig");
+        _ = @import("telemetry/prometheus_proto.zig");
     }
 }
 
@@ -621,6 +623,14 @@ pub const Histogram = struct {
         _ = shard.count.fetchAdd(1, .release); // releases lock. must be last step.
     }
 
+    /// Starts a span timer that records its elapsed nanoseconds into this histogram. Call
+    /// `.observe()` on the result at the end of the span, usually with `defer`. `upper_bounds` must
+    /// then be in nanoseconds; see the unit contract on `LatencyObserver`, and `IO_LATENCY_BOUNDS`
+    /// in `snapshot/download.zig` for an example.
+    pub fn observer(self: *const Histogram) LatencyObserver(.standard, null) {
+        return .init(self);
+    }
+
     /// Swaps in the hot shard for the cold shard, such that it can be viewed as a snapshot of
     /// recent state.
     /// The returned struct is used to access this state iteratively, before resetting the cold
@@ -820,6 +830,497 @@ pub const Histogram = struct {
     }
 };
 
+/// Prometheus native-histogram bucket boundaries within one mantissa octave for a given `schema`:
+/// `bounds[k] = 0.5 * 2^(k / 2^schema)` for `k in 0..2^schema`. Used to bin the `frexp` fraction
+/// (which lies in `[0.5, 1)`) into a sub-octave bucket.
+fn nativeBoundsTable(comptime schema: u4) [@as(usize, 1) << schema]f64 {
+    @setEvalBranchQuota(1_000_000); // comptime `exp2` per entry is branch-heavy
+    var arr: [@as(usize, 1) << schema]f64 = undefined;
+    const per_octave: f64 = @floatFromInt(@as(u64, 1) << schema);
+    for (&arr, 0..) |*b, k| {
+        b.* = 0.5 * std.math.exp2(@as(f64, @floatFromInt(k)) / per_octave);
+    }
+    return arr;
+}
+
+/// Smallest index `k` with `bounds[k] >= frac` (like Go's `sort.SearchFloat64s`), in `0..bounds.len`.
+fn searchFloat(bounds: []const f64, frac: f64) i64 {
+    var lo: usize = 0;
+    var hi: usize = bounds.len;
+    while (lo < hi) {
+        const mid = lo + (hi - lo) / 2;
+        if (bounds[mid] < frac) lo = mid + 1 else hi = mid;
+    }
+    return @intCast(lo);
+}
+
+/// The global Prometheus native-histogram bucket index for `ns` at `schema`. Splits `ns` with
+/// `frexp` and bins the fraction via a per-schema boundary table, so the result is exact at octave
+/// boundaries (mirrors `prometheus/client_golang`) and avoids the off-by-one a naive
+/// `ceil(2^schema * log2(ns))` suffers from floating-point error. Assumes `ns >= 1`.
+fn nativeBucketIndex(schema: u4, ns: u64) i64 {
+    const fv: f64 = @floatFromInt(ns);
+    const r = std.math.frexp(fv);
+    const per_octave: i64 = @as(i64, 1) << @as(u6, schema);
+    const s: i64 = switch (schema) {
+        inline 0...8 => |sc| blk: {
+            const table = comptime nativeBoundsTable(sc);
+            break :blk searchFloat(&table, r.significand);
+        },
+        else => unreachable,
+    };
+    return (@as(i64, r.exponent) - 1) * per_octave + s;
+}
+
+pub const LatencyHistogram = struct {
+    layout: Layout,
+    /// Used to ensure reads and writes occur on separate shards.
+    /// Atomic representation of `ShardSync`.
+    shard_sync: *std.atomic.Value(u64),
+    /// One hot shard for writing, one cold shard for reading.
+    shards: [2]Shard,
+
+    /// A windowed Prometheus native histogram: geometric (log-exponential) buckets aligned 1:1 with a
+    /// native-histogram `schema`. Bucket `i`'s upper bound is `2^((base_index + i) / 2^schema)` ns,
+    /// where `base_index = baseIndex()`; there are `2^schema` buckets per power-of-two octave.
+    ///
+    /// `min_ns`/`octaves` bound the fixed storage window — native histograms are unbounded/sparse,
+    /// but the IPC region is dense/fixed. Observations below the window clamp into bucket 0; those
+    /// above it land in the implicit `+Inf` bucket (counted, but in no explicit bucket).
+    pub const Layout = struct {
+        /// Native histogram schema `n`; buckets per octave = `2^n`. Valid range 0..8.
+        schema: u4,
+        /// Lower window edge in ns; storage bucket 0 has global native index `baseIndex()`.
+        min_ns: u64,
+        /// Number of power-of-two octaves of range; `bucketCount = octaves << schema`.
+        octaves: u64,
+
+        /// Number of leading `u64` words (at `Detail.index`) encoding `layout` — `[schema, min_ns,
+        /// octaves]` — before the `Raw` shard elements.
+        pub const header_words: u32 = 3;
+
+        pub fn initFromHeader(src: []const u64) Layout {
+            std.debug.assert(src.len == header_words);
+            return .{
+                .schema = @intCast(src[0]),
+                .min_ns = src[1],
+                .octaves = src[2],
+            };
+        }
+
+        /// Serialize `layout` into a `header_words`-length region header.
+        pub fn writeHeader(self: Layout, dst: []u64) void {
+            std.debug.assert(dst.len == header_words);
+            dst[0] = self.schema;
+            dst[1] = self.min_ns;
+            dst[2] = self.octaves;
+        }
+
+        pub fn comptimeValidate(comptime self: Layout) void {
+            if (self.octaves == 0) @compileError("Layout requires at least one octave");
+            if (self.schema > 8) @compileError("Layout schema must be in 0..8");
+            if (self.min_ns == 0) @compileError("Layout requires min_ns > 0");
+            // The top bucket's bound is ~`min_ns << octaves` (one native octave == one power-of-two
+            // octave); keep the shift in range and the bound within u64.
+            if (self.octaves >= 64 or self.min_ns > std.math.maxInt(u64) >> self.octaves)
+                @compileError("bucket bounds overflow u64: reduce octaves or min_ns");
+        }
+
+        pub fn bucketCount(self: Layout) u64 {
+            return @intCast(self.octaves << @as(u6, self.schema));
+        }
+
+        pub fn elementsFromBucketCount(self: Layout) u32 {
+            return @intCast(1 + 2 * (2 + self.bucketCount()));
+        }
+
+        /// Global native bucket index of storage bucket 0; storage bucket `i` has global index
+        /// `baseIndex() + i`. This is the `sint32` `positive_span` offset in the native histogram.
+        pub fn baseIndex(self: Layout) i64 {
+            return nativeBucketIndex(self.schema, self.min_ns);
+        }
+
+        /// The inclusive `le` upper bound (in ns) for bucket `index`, rounded to an integer:
+        /// `2^((base_index + index) / 2^schema)`. Used only by the classic (text) render path; the
+        /// native protobuf path uses bucket indices directly via `baseIndex`.
+        pub fn upperBoundNs(self: Layout, index: usize) u64 {
+            const gi = self.baseIndex() + @as(i64, @intCast(index));
+            const per_octave: f64 = @floatFromInt(@as(u64, 1) << @as(u6, self.schema));
+            const bound = std.math.exp2(@as(f64, @floatFromInt(gi)) / per_octave);
+            return @intFromFloat(@round(bound));
+        }
+    };
+
+    const ShardSync = Histogram.ShardSync;
+
+    pub const Shard = struct {
+        /// Total of all observed values, in nanoseconds.
+        sum: *std.atomic.Value(u64),
+        /// Total number of observations that have finished being recorded to this shard.
+        count: *std.atomic.Value(u64),
+        /// Cumulative counts for each upper bound.
+        buckets: []std.atomic.Value(u64),
+
+        /// For when `elems` does not already represent a valid shard, see `Shard.init`.
+        /// Assumes `elems.len >= 2`.
+        pub fn fromElements(elems: []u64) Shard {
+            return .{
+                .sum = @ptrCast(&elems[0]),
+                .count = @ptrCast(&elems[1]),
+                .buckets = @ptrCast(elems[2..]),
+            };
+        }
+
+        /// XXX: Not an atomic operation. This method overwrites all pointed-to data directly
+        /// Assumes `self.buckets.len == init_data.buckets.len`.
+        /// Sets all pointed-to data to zero.
+        pub fn initZeroes(self: Shard) void {
+            self.sum.* = .init(0);
+            self.count.* = .init(0);
+            @memset(self.buckets, .init(0));
+        }
+    };
+
+    /// A raw view of a latency histogram's shard storage: `[shard_sync][shard0][shard1]`.
+    /// Unlike `Histogram.Raw`, no bounds are stored — they are derived from the `Layout`.
+    pub const Raw = struct {
+        elements: []u64,
+
+        /// XXX: Not an atomic operation. Zeroes `shard_sync` and both shards.
+        pub fn init(self: Raw) void {
+            self.shardSync().* = .init(0);
+            for (&self.shards()) |shard| shard.initZeroes();
+        }
+
+        pub fn shardSync(self: Raw) *std.atomic.Value(u64) {
+            return @ptrCast(&self.elements[0]);
+        }
+
+        pub fn shards(self: Raw) [2]Shard {
+            const rest = self.elements[1..]; // everything after shard_sync
+            const half = @divExact(rest.len, 2);
+            const shard0: Shard = .fromElements(rest[0..half]);
+            const shard1: Shard = .fromElements(rest[half..]);
+            std.debug.assert(shard0.buckets.len == shard1.buckets.len);
+            return .{ shard0, shard1 };
+        }
+    };
+
+    pub fn fromRaw(layout: Layout, raw: Raw) LatencyHistogram {
+        return .{
+            .layout = layout,
+            .shard_sync = raw.shardSync(),
+            .shards = raw.shards(),
+        };
+    }
+
+    fn bucketIndex(self: *const LatencyHistogram, ns: u64) usize {
+        // Global native index minus the window base; values below the window floor into bucket 0,
+        // values above the top land in the implicit `+Inf` bucket via `observe`'s `index <
+        // buckets.len` guard.
+        if (ns == 0) return 0;
+        const local = nativeBucketIndex(self.layout.schema, ns) - self.layout.baseIndex();
+        return if (local < 0) 0 else @intCast(local);
+    }
+
+    /// Writes an observed latency (in nanoseconds) into the histogram.
+    pub fn observe(self: *const LatencyHistogram, ns: u64) void {
+        const shard_sync: ShardSync = @bitCast(self.shard_sync.fetchAdd(1, .acquire)); // acquires lock; must be first
+        const shard = &self.shards[shard_sync.shard];
+        const index = self.bucketIndex(ns);
+        // A value above every bucket bound lands in the implicit `+Inf` bucket: it still
+        // contributes to `sum`/`count` but to no explicit bucket (matches `Histogram.observe`).
+        if (index < shard.buckets.len) {
+            _ = shard.buckets[index].fetchAdd(1, .monotonic);
+        }
+        _ = shard.sum.fetchAdd(ns, .monotonic);
+        _ = shard.count.fetchAdd(1, .release); // releases lock; must be last
+    }
+
+    /// Starts a span timer that records its elapsed nanoseconds into this histogram. Call
+    /// `.observe()` on the result at the end of the span, usually with `defer` (see the `defer`
+    /// caveat on `LatencyObserver` first). The bounds come from the `Layout` and are already in
+    /// nanoseconds.
+    pub fn observer(self: *const LatencyHistogram) LatencyObserver(.latency, null) {
+        return .init(self);
+    }
+
+    /// Makes the hot shard cold and vice versa, returning the pre-swap `shard_sync`.
+    fn flipShard(
+        self: *const LatencyHistogram,
+        comptime ordering: std.builtin.AtomicOrder,
+    ) ShardSync {
+        const shard_sync: ShardSync = .{ .shard = 1 };
+        const data = self.shard_sync.fetchAdd(@bitCast(shard_sync), ordering);
+        return @bitCast(data);
+    }
+
+    /// Swaps the hot and cold shards, then returns a reader over a consistent snapshot of the
+    /// now-cold shard. Mirrors `LatencyHistogram.swapOutSnapshot`.
+    pub fn swapOutSnapshot(self: *const LatencyHistogram) SnapshotReader {
+        // Make the hot shard cold. Some writers may still be writing to it, but no new ones will.
+        const shard_sync = self.flipShard(.acq_rel);
+        const cold_shard = &self.shards[shard_sync.shard];
+        const hot_shard = &self.shards[shard_sync.shard +% 1];
+
+        // Wait until in-flight writers finish draining into the now-cold shard.
+        while (true) {
+            const current_cold_count = cold_shard.count.load(.acquire);
+            if (current_cold_count == shard_sync.count) {
+                cold_shard.count.store(0, .monotonic);
+                break;
+            }
+            std.debug.assert(current_cold_count < shard_sync.count);
+        }
+
+        const cold_shard_sum = cold_shard.sum.load(.monotonic);
+        cold_shard.sum.store(0, .monotonic);
+
+        return .{
+            .count = shard_sync.count,
+            .sum = cold_shard_sum,
+
+            .layout = self.layout,
+            .cold_shard_buckets = cold_shard.buckets,
+            .hot_shard_buckets = hot_shard.buckets,
+            .hot_shard = hot_shard,
+
+            .current_cumulative_count = 0,
+            .current_bucket_index = 0,
+        };
+    }
+
+    /// Iterates a cold-shard snapshot as cumulative prometheus buckets, folding each bucket back
+    /// into the hot shard as it goes. Mirrors `LatencyHistogram.SnapshotReader`, except bucket
+    /// bounds are derived from `layout` via `upperBoundNs` rather than a stored slice.
+    pub const SnapshotReader = struct {
+        /// Total number of events observed by the histogram.
+        count: u63,
+        /// Sum of all values observed by the histogram, in nanoseconds.
+        sum: u64,
+
+        // internal references
+        layout: Layout,
+        cold_shard_buckets: []std.atomic.Value(u64),
+        /// See the NOTE on `LatencyHistogram.SnapshotReader.hot_shard_buckets`.
+        hot_shard_buckets: []std.atomic.Value(u64),
+        hot_shard: *const Shard,
+
+        // mutable state
+        current_cumulative_count: u64,
+        current_bucket_index: usize,
+
+        pub const Bucket = struct {
+            upper_bound: u64,
+            cumulative_count: u64,
+        };
+
+        pub fn finished(self: *const SnapshotReader) bool {
+            std.debug.assert(self.cold_shard_buckets.len == self.hot_shard.buckets.len);
+            return self.current_bucket_index == self.cold_shard_buckets.len;
+        }
+
+        /// Release the snapshot reader, ignoring any unobserved buckets.
+        pub fn release(self: *SnapshotReader) void {
+            if (self.finished()) return;
+            while (self.nextBucket()) |_| {}
+        }
+
+        /// After this returns `null`, the cold shard is fully reset and everything pending in it
+        /// has been aggregated back into the hot shard.
+        pub fn nextBucket(self: *SnapshotReader) ?Bucket {
+            if (self.finished()) {
+                _ = self.hot_shard.sum.fetchAdd(self.sum, .monotonic);
+                _ = self.hot_shard.count.fetchAdd(self.count, .monotonic);
+                return null;
+            }
+            defer self.current_bucket_index += 1;
+
+            const upper_bound = self.layout.upperBoundNs(self.current_bucket_index);
+            const cold_bucket = &self.cold_shard_buckets[self.current_bucket_index];
+            const hot_bucket = &self.hot_shard_buckets[self.current_bucket_index];
+
+            const count = cold_bucket.swap(0, .monotonic);
+            _ = hot_bucket.fetchAdd(count, .monotonic);
+
+            self.current_cumulative_count += count;
+            return .{
+                .cumulative_count = self.current_cumulative_count,
+                .upper_bound = upper_bound,
+            };
+        }
+    };
+
+    /// Used to initialize a latency histogram in-place, backed by a heap allocation.
+    pub fn initForTest(
+        gpa: std.mem.Allocator,
+        layout: Layout,
+    ) std.mem.Allocator.Error!LatencyHistogram {
+        const raw: Raw = .{ .elements = try gpa.alloc(u64, layout.elementsFromBucketCount()) };
+        raw.init();
+        return .fromRaw(layout, raw);
+    }
+
+    /// Only valid if `self` was initialized using `initForTest`.
+    pub fn deinitForTest(self: LatencyHistogram, gpa: std.mem.Allocator) void {
+        const element_count = self.layout.elementsFromBucketCount();
+        const elements: []const u64 = @as(
+            [*]const u64,
+            @ptrCast(self.shard_sync),
+        )[0..element_count];
+        gpa.free(elements);
+    }
+
+    pub fn testExpectBuckets(
+        self: LatencyHistogram,
+        expected_count: u63,
+        expected_buckets: []const SnapshotReader.Bucket,
+    ) !void {
+        if (!builtin.is_test) @compileError("Not allowed in tests.");
+        const gpa = std.testing.allocator;
+
+        var snap = self.swapOutSnapshot();
+        defer snap.release();
+
+        var actual_buckets: std.ArrayList(SnapshotReader.Bucket) = .empty;
+        defer actual_buckets.deinit(gpa);
+
+        while (snap.nextBucket()) |bucket| {
+            try actual_buckets.append(gpa, bucket);
+        }
+
+        try std.testing.expectEqualSlices(
+            SnapshotReader.Bucket,
+            expected_buckets,
+            actual_buckets.items,
+        );
+        try std.testing.expectEqual(expected_count, snap.count);
+    }
+};
+
+/// One `Hist` per variant of `V`, held in a fixed inline array indexed by `EnumIndexer`, so each
+/// tag records into its own distribution through a direct index rather than a map lookup. `V` may
+/// be an enum, a tagged union (its tag type is used), or an error set: `Tag` is what `observe`
+/// takes, and `Enum` is the `FieldEnum` assigning each variant its array slot in declaration order.
+///
+/// The histogram analogue of `Variant`, and intended to be exposed the same way: one metric name
+/// (e.g. `method_elapsed_seconds`) carrying a series per tag under a `variant="<tag>"` label, so
+/// variants can be summed together or filtered apart in Prometheus/Grafana. `kind` selects the
+/// backing histogram: `.latency` for ns-native `LatencyHistogram`, `.standard` for `Histogram`
+/// with explicit bounds. Every variant shares one `Kind`, so the series aggregate cleanly; the
+/// bucket layout itself is still supplied once by the appender.
+pub fn VariantHistogram(comptime V: type, comptime kind: metric.HistogramKind) type {
+    const Hist = kind.StructType();
+    return struct {
+        histograms: [Indexer.count]Hist,
+        const VariantHistogramSelf = @This();
+
+        pub const Value = V;
+        pub const Enum = std.meta.FieldEnum(Value);
+        pub const Tag = switch (@typeInfo(Value)) {
+            .@"enum" => Value,
+            .@"union" => |u_info| u_info.tag_type.?,
+            .error_set => Value,
+            else => @compileError("Unsupported: " ++ @typeName(Value)),
+        };
+
+        pub const Indexer = std.enums.EnumIndexer(Enum);
+
+        /// Records an observed value into the histogram for `tag`. For a `LatencyHistogram` the
+        /// value is a latency in nanoseconds; for a `Histogram` it is a raw observation.
+        pub fn observe(self: *const VariantHistogramSelf, comptime tag: Tag, value: anytype) void {
+            self.get(tag).observe(value);
+        }
+
+        /// Starts a span timer that records its elapsed nanoseconds into the histogram for whichever
+        /// tag `.observe(tag)` is given at the end of the span, usually with `defer`. For
+        /// `kind == .standard` the registered `upper_bounds` must be in nanoseconds; see the unit
+        /// contract on `LatencyObserver`.
+        pub fn observer(self: *const VariantHistogramSelf) LatencyObserver(kind, Value) {
+            return .init(self);
+        }
+
+        /// Returns the individual `Hist` handle registered for `tag`, for operations beyond
+        /// `observe` (e.g. snapshotting a single variant's distribution). `Hist` is a handle of
+        /// pointers into the shared region, so the returned copy writes to the same counters.
+        pub fn get(self: *const VariantHistogramSelf, comptime tag: Tag) Hist {
+            const enum_tag = switch (@typeInfo(Value)) {
+                .@"enum" => if (Enum == Value) tag else switch (tag) {
+                    inline else => |itag| @field(Enum, @tagName(itag)),
+                },
+                .@"union" => |u_info| if (Enum == u_info.tag_type) tag else switch (tag) {
+                    inline else => |_, itag| @field(Enum, @tagName(itag)),
+                },
+                .error_set => switch (tag) {
+                    inline else => |t| @field(Enum, @errorName(t)),
+                },
+                else => @compileError("Unsupported: " ++ @typeName(Value)),
+            };
+            return self.histograms[Indexer.indexOf(enum_tag)];
+        }
+    };
+}
+
+/// A timer for one span. `init` reads the monotonic clock; `observe` reads it again and records the
+/// elapsed nanoseconds into the histogram.
+///
+/// `V` selects the shape. `null` gives a plain `Histogram` or `LatencyHistogram` and an `observe()`
+/// taking no argument. A `VariantHistogram`'s value type gives `observe(tag)`, which selects the
+/// series at the end of the span, after an outcome such as an error tag is known. `tag` must be
+/// comptime-known; dispatch a runtime one with
+/// `switch (tag) { inline else => |t| obs.observe(t) }`.
+///
+/// The recorded value is always in nanoseconds, so the histogram's bounds must be in nanoseconds
+/// too. A `LatencyHistogram` derives its bounds from a `Layout`, which already is. A
+/// `kind == .standard` histogram uses whatever `upper_bounds` it was registered with. Nothing
+/// checks the unit, and bounds in another unit mislabel every bucket.
+///
+/// Holds a pointer to the histogram handle, which the caller must keep alive. Call `observe` once
+/// per observer: it does not stop or reset the timer, so a second call records a second span.
+///
+/// `defer obs.observe()` records on every exit from the enclosing scope, including `break`,
+/// `continue`, and error returns — there is no way to disarm an observer. Only use it where every
+/// exit ends a span worth recording. A scope that can leave without completing one, such as a drain
+/// loop that breaks on `error.WouldBlock`, must instead call `observe` on the success path; a
+/// `defer` there records the failed operation as if it had succeeded.
+pub fn LatencyObserver(comptime kind: metric.HistogramKind, comptime V: ?type) type {
+    // `V` is the variant histogram's value type, not its `Tag`. The two differ for a tagged union,
+    // whose `Tag` is the union's tag type, so reconstructing from `Tag` would name a different
+    // `VariantHistogram` instantiation than the caller holds.
+    const Hist = if (V) |v| VariantHistogram(v, kind) else kind.StructType();
+    return struct {
+        hist: *const Hist,
+        start_ns: u64,
+
+        const LatencyObserverSelf = @This();
+
+        pub fn init(hist: *const Hist) LatencyObserverSelf {
+            return .{
+                .hist = hist,
+                .start_ns = clock.monotonic(.ns),
+            };
+        }
+
+        /// Nanoseconds elapsed since construction. Reads the clock once;
+        /// saturating so a non-monotonic clock can never underflow.
+        pub fn elapsedNs(self: LatencyObserverSelf) u64 {
+            return clock.monotonic(.ns) -| self.start_ns;
+        }
+
+        /// Records the elapsed span, in nanoseconds. Takes no argument for a plain histogram, and a
+        /// tag for a variant histogram. Call it once per observer; see `LatencyObserver`.
+        pub const observe = if (V != null) observeTagged else observePlain;
+
+        fn observeTagged(self: LatencyObserverSelf, comptime tag: Hist.Tag) void {
+            self.hist.observe(tag, self.elapsedNs());
+        }
+
+        fn observePlain(self: LatencyObserverSelf) void {
+            self.hist.observe(self.elapsedNs());
+        }
+    };
+}
+
 fn initBuckets(
     comptime len: usize,
     upper_bounds: *const [len]f64,
@@ -946,4 +1447,302 @@ test "histogram: totals add up after concurrent reads and writes" {
         &Histogram.DEFAULT_UPPER_BOUNDS,
         &expected,
     ));
+}
+
+test "latency histogram: layout header round-trips" {
+    const Layout = LatencyHistogram.Layout;
+    const cases = [_]Layout{
+        .{ .schema = 2, .min_ns = 512, .octaves = 12 },
+        .{ .schema = 0, .min_ns = 64, .octaves = 10 },
+        .{ .schema = 8, .min_ns = 1_000, .octaves = 4 },
+    };
+    for (cases) |layout| {
+        var header: [Layout.header_words]u64 = undefined;
+        layout.writeHeader(&header);
+        try std.testing.expectEqual(layout, Layout.initFromHeader(&header));
+    }
+}
+
+test "latency histogram: comptimeValidate accepts well-formed layouts" {
+    const Layout = LatencyHistogram.Layout;
+    Layout.comptimeValidate(.{ .schema = 2, .min_ns = 512, .octaves = 12 });
+    Layout.comptimeValidate(.{ .schema = 0, .min_ns = 1, .octaves = 8 });
+    Layout.comptimeValidate(.{ .schema = 8, .min_ns = 1_000, .octaves = 4 });
+}
+
+test "latency histogram: geometric bounds and base index" {
+    const Layout = LatencyHistogram.Layout;
+    // schema 2 (4 buckets/octave), window anchored at 512ns == native index 36. Bounds are
+    // `2^((36 + i) / 4)` rounded: 512, 609, 724, 861, 1024, 1218, 1448, 1722.
+    const layout: Layout = .{ .schema = 2, .min_ns = 512, .octaves = 2 };
+    const want = [_]u64{ 512, 609, 724, 861, 1024, 1218, 1448, 1722 };
+    for (want, 0..) |bound, i| try std.testing.expectEqual(bound, layout.upperBoundNs(i));
+
+    // Storage bucket 0 is native index 36 (== 2^schema * log2(512), exact since 512 is a power of 2);
+    // this is the `positive_span` offset the protobuf encoder emits.
+    try std.testing.expectEqual(@as(i64, 36), layout.baseIndex());
+    try std.testing.expectEqual(@as(u64, 8), layout.bucketCount());
+}
+
+test "latency histogram: bins geometrically" {
+    const gpa = std.testing.allocator;
+    const Layout = LatencyHistogram.Layout;
+
+    // schema 2, min_ns 512, 2 octaves -> 8 buckets. Octave boundaries (512, 1024) exercise the
+    // fp-safe `frexp` binning; 513/700 are mid-octave; 2000 overflows into the implicit `+Inf`.
+    const layout: Layout = .{ .schema = 2, .min_ns = 512, .octaves = 2 };
+    const hist: LatencyHistogram = try .initForTest(gpa, layout);
+    defer hist.deinitForTest(gpa);
+
+    hist.observe(512); // bucket 0 (le=512, inclusive octave boundary)
+    hist.observe(513); // bucket 1 (le=609)
+    hist.observe(700); // bucket 2 (le=724)
+    hist.observe(1024); // bucket 4 (le=1024, inclusive octave boundary)
+    hist.observe(2000); // +Inf
+
+    try hist.testExpectBuckets(5, &.{
+        .{ .upper_bound = 512, .cumulative_count = 1 },
+        .{ .upper_bound = 609, .cumulative_count = 2 },
+        .{ .upper_bound = 724, .cumulative_count = 3 },
+        .{ .upper_bound = 861, .cumulative_count = 3 },
+        .{ .upper_bound = 1024, .cumulative_count = 4 },
+        .{ .upper_bound = 1218, .cumulative_count = 4 },
+        .{ .upper_bound = 1448, .cumulative_count = 4 },
+        .{ .upper_bound = 1722, .cumulative_count = 4 },
+    });
+}
+
+test "latency histogram: values accumulate across snapshots" {
+    const gpa = std.testing.allocator;
+    const Layout = LatencyHistogram.Layout;
+
+    const layout: Layout = .{ .schema = 2, .min_ns = 512, .octaves = 2 };
+    const hist: LatencyHistogram = try .initForTest(gpa, layout);
+    defer hist.deinitForTest(gpa);
+
+    hist.observe(512); // bucket 0
+    hist.observe(513); // bucket 1
+    try hist.testExpectBuckets(2, &.{
+        .{ .upper_bound = 512, .cumulative_count = 1 },
+        .{ .upper_bound = 609, .cumulative_count = 2 },
+        .{ .upper_bound = 724, .cumulative_count = 2 },
+        .{ .upper_bound = 861, .cumulative_count = 2 },
+        .{ .upper_bound = 1024, .cumulative_count = 2 },
+        .{ .upper_bound = 1218, .cumulative_count = 2 },
+        .{ .upper_bound = 1448, .cumulative_count = 2 },
+        .{ .upper_bound = 1722, .cumulative_count = 2 },
+    });
+
+    // The prior snapshot folds its counts back into the hot shard, so totals accumulate.
+    hist.observe(512); // bucket 0
+    try hist.testExpectBuckets(3, &.{
+        .{ .upper_bound = 512, .cumulative_count = 2 },
+        .{ .upper_bound = 609, .cumulative_count = 3 },
+        .{ .upper_bound = 724, .cumulative_count = 3 },
+        .{ .upper_bound = 861, .cumulative_count = 3 },
+        .{ .upper_bound = 1024, .cumulative_count = 3 },
+        .{ .upper_bound = 1218, .cumulative_count = 3 },
+        .{ .upper_bound = 1448, .cumulative_count = 3 },
+        .{ .upper_bound = 1722, .cumulative_count = 3 },
+    });
+}
+
+test "latency histogram: values below the window floor into bucket 0" {
+    const gpa = std.testing.allocator;
+    const Layout = LatencyHistogram.Layout;
+
+    const layout: Layout = .{ .schema = 2, .min_ns = 512, .octaves = 2 };
+    const hist: LatencyHistogram = try .initForTest(gpa, layout);
+    defer hist.deinitForTest(gpa);
+
+    hist.observe(0); // clamps to bucket 0
+    hist.observe(1); // below window -> bucket 0
+    hist.observe(100); // below window -> bucket 0
+
+    try hist.testExpectBuckets(3, &.{
+        .{ .upper_bound = 512, .cumulative_count = 3 },
+        .{ .upper_bound = 609, .cumulative_count = 3 },
+        .{ .upper_bound = 724, .cumulative_count = 3 },
+        .{ .upper_bound = 861, .cumulative_count = 3 },
+        .{ .upper_bound = 1024, .cumulative_count = 3 },
+        .{ .upper_bound = 1218, .cumulative_count = 3 },
+        .{ .upper_bound = 1448, .cumulative_count = 3 },
+        .{ .upper_bound = 1722, .cumulative_count = 3 },
+    });
+}
+
+// A window of 512ns .. ~537ms. Wide enough that a measured span lands in an explicit bucket rather
+// than the implicit `+Inf` one.
+const observer_test_layout: LatencyHistogram.Layout = .{
+    .schema = 2,
+    .min_ns = 512,
+    .octaves = 20,
+};
+
+// Bounds for the `.standard` observer tests, in nanoseconds per the contract on
+// `VariantHistogram.observer`. The 1s top bound is above any span these tests measure.
+const observer_test_bounds: []const f64 = &.{
+    1 * std.time.ns_per_us,
+    1 * std.time.ns_per_ms,
+    1 * std.time.ns_per_s,
+};
+
+/// Builds a `VariantHistogram` without a metric region. The observer only needs the `Hist` handles,
+/// and registration is covered by the `variant histogram` tests in `metric.zig`.
+fn initVariantForTest(
+    comptime V: type,
+    comptime kind: metric.HistogramKind,
+    gpa: std.mem.Allocator,
+    config: kind.ConfigType(),
+) std.mem.Allocator.Error!VariantHistogram(V, kind) {
+    var vh: VariantHistogram(V, kind) = undefined;
+    var initialized: usize = 0;
+    errdefer for (vh.histograms[0..initialized]) |h| h.deinitForTest(gpa);
+    for (&vh.histograms) |*h| {
+        h.* = try .initForTest(gpa, config);
+        initialized += 1;
+    }
+    return vh;
+}
+
+/// Frees a `VariantHistogram` built by `initVariantForTest`.
+fn deinitVariantForTest(vh: anytype, gpa: std.mem.Allocator) void {
+    for (vh.histograms) |h| h.deinitForTest(gpa);
+}
+
+test "latency observer: observe records the elapsed span" {
+    const gpa = std.testing.allocator;
+
+    const hist: LatencyHistogram = try .initForTest(gpa, observer_test_layout);
+    defer hist.deinitForTest(gpa);
+
+    const obs = hist.observer();
+
+    // `elapsedNs` reads the clock but records nothing, so the histogram is still empty.
+    const early = obs.elapsedNs();
+    try std.testing.expect(obs.elapsedNs() >= early);
+    {
+        var empty = hist.swapOutSnapshot();
+        defer empty.release();
+        try std.testing.expectEqual(@as(u63, 0), empty.count);
+    }
+
+    // A second `observe` is not a no-op. It records a second span from the same start.
+    obs.observe();
+    obs.observe();
+
+    var snap = hist.swapOutSnapshot();
+    defer snap.release();
+    try std.testing.expectEqual(@as(u63, 2), snap.count);
+    // Both spans were still running when `early` was read, so each is at least that long.
+    try std.testing.expect(snap.sum >= 2 * early);
+}
+
+test "latency observer: tagged spans record into their own variant" {
+    const gpa = std.testing.allocator;
+    const Method = enum { get, put, delete };
+
+    const vh = try initVariantForTest(Method, .latency, gpa, observer_test_layout);
+    defer deinitVariantForTest(vh, gpa);
+
+    vh.observer().observe(.get);
+    vh.observer().observe(.get);
+    vh.observer().observe(.put);
+
+    inline for (.{ .{ Method.get, 2 }, .{ Method.put, 1 }, .{ Method.delete, 0 } }) |case| {
+        var snap = vh.get(case[0]).swapOutSnapshot();
+        defer snap.release();
+        try std.testing.expectEqual(@as(u63, case[1]), snap.count);
+    }
+}
+
+test "latency observer: a runtime tag dispatches through an inline switch" {
+    const gpa = std.testing.allocator;
+    const Outcome = enum { ok, err };
+
+    const vh = try initVariantForTest(Outcome, .latency, gpa, observer_test_layout);
+    defer deinitVariantForTest(vh, gpa);
+
+    // Start the timer before the outcome is known, then select the variant at the end. `observe`
+    // takes a comptime tag, so a runtime one is dispatched with `inline else`.
+    const obs = vh.observer();
+    var outcome: Outcome = .err;
+    _ = &outcome; // keep `outcome` runtime-known
+    switch (outcome) {
+        inline else => |tag| obs.observe(tag),
+    }
+
+    inline for (.{ .{ Outcome.ok, 0 }, .{ Outcome.err, 1 } }) |case| {
+        var snap = vh.get(case[0]).swapOutSnapshot();
+        defer snap.release();
+        try std.testing.expectEqual(@as(u63, case[1]), snap.count);
+    }
+}
+
+test "latency observer: a tagged union selects the variant by its tag type" {
+    const gpa = std.testing.allocator;
+    // Covers the union case of the value-type rule noted on `LatencyObserver`.
+    const Event = union(enum) { get: u32, put: []const u8, delete: void };
+    const Tag = std.meta.Tag(Event);
+
+    const vh = try initVariantForTest(Event, .latency, gpa, observer_test_layout);
+    defer deinitVariantForTest(vh, gpa);
+
+    vh.observer().observe(.get);
+    vh.observer().observe(.delete);
+
+    inline for (.{ .{ Tag.get, 1 }, .{ Tag.put, 0 }, .{ Tag.delete, 1 } }) |case| {
+        var snap = vh.get(case[0]).swapOutSnapshot();
+        defer snap.release();
+        try std.testing.expectEqual(@as(u63, case[1]), snap.count);
+    }
+}
+
+test "latency observer: a standard-kind variant records ns into its explicit bounds" {
+    const gpa = std.testing.allocator;
+    const Outcome = enum { ok, err };
+
+    const vh = try initVariantForTest(Outcome, .standard, gpa, observer_test_bounds);
+    defer deinitVariantForTest(vh, gpa);
+
+    // `Histogram` is unit-agnostic, but the span still arrives as a nanosecond count through
+    // `observe`'s int to f64 conversion. Two `elapsedNs` reads bracket the recorded value.
+    const obs = vh.observer();
+    const before = obs.elapsedNs();
+    obs.observe(.ok);
+    const after = obs.elapsedNs();
+
+    var snap = vh.get(.ok).swapOutSnapshot();
+    defer snap.release();
+    try std.testing.expectEqual(@as(u63, 1), snap.count);
+    try std.testing.expect(snap.sum >= @as(f64, @floatFromInt(before)));
+    try std.testing.expect(snap.sum <= @as(f64, @floatFromInt(after)));
+
+    // The bounds are in nanoseconds, so the span lands in an explicit bucket rather than the
+    // implicit `+Inf` one, and the final cumulative count includes it.
+    var last_cumulative: u64 = 0;
+    while (snap.nextBucket()) |bucket| last_cumulative = bucket.cumulative_count;
+    try std.testing.expectEqual(@as(u64, 1), last_cumulative);
+
+    var untouched = vh.get(.err).swapOutSnapshot();
+    defer untouched.release();
+    try std.testing.expectEqual(@as(u63, 0), untouched.count);
+}
+
+test "latency observer: a plain histogram observes through the same ns contract" {
+    const gpa = std.testing.allocator;
+
+    const hist: Histogram = try .initForTest(gpa, observer_test_bounds);
+    defer hist.deinitForTest(gpa);
+
+    const obs = hist.observer();
+    const before = obs.elapsedNs();
+    obs.observe();
+    const after = obs.elapsedNs();
+
+    var snap = hist.swapOutSnapshot();
+    defer snap.release();
+    try std.testing.expectEqual(@as(u63, 1), snap.count);
+    try std.testing.expect(snap.sum >= @as(f64, @floatFromInt(before)));
+    try std.testing.expect(snap.sum <= @as(f64, @floatFromInt(after)));
 }

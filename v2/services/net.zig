@@ -29,6 +29,18 @@ pub fn serviceMain(
     const metric_appender = rw.tel.metricAppender();
     const metrics = metric_appender.appendFields(Metrics, .{
         .prefix = @tagName(name),
+        .fields = .{
+            .recv_packet_latency_ns = .{ .layout = .{
+                .schema = 2,
+                .min_ns = 512,
+                .octaves = 12,
+            } },
+            .send_packet_latency_ns = .{ .layout = .{
+                .schema = 2,
+                .min_ns = 512,
+                .octaves = 12,
+            } },
+        },
     });
     rw.tel.signalReady();
 
@@ -41,11 +53,8 @@ pub fn serviceMain(
 }
 
 const Metrics = struct {
-    recv_packets: tel.Counter,
-    send_packets: tel.Counter,
-
-    recv_latency: tel.Gauge,
-    send_latency: tel.Gauge,
+    recv_packet_latency_ns: tel.LatencyHistogram,
+    send_packet_latency_ns: tel.LatencyHistogram,
 };
 
 const MAX_SOCKETS = 10;
@@ -81,7 +90,6 @@ fn mainInner(
         sockets_len += 1;
     }
 
-    var timer: lib.time.Timer = .start();
     while (true) {
         // send
         for (pairs, sockets[0..sockets_len]) |pair, sock| {
@@ -90,7 +98,8 @@ fn mainInner(
 
             // TODO: use std.os.linux.sendmmsg
             while (it.next()) |p| {
-                timer.reset();
+                const obs = metrics.send_packet_latency_ns.observer();
+                defer obs.observe();
                 const bytes = try std.posix.sendto(
                     sock,
                     p.data[0..p.len],
@@ -99,8 +108,6 @@ fn mainInner(
                     p.addr.getOsSockLen(),
                 );
                 std.debug.assert(bytes == p.len);
-                metrics.send_packets.increment(1);
-                metrics.send_latency.set(timer.read());
             }
         }
 
@@ -111,7 +118,7 @@ fn mainInner(
 
             // TODO: use std.os.linux.recvmmsg
             while (it.peek()) |ptr| {
-                timer.reset();
+                const obs = metrics.recv_packet_latency_ns.observer();
                 var addr_len: std.posix.socklen_t = @sizeOf(std.net.Address);
                 ptr.len = @intCast(std.posix.recvfrom(
                     sock,
@@ -124,8 +131,7 @@ fn mainInner(
                     else => |e| return e,
                 });
                 _ = it.next();
-                metrics.recv_packets.increment(1);
-                metrics.recv_latency.set(timer.read());
+                obs.observe();
             }
         }
     }
