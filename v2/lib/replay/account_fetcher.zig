@@ -1,3 +1,15 @@
+//! Asynchronous account fetch deduplication for Replay.
+//!
+//! `AccountFetcher` resolves individual account reads against Replay's account view:
+//! unrooted fork state first, then rooted AccountsDB storage. Requests for the same
+//! `(block_ref, pubkey)` share one fetch entry, and each requester receives a separate
+//! completion tagged with its opaque `user_data`.
+//!
+//! Higher-level transaction resolution is intentionally kept outside this module.
+//!
+//! The resolver decides which accounts a transaction needs, including lookup-table and
+//! program-derived dependencies, while this module only fetches accounts and reports
+//! whether each account was found.
 const std = @import("std");
 const lib = @import("../lib.zig");
 
@@ -7,30 +19,37 @@ const BlockPool = lib.replay.BlockPool;
 const BlockRef = lib.replay.BlockRef;
 
 const Unrooted = lib.replay.Unrooted;
-
 const Pubkey = lib.solana.Pubkey;
-
 const AccountRef = AccountPool.AccountRef;
 
-// Arbitrarily chosen for now.
-const ENTRY_CAPACITY = 1024;
-// Arbitrarily chosen for now.
-const WAITER_CAPACITY = 1024;
-
-pub const UserData = u64;
-
+/// Deduplicates and drives asynchronous account reads for Replay.
+///
+/// The deduplication is implemented by internally maintaining a map keyed by `(block_ref, pubkey)`.
+/// When a request is submitted, if an entry already exists for the same key, the request is appended
+/// to the existing entry's waiter list.
+///
+/// The fetcher maintains two queues: one for entries that are queued for rooted lookups and another for
+/// entries that are ready with results. The `poll` method processes these queues, submitting
+/// requests to the `AccountLookups` service and draining completed results.
 pub const AccountFetcher = struct {
-    // TODO: remove this, implement a simple map.
-    allocator: std.mem.Allocator,
-
     account_pool: *AccountPool,
     account_lookups: *AccountLookups,
     unrooted: *Unrooted,
     block_pool: *BlockPool,
 
+    // TODO: remove this, implement a simple map.
+    allocator: std.mem.Allocator,
+    /// In-flight or ready fetch entries keyed by `(block_ref, pubkey)`.
     active_fetches: FetchMap,
-    entries: [ENTRY_CAPACITY]FetchEntry,
-    waiters: [WAITER_CAPACITY]Waiter,
+
+    // NOTE: rational for using separate lists for entries and waiters instead of a single list of
+    // union enums is for simplicity mostly, but also since a single FetchEntry can have multiple waiters,
+    // we're wasting less space. Though perhaps there's good reason to change this in the future?
+
+    /// Backing storage for fetch entries.
+    entries: [512]FetchEntry,
+    /// Backing storage for per-request completion waiters.
+    waiters: [512]Waiter,
 
     waiter_pool: WaiterPool,
     entry_pool: EntryPool,
@@ -41,10 +60,10 @@ pub const AccountFetcher = struct {
     ready_head: EntryId.Optional,
     ready_tail: EntryId.Optional,
 
-    const EntryPool = lib.collections.Pool(FetchEntry, ENTRY_CAPACITY);
+    const EntryPool = lib.collections.Pool(FetchEntry, u16);
     const EntryId = EntryPool.ItemId;
 
-    const WaiterPool = lib.collections.Pool(Waiter, WAITER_CAPACITY);
+    const WaiterPool = lib.collections.Pool(Waiter, u16);
     const WaiterId = WaiterPool.ItemId;
 
     // TODO: custom map.
@@ -65,10 +84,7 @@ pub const AccountFetcher = struct {
         next: WaiterId.Optional,
     };
 
-    const RootedTicket = packed struct(u32) {
-        entry_index: u16,
-        generation: u16,
-    };
+    pub const UserData = u64;
 
     pub const Request = struct {
         block_ref: BlockRef,
@@ -90,7 +106,6 @@ pub const AccountFetcher = struct {
     };
 
     const FetchEntry = struct {
-        generation: u16,
         state: State,
 
         key: FetchKey,
@@ -98,6 +113,9 @@ pub const AccountFetcher = struct {
         waiter_head: WaiterId.Optional,
         waiter_tail: WaiterId.Optional,
 
+        /// links `FetchEntry`s together in the rooted and ready queues.
+        /// It's either the next entry waiting to be sent to rooted, or
+        /// an entry that has completed and whose result is ready for waiters.
         queue_next: EntryId.Optional,
 
         result: Result = undefined,
@@ -163,54 +181,62 @@ pub const AccountFetcher = struct {
         self.* = undefined;
     }
 
-    pub fn submit(
-        self: *AccountFetcher,
-        request: Request,
-    ) error{Full}!void {
-        const waiter_id = self.waiter_pool.createId() catch
-            return error.Full;
+    /// Submits one account fetch request and attaches it to any existing fetch
+    /// for the same `(block_ref, pubkey)`.
+    ///
+    /// New fetches check unrooted state immediately. Misses are queued for rooted
+    /// AccountsDB lookup and later driven by `poll`.
+    pub fn submit(self: *AccountFetcher, request: Request) error{Full}!void {
+        // Create a new waiter for this request
+        const waiter_id = self.waiter_pool.createId() catch return error.Full;
+        errdefer self.waiter_pool.destroyId(waiter_id);
 
-        const waiter = waiter_id.ptr(&self.waiter_pool);
+        const waiter = self.waiter_pool.indexToPtr(waiter_id);
         waiter.* = .{
             .user_data = request.user_data,
             .next = .null,
         };
 
-        errdefer self.waiter_pool.destroyId(waiter_id);
-
+        // Create a key for this request to check if an entry already exists
+        // (i.e a fetch is already in progress for this pubkey and block_ref)
         const key: FetchKey = .{
             .block_ref = request.block_ref,
             .pubkey = request.pubkey,
         };
 
-        // Existing Unrooted lookup, Rooted lookup, or ready result.
+        // Check if there's already a fetch tracked for this key.
         if (self.active_fetches.get(key)) |entry_id| {
+            // If there is, append this request's waiter to the existing entry's waiter list.
+            // The entry will be completed when the fetch completes, and this request will
+            // receive its own completion.
             self.appendWaiter(entry_id, waiter_id);
             return;
         }
 
-        const entry_id = self.entry_pool.createId() catch
-            return error.Full;
+        // If there isn't, create a new fetch entry for this key and start the fetch process.
+        const entry_id = self.entry_pool.createId() catch return error.Full;
         errdefer self.entry_pool.destroyId(entry_id);
 
-        const entry = entry_id.ptr(&self.entry_pool);
+        const entry = self.entry_pool.indexToPtr(entry_id);
         entry.* = .{
             .key = key,
+            // There's one one waiter (this request) for the new entry, so both the
+            // head and tail point to the same waiter.
             .waiter_head = .init(waiter_id),
             .waiter_tail = .init(waiter_id),
+            // This starts as null since its not linked into any queue yet.
             .queue_next = .null,
+            // TODO: remove undefineds and add new state.
             .state = undefined,
             .result = undefined,
         };
 
-        self.active_fetches.putAssumeCapacityNoClobber(
-            key,
-            entry_id,
-        );
-        errdefer std.debug.assert(
-            self.active_fetches.remove(key),
-        );
+        // Track this new fetch entry in the active fetches map.
+        self.active_fetches.putAssumeCapacityNoClobber(key, entry_id);
+        errdefer std.debug.assert(self.active_fetches.remove(key));
 
+        // Check if the account is already available in the unrooted state.
+        // If it is, we can complete the fetch immediately without needing to query the rooted storage.
         const unrooted_ref = self.unrooted.fetch(
             &request.pubkey,
             request.block_ref,
@@ -221,7 +247,7 @@ pub const AccountFetcher = struct {
         if (unrooted_ref != .invalid) {
             const account = self.account_pool.getAccount(unrooted_ref);
 
-            // An Unrooted tombstone shadows any older Rooted value.
+            // An Unrooted tombstone shadows any older Rooted value (deleted account).
             if (account.lamports == 0) {
                 self.releaseAccount(unrooted_ref);
                 entry.result = .not_found;
@@ -230,11 +256,13 @@ pub const AccountFetcher = struct {
                 entry.result = .{ .found = unrooted_ref };
             }
 
+            // Unrooted had the account, mark ready and return.
             entry.state = .ready;
             self.enqueueReady(entry_id);
             return;
         }
 
+        // If the account isn't available in the unrooted state, we need to query the rooted storage.
         entry.state = .queued_rooted;
         self.enqueueRooted(entry_id);
     }
@@ -313,17 +341,22 @@ pub const AccountFetcher = struct {
         return entry_id;
     }
 
+    /// Enqueue a ready entry to the ready queue, which is used to deliver completions to waiters.
     fn enqueueReady(self: *AccountFetcher, entry_id: EntryId) void {
-        const entry = entry_id.ptr(&self.entry_pool);
+        const entry = self.entry_pool.indexToPtr(entry_id);
         std.debug.assert(entry.queue_next == .null);
         std.debug.assert(entry.state == .ready);
 
+        // Add the entry to the end of the ready queue.
         if (self.ready_tail.opt()) |tail_id| {
+            // update current tail's next pointer to the new entry.
             tail_id.ptr(&self.entry_pool).queue_next = .init(entry_id);
         } else {
+            // Empty queue, so set the head to the new entry.
             self.ready_head = .init(entry_id);
         }
 
+        // Update the tail to the new entry.
         self.ready_tail = .init(entry_id);
     }
 
@@ -421,19 +454,17 @@ pub const AccountFetcher = struct {
         self: *AccountFetcher,
         response: AccountLookups.Result,
     ) void {
-        const ticket: RootedTicket = @bitCast(response.req_user_data);
+        const entry_index = response.req_user_data;
 
-        if (ticket.entry_index >= self.entries.len) {
+        if (entry_index >= self.entry_pool.len) {
             self.releaseAccount(response.account_index);
             return;
         }
 
-        const entry = &self.entries[ticket.entry_index];
+        const entry_id = EntryId.fromInt(@intCast(entry_index));
+        const entry = entry_id.ptr(&self.entry_pool);
 
-        if (entry.generation != ticket.generation or
-            entry.state != .fetching_rooted)
-        {
-            // Stale response: the slot was reused or is no longer awaiting this read.
+        if (entry.state != .fetching_rooted) {
             self.releaseAccount(response.account_index);
             return;
         }
@@ -446,9 +477,10 @@ pub const AccountFetcher = struct {
             .{ .found = response.account_index };
 
         entry.state = .ready;
-        self.enqueueReady(EntryId.fromInt(ticket.entry_index));
+        self.enqueueReady(entry_id);
     }
 
+    /// Release an account reference back to the account pool, if it's valid.
     fn releaseAccount(self: *AccountFetcher, account_ref: AccountRef) void {
         if (account_ref == .invalid) return;
         const account = self.account_pool.getAccount(account_ref);
