@@ -102,10 +102,19 @@ pub const SnapshotMetadata = extern struct {
         self.memory_len = memory_len;
     }
 
+    /// Gets a slice of the serializable memory of the SnapshotMetadata
+    pub fn getSerializable(self: *SnapshotMetadata) []u8 {
+        // skip the slot & return all bytes from manifest onwards
+        comptime std.debug.assert(@offsetOf(SnapshotMetadata, "slot") == 0);
+        comptime std.debug.assert(@offsetOf(SnapshotMetadata, "manifest") == 8);
+        const header_size = @sizeOf(SnapshotMetadata) - 8;
+        return @as([*]u8, @ptrCast(&self.manifest))[0 .. header_size + self.memory_len];
+    }
+
     /// Returns the base pointer used to resolve `RelativeSlice`/`RelativeOffset`
     /// values inside `manifest` / `status_cache`.
-    pub fn manifestBase(self: *SnapshotMetadata) [*]u8 {
-        return @ptrCast(&self.memory);
+    pub fn getMemory(self: *SnapshotMetadata) []u8 {
+        return self.memory[0..].ptr[0..self.memory_len];
     }
 
     /// Unblocks all getSlotBlocking() callers with the given slot value.

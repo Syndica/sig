@@ -71,7 +71,7 @@ pub const Rooted = struct {
         committed_offset: u64 align(1),
         blockhash_max_age: u32 align(1),
         /// Padded on-disk size of the SnapshotMetadata blob. 0 means "no metadata yet".
-        manifest_bytes: u32 align(1),
+        metadata_bytes: u32 align(1),
 
         const empty: Journal = .{
             .magic = .valid,
@@ -80,7 +80,7 @@ pub const Rooted = struct {
             .committed_slot = 0,
             .committed_offset = 0,
             .blockhash_max_age = 300,
-            .manifest_bytes = 0,
+            .metadata_bytes = 0,
         };
     };
     comptime {
@@ -256,21 +256,24 @@ pub const Rooted = struct {
         }
 
         // read the persisted Manifest + StatusCache + FBA blob back into place.
-        // Layout on disk: [Journal (block_size)][manifest+status_cache+memory (manifest_bytes)][account sectors...]
+        // Layout on disk:
+        //      [Journal (block_size)]
+        //      [manifest + status_cache + memory (metadata_bytes)]
+        //      [account sectors...]
         {
-            const disk_bytes = self.journal.manifest_bytes;
-            const hdr_size = @sizeOf(lib.solana.snapshot.Manifest) +
-                @sizeOf(lib.solana.snapshot.StatusCache);
-            const total_capacity = hdr_size + snapshot_metadata.memory_len;
-            if (disk_bytes == 0 or disk_bytes > total_capacity) {
-                logger.err().logf("invalid manifest_bytes: disk={}, capacity={}", .{
-                    disk_bytes, total_capacity,
-                });
+            const disk_bytes = self.journal.metadata_bytes;
+            const metadata = snapshot_metadata.getSerializable();
+            const padded = std.mem.alignForward(u64, metadata.len, block_size);
+            if (disk_bytes == 0 or disk_bytes != padded) {
+                logger.err().logf(
+                    "invalid metadata_bytes: disk={}, expected={}",
+                    .{ disk_bytes, padded },
+                );
                 return error.InvalidJournal;
             }
 
-            const dst: [*]u8 = @ptrCast(&snapshot_metadata.manifest);
-            try self.readExisting(.from(logger), dst, disk_bytes);
+            try self.readExisting(.from(logger), metadata.ptr, metadata.len); // read metadata
+            try self.readExisting(.from(logger), null, padded - metadata.len); // skip padding
         }
 
         var timer = try std.time.Timer.start();
@@ -386,17 +389,17 @@ pub const Rooted = struct {
         // contiguous blob right after the journal block. Padded to block_size
         // so account sectors start block-aligned.
         {
-            const hdr_size = @sizeOf(Manifest) + @sizeOf(StatusCache);
-            const unpadded: u64 = hdr_size + snapshot_metadata.memory_len;
-            const padded: u64 = std.mem.alignForward(u64, unpadded, block_size);
+            const metadata = snapshot_metadata.getSerializable();
+            const padded = std.mem.alignForward(u64, metadata.len, block_size);
             if (padded > std.math.maxInt(u32)) return error.ManifestTooLarge;
-            self.journal.manifest_bytes = @intCast(padded);
+            self.journal.metadata_bytes = @intCast(padded);
 
-            const base: [*]const u8 = @ptrCast(&snapshot_metadata.manifest);
-            var r = std.Io.Reader.fixed(base[0..unpadded]);
-            try self.queueWrite(.from(logger), unpadded, &r);
+            // write unpadded
+            var r = std.Io.Reader.fixed(metadata);
+            try self.queueWrite(.from(logger), metadata.len, &r);
 
-            const pad_len = padded - unpadded;
+            // write padding if any
+            const pad_len = padded - metadata.len;
             if (pad_len > 0) try self.queueWrite(.from(logger), pad_len, struct {
                 pub fn readSliceAll(_: @This(), b: []u8) !void {
                     @memset(b, 0);
