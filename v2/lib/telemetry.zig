@@ -46,6 +46,10 @@ pub const Region = extern struct {
     pub const Info = extern struct {
         /// The port to listen on for the prometheus client.
         port: u16,
+        /// The most verbose level enabled by any filter in `log_filters_encoded`.
+        /// Writers gate on this; the exact (service, scope) filter is still applied
+        /// by the telemetry service in `log.streamLogs`.
+        max_log_level: log.Level = .trace,
         /// The length of the encoded log filters byte string.
         log_filters_len: u32,
 
@@ -112,6 +116,7 @@ pub const Region = extern struct {
         pub fn info(self: InitParams) Info {
             return .{
                 .port = self.port,
+                .max_log_level = log.maxLevelEncoded(self.log_filters_encoded),
                 .log_filters_len = @intCast(self.log_filters_encoded.len),
 
                 .service_count = self.service_count,
@@ -218,7 +223,10 @@ pub const Region = extern struct {
 
         std.debug.assert(name.len <= log.MessageStream.Name.MAX_LEN); // see `stream.name.init`
         stream.name.init(name);
-        return .{ .sink = .{ .swap_buffer = &stream.swap_buffer } };
+        return .{
+            .sink = .{ .swap_buffer = &stream.swap_buffer },
+            .max_level = self.info.max_log_level,
+        };
     }
 
     /// Low-level helper for registering metrics.
@@ -240,6 +248,10 @@ pub const Region = extern struct {
 pub fn Logger(comptime scope_str: []const u8) type {
     return struct {
         sink: log.MessageSink,
+        /// See `Region.Info.max_log_level`. Scope-independent, so it survives
+        /// `withScope`/`from` unchanged.
+        max_level: log.Level = .trace,
+
         const LoggerSelf = @This();
 
         pub const scope = scope_str;
@@ -255,7 +267,7 @@ pub fn Logger(comptime scope_str: []const u8) type {
             self: LoggerSelf,
             comptime new_scope: []const u8,
         ) Logger(new_scope) {
-            return .{ .sink = self.sink };
+            return .{ .sink = self.sink, .max_level = self.max_level };
         }
 
         pub fn fatal(self: LoggerSelf) Entry(0) {
@@ -393,6 +405,13 @@ pub fn Logger(comptime scope_str: []const u8) type {
                     comptime fmt_str: []const u8,
                     args: anytype,
                 ) void {
+                    // `max_level` bounds what any filter in this process can enable, so
+                    // `streamLogs` would drop this message regardless of service/scope.
+                    // Bailing here avoids rendering it three times (twice to count length
+                    // in `computeHeader`, once in `Message.write`) and avoids spending
+                    // swap buffer on bytes nobody reads.
+                    if (self.level.order(self.logger.max_level) == .gt) return;
+
                     switch (self.level) {
                         inline else => |ilevel| {
                             tracy.print(@tagName(ilevel) ++ ": " ++ fmt_str, args);

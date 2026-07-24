@@ -799,6 +799,24 @@ test EntryValueFmt {
     });
 }
 
+/// The most verbose level that any filter in `encoded` can enable, across every
+/// service and scope. `streamLogs` is guaranteed to drop anything more verbose
+/// than this, so writers may skip encoding such messages entirely.
+///
+/// Returns `.trace` (gate fully open) for empty or malformed input, leaving the
+/// diagnostic to the telemetry service, which rejects both explicitly.
+pub fn maxLevelEncoded(encoded: []const u8) Level {
+    if (encoded.len == 0) return .trace;
+    var max: Level = .fatal;
+    var fbr: std.Io.Reader = .fixed(encoded);
+    while (fbr.bufferedLen() != 0) {
+        const header = fbr.takeStruct(Filter.Header, tel.endian) catch return .trace;
+        const filter = header.getFilterFromFixedReader(&fbr) orelse return .trace;
+        if (filter.level.order(max) == .gt) max = filter.level;
+    }
+    return max;
+}
+
 pub fn streamLogs(
     params: struct {
         output: *std.Io.Writer,
