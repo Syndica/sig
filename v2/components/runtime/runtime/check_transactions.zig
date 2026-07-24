@@ -49,7 +49,6 @@ pub fn checkFeePayer(
     /// Takes ownership of this
     maybe_nonce: ?LoadedAccount,
     rent_collector: *const RentCollector,
-    lamports_per_signature: u64,
 ) AccountLoadError!TransactionResult(struct {
     FeeDetails,
     std14.BoundedArray(LoadedAccount, 2),
@@ -89,7 +88,7 @@ pub fn checkFeePayer(
     const fee_budget_limits = FeeBudgetLimits.fromComputeBudgetLimits(compute_budget_limits.*);
     const fee_details = FeeDetails.init(
         SignatureCounts.fromTransaction(transaction),
-        lamports_per_signature,
+        LAMPORTS_PER_SIGNATURE,
         fee_budget_limits.prioritization_fee,
         compute_budget_limits.compute_unit_price,
     );
@@ -767,7 +766,6 @@ test "checkFeePayer: happy path fee payer only" {
         &ComputeBudgetLimits.DEFAULT,
         null,
         &sig.core.rent_collector.defaultCollector(10),
-        LAMPORTS_PER_SIGNATURE,
     );
 
     const fee_details, const rollbacks, const prepared_fee_payer = result.ok;
@@ -835,7 +833,6 @@ test "checkFeePayer: happy path with same nonce and fee payer" {
             .account = nonce_account,
         },
         &sig.core.rent_collector.defaultCollector(10),
-        LAMPORTS_PER_SIGNATURE,
     );
 
     const fee_details, const rollbacks, const prepared_fee_payer = result.ok;
@@ -904,7 +901,6 @@ test "checkFeePayer: happy path with separate nonce and fee payer" {
             .account = nonce_account,
         },
         &sig.core.rent_collector.defaultCollector(10),
-        LAMPORTS_PER_SIGNATURE,
     );
 
     const fee_details, const rollbacks, const prepared_fee_payer = result.ok;
