@@ -1,3 +1,5 @@
+// TODO: move this into core
+
 const std = @import("std");
 const lib = @import("../lib.zig");
 
@@ -18,24 +20,24 @@ pub const MINIMUM_SLOTS_PER_EPOCH: u64 = 32;
 /// Analogous to [EpochSchedule](https://github.com/anza-xyz/agave/blob/5a9906ebf4f24cd2a2b15aca638d609ceed87797/sdk/program/src/epoch_schedule.rs#L35)
 pub const EpochSchedule = extern struct {
     /// The maximum number of slots in each epoch.
-    slots_per_epoch: u64,
+    slots_per_epoch: u64 align(1),
 
     /// A number of slots before beginning of an epoch to calculate
     /// a leader schedule for that epoch.
-    leader_schedule_slot_offset: u64,
+    leader_schedule_slot_offset: u64 align(1),
 
     /// Whether epochs start short and grow.
-    warmup: bool,
+    warmup: bool align(1),
 
     /// The first epoch after the warmup period.
     ///
     /// Basically: `log2(slots_per_epoch) - log2(MINIMUM_SLOTS_PER_EPOCH)`.
-    first_normal_epoch: Epoch,
+    first_normal_epoch: Epoch align(1),
 
     /// The first slot after the warmup period.
     ///
     /// Basically: `MINIMUM_SLOTS_PER_EPOCH * (2.pow(first_normal_epoch) - 1)`.
-    first_normal_slot: Slot,
+    first_normal_slot: Slot align(1),
 
     pub const ID: Pubkey = .parse("SysvarEpochSchedu1e111111111111111111111111");
     pub const STORAGE_SIZE: u64 = 33;

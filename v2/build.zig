@@ -333,6 +333,13 @@ const Sig = struct {
                     .{ .name = "services", .module = services_mod },
                 },
             });
+
+            // accounts_db creates a lot of large globals.
+            // convert globals from [rip + 32-bit offset] to 64bit offsets
+            if (std.mem.eql(u8, service.name, "accounts_db")) {
+                service_mod.code_model = .medium;
+            }
+
             unit_tests.add(service.name, service_mod);
 
             const service_lib = b.addLibrary(.{

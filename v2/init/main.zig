@@ -66,6 +66,7 @@ const Config = struct {
         file: []const u8,
         rooted: MemorySize,
         unrooted: MemorySize,
+        metadata: MemorySize,
 
         // For nicer initialization of constants (instead of x * 1024 * 1024 * 1024)
         const MemorySize = union(enum) {
@@ -258,8 +259,10 @@ pub fn main() !void {
     var snapshot_ready_to_accounts_db: Region(lib.snapshot.SnapshotData) = try .simple();
     snapshot_ready_to_accounts_db.ptr().init();
 
-    var snapshot_metadata: Region(lib.accounts_db.RuntimeMetadata) = try .simple();
-    snapshot_metadata.ptr().init();
+    var snapshot_metadata: Region(lib.snapshot.SnapshotMetadata) = try .sized(
+        @sizeOf(lib.snapshot.SnapshotMetadata) + config.accounts_db.metadata.toBytes(),
+    );
+    snapshot_metadata.ptr().init(config.accounts_db.metadata.toBytes());
 
     const unrooted_memory = config.accounts_db.unrooted.toBytes();
     var account_pool: Region(lib.accounts_db.AccountPool) =

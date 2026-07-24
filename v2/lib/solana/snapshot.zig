@@ -8,6 +8,77 @@ const Pubkey = lib.solana.Pubkey;
 const Slot = lib.solana.Slot;
 const Epoch = lib.solana.Epoch;
 const Hash = lib.solana.Hash;
+const EpochSchedule = lib.solana.EpochSchedule;
+const Inflation = lib.solana.Inflation;
+
+/// A slice into a shared-memory region, expressed as an offset from a base pointer
+/// plus a length. Position-independent so it can live inside an extern struct that is
+/// mmap'd at different virtual addresses across processes.
+pub fn RelativeSlice(comptime T: type) type {
+    return extern struct {
+        offset: u32 = 0,
+        len: u32 = 0,
+
+        const Self = @This();
+
+        pub fn fromSlice(base: [*]const u8, s: []const T) Self {
+            const start = @intFromPtr(s.ptr) - @intFromPtr(base);
+            std.debug.assert(start <= std.math.maxInt(u32));
+            std.debug.assert(s.len <= std.math.maxInt(u32));
+            return .{ .offset = @intCast(start), .len = @intCast(s.len) };
+        }
+
+        pub fn slice(self: Self, base: [*]u8) []T {
+            const raw = base + self.offset;
+            std.debug.assert(@intFromPtr(raw) % @alignOf(T) == 0);
+            const ptr: [*]T = @ptrCast(@alignCast(raw));
+            return ptr[0..self.len];
+        }
+
+        pub fn sliceConst(self: Self, base: [*]const u8) []const T {
+            const raw = base + self.offset;
+            std.debug.assert(@intFromPtr(raw) % @alignOf(T) == 0);
+            const ptr: [*]const T = @ptrCast(@alignCast(raw));
+            return ptr[0..self.len];
+        }
+    };
+}
+
+/// A single-pointer variant of `RelativeSlice`. `offset == 0` is the null sentinel;
+/// callers must guarantee no valid allocation lands at offset 0 (see `Rooted.loadSnapshot`
+/// which reserves the first byte of its FBA for exactly this purpose).
+pub fn RelativeOffset(comptime T: type) type {
+    return extern struct {
+        offset: u32 = 0,
+
+        const Self = @This();
+
+        pub fn from(base: [*]const u8, ptr: *const T) Self {
+            const o = @intFromPtr(ptr) - @intFromPtr(base);
+            std.debug.assert(o != 0);
+            std.debug.assert(o <= std.math.maxInt(u32));
+            return .{ .offset = @intCast(o) };
+        }
+
+        pub fn isNull(self: Self) bool {
+            return self.offset == 0;
+        }
+
+        pub fn pointer(self: Self, base: [*]u8) *T {
+            std.debug.assert(self.offset != 0);
+            const raw = base + self.offset;
+            std.debug.assert(@intFromPtr(raw) % @alignOf(T) == 0);
+            return @ptrCast(@alignCast(raw));
+        }
+
+        pub fn pointerConst(self: Self, base: [*]const u8) *const T {
+            std.debug.assert(self.offset != 0);
+            const raw = base + self.offset;
+            std.debug.assert(@intFromPtr(raw) % @alignOf(T) == 0);
+            return @ptrCast(@alignCast(raw));
+        }
+    };
+}
 
 fn readInt(Int: type, r: anytype) !u64 {
     var buf: [@sizeOf(Int)]u8 = undefined;
@@ -22,7 +93,12 @@ fn readBool(r: anytype) !bool {
     return buf[0] > 0;
 }
 
-pub const StatusCache = struct {
+pub const StatusCache = extern struct {
+    /// Placeholder — the deserialized contents are currently discarded. Kept as an
+    /// extern struct so it can live inline in `SnapshotMetadata` and be persisted
+    /// alongside the `Manifest` in the rooted DB blob.
+    _reserved: u8 = 0,
+
     pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !StatusCache {
         const zone = tracy.Zone.init(@src(), .{ .name = "StatusCache.read" });
         defer zone.deinit();
@@ -89,7 +165,7 @@ pub const StatusCache = struct {
     }
 };
 
-pub const Manifest = struct {
+pub const Manifest = extern struct {
     bank_fields: BankFields,
     accounts_db_fields: AccountsDbFields,
     extra_fields: ExtraFields,
@@ -106,22 +182,36 @@ pub const Manifest = struct {
     }
 };
 
-pub const BankFields = struct {
+pub const BankFields = extern struct {
     slot: Slot,
     blockhash_queue: BlockHashQueue,
+    epoch_schedule: EpochSchedule,
+    inflation: Inflation,
+    stakes_cache: extern struct {
+        epoch: Epoch,
+        vote_accounts: RelativeSlice(Pubkey), // acc.data contains stake for the voter
+        stake_accounts: RelativeSlice(Pubkey), // acc.data contains voter pubkey + Delegation
+    },
 
-    pub const BlockHashQueue = struct {
-        last_hash: ?Hash,
+    pub const BlockHashQueue = extern struct {
+        /// Agave's MAX_RECENT_BLOCKHASHES and the current `Rooted.Journal.blockhash_max_age`.
+        /// It's plus-one given cutoff is `<= max_age` instead of `< max_age`.
+        /// [agave] https://github.com/anza-xyz/solana-sdk/blob/clock%40v3.1.1/clock/src/lib.rs#L95
+        pub const MAX_RECENT_BLOCKHASHES: u32 = 300 + 1;
+
+        last_hash: Hash, // .ZEROES if null in snapshot
         max_age: u64,
-        hashes: struct {
-            array: []Hash,
-            count: usize,
-        },
+        hashes: [MAX_RECENT_BLOCKHASHES]Hash,
+        hashes_count: u32,
 
         pub const Entry = extern struct {
             hash: Hash,
             hash_index: u64,
         };
+
+        pub fn getHashes(self: *const BlockHashQueue) []const Hash {
+            return self.hashes[0..self.hashes_count];
+        }
 
         pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !BlockHashQueue {
             const last_hash_index = try readInt(u64, r);
@@ -132,7 +222,6 @@ pub const BankFields = struct {
             };
 
             const n_hash_infos = try readInt(u64, r);
-            const hashes = try fba.allocator().alloc(Hash, n_hash_infos);
 
             const BlockhashEntry = extern struct {
                 hash: Hash,
@@ -154,21 +243,24 @@ pub const BankFields = struct {
                 }
             }.lessThan);
 
-            // then add only the live ones by max_age to the hashes
-            var count: usize = 0;
+            var out: BlockHashQueue = .{
+                .last_hash = maybe_last_hash orelse .ZEROES,
+                .max_age = max_age,
+                .hashes = @splat(.ZEROES),
+                .hashes_count = 0,
+            };
+
+            // then add only the live ones by max_age
             for (entries) |*e| {
                 const age = last_hash_index - e.hash_index;
                 if (age <= max_age) {
-                    hashes[count] = e.hash;
-                    count += 1;
+                    if (out.hashes_count >= MAX_RECENT_BLOCKHASHES) return error.TooManyBlockhashes;
+                    out.hashes[out.hashes_count] = e.hash;
+                    out.hashes_count += 1;
                 }
             }
 
-            return .{
-                .last_hash = maybe_last_hash,
-                .max_age = max_age,
-                .hashes = .{ .array = hashes, .count = count },
-            };
+            return out;
         }
     };
 
@@ -211,68 +303,102 @@ pub const BankFields = struct {
             8 // accounts_data_len: u64
         );
         const slot = try readInt(Slot, r);
-        try r.discardAll(
-            8 + // _unused_epoch: Epoch
-                8 + // block_height: u64
-                32 + // leader_id: Pubkey
-                8 + // _unused_collector_fees: u64
-                8 + // _unused_fee_calculator: u64
-                // fee_rate_governor:
-                8 + //   target_lamports_per_signature: u64
-                8 + //   target_signatures_per_slot: u64
-                8 + //   min_lamports_per_signature: u64
-                8 + //   max_lamports_per_signature: u64
-                1 + //   burn_percent: u8
-                8 + // _unused_collected_rent: u64
-                // _unused_rent_collector:
-                8 + //   epoch: Epoch
-                //   epoch_schedule: EpochSchedule:
-                8 + //     slots_per_epoch: u64
-                8 + //     leader_schedule_slot_offset: u64
-                1 + //     warmup: bool
-                8 + //     first_normal_epoch: u64
-                8 + //     first_normal_slot: u64
-                8 + //   slots_per_year: f64
-                //   rent:
-                8 + //     lamports_per_byte: u64
-                8 + //     exemption_threshold: [8]u8
-                1 + //     burn_percent: u8
-                // epoch_schedule: EpochSchedule:
-                8 + //   slots_per_epoch: u64
-                8 + //   leader_schedule_slot_offset: u64
-                1 + //   warmup: bool
-                8 + //   first_normal_epoch: u64
-                8 + //   first_normal_slot: u64
-                // inflation:
-                8 + //   initial: f64
-                8 + //   terminal: f64
-                8 + //   taper: f64
-                8 + //   foundation: f64
-                8 + //   foundation_term: f64
-                8, //   __unused: f64
+        try r.discardAll(8 + // _unused_epoch: Epoch
+            8 + // block_height: u64
+            32 + // leader_id: Pubkey
+            8 + // _unused_collector_fees: u64
+            8 + // _unused_fee_calculator: u64
+            // fee_rate_governor:
+            8 + //   target_lamports_per_signature: u64
+            8 + //   target_signatures_per_slot: u64
+            8 + //   min_lamports_per_signature: u64
+            8 + //   max_lamports_per_signature: u64
+            1 + //   burn_percent: u8
+            8 + // _unused_collected_rent: u64
+            // _unused_rent_collector:
+            8 + //   epoch: Epoch
+            //       epoch_schedule: EpochSchedule:
+            8 + //     slots_per_epoch: u64
+            8 + //     leader_schedule_slot_offset: u64
+            1 + //     warmup: bool
+            8 + //     first_normal_epoch: u64
+            8 + //     first_normal_slot: u64
+            8 + //   slots_per_year: f64
+            //       rent:
+            8 + //     lamports_per_byte: u64
+            8 + //     exemption_threshold: [8]u8
+            1 //       burn_percent: u8
         );
 
-        // stakes: Stakes(Delegation)
-        //   vote_accounts: VoteAccounts
-        try discardVoteAccounts(r);
+        var epoch_schedule: EpochSchedule = undefined;
+        try r.readSliceAll(std.mem.asBytes(&epoch_schedule));
+
+        var inflation: Inflation = undefined;
+        try r.readSliceAll(std.mem.asBytes(&inflation));
+
+        // stakes: Stakes(.Delegation)
+        //     vote_accounts: HashMap(Pubkey, {stake, AccountData})
+        //
+        // NOTE: Only stores pubkeys, as we should verify their data against the accounts instead.
+        const vote_len = try readInt(u64, r);
+        const vote_accounts = try fba.allocator().alloc(Pubkey, vote_len);
+        for (vote_accounts) |*vote_pubkey| {
+            var header: extern struct {
+                pubkey: Pubkey, // key: Pubkey
+                stake: u64, // value.stake: u64
+                lamports: u64, // value.account.lamports: u64
+                data_len: u64, // value.account.data: Vec(u8)
+            } = undefined;
+            try r.readSliceAll(std.mem.asBytes(&header));
+
+            vote_pubkey.* = header.pubkey;
+            try r.discardAll(
+                header.data_len + // account data bytes (TODO: validate this against account?)
+                    32 + // value.account.owner: Pubkey
+                    1 + // value.account.executable: bool
+                    8, // value.account.rent_epoch: Epoch(u64)
+            );
+        }
 
         //   stake_delegations: HashMap(Pubkey, Delegation)
+        //     Delegation = { voter_pubkey, stake, activation_epoch, deactivation_epoch, warmup }
+        //
+        // NOTE: only read the pubkeys. The stake data should be fetched from the accounts instead.
         const stake_del_len = try readInt(u64, r);
-        try r.discardAll(stake_del_len * (32 + // key: Pubkey
-            // Delegation:
-            32 + //   voter_pubkey: Pubkey
-            8 + //   stake: u64
-            8 + //   activation_epoch: Epoch
-            8 + //   deactivation_epoch: Epoch
-            8 //   warmup_cooldown_rate: f64
-        ));
+        const stake_accounts = try fba.allocator().alloc(Pubkey, stake_del_len);
+        {
+            // read chunks of entries at a time to amortize costs of r.readSliceAll
+            var delegation_entries: [32]extern struct {
+                stake_pubkey: Pubkey,
+                voter_pubkey: Pubkey,
+                stake: u64 align(1),
+                activation_epoch: Epoch align(1),
+                deactivation_epoch: Epoch align(1),
+                _deprecated_warmup_cooldown_rate: f64 align(1),
+            } = undefined;
 
-        try r.discardAll(
-            8 + // stakes.unused: u64
-                8, // stakes.epoch: Epoch
-        );
+            var i: usize = 0;
+            while (i < stake_del_len) {
+                const n = @min(stake_del_len - i, delegation_entries.len);
 
-        //   stake_history: Vec({ epoch: Epoch, effective: u64, activating: u64, deactivating: u64 })
+                const pubkey_chunk = stake_accounts[i..][0..n];
+                i += n;
+
+                const chunk = delegation_entries[0..n];
+                try r.readSliceAll(std.mem.sliceAsBytes(chunk));
+
+                for (chunk, pubkey_chunk) |*delegation_entry, *stake_pubkey| {
+                    stake_pubkey.* = delegation_entry.stake_pubkey;
+                }
+            }
+        }
+
+        _ = try readInt(u64, r); // stakes.unused: u64
+        const epoch = try readInt(Epoch, r); // stakes.epoch: Epoch
+
+        //  stake_history: Vec({ epoch: Epoch, effective: u64, activating: u64, deactivating: u64 })
+        //
+        // NOTE: ignored as it's better to parse from the StakeHistory account instead.
         const stake_history_len = try readInt(u64, r);
         try r.discardAll(stake_history_len * (8 + // epoch: Epoch
             8 + // effective: u64
@@ -300,11 +426,18 @@ pub const BankFields = struct {
         return .{
             .slot = slot,
             .blockhash_queue = blockhash_queue,
+            .epoch_schedule = epoch_schedule,
+            .inflation = inflation,
+            .stakes_cache = .{
+                .epoch = epoch,
+                .vote_accounts = .fromSlice(fba.buffer.ptr, vote_accounts),
+                .stake_accounts = .fromSlice(fba.buffer.ptr, stake_accounts),
+            },
         };
     }
 };
 
-pub const AccountsDbFields = struct {
+pub const AccountsDbFields = extern struct {
     slot: u64,
 
     pub fn read(_: *std.heap.FixedBufferAllocator, r: anytype) !AccountsDbFields {
@@ -367,17 +500,139 @@ pub const AccountsDbFields = struct {
     }
 };
 
-pub const ExtraFields = struct {
+pub const ExtraFields = extern struct {
+    versioned_epoch_stakes: RelativeSlice(VersionedEpochStakes) = .{},
     /// - TowerBFT: the Merkle root of the last FEC set of the block
     /// - Alpenglow: the "double Merkle root": a Merkle root computed over the
     ///   sequence of per-FEC-set Merkle roots of the block's shreds.
     block_id: Hash,
 
+    pub const VersionedEpochStakes = extern struct {
+        epoch: Epoch,
+        total_stake: u64,
+        vote_accounts: RelativeSlice(VoteAccountEntry),
+        node_to_vote_accounts: RelativeSlice(NodeToVoterEntry),
+        epoch_authorized_voters: RelativeSlice(AuthToVoterEntry),
+
+        pub const VoteAccountEntry = extern struct {
+            pubkey: Pubkey,
+            stake: u64, // kept as Versioned entry cant lookup past/future epoch VoteAccount data
+        };
+
+        pub const NodeToVoterEntry = extern struct {
+            node_pubkey: Pubkey,
+            vote_accounts: RelativeSlice(Pubkey),
+            total_stake: u64,
+        };
+
+        pub const AuthToVoterEntry = extern struct {
+            voter_pubkey: Pubkey,
+            authorized_voter: Pubkey,
+        };
+
+        pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !VersionedEpochStakes {
+            // epoch: Epoch
+            const epoch = try readInt(Epoch, r);
+
+            // union tag: u32 (enum(u32), always 'current')
+            const union_tag = try readInt(u32, r);
+            if (union_tag != 0) {
+                return error.InvalidVersionedEpochStakesUnion;
+            }
+
+            // epoch_stakes: Stakes(Delegation)
+            //   vote_accounts: HashMap(Pubkey, { stake: u64, account: AccountSharedData })
+            //
+            // where AccountSharedData =
+            // { lamports: u64, data: Vec(u8), owner: Pubkey, executable: bool, rent_epoch: Epoch }
+            const vote_len = try readInt(u64, r);
+            const vote_accounts = try fba.allocator().alloc(VoteAccountEntry, vote_len);
+            for (vote_accounts) |*entry| {
+                var header: extern struct {
+                    key: Pubkey,
+                    stake: u64 align(1),
+                    lamports: u64 align(1),
+                    data_len: u64 align(1),
+                } = undefined;
+                try r.readSliceAll(std.mem.asBytes(&header));
+
+                entry.* = .{ .pubkey = header.key, .stake = header.stake };
+                try r.discardAll(header.data_len + // data bytes (TODO: validate this against account data?)
+                    32 + // owner: Pubkey
+                    1 + // executable: bool
+                    8 // rent_epoch: Epoch
+                );
+            }
+
+            //   stake_delegations: HashMap(Pubkey, { Delegation, credits_observed: u64 })
+            //
+            // NOTE: this is discarded instead of stored:
+            // https://github.com/anza-xyz/agave/blob/v4.2/runtime/src/epoch_stakes.rs#L442-L443
+            const stake_del_len = try readInt(u64, r);
+            try r.discardAll(stake_del_len * (32 + // key: Pubkey
+                32 + // delegation.voter_pubkey: Pubkey
+                8 + // delegation.stake: u64
+                8 + // delegation.activation_epoch: Epoch
+                8 + // delegation.deactivation_epoch: Epoch
+                8 + // delegation.warmup_cooldown_rate: f64
+                8 // credits_observed: u64
+            ));
+
+            //   unused: u64
+            //   epoch: Epoch
+            try r.discardAll(8 + 8);
+
+            //   stake_history: Vec({Epoch, effective: u64, activating: u64, deactivating: u64})
+            //
+            // NOTE: this is empty on testnet snapshots and is fine to discard.
+            // The one that actually matters is BankFields.stake_history,
+            // and its better to parse it out of the StakeHistory sysvar account from db instead.
+            const stake_history_len = try readInt(u64, r);
+            try r.discardAll(stake_history_len * (8 + // epoch: Epoch
+                8 + // effective: u64
+                8 + // activating: u64
+                8 // deactivating: u64
+            ));
+
+            // total_stake: u64
+            const total_stake = try readInt(u64, r);
+
+            // node_id_to_vote_accounts: HashMap(Pubkey, { voters:Vec(Pubkey), total_stake: u64 })
+            const node_len = try readInt(u64, r);
+            const node_to_voters = try fba.allocator().alloc(NodeToVoterEntry, node_len);
+            for (node_to_voters) |*entry| {
+                var header: extern struct { node_pubkey: Pubkey, voters_len: u64 } = undefined;
+                try r.readSliceAll(std.mem.asBytes(&header));
+
+                const node_voters = try fba.allocator().alloc(Pubkey, header.voters_len);
+                try r.readSliceAll(std.mem.sliceAsBytes(node_voters));
+
+                const node_stake = try readInt(u64, r);
+                entry.* = .{
+                    .node_pubkey = header.node_pubkey,
+                    .vote_accounts = .fromSlice(fba.buffer.ptr, node_voters),
+                    .total_stake = node_stake,
+                };
+            }
+
+            // epoch_authorized_voters: HashMap(Pubkey, Pubkey)
+            const auth_len = try readInt(u64, r);
+            const auth_to_voters = try fba.allocator().alloc(AuthToVoterEntry, auth_len);
+            try r.readSliceAll(std.mem.sliceAsBytes(auth_to_voters));
+
+            return .{
+                .epoch = epoch,
+                .total_stake = total_stake,
+                .vote_accounts = .fromSlice(fba.buffer.ptr, vote_accounts),
+                .node_to_vote_accounts = .fromSlice(fba.buffer.ptr, node_to_voters),
+                .epoch_authorized_voters = .fromSlice(fba.buffer.ptr, auth_to_voters),
+            };
+        }
+    };
+
     pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !ExtraFields {
         const zone = tracy.Zone.init(@src(), .{ .name = "ExtraFields.read" });
         defer zone.deinit();
-
-        _ = fba;
 
         // lamports_per_signature: NullOnEof(u64)
         r.discardAll(8) catch |err| switch (err) {
@@ -385,7 +640,12 @@ pub const ExtraFields = struct {
             else => |e| return e,
         };
 
-        // _unused_incremental_snapshot_persistence: NullOnEof(?{ full: SlotAndHash, full_capitalization: u64, incremental_hash: Hash, incremental_capitalization: u64 })
+        // _unused_incremental_snapshot_persistence: NullOnEof(?{
+        //   full: SlotAndHash,
+        //   full_capitalization: u64,
+        //   incremental_hash: Hash,
+        //   incremental_capitalization: u64
+        // })
         {
             const is_some = readBool(r) catch |err| switch (err) {
                 error.EndOfStream => false,
@@ -410,63 +670,19 @@ pub const ExtraFields = struct {
         }
 
         // versioned_epoch_stakes: NullOnEof(Vec({ epoch: u64, value: union(enum(u32)) { current: ... } }))
+        var versioned_epoch_stakes: RelativeSlice(VersionedEpochStakes) = .{};
         {
-            const outer_len = readInt(u64, r) catch |err| switch (err) {
+            const len = readInt(u64, r) catch |err| switch (err) {
                 error.EndOfStream => 0,
                 else => |e| return e,
             };
-            for (0..outer_len) |_| {
-                try r.discardAll(
-                    8 + // epoch: u64
-                        4, // union tag: u32 (enum(u32), always 'current')
-                );
 
-                // current.epoch_stakes: Stakes(StakeDelegationWithStake)
-                //   vote_accounts: VoteAccounts
-                try discardVoteAccounts(r);
-
-                //   stake_delegations: HashMap(Pubkey, { delegation: Delegation, credits_observed: u64 })
-                const stake_del_len = try readInt(u64, r);
-                try r.discardAll(stake_del_len * (32 + // key: Pubkey
-                    32 + // delegation.voter_pubkey: Pubkey
-                    8 + // delegation.stake: u64
-                    8 + // delegation.activation_epoch: Epoch
-                    8 + // delegation.deactivation_epoch: Epoch
-                    8 + // delegation.warmup_cooldown_rate: f64
-                    8 // credits_observed: u64
-                ));
-
-                try r.discardAll(
-                    8 + // stakes.unused: u64
-                        8, // stakes.epoch: Epoch
-                );
-
-                //   stake_history: Vec({ epoch: Epoch, effective: u64, activating: u64, deactivating: u64 })
-                const sh_len = try readInt(u64, r);
-                try r.discardAll(sh_len * (8 + 8 + 8 + 8));
-
-                // current.total_stake: u64
-                try r.discardAll(8);
-
-                // current.node_id_to_vote_accounts: HashMap(Pubkey, { vote_accounts: Vec(Pubkey), total_stake: u64 })
-                const nv_len = try readInt(u64, r);
-                for (0..nv_len) |_| {
-                    // key: Pubkey
-                    try r.discardAll(32);
-                    // value.vote_accounts: Vec(Pubkey)
-                    const va_len = try readInt(u64, r);
-                    try r.discardAll(
-                        va_len * 32 + // vote_accounts: []Pubkey
-                            8, // total_stake: u64
-                    );
-                }
-
-                // current.epoch_authorized_voters: HashMap(Pubkey, Pubkey)
-                const eav_len = try readInt(u64, r);
-                try r.discardAll(eav_len * (32 + // key: Pubkey
-                    32 // value: Pubkey
-                ));
+            const slice = try fba.allocator().alloc(VersionedEpochStakes, len);
+            for (slice) |*versioned_epoch_stake| {
+                versioned_epoch_stake.* = try .read(fba, r);
             }
+
+            versioned_epoch_stakes = .fromSlice(fba.buffer.ptr, slice);
         }
 
         // accounts_lt_hash: NullOnEof(?LtHash)
@@ -491,47 +707,29 @@ pub const ExtraFields = struct {
             else => |e| return e,
         };
 
-        return .{ .block_id = block_id };
+        return .{
+            .versioned_epoch_stakes = versioned_epoch_stakes,
+            .block_id = block_id,
+        };
     }
 };
 
-/// Discards VoteAccounts: HashMap(Pubkey, { stake: u64, account: AccountSharedData })
-/// AccountSharedData contains a variable-length Vec(u8) data field, so we must loop.
-fn discardVoteAccounts(r: anytype) !void {
-    const len = try readInt(u64, r);
-    for (0..len) |_| {
-        try r.discardAll(
-            32 + // key: Pubkey
-                8 + // value.stake: u64
-                8, // value.account.lamports: u64
-        );
-        // value.account.data: Vec(u8)
-        const data_len = try readInt(u64, r);
-        try r.discardAll(
-            data_len + // account data bytes
-                32 + // value.account.owner: Pubkey
-                1 + // value.account.executable: bool
-                8, // value.account.rent_epoch: Epoch(u64)
-        );
-    }
-}
-
 pub fn SnapshotIter(comptime BufReader: type) type {
     return struct {
-        // public fields instantiated using the fba from init()
-        status_cache: StatusCache,
-        manifest: Manifest,
-
         tar_iter: TarZstIter(BufReader),
         account_file_len: usize,
         account_file_slot: Slot,
         account_data_len: usize,
         account_data_padding: usize,
+        /// Cached from the just-parsed Manifest so `next()` can validate account file
+        /// slots without holding a pointer into snapshot_metadata (which lives in
+        /// another module and is passed as `anytype` at init time).
+        accounts_db_slot: Slot,
 
         const Self = @This();
 
         pub fn init(
-            fba: *std.heap.FixedBufferAllocator,
+            snapshot_metadata: *lib.snapshot.SnapshotMetadata,
             buf_reader: BufReader,
         ) !Self {
             var self: Self = undefined;
@@ -549,18 +747,23 @@ pub fn SnapshotIter(comptime BufReader: type) type {
 
             // read /snapshots/status_cache & /snapshots/{slot}/{slot} (can be in any order)
             {
+                var fba = std.heap.FixedBufferAllocator.init(
+                    snapshot_metadata.memory[0..].ptr[0..snapshot_metadata.memory_len],
+                );
+
                 const tar_file = (try self.tar_iter.next()) orelse return error.MissingMetadata;
                 if (std.mem.eql(u8, tar_file.name, "snapshots/status_cache")) {
-                    self.status_cache = try StatusCache.read(fba, &self.tar_iter);
+                    snapshot_metadata.status_cache = try StatusCache.read(&fba, &self.tar_iter);
                     _ = (try self.tar_iter.next()) orelse return error.MissingMetadata;
-                    self.manifest = try Manifest.read(fba, &self.tar_iter);
+                    snapshot_metadata.manifest = try Manifest.read(&fba, &self.tar_iter);
                 } else {
-                    self.manifest = try Manifest.read(fba, &self.tar_iter);
+                    snapshot_metadata.manifest = try Manifest.read(&fba, &self.tar_iter);
                     _ = (try self.tar_iter.next()) orelse return error.MissingMetadata;
-                    self.status_cache = try StatusCache.read(fba, &self.tar_iter);
+                    snapshot_metadata.status_cache = try StatusCache.read(&fba, &self.tar_iter);
                 }
             }
 
+            self.accounts_db_slot = snapshot_metadata.manifest.accounts_db_fields.slot;
             self.account_file_len = 0;
             self.account_file_slot = 0;
             self.account_data_len = 0;
@@ -593,7 +796,7 @@ pub fn SnapshotIter(comptime BufReader: type) type {
 
                 const slot = std.fmt.parseInt(u64, tar_file.name["accounts/".len..split], 10) catch
                     return error.InvalidAccountFileSlot;
-                if (slot > self.manifest.accounts_db_fields.slot)
+                if (slot > self.accounts_db_slot)
                     return error.InvalidAccountFileSlot;
 
                 self.account_file_slot = slot;
@@ -847,29 +1050,40 @@ test "deserialized snapshot matches generated snapshot json" {
         }
     };
 
-    var snapshot_reader: SnapshotBufReader = .{ .zst_reader = zst_reader };
-    const fba_buf = try allocator.alloc(u8, 8 * 1024 * 1024);
-    defer allocator.free(fba_buf);
-    var fba: std.heap.FixedBufferAllocator = .init(fba_buf);
-    var snapshot_iter = try SnapshotIter(*SnapshotBufReader).init(&fba, &snapshot_reader);
+    const SnapshotMetadata = lib.snapshot.SnapshotMetadata;
+    const snapshot_fba_size = 8 * 1024 * 1024;
+    const snapshot_meta_buf = try allocator.alignedAlloc(
+        u8,
+        @enumFromInt(@alignOf(SnapshotMetadata)),
+        @sizeOf(SnapshotMetadata) + snapshot_fba_size,
+    );
+    defer allocator.free(snapshot_meta_buf);
 
-    try expectEqual(jsonU64(merged.get("slot").?), snapshot_iter.manifest.bank_fields.slot);
-    try expectEqual(jsonU64(merged.get("slot").?), snapshot_iter.manifest.accounts_db_fields.slot);
+    const snapshot_metadata: *SnapshotMetadata = @ptrCast(snapshot_meta_buf.ptr);
+    snapshot_metadata.init(snapshot_fba_size);
+
+    var snapshot_reader: SnapshotBufReader = .{ .zst_reader = zst_reader };
+    var snapshot_iter =
+        try SnapshotIter(*SnapshotBufReader).init(snapshot_metadata, &snapshot_reader);
+
+    const manifest = &snapshot_metadata.manifest;
+    try expectEqual(jsonU64(merged.get("slot").?), manifest.bank_fields.slot);
+    try expectEqual(jsonU64(merged.get("slot").?), manifest.accounts_db_fields.slot);
     try expectEqualStrings(
         merged.get("block_id").?.string,
-        snapshot_iter.manifest.extra_fields.block_id.base58String(&hash_buf),
+        manifest.extra_fields.block_id.base58String(&hash_buf),
     );
 
     const blockhash_queue_json = merged.get("blockhash_queue").?.object;
     try expectEqual(
         jsonU64(blockhash_queue_json.get("max_age").?),
-        snapshot_iter.manifest.bank_fields.blockhash_queue.max_age,
+        manifest.bank_fields.blockhash_queue.max_age,
     );
 
     const json_hashes = blockhash_queue_json.get("hashes").?.array.items;
-    const bhq_hashes = snapshot_iter.manifest.bank_fields.blockhash_queue.hashes;
-    try expectEqual(json_hashes.len, bhq_hashes.count);
-    for (bhq_hashes.array, json_hashes) |hash, json_hash| {
+    const bhq_hashes = manifest.bank_fields.blockhash_queue.getHashes();
+    try expectEqual(json_hashes.len, bhq_hashes.len);
+    for (bhq_hashes, json_hashes) |hash, json_hash| {
         try expectEqualStrings(json_hash.object.get("hash").?.string, hash.base58String(&hash_buf));
     }
 
