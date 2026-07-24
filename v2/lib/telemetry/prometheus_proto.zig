@@ -505,7 +505,11 @@ test "prometheus_proto: native histogram round-trips through the wire" {
 
     var metrics: Map = .empty;
     defer metrics.deinit(gpa);
-    try metrics.put(gpa, .initNameOnly("net_recv_packet_latency_ns"), .{ .latency_histogram = hist });
+    try metrics.put(
+        gpa,
+        .initNameOnly("net_recv_packet_latency_ns"),
+        .{ .latency_histogram = hist },
+    );
 
     var out: std.Io.Writer.Allocating = .init(gpa);
     defer out.deinit();
