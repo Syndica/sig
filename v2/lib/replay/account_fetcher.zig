@@ -51,13 +51,19 @@ pub const AccountFetcher = struct {
     /// Backing storage for per-request completion waiters.
     waiters: [512]Waiter,
 
+    /// Pool of waiter slots stored in `waiters`.
     waiter_pool: WaiterPool,
+    /// Pool of fetch-entry slots stored in `entries`.
     entry_pool: EntryPool,
 
+    /// Head of entries waiting to be submitted to rooted AccountsDB.
     rooted_head: EntryId.Optional,
+    /// Tail of entries waiting to be submitted to rooted AccountsDB.
     rooted_tail: EntryId.Optional,
 
+    /// Head of entries with results ready to deliver to waiters.
     ready_head: EntryId.Optional,
+    /// Tail of entries with results ready to deliver to waiters.
     ready_tail: EntryId.Optional,
 
     const EntryPool = lib.collections.Pool(FetchEntry, u16);
