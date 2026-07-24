@@ -565,6 +565,29 @@ pub const Filter = struct {
         }
     };
 
+    /// Iterates over a byte string written by `parseListAndWriteBinary`.
+    pub const Iterator = struct {
+        fbr: std.Io.Reader,
+
+        pub fn init(encoded: []const u8) Iterator {
+            return .{ .fbr = .fixed(encoded) };
+        }
+
+        pub const NextError = error{InvalidFilter};
+
+        /// Returns `null` once `encoded` has been fully consumed. The `service` & `scope`
+        /// of the returned filter point into `encoded`.
+        ///
+        /// Returns `error.InvalidFilter` for a truncated header, or a header whose
+        /// service/scope bytes are missing; the iterator should not be used afterwards.
+        pub fn next(self: *Iterator) NextError!?Filter {
+            if (self.fbr.bufferedLen() == 0) return null;
+            const header = self.fbr.takeStruct(Header, tel.endian) catch
+                return error.InvalidFilter;
+            return header.getFilterFromFixedReader(&self.fbr) orelse return error.InvalidFilter;
+        }
+    };
+
     pub fn format(self: Filter, w: *std.Io.Writer) std.Io.Writer.Error!void {
         if (self.service) |service| try w.writeAll(service);
         if (self.scope) |scope| {
@@ -806,12 +829,12 @@ test EntryValueFmt {
 /// Returns `.trace` (gate fully open) for empty or malformed input, leaving the
 /// diagnostic to the telemetry service, which rejects both explicitly.
 pub fn maxLevelEncoded(encoded: []const u8) Level {
+    // NOTE: load-bearing; without it an empty list would fall through to `.fatal`,
+    // which is the strictest gate rather than the most open one.
     if (encoded.len == 0) return .trace;
     var max: Level = .fatal;
-    var fbr: std.Io.Reader = .fixed(encoded);
-    while (fbr.bufferedLen() != 0) {
-        const header = fbr.takeStruct(Filter.Header, tel.endian) catch return .trace;
-        const filter = header.getFilterFromFixedReader(&fbr) orelse return .trace;
+    var filters: Filter.Iterator = .init(encoded);
+    while (filters.next() catch return .trace) |filter| {
         if (filter.level.order(max) == .gt) max = filter.level;
     }
     return max;
@@ -861,13 +884,8 @@ test maxLevelEncoded {
         // Decode into the sorted list `streamLogs` is given; see `services/telemetry.zig`.
         var filters_buffer: [8]Filter = undefined;
         var filters: std.ArrayList(Filter) = .initBuffer(&filters_buffer);
-        var fbr: std.Io.Reader = .fixed(encoded);
-        while (fbr.bufferedLen() != 0) {
-            const header = try fbr.takeStruct(Filter.Header, tel.endian);
-            const filter = header.getFilterFromFixedReader(&fbr) orelse
-                return error.TestExpectedNonNull;
-            try filters.appendBounded(filter);
-        }
+        var iter: Filter.Iterator = .init(encoded);
+        while (try iter.next()) |filter| try filters.appendBounded(filter);
         std.sort.block(Filter, filters.items, {}, Filter.sortLessThanInverted);
 
         // Every service & scope named by the list, plus pairs that fall through to a
