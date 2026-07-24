@@ -265,16 +265,8 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
             );
 
             if (unrooted_ref != .invalid) {
-                const account = self.account_pool.getAccount(unrooted_ref);
-
-                // An Unrooted tombstone shadows any older Rooted value (deleted account).
-                if (account.lamports == 0) {
-                    self.releaseAccount(unrooted_ref);
-                    entry.result = .invalid;
-                } else {
-                    // FetchEntry takes ownership of the reference returned by fetch().
-                    entry.result = unrooted_ref;
-                }
+                // FetchEntry takes ownership of the reference returned by fetch().
+                entry.result = unrooted_ref;
 
                 // Unrooted had the account, mark ready and return.
                 entry.state = .ready;
@@ -747,7 +739,7 @@ test "duplicate requests share rooted fetch and receive owned references" {
     rooted_state.account_pool.free(first.account_ref);
 }
 
-test "unrooted accounts bypass rooted and tombstones return invalid" {
+test "unrooted accounts bypass rooted and zero-lamport accounts return refs" {
     const memory_len = 64 * 1024;
     const memory = try std.testing.allocator.alignedAlloc(
         u8,
@@ -826,11 +818,14 @@ test "unrooted accounts bypass rooted and tombstones return invalid" {
     const tombstone = state.fetcher.popCompletion().?;
 
     try std.testing.expectEqual(found_ref, found.account_ref);
-    try std.testing.expectEqual(AccountRef.invalid, tombstone.account_ref);
+    try std.testing.expectEqual(tombstone_ref, tombstone.account_ref);
 
     // Release completion ownership.
     try std.testing.expect(
         !account_pool.getAccount(found.account_ref).unref(),
+    );
+    try std.testing.expect(
+        !account_pool.getAccount(tombstone.account_ref).unref(),
     );
 
     // Release the references owned by Unrooted before ending the test.
