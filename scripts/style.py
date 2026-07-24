@@ -199,9 +199,9 @@ def line_length(args, files_to_check):
             lines = f.readlines()
         for i, line in enumerate(lines):
             stripped = line.lstrip()
-            if re.match(r"// [sz]ig fmt: off", stripped):
+            if re.match(r"/{2,3} [sz]ig fmt: off", stripped):
                 fmt_off = True
-            if re.match(r"// [sz]ig fmt: on", stripped):
+            if re.match(r"/{2,3} [sz]ig fmt: on", stripped):
                 fmt_off = False
                 continue  # Don't check lines that have formatting turned off
 
