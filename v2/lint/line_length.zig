@@ -1,14 +1,17 @@
-//! Enforces line length for code lines.
+//! Enforces line length for code and comment lines.
 //!
-//! Full-line comments and multiline string literal lines are ignored:
+//! Multiline string literal lines are ignored:
 //!
 //! ```zig
-//! // this comment may exceed the limit
 //! \\ this multiline string literal line may exceed the limit
 //! ```
 //!
-//! Trailing line comments do not count toward line length. Lines between `// zig fmt: off`
-//! and `// zig fmt: on` are ignored, and `// sig fmt:` directives work same way.
+//! Lines containing URLs (any occurrence of "http") are exempt from length checks.
+//! This includes `[word] URL` reference patterns (e.g. `// [agave] https://...`).
+//!
+//! For code lines, trailing comments do not count toward line length. Lines between
+//! `// zig fmt: off` and `// zig fmt: on` are ignored, and `// sig fmt:` directives
+//! work the same way. Doc comment variants (`/// sig fmt: off/on`) are also supported.
 //!
 //! Generated and data-heavy files can be listed in `excluded_paths`. Stale entries are reported
 //! by `lintExcludedPathsExist` so exclusions stay tied to files that exist.
@@ -60,14 +63,20 @@ pub fn lint(ctx: *core.Context, file: *const core.SourceFile) !void {
         }
         if (fmt_off) continue;
 
-        if (std.mem.startsWith(u8, stripped_left, "//") or
-            std.mem.startsWith(u8, stripped_left, "\\\\"))
-        {
-            continue;
-        }
+        // Multiline string literals are exempt.
+        if (std.mem.startsWith(u8, stripped_left, "\\\\")) continue;
 
-        const code_part = std.mem.trimRight(u8, beforeLineComment(line), " ");
-        if (code_part.len > max_line_length) {
+        // Lines containing URLs are exempt from line length limits.
+        if (std.mem.indexOf(u8, line, "http") != null) continue;
+
+        // For full-line comments, measure the entire line.
+        // For code lines, measure only the code part (before any trailing comment).
+        const measured_len = if (std.mem.startsWith(u8, stripped_left, "//"))
+            line.len
+        else
+            std.mem.trimRight(u8, beforeLineComment(line), " ").len;
+
+        if (measured_len > max_line_length) {
             try ctx.addDiagnostic(
                 file.path,
                 line_no,
@@ -87,7 +96,7 @@ fn isExcluded(path: []const u8) bool {
 }
 
 fn startsFmtDirective(stripped: []const u8, state: []const u8) bool {
-    const prefixes = [_][]const u8{ "// zig fmt: ", "// sig fmt: " };
+    const prefixes = [_][]const u8{ "// zig fmt: ", "// sig fmt: ", "/// zig fmt: ", "/// sig fmt: " };
     for (prefixes) |prefix| {
         if (std.mem.startsWith(u8, stripped, prefix) and
             std.mem.eql(u8, stripped[prefix.len..], state))
@@ -103,7 +112,7 @@ fn beforeLineComment(line: []const u8) []const u8 {
     return line;
 }
 
-test "detects code and ignores comments strings fmt-off and trailing comments" {
+test "detects code and comments, ignores multiline strings fmt-off and trailing comments" {
     const allocator = std.heap.page_allocator;
     const config: cli.Config = .{};
     var ctx: core.Context = .{ .arena = allocator, .config = config };
@@ -128,6 +137,58 @@ test "detects code and ignores comments strings fmt-off and trailing comments" {
         .ast = ast,
     };
     try lint(&ctx, &file);
+    // Long code line (line 1) and long comment (line 2) are flagged.
+    // Multiline string (line 3), fmt-off code (line 5), and trailing comment (line 7)
+    // are not flagged.
+    try std.testing.expectEqual(2, ctx.diagnostics.items.len);
+}
+
+test "doc comment /// sig fmt: off/on directives are recognized" {
+    const allocator = std.heap.page_allocator;
+    const config: cli.Config = .{};
+    var ctx: core.Context = .{ .arena = allocator, .config = config };
+
+    const source =
+        "/// sig fmt: off\n" ++
+        "///     \\phi_i'(x) = \\sum_{l: bit l set in i} S_l'(x) \\prod_{{l: bit l set in i} \\ {l}} S_{l'}(x) extra padding here\n" ++
+        "/// sig fmt: on\n" ++
+        "/// this long doc comment without fmt-off should be flagged 12345678901234567890123456789012345678901234567890\n";
+    const source_z = try allocator.dupeZ(u8, source);
+    const ast = try std.zig.Ast.parse(allocator, source_z, .zig);
+    const file: core.SourceFile = .{
+        .path = "lib/example.zig",
+        .source = source_z,
+        .ast = ast,
+    };
+    try lint(&ctx, &file);
+    // Only line 4 (the long doc comment outside fmt-off) should be flagged.
+    try std.testing.expectEqual(1, ctx.diagnostics.items.len);
+}
+
+test "lines containing URLs are exempt from line length" {
+    const allocator = std.heap.page_allocator;
+    const config: cli.Config = .{};
+    var ctx: core.Context = .{ .arena = allocator, .config = config };
+
+    const source =
+        // Code line with a URL — should be exempt even though it exceeds 100 columns.
+        "const url = \"https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L471-L474\";\n" ++
+        // Inline comment with URL on a code line — also exempt.
+        "const x = 1; // see https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L471-L474\n" ++
+        // Full-line comment with URL — also exempt.
+        "// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L471-L474\n" ++
+        // Plain long code line without URL — should be flagged.
+        "const y = 123456789012345678901234567890123456789012345678901234567890" ++
+        "12345678901234567890123456789012345678901;\n";
+    const source_z = try allocator.dupeZ(u8, source);
+    const ast = try std.zig.Ast.parse(allocator, source_z, .zig);
+    const file: core.SourceFile = .{
+        .path = "lib/example.zig",
+        .source = source_z,
+        .ast = ast,
+    };
+    try lint(&ctx, &file);
+    // Only the plain long code line should be flagged, not the URL lines.
     try std.testing.expectEqual(1, ctx.diagnostics.items.len);
 }
 

@@ -2,7 +2,6 @@ const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
 const services = @import("services");
-const tel = lib.telemetry;
 
 const download = lib.snapshot.download;
 
