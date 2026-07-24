@@ -426,7 +426,7 @@ const Tools = struct {
         },
         .{
             .name = "replay-offline",
-            .root_source_file = "tests/shred_stream_replay/main.zig",
+            .root_source_file = "tests/replay_offline/main.zig",
             .services = &.{
                 "shred_streamer",
                 "shred_receiver",

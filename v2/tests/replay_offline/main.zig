@@ -165,10 +165,10 @@ pub fn main() !void {
     // -- Populate shred_streamer config from remaining CLI args -- //
 
     var streamer_config: Region(lib.shred_streamer.Config) = try .simple();
-    streamer_config.ptr().populate(argv[2..]) catch {
+    streamer_config.ptr().populateFromArgs(argv[2..]) catch {
         std.debug.print(
             "error: shred_streamer CLI args too long (max {d} bytes)\n",
-            .{lib.shred_streamer.Config.max_args_len},
+            .{lib.shred_streamer.Config.max_path_len},
         );
         return error.ArgsTooLong;
     };

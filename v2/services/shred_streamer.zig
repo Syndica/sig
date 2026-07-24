@@ -53,30 +53,52 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     rw.tel.signalReady();
 
-    // Parse config from shared memory args
-    const args_str = ro.config.getArgs();
-    var arg_ptrs: [64][]const u8 = undefined;
-    var arg_count: usize = 0;
-    var iter = std.mem.splitScalar(u8, args_str, ' ');
-    while (iter.next()) |arg| {
-        if (arg.len == 0) continue;
-        if (arg_count >= arg_ptrs.len) break;
-        arg_ptrs[arg_count] = arg;
-        arg_count += 1;
-    }
-
     var discard_writer: std.Io.Writer.Discarding = .init(&.{});
-    const parse_result = shred_stream.parseArgs(&discard_writer.writer, arg_ptrs[0..arg_count]) catch |err| {
-        logger.err().logf("failed to parse args: {}", .{err});
-        return err;
-    };
 
-    const config: Config = switch (parse_result) {
-        .help => {
-            logger.info().logf("help requested, going idle", .{});
-            while (true) try runner.activity.signalIdleSpinning();
-        },
-        .config => |c| c,
+    const config: Config = cfg: {
+        if (ro.config.getRawArgs()) |args_str| {
+            // Fallback: raw CLI args string — parse them.
+            var arg_ptrs: [64][]const u8 = undefined;
+            var arg_count: usize = 0;
+            var iter = std.mem.splitScalar(u8, args_str, ' ');
+            while (iter.next()) |arg| {
+                if (arg.len == 0) continue;
+                if (arg_count >= arg_ptrs.len) {
+                    logger.err().logf("too many CLI args (max {d})", .{arg_ptrs.len});
+                    return error.InvalidArguments;
+                }
+                arg_ptrs[arg_count] = arg;
+                arg_count += 1;
+            }
+
+            const parse_result = shred_stream.parseArgs(&discard_writer.writer, arg_ptrs[0..arg_count]) catch |err| {
+                logger.err().logf("failed to parse args: {}", .{err});
+                return err;
+            };
+
+            break :cfg switch (parse_result) {
+                .help => {
+                    logger.info().logf("help requested, going idle", .{});
+                    while (true) try runner.activity.signalIdleSpinning();
+                },
+                .config => |c| c,
+            };
+        } else {
+            const ipc = ro.config;
+            break :cfg .{
+                .ledger = ipc.getLedger(),
+                .start_slot = if (ipc.has_start_slot) ipc.start_slot else null,
+                .end_slot = if (ipc.has_end_slot) ipc.end_slot else null,
+                .rate_hz = if (ipc.has_rate_hz) ipc.rate_hz else null,
+                .test_mode = @enumFromInt(@intFromEnum(ipc.test_mode)),
+                .seed = if (ipc.has_seed) ipc.seed else null,
+                .selected_count = ipc.selected_count,
+                .shred_kind = @enumFromInt(@intFromEnum(ipc.shred_kind)),
+                .plan_limit = ipc.plan_limit,
+                .corrupt_bytes = ipc.corrupt_bytes,
+                .dry_run = ipc.dry_run,
+            };
+        }
     };
 
     // Reject --dry-run: doesn't make sense for in-topology streaming.
@@ -193,7 +215,8 @@ const ServicePacketContext = struct {
         }
 
         // Wait for a writable slot in the ring
-        return while (true) {
+        var was_idle = false;
+        const result = while (true) {
             if (writer.peek()) |p| break p;
             // Ring full — flush pending writes so reader can drain
             if (unpublished_packets.* != 0) {
@@ -201,8 +224,12 @@ const ServicePacketContext = struct {
                 unpublished_packets.* = 0;
                 continue;
             }
+            was_idle = true;
             try self.runner.activity.signalIdleSpinning();
         };
+        // Re-signal active after recovering from back-pressure idle.
+        if (was_idle) try self.runner.activity.signalActive();
+        return result;
     }
 };
 
