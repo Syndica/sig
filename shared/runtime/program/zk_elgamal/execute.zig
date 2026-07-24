@@ -144,8 +144,7 @@ fn processVerifyProof(
         };
         proof_data.verify() catch {
             // TODO: log error as well
-            // [fd]
-            // https://github.com/firedancer-io/firedancer/blob/e0de87d/src/flamenco/runtime/program/zksdk/fd_zksdk.c#L209-L210
+            // [fd] https://github.com/firedancer-io/firedancer/blob/e0de87d2f58547b69ba980b3c88f35094b34561e/src/flamenco/runtime/program/zksdk/fd_zksdk.c#L209-L210
             try tc.log("proof_verification failed", .{});
             return InstructionError.InvalidInstructionData;
         };
@@ -158,8 +157,7 @@ fn processVerifyProof(
         };
         proof_data.verify() catch {
             // TODO: log error as well
-            // [fd]
-            // https://github.com/firedancer-io/firedancer/blob/e0de87d/src/flamenco/runtime/program/zksdk/fd_zksdk.c#L209-L210
+            // [fd] https://github.com/firedancer-io/firedancer/blob/e0de87d2f58547b69ba980b3c88f35094b34561e/src/flamenco/runtime/program/zksdk/fd_zksdk.c#L209-L210
             try tc.log("proof_verification failed", .{});
             return InstructionError.InvalidInstructionData;
         };
@@ -212,7 +210,7 @@ fn processVerifyProof(
     }
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/9369994/programs/zk-elgamal-proof/src/lib.rs#L129
+/// [agave] https://github.com/anza-xyz/agave/blob/93699947720534741b2b4d9b6e1696d81e386dcc/programs/zk-elgamal-proof/src/lib.rs#L129
 fn processCloseContextState(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,

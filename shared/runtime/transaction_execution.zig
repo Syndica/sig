@@ -142,7 +142,7 @@ pub const ProcessedTransaction = struct {
     rent: u64,
     writes: Writes,
     err: ?TransactionError,
-    /// Analogous to [loaded_accounts_data_size](https://github.com/anza-xyz/agave/blob/10fe1eb/svm/src/transaction_processing_result.rs#L97).
+    /// Analogous to [loaded_accounts_data_size](https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/svm/src/transaction_processing_result.rs#L97).
     loaded_accounts_data_size: u32,
     /// If null, the transaction did not execute, due to a failure before
     /// execution could begin.
@@ -175,8 +175,7 @@ pub fn TransactionResult(comptime T: type) type {
     };
 }
 
-/// [agave]
-/// https://github.com/firedancer-io/agave/blob/403d23b/svm/src/transaction_processor.rs#L323-L324
+/// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L323-L324
 pub fn loadAndExecuteTransaction(
     programs_allocator: std.mem.Allocator,
     tmp_allocator: std.mem.Allocator,
@@ -216,8 +215,7 @@ pub fn loadAndExecuteTransaction(
 
     // verify the transaction is not in another block, first by checking
     // in recent blocks, then checking if it's a durable nonce.
-    // [agave]
-    // https://github.com/firedancer-io/agave/blob/403d23b/runtime/src/bank/check_transactions.rs#L105
+    // [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/runtime/src/bank/check_transactions.rs#L105
     const maybe_nonce_info: ?LoadedAccount = switch (env.status_checker.check(
         &transaction.msg_hash,
         &transaction.recent_blockhash,
@@ -269,8 +267,7 @@ pub fn loadAndExecuteTransaction(
 
             // SIMD-186 amendment: report the partial loaded size clamped to
             // the limit. Pre-feature: raw sum of rollback account data lengths.
-            // [agave]
-            // https://github.com/anza-xyz/agave/blob/10fe1eb/svm/src/account_loader.rs#L438-L450
+            // [agave] https://github.com/anza-xyz/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/svm/src/account_loader.rs#L438-L450
             const loaded_accounts_data_size: u32 = if (env.feature_set.active(
                 .define_ltds_fee_only_semantics,
                 env.slot,
@@ -374,7 +371,7 @@ pub fn loadAndExecuteTransaction(
     // Pass only the raw executed compute units (compute_limit - compute_meter remaining).
     // Signature costs (transaction + precompile) are computed inside the cost model,
     // matching Agave's architecture.
-    // [agave] https://github.com/anza-xyz/agave/blob/2717084/cost-model/src/cost_model.rs#L61
+    // [agave] https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/cost-model/src/cost_model.rs#L61
     const tx_cost = cost_model.calculateCostForExecutedTransaction(
         transaction,
         executed_transaction.total_cost(),
@@ -402,13 +399,13 @@ pub fn loadAndExecuteTransaction(
 ///
 /// NOTE: in agave, this check is done while creating/loading the account batch:
 /// * [prepare_sanitized_batch](
-/// https://github.com/firedancer-io/agave/blob/10fe1eb/runtime/src/bank.rs#L3173)
+/// https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/bank.rs#L3173)
 /// * [try_lock_accounts](
-/// https://github.com/firedancer-io/agave/blob/10fe1eb/runtime/src/bank.rs#L3164)
+/// https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/runtime/src/bank.rs#L3164)
 /// * [lock_accounts](
-/// https://github.com/firedancer-io/agave/blob/10fe1eb/accounts-db/src/accounts.rs#L569)
+/// https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/accounts-db/src/accounts.rs#L569)
 /// * [validate_account_locks](
-/// https://github.com/firedancer-io/agave/blob/10fe1eb/accounts-db/src/account_locks.rs#L122-L123)
+/// https://github.com/firedancer-io/agave/blob/10fe1eb29aac9c236fd72d08ae60a3ef61ee8353/accounts-db/src/account_locks.rs#L122-L123)
 /// and then it is propagated to and through `load_and_execute_transactions`.
 ///
 /// Our account batch creation/load process isn't designed to accommodate this, so what we do
@@ -437,8 +434,7 @@ test hasDuplicates {
     try std.testing.expectEqual(true, hasDuplicates(&.{ pk2, pk1, pk2, pk3 }));
 }
 
-/// [agave]
-/// https://github.com/firedancer-io/agave/blob/403d23b/svm/src/transaction_processor.rs#L909
+/// [agave] https://github.com/firedancer-io/agave/blob/403d23b809fc513e2c4b433125c127cf172281a2/svm/src/transaction_processor.rs#L909
 pub fn executeTransaction(
     allocator: std.mem.Allocator,
     programs_allocator: std.mem.Allocator,

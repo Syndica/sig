@@ -8,7 +8,7 @@ const bincode = sig.bincode;
 const Epoch = sig.core.Epoch;
 const Pubkey = sig.core.Pubkey;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/8db563d/sdk/sysvar/src/stake_history.rs#L67
+/// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/sysvar/src/stake_history.rs#L67
 pub const StakeHistory = struct {
     entries: std14.BoundedArray(Entry, MAX_ENTRIES),
 

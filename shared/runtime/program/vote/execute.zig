@@ -32,7 +32,7 @@ const SlotHashes = sig.runtime.sysvar.SlotHashes;
 const VoteProgramInstruction = vote_instruction.Instruction;
 const VoteVersion = vote_instruction.Version;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/2b0966d/programs/vote/src/vote_processor.rs#L54
+/// [agave] https://github.com/anza-xyz/agave/blob/2b0966de426597399ed4570d4e6c0635db2f80bf/programs/vote/src/vote_processor.rs#L54
 pub fn execute(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -215,8 +215,7 @@ pub fn execute(
     };
 }
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/32ac530/programs/vote/src/vote_processor.rs#L68-L76
+/// [agave] https://github.com/anza-xyz/agave/blob/32ac530151de63329f9ceb97dd23abfcee28f1d4/programs/vote/src/vote_processor.rs#L68-L76
 ///
 /// Initialize the vote_state for a vote account
 /// Assumes that the account is being init as part of a account creation or balance transfer and
@@ -259,13 +258,12 @@ fn executeIntializeAccount(
     );
 }
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/ddec7bd/programs/vote/src/vote_state/mod.rs#L884-L903
+/// [agave] https://github.com/anza-xyz/agave/blob/ddec7bdbcf308a853d464f865ae4962acbc2b9cd/programs/vote/src/vote_state/mod.rs#L884-L903
 ///
 /// Note: Versioned state is not implemented for creating new vote account, as current check in
 /// Agaave implementation
 /// here
-/// https://github.com/anza-xyz/agave/blob/92b11cd/programs/vote/src/vote_state/mod.rs#L890-L892
+/// https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/programs/vote/src/vote_state/mod.rs#L890-L892
 /// suggests creating only current version is supported.
 fn intializeAccount(
     allocator: std.mem.Allocator,
@@ -328,8 +326,7 @@ fn intializeAccount(
 /// Mirrors agave's predicate, which AND-combines five SIMD-0387 / SIMD-0291 /
 /// SIMD-0232 / SIMD-0123 / SIMD-0464 feature gates.
 ///
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/a64b635/programs/vote/src/vote_processor.rs#L63-L70
+/// [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_processor.rs#L63-L70
 fn isInitAccountV2Enabled(ic: *InstructionContext) bool {
     const slot = ic.tc.slot;
     const fs = ic.tc.feature_set;
@@ -344,8 +341,7 @@ fn isInitAccountV2Enabled(ic: *InstructionContext) bool {
 /// vote account itself (escape-hatch) or a separately borrowed
 /// instruction account pending validation via `validateAndResolveKey`.
 ///
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_state/mod.rs#L876-L912
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_state/mod.rs#L876-L912
 const NewCommissionCollector = union(enum) {
     vote_account,
     new_account: BorrowedAccount,
@@ -364,8 +360,7 @@ const NewCommissionCollector = union(enum) {
     /// The collector must either equal the vote account's address, or
     /// be a writable, system-program-owned, rent-exempt account.
     ///
-    /// [agave]
-    /// https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_state/mod.rs#L883-L912
+    /// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_state/mod.rs#L883-L912
     pub fn validateAndResolveKey(
         self: *const NewCommissionCollector,
         rent: *const Rent,
@@ -402,8 +397,7 @@ const NewCommissionCollector = union(enum) {
 /// Returns `.vote_account` if the collector meta aliases the vote account,
 /// otherwise borrows the collector account.
 ///
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_processor.rs#L83-L97
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_processor.rs#L83-L97
 fn readNewCollectorAccount(
     ic: *InstructionContext,
     vote_account: *const BorrowedAccount,
@@ -431,10 +425,8 @@ fn readNewCollectorAccount(
 /// initialization into a single instruction. Only available once
 /// `isInitAccountV2Enabled` returns true.
 ///
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/a64b635/programs/vote/src/vote_processor.rs#L334-L361
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/a64b635/programs/vote/src/vote_state/mod.rs#L1140-L1187
+/// [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_processor.rs#L334-L361
+/// [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_state/mod.rs#L1140-L1187
 fn executeIntializeAccountV2(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -492,8 +484,7 @@ fn executeIntializeAccountV2(
         return InstructionError.MissingRequiredSignature;
     }
 
-    // [agave]
-    // https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_state/mod.rs#L1014-L1043
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_state/mod.rs#L1014-L1043
     const inflation_rewards_collector_key = try inflation_rewards_collector
         .validateAndResolveKey(&rent, vote_account);
     const block_revenue_collector_key = try block_revenue_collector
@@ -546,8 +537,7 @@ fn executeIntializeAccountV2(
     );
 }
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/0603d1c/programs/vote/src/vote_processor.rs#L77-L79
+/// [agave] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L77-L79
 fn executeAuthorize(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -599,8 +589,7 @@ fn authorize(
     //     `Authorize::VoterWithBLS` so the new voter ↔ BLS pubkey
     //     pairing is verified atomically.
     //   * `Authorize::VoterWithBLS` is gated on the same feature.
-    // [agave]
-    // https://github.com/anza-xyz/agave/blob/a64b635/programs/vote/src/vote_state/mod.rs#L703-L772
+    // [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_state/mod.rs#L703-L772
     const is_with_bls_enabled = ic.tc.feature_set.active(
         .bls_pubkey_management_in_vote_account,
         ic.tc.slot,
@@ -614,21 +603,18 @@ fn authorize(
                 return InstructionError.InvalidInstructionData;
             }
 
-            // [agave]
-            // https://github.com/anza-xyz/agave/blob/01e50dc/programs/vote/src/vote_state/mod.rs#L697-L701
+            // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/vote/src/vote_state/mod.rs#L697-L701
             const target_epoch = std.math.add(u64, clock.leader_schedule_epoch, 1) catch {
                 return InstructionError.InvalidAccountData;
             };
 
-            // [agave]
-            // https://github.com/anza-xyz/solana-sdk/blob/4e30766/vote-interface/src/state/mod.rs#L872
+            // [agave] https://github.com/anza-xyz/solana-sdk/blob/4e30766b8d327f0191df6490e48d9ef521956495/vote-interface/src/state/mod.rs#L872
             const epoch_authorized_voter = try vote_state.getAndUpdateAuthorizedVoter(
                 allocator,
                 clock.epoch,
             );
 
-            // [agave]
-            // https://github.com/anza-xyz/agave/blob/01e50dc/programs/vote/src/vote_state/mod.rs#L701-L709
+            // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/vote/src/vote_state/mod.rs#L701-L709
             // The current authorized withdrawer or the epoch authorized voter must sign the
             // transaction.
             validateIsSigner(vote_state.withdrawerKey().*, signers) catch {
@@ -658,14 +644,12 @@ fn authorize(
             // pubkey (the message domain binds the two together) and
             // 34_500 CUs are consumed regardless of the verification
             // result, matching agave's `consume_pop_compute_units`.
-            // [agave]
-            // https://github.com/anza-xyz/agave/blob/a64b635/programs/vote/src/vote_state/mod.rs#L736-L770
+            // [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_state/mod.rs#L736-L770
             if (!is_with_bls_enabled) {
                 return InstructionError.InvalidInstructionData;
             }
 
-            // [agave]
-            // https://github.com/anza-xyz/agave/blob/a64b635/programs/vote/src/vote_state/mod.rs#L732-L763
+            // [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_state/mod.rs#L732-L763
             try verifyBlsProofOfPossession(
                 ic.tc,
                 &vote_account.pubkey,
@@ -710,8 +694,7 @@ fn authorize(
     );
 }
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/0603d1c/programs/vote/src/vote_processor.rs#L82-L92
+/// [agave] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L82-L92
 fn executeAuthorizeWithSeed(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -741,7 +724,7 @@ fn executeAuthorizeWithSeed(
 }
 
 /// [agave] Analogous to [process_authorize_with_seed_instruction]
-/// https://github.com/anza-xyz/agave/blob/0603d1c/programs/vote/src/vote_processor.rs#L19
+/// https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L19
 fn authorizeWithSeed(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -783,8 +766,7 @@ fn authorizeWithSeed(
     );
 }
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/0603d1c/programs/vote/src/vote_processor.rs#L96-L102
+/// [agave] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L96-L102
 fn executeAuthorizeCheckedWithSeed(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -820,8 +802,7 @@ fn executeAuthorizeCheckedWithSeed(
     );
 }
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/0603d1c/programs/vote/src/vote_processor.rs#L239-L248
+/// [agave] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L239-L248
 fn executeAuthorizeChecked(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -858,8 +839,7 @@ fn executeAuthorizeChecked(
     );
 }
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/24e6224/programs/vote/src/vote_processor.rs#L114-L118
+/// [agave] https://github.com/anza-xyz/agave/blob/24e62248d7a91c090790e7b812e23321fa1f53b1/programs/vote/src/vote_processor.rs#L114-L118
 fn executeUpdateValidatorIdentity(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -903,8 +883,7 @@ fn updateValidatorIdentity(
     }
 
     vote_state.nodePubkeyMut().* = new_identity;
-    // [agave]
-    // https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_state/mod.rs#L828-L832
+    // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_state/mod.rs#L828-L832
     // Before SIMD-0232, block_revenue_collector is always synced with node_pubkey.
     // After SIMD-0232, the collector can be set independently.
     if (!ic.tc.feature_set.active(.custom_commission_collector, ic.tc.slot)) {
@@ -922,8 +901,7 @@ fn updateValidatorIdentity(
     );
 }
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_processor.rs#L383
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_processor.rs#L383
 fn executeUpdateCommissionCollector(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -963,8 +941,7 @@ fn executeUpdateCommissionCollector(
     );
 }
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_state/mod.rs#L1102-L1144
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.3/programs/vote/src/vote_state/mod.rs#L1102-L1144
 fn updateCommissionCollector(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -1009,8 +986,7 @@ fn updateCommissionCollector(
     );
 }
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_processor.rs#L361-L379
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_processor.rs#L361-L379
 ///
 /// SIMD-0291: Commission Rate in Basis Points. Requires SIMD-0185 (Vote State V4)
 /// and SIMD-0249 (Delay Commission Updates).
@@ -1041,8 +1017,7 @@ fn executeUpdateCommissionBps(
     );
 }
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_state/mod.rs#L829-L862
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_state/mod.rs#L829-L862
 ///
 /// Update the vote account's commission in basis points (SIMD-0291, SIMD-0123).
 fn updateCommissionBps(
@@ -1086,8 +1061,7 @@ fn updateCommissionBps(
     );
 }
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/24e6224/programs/vote/src/vote_processor.rs#L121-L131
+/// [agave] https://github.com/anza-xyz/agave/blob/24e62248d7a91c090790e7b812e23321fa1f53b1/programs/vote/src/vote_processor.rs#L121-L131
 fn executeUpdateCommission(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -1162,7 +1136,7 @@ fn updateCommission(
     );
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/a7092a2/programs/vote/src/vote_state/mod.rs#L798
+/// [agave] https://github.com/anza-xyz/agave/blob/a7092a20bb2f5d16375bdc531b71d2a164b43b93/programs/vote/src/vote_state/mod.rs#L798
 ///
 /// Given the current slot and epoch schedule, determine if a commission change
 /// is allowed
@@ -1181,8 +1155,7 @@ pub fn isCommissionUpdateAllowed(slot: u64, epoch_schedule: *const EpochSchedule
     }
 }
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/e363f52/programs/vote/src/vote_processor.rs#L222-L227
+/// [agave] https://github.com/anza-xyz/agave/blob/e363f52b5bb4bfb131c647d4dbd6043d23575c78/programs/vote/src/vote_processor.rs#L222-L227
 fn executeWithdraw(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -1290,7 +1263,7 @@ fn widthraw(
     try recipient_account.addLamports(lamports);
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/e173405/programs/vote/src/vote_processor.rs#L133
+/// [agave] https://github.com/anza-xyz/agave/blob/e17340519f792d97cf4af7b9eb81056d475c70f9/programs/vote/src/vote_processor.rs#L133
 fn executeProcessVoteWithAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -1382,8 +1355,7 @@ fn processVoteWithAccount(
     );
 }
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_processor.rs#L156-L169
+/// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_processor.rs#L156-L169
 fn executeUpdateVoteState(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -1453,8 +1425,7 @@ fn voteStateUpdate(
     );
 }
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_processor.rs#L202-L212
+/// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_processor.rs#L202-L212
 fn executeTowerSync(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -1537,8 +1508,7 @@ fn getVoteStateChecked(
             // variant 0 (the unsupported V0_23_5 layout) with InvalidAccountData
             // rather than letting bincode propagate a generic error on a short or
             // zero-tagged buffer. This guard is target-independent.
-            // [agave]
-            // https://github.com/anza-xyz/solana-sdk/blob/vote-interface@v5.1.1/vote-interface/src/state/vote_state_versions.rs#L155
+            // [agave] https://github.com/anza-xyz/solana-sdk/blob/vote-interface@v5.1.1/vote-interface/src/state/vote_state_versions.rs#L155
             {
                 const data = vote_account.constAccountData();
                 if (data.len < @sizeOf(u32)) return InstructionError.InvalidAccountData;
@@ -1584,8 +1554,7 @@ fn validateIsSigner(
 /// or pairing-check failure returns `InstructionError.InvalidArgument`,
 /// matching agave's mapping.
 ///
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/a64b635/programs/vote/src/vote_state/mod.rs#L1045-L1061
+/// [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_state/mod.rs#L1045-L1061
 fn verifyBlsProofOfPossession(
     tc: *sig.runtime.TransactionContext,
     vote_account_pubkey: *const Pubkey,
@@ -1621,8 +1590,7 @@ fn setVoteState(
 ) (error{OutOfMemory} || InstructionError)!void {
     switch (state.*) {
         .v4 => |v4_state| {
-            // [agave]
-            // https://github.com/anza-xyz/agave/blob/v4.0.0-beta.4/programs/vote/src/vote_state/handler.rs#L655-L673
+            // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.4/programs/vote/src/vote_state/handler.rs#L655-L673
             // [SIMD-0185] v4: check rent exempt first, then resize, then serialize v4.
             if (account.constAccountData().len < VoteStateV4.MAX_VOTE_STATE_SIZE) {
                 if (!rent.isExempt(account.account.lamports, VoteStateV4.MAX_VOTE_STATE_SIZE)) {
@@ -1645,7 +1613,7 @@ fn setVoteState(
     }
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L3659
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3659
 test "isCommissionUpdateAllowed epoch half check" {
     const DEFAULT_SLOTS_PER_EPOCH = sig.core.time.DEFAULT_SLOTS_PER_EPOCH;
     const DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET =
@@ -1697,7 +1665,7 @@ test "isCommissionUpdateAllowed epoch half check" {
     }
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L3668
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3668
 test "isCommissionUpdateAllowed warmup epoch half check with warmup" {
     const DEFAULT_SLOTS_PER_EPOCH = sig.core.time.DEFAULT_SLOTS_PER_EPOCH;
     const DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET =
@@ -1719,7 +1687,7 @@ test "isCommissionUpdateAllowed warmup epoch half check with warmup" {
     );
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5/programs/vote/src/vote_state/mod.rs#L3686
+// [agave] https://github.com/anza-xyz/agave/blob/bdba5c5f93eeb6b981d41ea3c14173eb36879d3c/programs/vote/src/vote_state/mod.rs#L3686
 test "isCommissionUpdateAllowed epoch half check with warmup" {
     const DEFAULT_SLOTS_PER_EPOCH = sig.core.time.DEFAULT_SLOTS_PER_EPOCH;
     const DEFAULT_LEADER_SCHEDULE_SLOT_OFFSET =
@@ -7209,8 +7177,7 @@ test "update_commission_collector not writable" {
 // SIMD-0185). getVoteStateChecked must shortcut on the tag with
 // InvalidAccountData rather than letting bincode surface a generic error from
 // the truncated body.
-// [agave]
-// https://github.com/anza-xyz/solana-sdk/blob/ddbf343/vote-interface/src/state/vote_state_versions.rs#L155
+// [agave] https://github.com/anza-xyz/solana-sdk/blob/ddbf3430b08eb375de695328ae298dd61c2e1471/vote-interface/src/state/vote_state_versions.rs#L155
 test "vote_program: authorize zero-tag short data returns InvalidAccountData" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;
@@ -7388,8 +7355,7 @@ test "vote_program: authorize uninitialized v3-tagged returns UninitializedAccou
 // verified atomically. With the feature INactive the same instruction
 // would succeed.
 //
-// [agave]
-// https://github.com/anza-xyz/agave/blob/a64b635/programs/vote/src/vote_state/mod.rs#L703-L706
+// [agave] https://github.com/anza-xyz/agave/blob/a64b6358a247b7f16426aa1f070cd2f0f21aba15/programs/vote/src/vote_state/mod.rs#L703-L706
 test "vote_program: authorize voter rejected when bls_pubkey set and SIMD-0387 active" {
     const ids = sig.runtime.ids;
     const testing = sig.runtime.program.testing;

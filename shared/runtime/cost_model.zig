@@ -111,7 +111,7 @@ pub const UsageCostDetails = struct {
 /// When the `stop_use_static_simple_vote_tx_cost` feature is inactive,
 /// simple vote transactions use a static cost of 3428 CU.
 ///
-/// See: https://github.com/anza-xyz/agave/blob/2717084/cost-model/src/cost_model.rs#L37
+/// See: https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/cost-model/src/cost_model.rs#L37
 pub fn calculateTransactionCost(
     transaction: *const RuntimeTransaction,
     compute_budget_limits: *const ComputeBudgetLimits,
@@ -134,7 +134,7 @@ pub fn calculateTransactionCost(
 /// the actual compute units consumed rather than using the budget limit.
 /// This matches Agave's `calculate_cost_for_executed_transaction`.
 ///
-/// See: https://github.com/anza-xyz/agave/blob/2717084/cost-model/src/cost_model.rs#L61
+/// See: https://github.com/anza-xyz/agave/blob/2717084afeeb7baad4342468c27f528ef617a3cf/cost-model/src/cost_model.rs#L61
 pub fn calculateCostForExecutedTransaction(
     transaction: *const RuntimeTransaction,
     actual_programs_execution_cost: u64,
@@ -154,7 +154,7 @@ pub fn calculateCostForExecutedTransaction(
 /// Calculate the total signature verification cost for a transaction.
 /// Includes transaction signatures AND precompile instruction signatures.
 /// Mirrors Agave's `CostModel::get_signature_cost()`.
-/// See: https://github.com/anza-xyz/agave/blob/eb30856/cost-model/src/cost_model.rs#L148
+/// See: https://github.com/anza-xyz/agave/blob/eb30856ca804831f30d96f034a1cabd65c96184a/cost-model/src/cost_model.rs#L148
 fn getSignatureCost(
     transaction: *const RuntimeTransaction,
 ) u64 {

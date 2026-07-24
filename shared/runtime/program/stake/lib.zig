@@ -39,7 +39,7 @@ pub const StakeStateV2 = union(enum) {
     stake: struct { meta: Meta, stake: Stake, flags: StakeFlags },
     rewards_pool,
 
-    /// [agave] https://github.com/solana-program/stake/blob/6962042/interface/src/state.rs#L214
+    /// [agave] https://github.com/solana-program/stake/blob/69620421bf76ecddb62357e1e1cd5c0961f7794d/interface/src/state.rs#L214
     pub const SIZE = 200;
 
     pub const Meta = struct {
@@ -318,7 +318,7 @@ pub const StakeStateV2 = union(enum) {
 
 // --- instruction types ---
 
-/// [agave] https://github.com/solana-program/stake/blob/bb6932e/interface/src/instruction.rs#L37
+/// [agave] https://github.com/solana-program/stake/blob/bb6932ed816eb39205102eee2e0cbc0cd511dcaa/interface/src/instruction.rs#L37
 pub const Instruction = union(enum) {
     /// Initialize a stake with lockup and authorization information
     ///

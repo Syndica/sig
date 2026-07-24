@@ -14,8 +14,7 @@ const SEED_FIELD_CONFIG = sig.runtime.program.SEED_FIELD_CONFIG;
 const BLS_PUBLIC_KEY_COMPRESSED_SIZE = vote_state.BLS_PUBLIC_KEY_COMPRESSED_SIZE;
 const BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE = vote_state.BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE;
 
-/// [agave]
-/// https://github.com/anza-xyz/solana-sdk/blob/3426feb/vote-interface/src/instruction.rs#L25
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L25
 pub const CommissionKind = enum(u8) {
     inflation_rewards = 0,
     block_revenue = 1,
@@ -131,8 +130,7 @@ pub const VoteAuthorize = union(enum(u32)) {
 };
 
 /// Payload of `VoteAuthorize::VoterWithBLS` (SIMD-0387).
-/// [agave]
-/// https://github.com/anza-xyz/solana-sdk/blob/fb87296/vote-interface/src/state/vote_instruction_data.rs#L258-L269
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb87296b6af322d63627f5341fb2e942c55275b5/vote-interface/src/state/vote_instruction_data.rs#L258-L269
 pub const VoterWithBLSArgs = struct {
     bls_pubkey: [BLS_PUBLIC_KEY_COMPRESSED_SIZE]u8,
     bls_proof_of_possession: [BLS_PROOF_OF_POSSESSION_COMPRESSED_SIZE]u8,
@@ -143,8 +141,7 @@ pub const VoterWithBLSArgs = struct {
 /// SIMD-0291 (basis-points commission), SIMD-0232 (commission collectors)
 /// initialization in a single instruction. The instruction itself is gated
 /// on `vote_account_initialize_v2`; the executor wiring is added later.
-/// [agave]
-/// https://github.com/anza-xyz/solana-sdk/blob/fb87296/vote-interface/src/state/vote_instruction_data.rs#L222-L238
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb87296b6af322d63627f5341fb2e942c55275b5/vote-interface/src/state/vote_instruction_data.rs#L222-L238
 pub const VoteInitV2 = struct {
     node_pubkey: Pubkey,
     authorized_voter: Pubkey,
@@ -370,8 +367,7 @@ pub const TowerSyncSwitch = struct {
     }
 };
 
-/// [agave]
-/// https://github.com/anza-xyz/solana-sdk/blob/3426feb/vote-interface/src/instruction.rs#L26
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L26
 pub const Instruction = union(enum(u32)) {
     /// Initialize a vote account
     ///
@@ -518,8 +514,7 @@ pub const Instruction = union(enum(u32)) {
     /// `InvalidInstructionData` until the
     /// `vote_account_initialize_v2` feature is implemented.
     ///
-    /// [agave]
-    /// https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_processor.rs#L307-L324
+    /// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/programs/vote/src/vote_processor.rs#L307-L324
     initialize_account_v2: VoteInitV2,
 
     /// Update the commission collector for the vote account (SIMD-0232)
@@ -531,8 +526,7 @@ pub const Instruction = union(enum(u32)) {
     ///      account is not reserved.
     ///   2. `[SIGNER]` Vote account withdraw authority
     ///
-    /// [agave]
-    /// https://github.com/anza-xyz/solana-sdk/blob/3426feb/vote-interface/src/instruction.rs#L202
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L202
     update_commission_collector: CommissionKind,
 
     /// Update the commission for the vote account, measured in basis points (SIMD-0291).
@@ -541,16 +535,14 @@ pub const Instruction = union(enum(u32)) {
     ///   0. `[WRITE]` Vote account to be updated
     ///   1. `[SIGNER]` Withdraw authority
     ///
-    /// [agave]
-    /// https://github.com/anza-xyz/solana-sdk/blob/3426feb/vote-interface/src/instruction.rs#L212-L221
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L212-L221
     update_commission_bps: UpdateCommissionBps,
 
     /// Deposit delegator rewards into the vote account (SIMD-0123).
     ///
     /// TODO: implement when SIMD-0123 (block_revenue_sharing) lands in sig.
     ///
-    /// [agave]
-    /// https://github.com/anza-xyz/solana-sdk/blob/3426feb/vote-interface/src/instruction.rs#L223-L228
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/3426febe49bd701f54ea15ce11d539e277e2810e/vote-interface/src/instruction.rs#L223-L228
     _reserved_deposit_delegator_rewards: void,
 
     pub fn deinit(self: Instruction, allocator: std.mem.Allocator) void {

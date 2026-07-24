@@ -97,8 +97,7 @@ pub const VoteStateV4 = struct {
     /// 100.
     /// Matches Agave's `CommissionView::commission_percent`, which saturates at `u8::MAX`
     /// rather than panicking when the stored basis-points value exceeds 25,500.
-    /// [agave]
-    /// https://github.com/anza-xyz/agave/blob/v3.1.8/vote/src/vote_state_view/field_frames.rs
+    /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/vote/src/vote_state_view/field_frames.rs
     pub fn commission(self: *const VoteStateV4) u8 {
         return @intCast(@min(self.inflation_rewards_commission_bps / 100, std.math.maxInt(u8)));
     }
@@ -454,8 +453,7 @@ pub const VoteStateV4 = struct {
         return null;
     }
 
-    /// [agave]
-    /// https://github.com/anza-xyz/solana-sdk/blob/fb8a9a0/vote-interface/src/state/mod.rs#L709
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L709
     pub fn processNextVoteSlot(
         self: *VoteStateV4,
         allocator: Allocator,
@@ -489,8 +487,7 @@ pub const VoteStateV4 = struct {
         try self.doubleLockouts();
     }
 
-    /// [agave]
-    /// https://github.com/anza-xyz/solana-sdk/blob/fb8a9a0/vote-interface/src/state/mod.rs#L939
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L939
     ///
     /// Pop all recent votes that are not locked out at the next vote slot.
     /// This allows validators to switch forks once their votes for another fork have
@@ -506,8 +503,7 @@ pub const VoteStateV4 = struct {
         }
     }
 
-    /// [agave]
-    /// https://github.com/anza-xyz/solana-sdk/blob/fb8a9a0/vote-interface/src/state/mod.rs#L949
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L949
     pub fn doubleLockouts(self: *VoteStateV4) !void {
         const stack_depth = self.votes.items.len;
 
@@ -521,8 +517,7 @@ pub const VoteStateV4 = struct {
         }
     }
 
-    /// [agave]
-    /// https://github.com/anza-xyz/solana-sdk/blob/fb8a9a0/vote-interface/src/state/mod.rs#L963
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L963
     pub fn processTimestamp(
         self: *VoteStateV4,
         slot: Slot,
@@ -542,8 +537,7 @@ pub const VoteStateV4 = struct {
         return null;
     }
 
-    /// [agave]
-    /// https://github.com/anza-xyz/agave/blob/a0717a1/programs/vote/src/vote_state/mod.rs#L618
+    /// [agave] https://github.com/anza-xyz/agave/blob/a0717a15d349dc5e0c30384bee6d039377b92167/programs/vote/src/vote_state/mod.rs#L618
     pub fn processVote(
         self: *VoteStateV4,
         allocator: Allocator,
@@ -585,8 +579,7 @@ pub const VoteStateV4 = struct {
         );
     }
 
-    /// [agave]
-    /// https://github.com/anza-xyz/agave/blob/a0717a1/programs/vote/src/vote_state/mod.rs#L603
+    /// [agave] https://github.com/anza-xyz/agave/blob/a0717a15d349dc5e0c30384bee6d039377b92167/programs/vote/src/vote_state/mod.rs#L603
     pub fn processVoteUnfiltered(
         self: *VoteStateV4,
         allocator: Allocator,

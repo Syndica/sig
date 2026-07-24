@@ -7,10 +7,11 @@
 //! ```
 //!
 //! Lines containing URLs (any occurrence of "http") are exempt from length checks.
+//! This includes `[word] URL` reference patterns (e.g. `// [agave] https://...`).
 //!
 //! For code lines, trailing comments do not count toward line length. Lines between
 //! `// zig fmt: off` and `// zig fmt: on` are ignored, and `// sig fmt:` directives
-//! work the same way.
+//! work the same way. Doc comment variants (`/// sig fmt: off/on`) are also supported.
 //!
 //! Generated and data-heavy files can be listed in `excluded_paths`. Stale entries are reported
 //! by `lintExcludedPathsExist` so exclusions stay tied to files that exist.
@@ -95,7 +96,7 @@ fn isExcluded(path: []const u8) bool {
 }
 
 fn startsFmtDirective(stripped: []const u8, state: []const u8) bool {
-    const prefixes = [_][]const u8{ "// zig fmt: ", "// sig fmt: " };
+    const prefixes = [_][]const u8{ "// zig fmt: ", "// sig fmt: ", "/// zig fmt: ", "/// sig fmt: " };
     for (prefixes) |prefix| {
         if (std.mem.startsWith(u8, stripped, prefix) and
             std.mem.eql(u8, stripped[prefix.len..], state))
@@ -140,6 +141,28 @@ test "detects code and comments, ignores multiline strings fmt-off and trailing 
     // Multiline string (line 3), fmt-off code (line 5), and trailing comment (line 7)
     // are not flagged.
     try std.testing.expectEqual(2, ctx.diagnostics.items.len);
+}
+
+test "doc comment /// sig fmt: off/on directives are recognized" {
+    const allocator = std.heap.page_allocator;
+    const config: cli.Config = .{};
+    var ctx: core.Context = .{ .arena = allocator, .config = config };
+
+    const source =
+        "/// sig fmt: off\n" ++
+        "///     \\phi_i'(x) = \\sum_{l: bit l set in i} S_l'(x) \\prod_{{l: bit l set in i} \\ {l}} S_{l'}(x) extra padding here\n" ++
+        "/// sig fmt: on\n" ++
+        "/// this long doc comment without fmt-off should be flagged 12345678901234567890123456789012345678901234567890\n";
+    const source_z = try allocator.dupeZ(u8, source);
+    const ast = try std.zig.Ast.parse(allocator, source_z, .zig);
+    const file: core.SourceFile = .{
+        .path = "lib/example.zig",
+        .source = source_z,
+        .ast = ast,
+    };
+    try lint(&ctx, &file);
+    // Only line 4 (the long doc comment outside fmt-off) should be flagged.
+    try std.testing.expectEqual(1, ctx.diagnostics.items.len);
 }
 
 test "lines containing URLs are exempt from line length" {

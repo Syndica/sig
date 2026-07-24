@@ -5,16 +5,16 @@ const Pubkey = sig.core.Pubkey;
 
 // TODO: Consider moving the below to the pubkey module
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/program/src/pubkey.rs#L26
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/pubkey.rs#L26
 pub const MAX_SEED_LEN = 32;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/c5ed166/sdk/pubkey/src/lib.rs#L44-L45
+/// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/pubkey/src/lib.rs#L44-L45
 pub const MAX_SEEDS: usize = 16;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/program/src/pubkey.rs#L32
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/pubkey.rs#L32
 const PDA_MARKER = "ProgramDerivedAddress";
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/program/src/pubkey.rs#L35
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/pubkey.rs#L35
 pub const PubkeyError = error{
     MaxSeedLenExceeded,
     InvalidSeeds,
@@ -22,7 +22,7 @@ pub const PubkeyError = error{
 };
 
 /// Maps the `PubkeyError` to a `u8` to match Agave's `PubkeyError` enum.
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/program/src/pubkey.rs#L35
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/pubkey.rs#L35
 pub fn mapError(err: PubkeyError) u8 {
     return switch (err) {
         error.MaxSeedLenExceeded => 0,
@@ -31,7 +31,7 @@ pub fn mapError(err: PubkeyError) u8 {
     };
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/program/src/pubkey.rs#L200
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/pubkey.rs#L200
 pub fn createWithSeed(
     base: Pubkey,
     seed: []const u8,
@@ -50,7 +50,7 @@ pub fn createWithSeed(
     }).data };
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/c5ed166/sdk/pubkey/src/lib.rs#L633
+/// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/pubkey/src/lib.rs#L633
 pub fn findProgramAddress(
     seeds: []const []const u8,
     program_id: Pubkey,
@@ -75,7 +75,7 @@ pub fn findProgramAddress(
     return null;
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/c5ed166/sdk/pubkey/src/lib.rs#L721
+/// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/pubkey/src/lib.rs#L721
 pub fn createProgramAddress(
     seeds: []const []const u8,
     bump_seed: []const u8,
@@ -106,7 +106,7 @@ pub fn createProgramAddress(
     return .{ .data = hash };
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/c5ed166/sdk/pubkey/src/lib.rs#L289
+/// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/pubkey/src/lib.rs#L289
 pub fn bytesAreCurvePoint(bytes: []const u8) bool {
     const encoded_length = std.crypto.ecc.Edwards25519.encoded_length;
     if (encoded_length != bytes.len) return false;
@@ -120,7 +120,7 @@ test mapError {
     try std.testing.expectEqual(mapError(PubkeyError.IllegalOwner), 2);
 }
 
-// [agave] https://github.com/anza-xyz/agave/blob/c5ed166/sdk/pubkey/src/lib.rs#L1336
+// [agave] https://github.com/anza-xyz/agave/blob/c5ed1663a1218e9e088e30c81677bc88059cc62b/sdk/pubkey/src/lib.rs#L1336
 test findProgramAddress {
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
     for (0..1_000) |_| {

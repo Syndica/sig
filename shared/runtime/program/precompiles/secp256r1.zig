@@ -50,7 +50,7 @@ pub fn execute(_: std.mem.Allocator, ic: *InstructionContext) InstructionError!v
 }
 
 // https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0075-precompile-for-secp256r1-sigverify.md
-// https://github.com/firedancer-io/firedancer/blob/4905613/src/flamenco/runtime/program/fd_precompiles.c#L376
+// https://github.com/firedancer-io/firedancer/blob/49056135a4c7ba024cb75a45925439239904238b/src/flamenco/runtime/program/fd_precompiles.c#L376
 pub fn verify(
     data: []const u8,
     all_instruction_datas: []const []const u8,
@@ -104,7 +104,7 @@ pub fn verify(
     }
 }
 
-// https://github.com/anza-xyz/agave/blob/a8aef04/sdk/src/ed25519_instruction.rs#L258
+// https://github.com/anza-xyz/agave/blob/a8aef04122068ec36a7af0721e36ee58efa0bef2/sdk/src/ed25519_instruction.rs#L258
 fn testCase(
     num_signatures: u16,
     offsets: SignatureOffsets,

@@ -51,9 +51,8 @@ pub const AccessViolationInfo = struct {
     handled: bool = false,
 };
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/src/transaction_context.rs#L136
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/faea52f/program-runtime/src/invoke_context.rs#L192
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L136
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/invoke_context.rs#L192
 pub const TransactionContext = struct {
     allocator: std.mem.Allocator,
     /// Allocator for ProgramMap entries that must outlive the transaction's arena.
@@ -161,7 +160,7 @@ pub const TransactionContext = struct {
         }
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/134be7c/sdk/src/transaction_context.rs#L233
+    /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L233
     pub fn getAccountIndex(
         self: *const TransactionContext,
         pubkey: Pubkey,
@@ -171,7 +170,7 @@ pub const TransactionContext = struct {
         return null;
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/134be7c/sdk/src/transaction_context.rs#L223
+    /// [agave] https://github.com/anza-xyz/agave/blob/134be7c14066ea00c9791187d6bbc4795dd92f0e/sdk/src/transaction_context.rs#L223
     pub fn getAccountAtIndex(
         self: *const TransactionContext,
         index: u16,
@@ -180,14 +179,13 @@ pub const TransactionContext = struct {
         return &self.accounts[index];
     }
 
-    /// [agave]
-    /// https://github.com/anza-xyz/agave/blob/a11b42a/program-runtime/src/invoke_context.rs#L688
+    /// [agave] https://github.com/anza-xyz/agave/blob/a11b42a73288ab5985009e21ffd48e79f8ad6c58/program-runtime/src/invoke_context.rs#L688
     pub fn getCheckAligned(self: *TransactionContext) bool {
         const ic = self.getCurrentInstructionContext() catch return true;
         return ic.getCheckAligned();
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/07dcd4d/transaction-context/src/lib.rs#L340
+    /// [agave] https://github.com/anza-xyz/agave/blob/07dcd4d033f544a96a72c6c664e56871eb8a24b5/transaction-context/src/lib.rs#L340
     pub fn getCurrentInstructionContext(
         self: *TransactionContext,
     ) InstructionError!*InstructionContext {
@@ -195,8 +193,7 @@ pub const TransactionContext = struct {
         return &self.instruction_stack.buffer[self.instruction_stack.len - 1];
     }
 
-    /// [agave]
-    /// https://github.com/anza-xyz/solana-sdk/blob/e1554f4/transaction-context/src/lib.rs#L646
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L646
     pub fn borrowAccountAtIndex(
         self: *TransactionContext,
         index: u16,
@@ -216,8 +213,7 @@ pub const TransactionContext = struct {
         };
     }
 
-    /// [agave]
-    /// https://github.com/anza-xyz/agave/blob/faea52f/program-runtime/src/invoke_context.rs#L574
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/invoke_context.rs#L574
     pub fn consumeCompute(
         self: *TransactionContext,
         compute: u64,
@@ -230,15 +226,13 @@ pub const TransactionContext = struct {
         self.consumeUnchecked(compute);
     }
 
-    /// [agave]
-    /// https://github.com/anza-xyz/agave/blob/faea52f/program-runtime/src/invoke_context.rs#L100-L105
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/invoke_context.rs#L100-L105
     pub fn consumeUnchecked(self: *TransactionContext, compute: u64) void {
         self.consumed_units +|= compute;
         self.compute_meter -|= compute;
     }
 
-    /// [agave]
-    /// https://github.com/anza-xyz/agave/blob/faea52f/program-runtime/src/log_collector.rs#L94
+    /// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/log_collector.rs#L94
     pub fn log(
         self: *TransactionContext,
         comptime fmt: []const u8,
@@ -267,18 +261,18 @@ pub const TransactionContext = struct {
     }
 };
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4/transaction-context/src/lib.rs#L493
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/transaction-context/src/lib.rs#L493
 pub const TransactionReturnData = struct {
     program_id: Pubkey = Pubkey.ZEROES,
     data: std14.BoundedArray(u8, MAX_RETURN_DATA) = .{},
 
-    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/95764e2/cpi/src/lib.rs#L329
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/95764e268fe33a19819e6f9f411ff9e732cbdf0d/cpi/src/lib.rs#L329
     pub const MAX_RETURN_DATA: usize = 1024;
 };
 
 /// Represents an account within a transaction and provides single threaded
 /// read/write access to the account data to prevent invalid access during cpi.
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f/sdk/src/transaction_context.rs#L137-L139
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/src/transaction_context.rs#L137-L139
 pub const TransactionContextAccount = struct {
     pubkey: Pubkey,
     account: *AccountSharedData,

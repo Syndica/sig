@@ -5,7 +5,7 @@ const sig = @import("../../lib.zig");
 const Hash = sig.core.Hash;
 const Pubkey = sig.core.Pubkey;
 
-/// [agave] https://github.com/anza-xyz/agave/blob/8db563d/sdk/epoch-rewards/src/lib.rs#L26
+/// [agave] https://github.com/anza-xyz/agave/blob/8db563d3bba4d03edf0eb2737fba87f394c32b64/sdk/epoch-rewards/src/lib.rs#L26
 pub const EpochRewards = extern struct {
     /// The starting block height of the rewards distribution in the current
     /// epoch

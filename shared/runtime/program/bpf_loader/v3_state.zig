@@ -2,8 +2,7 @@ const sig = @import("../../../lib.zig");
 
 const Pubkey = sig.core.Pubkey;
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/5fb000f/sdk/program/src/bpf_loader_upgradeable.rs#L29
+/// [agave] https://github.com/anza-xyz/agave/blob/5fb000f27e476add032e08a1de9e89310b0eab4b/sdk/program/src/bpf_loader_upgradeable.rs#L29
 pub const State = union(enum) {
     /// Account is not initialized.
     uninitialized,
@@ -43,14 +42,12 @@ pub const State = union(enum) {
         };
     }
 
-    /// [agave]
-    /// https://github.com/anza-xyz/solana-sdk/blob/c07f692/loader-v3-interface/src/state.rs#L57
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/c07f692e41d757057c8700211a9300cdcd6d33b1/loader-v3-interface/src/state.rs#L57
     pub fn sizeOfBuffer(program_len: usize) usize {
         return BUFFER_METADATA_SIZE +| program_len;
     }
 
-    /// [agave]
-    /// https://github.com/anza-xyz/solana-sdk/blob/c07f692/loader-v3-interface/src/state.rs#L62
+    /// [agave] https://github.com/anza-xyz/solana-sdk/blob/c07f692e41d757057c8700211a9300cdcd6d33b1/loader-v3-interface/src/state.rs#L62
     pub fn sizeOfProgramData(program_len: usize) usize {
         return PROGRAM_DATA_METADATA_SIZE +| program_len;
     }

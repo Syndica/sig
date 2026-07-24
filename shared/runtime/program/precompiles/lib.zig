@@ -16,7 +16,7 @@ pub const secp256r1 = @import("secp256r1.zig");
 const Feature = sig.core.features.Feature;
 const Pubkey = sig.core.Pubkey;
 
-/// https://github.com/anza-xyz/agave/blob/df063a8/cost-model/src/block_cost_limits.rs#L15
+/// https://github.com/anza-xyz/agave/blob/df063a8c6483ad1d2bbbba50ab0b7fd7290eb7f4/cost-model/src/block_cost_limits.rs#L15
 /// Cluster averaged compute unit to micro-sec conversion rate
 pub const COMPUTE_UNIT_TO_US_RATIO: u64 = 30;
 /// Number of compute units for one signature verification.

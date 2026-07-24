@@ -127,8 +127,7 @@ pub const ExtendProgram = struct {
     };
 };
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/master/sdk/program/src/loader_upgradeable_instruction.rs#L7
+/// [agave] https://github.com/anza-xyz/agave/blob/master/sdk/program/src/loader_upgradeable_instruction.rs#L7
 pub const Instruction = union(enum) {
     /// Initialize a Buffer account.
     ///

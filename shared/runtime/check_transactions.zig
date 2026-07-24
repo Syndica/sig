@@ -39,7 +39,7 @@ const NONCED_TX_MARKER_IX_INDEX = 0;
 /// account with its nonce already advanced.
 ///
 /// Analogous to [validate_transaction_fee_payer](
-/// https://github.com/anza-xyz/agave/blob/d70b171/svm/src/transaction_processor.rs#L557)
+/// https://github.com/anza-xyz/agave/blob/d70b1714b1153674c16e2b15b68790d274dfe953/svm/src/transaction_processor.rs#L557)
 pub fn checkFeePayer(
     /// same allocator as batch account cache
     allocator: Allocator,
@@ -91,8 +91,7 @@ pub fn checkFeePayer(
     // This will probably be fixed in Agave at some point, we should fix this
     // when they do.
     //
-    // [agave]
-    // https://github.com/anza-xyz/agave/blob/b6c96e8/runtime/src/bank/check_transactions.rs#L106-L112
+    // [agave] https://github.com/anza-xyz/agave/blob/b6c96e84b10396b92912d4574dae7d03f606da26/runtime/src/bank/check_transactions.rs#L106-L112
 
     const fee_budget_limits = FeeBudgetLimits.fromComputeBudgetLimits(compute_budget_limits.*);
     const fee_details = FeeDetails.init(
@@ -147,15 +146,14 @@ pub fn checkFeePayer(
     } } };
 }
 
-/// [agave] https://github.com/anza-xyz/agave/blob/dad81b9/fee/src/lib.rs#L85
+/// [agave] https://github.com/anza-xyz/agave/blob/dad81b9b2ecf81ceb518dd9f7cc91e83ba33bda8/fee/src/lib.rs#L85
 pub const SignatureCounts = struct {
     num_transaction_signatures: u64,
     num_ed25519_signatures: u64,
     num_secp256k1_signatures: u64,
     num_secp256r1_signatures: u64,
 
-    // [agave]
-    // https://github.com/anza-xyz/agave/blob/eb41682/svm-transaction/src/svm_message.rs#L139
+    // [agave] https://github.com/anza-xyz/agave/blob/eb416825349ca376fa13249a0267cf7b35701938/svm-transaction/src/svm_message.rs#L139
     fn sumPrecompileSigs(
         transaction: *const RuntimeTransaction,
         precompile: *const Pubkey,
@@ -169,8 +167,7 @@ pub const SignatureCounts = struct {
         return n_signatures;
     }
 
-    // [agave]
-    // https://github.com/anza-xyz/agave/blob/eb41682/svm-transaction/src/svm_message.rs#L139
+    // [agave] https://github.com/anza-xyz/agave/blob/eb416825349ca376fa13249a0267cf7b35701938/svm-transaction/src/svm_message.rs#L139
     pub fn fromTransaction(transaction: *const RuntimeTransaction) SignatureCounts {
         const precompiles = sig.runtime.program.precompiles;
 
@@ -212,7 +209,7 @@ pub const FeeDetails = struct {
         };
     }
 
-    /// [agave] https://github.com/anza-xyz/agave/blob/dad81b9/fee/src/lib.rs#L66
+    /// [agave] https://github.com/anza-xyz/agave/blob/dad81b9b2ecf81ceb518dd9f7cc91e83ba33bda8/fee/src/lib.rs#L66
     fn calculateSignatureFee(
         sig_counts: SignatureCounts,
         lamports_per_signature: u64,
@@ -237,8 +234,7 @@ pub const FeeBudgetLimits = struct {
     compute_unit_limit: u64,
     prioritization_fee: u64,
 
-    // [agave]
-    // https://github.com/anza-xyz/agave/blob/3e9af14/compute-budget/src/compute_budget_limits.rs#L20
+    // [agave] https://github.com/anza-xyz/agave/blob/3e9af14f3a145070773c719ad104b6a02aefd718/compute-budget/src/compute_budget_limits.rs#L20
     const MICRO_LAMPORTS_PER_LAMPORT = 1_000_000;
     const DEFAULT_HEAP_COST = 8;
 
@@ -266,7 +262,7 @@ pub const FeeBudgetLimits = struct {
     }
 };
 
-// [agave] https://github.com/anza-xyz/agave/blob/64b6160/svm/src/account_loader.rs#L293
+// [agave] https://github.com/anza-xyz/agave/blob/64b616042450fa6553427471f70895f1dfe0cd86/svm/src/account_loader.rs#L293
 fn validateFeePayer(
     pubkey: Pubkey,
     payer: *AccountSharedData,
@@ -287,7 +283,7 @@ fn validateFeePayer(
     // guard: a payer that cannot cover BOTH the system-account minimum balance
     // AND the fee must fail here as InsufficientFundsForFee, before the rent-state
     // transition below has a chance to surface a misleading InsufficientFundsForRent.
-    // [agave] https://github.com/anza-xyz/agave/blob/64b6160/svm/src/account_loader.rs#L320-L327
+    // [agave] https://github.com/anza-xyz/agave/blob/64b616042450fa6553427471f70895f1dfe0cd86/svm/src/account_loader.rs#L320-L327
     {
         const lamports_min_balance_diff = std.math.sub(u64, payer.lamports, min_balance) catch
             return .InsufficientFundsForFee;
@@ -320,7 +316,7 @@ fn validateFeePayer(
 
 const SystemAccountKind = enum { System, Nonce };
 
-// [agave] https://github.com/anza-xyz/agave/blob/64b6160/svm/src/account_loader.rs#L293
+// [agave] https://github.com/anza-xyz/agave/blob/64b616042450fa6553427471f70895f1dfe0cd86/svm/src/account_loader.rs#L293
 fn getSystemAccountKind(account: *const AccountSharedData) ?SystemAccountKind {
     if (!account.owner.equals(&sig.runtime.program.system.ID)) return null;
     if (account.data.len == 0) return .System;
@@ -446,8 +442,7 @@ pub fn verifyNonceAccount(
     return nonce_data;
 }
 
-// [agave]
-// https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/svm-transaction/src/svm_message.rs#L99-L131
+// [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-rc.0/svm-transaction/src/svm_message.rs#L99-L131
 /// If the message uses a durable nonce, return the pubkey of the nonce account.
 ///
 /// SIMD-0242: the nonce account index must reference a statically-included key

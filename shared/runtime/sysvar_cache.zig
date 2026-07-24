@@ -17,7 +17,7 @@ const RecentBlockhashes = sysvars.RecentBlockhashes;
 
 /// `SysvarCache` provides the runtime with access to sysvars during program execution
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f/program-runtime/src/sysvar_cache.rs#L28
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/sysvar_cache.rs#L28
 pub const SysvarCache = struct {
     // full account data as provided by bank, including any trailing zero bytes
     clock: ?[]const u8 = null,

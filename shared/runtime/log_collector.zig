@@ -1,7 +1,7 @@
 const builtin = @import("builtin");
 const std = @import("std");
 
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f/program-runtime/src/log_collector.rs#L4
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/log_collector.rs#L4
 const DEFAULT_MAX_BYTES_LIMIT: usize = 10 * 1000;
 const LOG_TRUNCATE_MSG = "Log truncated";
 
@@ -9,7 +9,7 @@ const LOG_TRUNCATE_MSG = "Log truncated";
 /// its own log collector
 /// which may be used to collect and emit logs as part of the transaction processing result.
 ///
-/// [agave] https://github.com/anza-xyz/agave/blob/faea52f/program-runtime/src/log_collector.rs#L6
+/// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/log_collector.rs#L6
 pub const LogCollector = struct {
     message_pool: std.ArrayListUnmanaged(u8),
     message_indices: std.ArrayListUnmanaged(usize),
@@ -137,8 +137,7 @@ test "bytes_limit" {
         );
     }
 
-    // [agave]
-    // https://github.com/anza-xyz/agave/blob/faea52f/program-runtime/src/log_collector.rs#L108
+    // [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/program-runtime/src/log_collector.rs#L108
     {
         var log_collector = try LogCollector.default(allocator);
         defer log_collector.deinit(allocator);

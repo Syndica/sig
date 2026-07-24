@@ -13,7 +13,7 @@ pub const Status = enum(u64) {
     pub const BincodeSize = u64;
 };
 
-/// [agave] https://github.com/anza-xyz/solana-sdk/blob/c7c8c60/loader-v4-interface/src/state.rs#L19
+/// [agave] https://github.com/anza-xyz/solana-sdk/blob/c7c8c604991bf5d1e4441f32659546c84a17d92c/loader-v4-interface/src/state.rs#L19
 pub const State = extern struct {
     /// Slot in which the program was last deployed, retracted or initialized.
     slot: u64,

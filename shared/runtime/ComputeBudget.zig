@@ -129,8 +129,7 @@ bls12_381_additional_pair_cost: u64,
 
 pub const DEFAULT: ComputeBudget = ComputeBudget.init(1_400_000);
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/v4.1.0-beta.1/program-runtime/src/execution_budget.rs#L162
+/// [agave] https://github.com/anza-xyz/agave/blob/v4.1.0-beta.1/program-runtime/src/execution_budget.rs#L162
 pub fn init(compute_unit_limit: u64) ComputeBudget {
     return .{
         .compute_unit_limit = compute_unit_limit,
@@ -194,10 +193,8 @@ pub fn init(compute_unit_limit: u64) ComputeBudget {
     };
 }
 
-/// [agave]
-/// https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/execution_budget.rs#L239-L266
-/// [fd]
-/// https://github.com/firedancer-io/firedancer/blob/211dfcc/src/flamenco/vm/syscall/fd_vm_syscall_crypto.c#L238-L245
+/// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/execution_budget.rs#L239-L266
+/// [fd] https://github.com/firedancer-io/firedancer/blob/211dfccc1d84a50191a487a6abffd962f7954179/src/flamenco/vm/syscall/fd_vm_syscall_crypto.c#L238-L245
 ///
 /// Returns the cost of a Poseidon hash syscall for a given input length.
 pub fn poseidonCost(self: ComputeBudget, len: std.math.IntFittingRange(0, 12)) u64 {
