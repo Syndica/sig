@@ -22,6 +22,11 @@ const Unrooted = lib.replay.Unrooted;
 const Pubkey = lib.solana.Pubkey;
 const AccountRef = AccountPool.AccountRef;
 
+pub const UserData = u64;
+const UserDataType = UserData;
+
+pub const AccountFetcher = AccountFetcherType(Unrooted);
+
 /// Deduplicates and drives asynchronous account reads for Replay.
 ///
 /// The deduplication is implemented by internally maintaining a map keyed by `(block_ref, pubkey)`.
@@ -31,465 +36,540 @@ const AccountRef = AccountPool.AccountRef;
 /// The fetcher maintains two queues: one for entries that are queued for rooted lookups and another for
 /// entries that are ready with results. The `poll` method processes these queues, submitting
 /// requests to the `AccountLookups` service and draining completed results.
-pub const AccountFetcher = struct {
-    account_pool: *AccountPool,
-    account_lookups: *AccountLookups,
-    unrooted: *Unrooted,
-    block_pool: *BlockPool,
+pub fn AccountFetcherType(comptime UnrootedStore: type) type {
+    return struct {
+        const Self = @This();
 
-    // TODO: remove this, implement a simple map.
-    allocator: std.mem.Allocator,
-    /// In-flight or ready fetch entries keyed by `(block_ref, pubkey)`.
-    active_fetches: FetchMap,
+        const entry_capacity = 512;
+        const waiter_capacity = 512;
 
-    // NOTE: rational for using separate lists for entries and waiters instead of a single list of
-    // union enums is for simplicity mostly, but also since a single FetchEntry can have multiple waiters,
-    // we're wasting less space. Though perhaps there's good reason to change this in the future?
-
-    /// Backing storage for fetch entries.
-    entries: [512]FetchEntry,
-    /// Backing storage for per-request completion waiters.
-    waiters: [512]Waiter,
-
-    /// Pool of waiter slots stored in `waiters`.
-    waiter_pool: WaiterPool,
-    /// Pool of fetch-entry slots stored in `entries`.
-    entry_pool: EntryPool,
-
-    /// Head of entries waiting to be submitted to rooted AccountsDB.
-    rooted_head: EntryId.Optional,
-    /// Tail of entries waiting to be submitted to rooted AccountsDB.
-    rooted_tail: EntryId.Optional,
-
-    /// Head of entries with results ready to deliver to waiters.
-    ready_head: EntryId.Optional,
-    /// Tail of entries with results ready to deliver to waiters.
-    ready_tail: EntryId.Optional,
-
-    const EntryPool = lib.collections.Pool(FetchEntry, u16);
-    const EntryId = EntryPool.ItemId;
-
-    const WaiterPool = lib.collections.Pool(Waiter, u16);
-    const WaiterId = WaiterPool.ItemId;
-
-    // TODO: custom map.
-    const FetchMap = std.HashMapUnmanaged(
-        FetchKey,
-        EntryId,
-        .{},
-        80,
-    );
-
-    const FetchKey = struct {
-        block_ref: BlockRef,
-        pubkey: Pubkey,
-    };
-
-    const Waiter = struct {
-        user_data: UserData,
-        next: WaiterId.Optional,
-    };
-
-    pub const UserData = u64;
-
-    pub const Request = struct {
-        block_ref: BlockRef,
-        pubkey: Pubkey,
-
-        /// Opaque to AccountFetcher.
-        user_data: UserData,
-    };
-
-    pub const Completion = struct {
-        user_data: UserData,
-        pubkey: Pubkey,
-        result: Result,
-    };
-
-    pub const Result = union(enum) {
-        found: AccountPool.AccountRef,
-        not_found,
-    };
-
-    const FetchEntry = struct {
-        state: State,
-
-        key: FetchKey,
-
-        waiter_head: WaiterId.Optional,
-        waiter_tail: WaiterId.Optional,
-
-        /// links `FetchEntry`s together in the rooted and ready queues.
-        /// It's either the next entry waiting to be sent to rooted, or
-        /// an entry that has completed and whose result is ready for waiters.
-        queue_next: EntryId.Optional,
-
-        result: Result = undefined,
-
-        const State = enum {
-            free,
-            queued_rooted,
-            fetching_rooted,
-            ready,
-        };
-    };
-
-    pub fn init(
-        allocator: std.mem.Allocator,
         account_pool: *AccountPool,
         account_lookups: *AccountLookups,
-        unrooted: *Unrooted,
+        unrooted: *UnrootedStore,
         block_pool: *BlockPool,
-        entry_buf: []FetchEntry,
-        waiter_buf: []Waiter,
-    ) !AccountFetcher {
-        var active_fetches: FetchMap = .empty;
-        try active_fetches.ensureTotalCapacity(
-            allocator,
-            @intCast(entry_buf.len),
+
+        // TODO: remove this, implement a simple map.
+        allocator: std.mem.Allocator,
+        /// In-flight or ready fetch entries keyed by `(block_ref, pubkey)`.
+        active_fetches: FetchMap,
+
+        // NOTE: rational for using separate lists for entries and waiters instead of a single list of
+        // union enums is for simplicity mostly, but also since a single FetchEntry can have multiple waiters,
+        // we're wasting less space. Though perhaps there's good reason to change this in the future?
+
+        /// Backing storage for fetch entries.
+        entries: [entry_capacity]FetchEntry,
+        /// Backing storage for per-request completion waiters.
+        waiters: [waiter_capacity]Waiter,
+
+        /// Pool of waiter slots stored in `waiters`.
+        waiter_pool: WaiterPool,
+        /// Pool of fetch-entry slots stored in `entries`.
+        entry_pool: EntryPool,
+
+        /// Head of entries waiting to be submitted to rooted AccountsDB.
+        rooted_head: EntryId.Optional,
+        /// Tail of entries waiting to be submitted to rooted AccountsDB.
+        rooted_tail: EntryId.Optional,
+
+        /// Head of entries with results ready to deliver to waiters.
+        ready_head: EntryId.Optional,
+        /// Tail of entries with results ready to deliver to waiters.
+        ready_tail: EntryId.Optional,
+
+        const EntryPool = lib.collections.Pool(FetchEntry, u16);
+        const EntryId = EntryPool.ItemId;
+
+        const WaiterPool = lib.collections.Pool(Waiter, u16);
+        const WaiterId = WaiterPool.ItemId;
+
+        // TODO: custom map.
+        const FetchMap = std.HashMapUnmanaged(
+            FetchKey,
+            EntryId,
+            std.hash_map.AutoContext(FetchKey),
+            80,
         );
 
-        return .{
-            .allocator = allocator,
-
-            .account_pool = account_pool,
-            .account_lookups = account_lookups,
-            .unrooted = unrooted,
-            .block_pool = block_pool,
-
-            .active_fetches = active_fetches,
-
-            .entry_pool = .init(entry_buf),
-            .waiter_pool = .init(waiter_buf),
-
-            .rooted_head = .null,
-            .rooted_tail = .null,
-
-            .ready_head = .null,
-            .ready_tail = .null,
-        };
-    }
-
-    pub fn deinit(self: *AccountFetcher) void {
-        std.debug.assert(self.active_fetches.count() == 0);
-
-        std.debug.assert(self.rooted_head == .null);
-        std.debug.assert(self.rooted_tail == .null);
-
-        std.debug.assert(self.ready_head == .null);
-        std.debug.assert(self.ready_tail == .null);
-
-        // Every waiter and entry should have been returned to its pool.
-        std.debug.assert(self.entry_pool.free_list.opt() != null);
-        std.debug.assert(self.waiter_pool.free_list.opt() != null);
-
-        self.active_fetches.deinit(self.allocator);
-        self.* = undefined;
-    }
-
-    /// Submits one account fetch request and attaches it to any existing fetch
-    /// for the same `(block_ref, pubkey)`.
-    ///
-    /// New fetches check unrooted state immediately. Misses are queued for rooted
-    /// AccountsDB lookup and later driven by `poll`.
-    pub fn submit(self: *AccountFetcher, request: Request) error{Full}!void {
-        // Create a new waiter for this request
-        const waiter_id = self.waiter_pool.createId() catch return error.Full;
-        errdefer self.waiter_pool.destroyId(waiter_id);
-
-        const waiter = self.waiter_pool.indexToPtr(waiter_id);
-        waiter.* = .{
-            .user_data = request.user_data,
-            .next = .null,
+        const FetchKey = extern struct {
+            block_ref: BlockRef,
+            pubkey: Pubkey,
         };
 
-        // Create a key for this request to check if an entry already exists
-        // (i.e a fetch is already in progress for this pubkey and block_ref)
-        const key: FetchKey = .{
-            .block_ref = request.block_ref,
-            .pubkey = request.pubkey,
+        const Waiter = extern struct {
+            user_data: UserDataType,
+            next: WaiterId.Optional,
         };
 
-        // Check if there's already a fetch tracked for this key.
-        if (self.active_fetches.get(key)) |entry_id| {
-            // If there is, append this request's waiter to the existing entry's waiter list.
-            // The entry will be completed when the fetch completes, and this request will
-            // receive its own completion.
-            self.appendWaiter(entry_id, waiter_id);
-            return;
-        }
+        pub const UserData = UserDataType;
 
-        // If there isn't, create a new fetch entry for this key and start the fetch process.
-        const entry_id = self.entry_pool.createId() catch return error.Full;
-        errdefer self.entry_pool.destroyId(entry_id);
+        pub const Request = struct {
+            block_ref: BlockRef,
+            pubkey: Pubkey,
 
-        const entry = self.entry_pool.indexToPtr(entry_id);
-        entry.* = .{
-            .key = key,
-            // There's one one waiter (this request) for the new entry, so both the
-            // head and tail point to the same waiter.
-            .waiter_head = .init(waiter_id),
-            .waiter_tail = .init(waiter_id),
-            // This starts as null since its not linked into any queue yet.
-            .queue_next = .null,
-            // TODO: remove undefineds and add new state.
-            .state = undefined,
-            .result = undefined,
+            /// Opaque to AccountFetcher.
+            user_data: UserDataType,
         };
 
-        // Track this new fetch entry in the active fetches map.
-        self.active_fetches.putAssumeCapacityNoClobber(key, entry_id);
-        errdefer std.debug.assert(self.active_fetches.remove(key));
-
-        // Check if the account is already available in the unrooted state.
-        // If it is, we can complete the fetch immediately without needing to query the rooted storage.
-        const unrooted_ref = self.unrooted.fetch(
-            &request.pubkey,
-            request.block_ref,
-            self.block_pool,
-            self.account_pool,
-        );
-
-        if (unrooted_ref != .invalid) {
-            const account = self.account_pool.getAccount(unrooted_ref);
-
-            // An Unrooted tombstone shadows any older Rooted value (deleted account).
-            if (account.lamports == 0) {
-                self.releaseAccount(unrooted_ref);
-                entry.result = .not_found;
-            } else {
-                // FetchEntry takes ownership of the reference returned by fetch().
-                entry.result = .{ .found = unrooted_ref };
-            }
-
-            // Unrooted had the account, mark ready and return.
-            entry.state = .ready;
-            self.enqueueReady(entry_id);
-            return;
-        }
-
-        // If the account isn't available in the unrooted state, we need to query the rooted storage.
-        entry.state = .queued_rooted;
-        self.enqueueRooted(entry_id);
-    }
-
-    pub fn poll(self: *AccountFetcher) bool {
-        var progressed: u1 = 0;
-        progressed |= self.drainRootedResults();
-        progressed |= self.submitRootedRequests();
-        return progressed;
-    }
-
-    pub fn popCompletion(self: *AccountFetcher) ?Completion {
-        const entry_id = self.popReady() orelse return null;
-        const entry = entry_id.ptr(&self.entry_pool);
-
-        std.debug.assert(entry.state == .ready);
-
-        const waiter_id = entry.waiter_head.opt() orelse
-            unreachable;
-        const waiter = waiter_id.ptr(&self.waiter_pool);
-
-        entry.waiter_head = waiter.next;
-        if (entry.waiter_head == .null)
-            entry.waiter_tail = .null;
-
-        const completion: Completion = .{
-            .user_data = waiter.user_data,
-            .pubkey = entry.key.pubkey,
-            .result = switch (entry.result) {
-                .not_found => .not_found,
-                .found => |account_ref| result: {
-                    // The caller receives its own reference.
-                    self.account_pool
-                        .getAccount(account_ref)
-                        .ref();
-
-                    break :result .{ .found = account_ref };
-                },
-            },
+        pub const Completion = struct {
+            user_data: UserDataType,
+            pubkey: Pubkey,
+            /// `.invalid` means the account was not found.
+            account_ref: AccountRef,
         };
 
-        self.waiter_pool.destroyId(waiter_id);
+        const FetchEntry = extern struct {
+            state: State,
 
-        if (entry.waiter_head != .null) {
-            // Round-robin completion delivery between ready accounts.
-            self.enqueueReady(entry_id);
-        } else {
-            self.retireEntry(entry_id);
-        }
+            key: FetchKey,
 
-        return completion;
-    }
+            waiter_head: WaiterId.Optional,
+            waiter_tail: WaiterId.Optional,
 
-    fn enqueueRooted(self: *AccountFetcher, entry_id: EntryId) void {
-        const entry = entry_id.ptr(&self.entry_pool);
-        std.debug.assert(entry.queue_next == .null);
+            /// links `FetchEntry`s together in the rooted and ready queues.
+            /// It's either the next entry waiting to be sent to rooted, or
+            /// an entry that has completed and whose result is ready for waiters.
+            queue_next: EntryId.Optional,
 
-        if (self.rooted_tail.opt()) |tail_id| {
-            tail_id.ptr(&self.entry_pool).queue_next = .init(entry_id);
-        } else {
-            self.rooted_head = .init(entry_id);
-        }
+            result: AccountRef = .invalid,
 
-        self.rooted_tail = .init(entry_id);
-    }
+            const State = enum(u8) {
+                free,
+                queued_rooted,
+                fetching_rooted,
+                ready,
+            };
+        };
 
-    fn popRooted(self: *AccountFetcher) ?EntryId {
-        const entry_id = self.rooted_head.opt() orelse return null;
-        const entry = entry_id.ptr(&self.entry_pool);
+        pub fn init(
+            self: *Self,
+            allocator: std.mem.Allocator,
+            account_pool: *AccountPool,
+            account_lookups: *AccountLookups,
+            unrooted: *UnrootedStore,
+            block_pool: *BlockPool,
+        ) !void {
+            var active_fetches: FetchMap = .empty;
+            try active_fetches.ensureTotalCapacity(
+                allocator,
+                @intCast(entry_capacity),
+            );
 
-        self.rooted_head = entry.queue_next;
-        if (self.rooted_head == .null)
-            self.rooted_tail = .null;
+            self.* = .{
+                .allocator = allocator,
 
-        entry.queue_next = .null;
-        return entry_id;
-    }
+                .account_pool = account_pool,
+                .account_lookups = account_lookups,
+                .unrooted = unrooted,
+                .block_pool = block_pool,
 
-    /// Enqueue a ready entry to the ready queue, which is used to deliver completions to waiters.
-    fn enqueueReady(self: *AccountFetcher, entry_id: EntryId) void {
-        const entry = self.entry_pool.indexToPtr(entry_id);
-        std.debug.assert(entry.queue_next == .null);
-        std.debug.assert(entry.state == .ready);
+                .active_fetches = active_fetches,
 
-        // Add the entry to the end of the ready queue.
-        if (self.ready_tail.opt()) |tail_id| {
-            // update current tail's next pointer to the new entry.
-            tail_id.ptr(&self.entry_pool).queue_next = .init(entry_id);
-        } else {
-            // Empty queue, so set the head to the new entry.
-            self.ready_head = .init(entry_id);
-        }
+                .entries = undefined,
+                .waiters = undefined,
 
-        // Update the tail to the new entry.
-        self.ready_tail = .init(entry_id);
-    }
+                .entry_pool = undefined,
+                .waiter_pool = undefined,
 
-    fn popReady(self: *AccountFetcher) ?EntryId {
-        const entry_id = self.ready_head.opt() orelse return null;
-        const entry = entry_id.ptr(&self.entry_pool);
+                .rooted_head = .null,
+                .rooted_tail = .null,
 
-        self.ready_head = entry.queue_next;
-        if (self.ready_head == .null)
-            self.ready_tail = .null;
-
-        entry.queue_next = .null;
-        return entry_id;
-    }
-
-    fn appendWaiter(self: *AccountFetcher, entry_id: EntryId, waiter_id: WaiterId) void {
-        const entry = entry_id.ptr(&self.entry_pool);
-        const waiter = waiter_id.ptr(&self.waiter_pool);
-
-        std.debug.assert(waiter.next == .null);
-
-        if (entry.waiter_tail.opt()) |tail_id| {
-            tail_id.ptr(&self.waiter_pool).next = .init(waiter_id);
-        } else {
-            entry.waiter_head = .init(waiter_id);
-        }
-
-        entry.waiter_tail = .init(waiter_id);
-    }
-
-    fn retireEntry(self: *AccountFetcher, entry_id: EntryId) void {
-        const entry = entry_id.ptr(&self.entry_pool);
-
-        std.debug.assert(entry.state == .ready);
-        std.debug.assert(entry.waiter_head == .null);
-        std.debug.assert(entry.waiter_tail == .null);
-
-        std.debug.assert(self.active_fetches.remove(entry.key));
-
-        switch (entry.result) {
-            .not_found => {},
-            .found => |account_ref| {
-                self.releaseAccount(account_ref);
-            },
-        }
-
-        self.entry_pool.destroyId(entry_id);
-    }
-
-    fn submitRootedRequests(self: *AccountFetcher) bool {
-        var writer = self.account_lookups.in.get(.writer);
-        var submitted: usize = 0;
-
-        while (self.rooted_head != .null) {
-            const request_out = writer.next() orelse break;
-
-            const entry_id = self.popRooted().?;
-            const entry = entry_id.ptr(&self.entry_pool);
-
-            std.debug.assert(entry.state == .queued_rooted);
-
-            request_out.* = .{
-                .req_user_data = @intCast(entry_id.index()),
-                .pubkey = entry.key.pubkey,
+                .ready_head = .null,
+                .ready_tail = .null,
             };
 
-            entry.state = .fetching_rooted;
-            submitted += 1;
+            self.entry_pool = .init(self.entries[0..]);
+            self.waiter_pool = .init(self.waiters[0..]);
         }
 
-        if (submitted == 0)
-            return false;
+        pub fn deinit(self: *Self) void {
+            std.debug.assert(self.active_fetches.count() == 0);
 
-        writer.markUsed();
-        return true;
-    }
+            std.debug.assert(self.rooted_head == .null);
+            std.debug.assert(self.rooted_tail == .null);
 
-    fn drainRootedResults(self: *AccountFetcher) bool {
-        var reader = self.account_lookups.out.get(.reader);
-        var consumed: usize = 0;
+            std.debug.assert(self.ready_head == .null);
+            std.debug.assert(self.ready_tail == .null);
 
-        while (reader.next()) |response| {
-            consumed += 1;
-            self.processRootedResult(response.*);
+            // Every waiter and entry should have been returned to its pool.
+            std.debug.assert(self.entry_pool.free_list.opt() != null);
+            std.debug.assert(self.waiter_pool.free_list.opt() != null);
+
+            self.active_fetches.deinit(self.allocator);
+            self.* = undefined;
         }
 
-        if (consumed == 0)
-            return false;
+        /// Submits one account fetch request and attaches it to any existing fetch
+        /// for the same `(block_ref, pubkey)`.
+        ///
+        /// New fetches check unrooted state immediately. Misses are queued for rooted
+        /// AccountsDB lookup and later driven by `poll`.
+        pub fn submit(self: *Self, request: Request) error{Full}!void {
+            // Create a new waiter for this request
+            const waiter_id = self.waiter_pool.createId() catch return error.Full;
+            errdefer self.waiter_pool.destroyId(waiter_id);
 
-        reader.markUsed();
-        return true;
-    }
+            const waiter = self.waiter_pool.indexToPtr(waiter_id);
+            waiter.* = .{
+                .user_data = request.user_data,
+                .next = .null,
+            };
 
-    fn processRootedResult(
-        self: *AccountFetcher,
-        response: AccountLookups.Result,
-    ) void {
-        const entry_index = response.req_user_data;
+            // Create a key for this request to check if an entry already exists
+            // (i.e a fetch is already in progress for this pubkey and block_ref)
+            const key: FetchKey = .{
+                .block_ref = request.block_ref,
+                .pubkey = request.pubkey,
+            };
 
-        if (entry_index >= self.entry_pool.len) {
-            self.releaseAccount(response.account_index);
-            return;
+            // Check if there's already a fetch tracked for this key.
+            if (self.active_fetches.get(key)) |entry_id| {
+                // If there is, append this request's waiter to the existing entry's waiter list.
+                // The entry will be completed when the fetch completes, and this request will
+                // receive its own completion.
+                self.appendWaiter(entry_id, waiter_id);
+                return;
+            }
+
+            // If there isn't, create a new fetch entry for this key and start the fetch process.
+            const entry_id = self.entry_pool.createId() catch return error.Full;
+            errdefer self.entry_pool.destroyId(entry_id);
+
+            const entry = self.entry_pool.indexToPtr(entry_id);
+            entry.* = .{
+                .key = key,
+                // There's one one waiter (this request) for the new entry, so both the
+                // head and tail point to the same waiter.
+                .waiter_head = .init(waiter_id),
+                .waiter_tail = .init(waiter_id),
+                // This starts as null since its not linked into any queue yet.
+                .queue_next = .null,
+                // TODO: remove undefineds and add new state.
+                .state = undefined,
+                .result = .invalid,
+            };
+
+            // Track this new fetch entry in the active fetches map.
+            self.active_fetches.putAssumeCapacityNoClobber(key, entry_id);
+            errdefer std.debug.assert(self.active_fetches.remove(key));
+
+            // Check if the account is already available in the unrooted state.
+            // If it is, we can complete the fetch immediately without needing to query the rooted storage.
+            const unrooted_ref = self.unrooted.fetch(
+                &request.pubkey,
+                request.block_ref,
+                self.block_pool,
+                self.account_pool,
+            );
+
+            if (unrooted_ref != .invalid) {
+                const account = self.account_pool.getAccount(unrooted_ref);
+
+                // An Unrooted tombstone shadows any older Rooted value (deleted account).
+                if (account.lamports == 0) {
+                    self.releaseAccount(unrooted_ref);
+                    entry.result = .invalid;
+                } else {
+                    // FetchEntry takes ownership of the reference returned by fetch().
+                    entry.result = unrooted_ref;
+                }
+
+                // Unrooted had the account, mark ready and return.
+                entry.state = .ready;
+                self.enqueueReady(entry_id);
+                return;
+            }
+
+            // If the account isn't available in the unrooted state, we need to query the rooted storage.
+            entry.state = .queued_rooted;
+            self.enqueueRooted(entry_id);
         }
 
-        const entry_id = EntryId.fromInt(@intCast(entry_index));
-        const entry = entry_id.ptr(&self.entry_pool);
-
-        if (entry.state != .fetching_rooted) {
-            self.releaseAccount(response.account_index);
-            return;
+        pub fn poll(self: *Self) bool {
+            var progressed = false;
+            progressed = self.drainRootedResults() or progressed;
+            progressed = self.submitRootedRequests() or progressed;
+            return progressed;
         }
 
-        std.debug.assert(response.pubkey.equals(&entry.key.pubkey));
+        pub fn popCompletion(self: *Self) ?Completion {
+            const entry_id = self.popReady() orelse return null;
+            const entry = entry_id.ptr(&self.entry_pool);
 
-        entry.result = if (response.account_index == .invalid)
-            .not_found
-        else
-            .{ .found = response.account_index };
+            std.debug.assert(entry.state == .ready);
 
-        entry.state = .ready;
-        self.enqueueReady(entry_id);
-    }
+            const waiter_id = entry.waiter_head.opt() orelse
+                unreachable;
+            const waiter = waiter_id.ptr(&self.waiter_pool);
 
-    /// Release an account reference back to the account pool, if it's valid.
-    fn releaseAccount(self: *AccountFetcher, account_ref: AccountRef) void {
-        if (account_ref == .invalid) return;
-        const account = self.account_pool.getAccount(account_ref);
-        if (account.unref()) self.account_pool.free(account_ref);
-    }
-};
+            entry.waiter_head = waiter.next;
+            if (entry.waiter_head == .null)
+                entry.waiter_tail = .null;
+
+            const completion: Completion = .{
+                .user_data = waiter.user_data,
+                .pubkey = entry.key.pubkey,
+                .account_ref = entry.result,
+            };
+
+            if (completion.account_ref != .invalid) {
+                // The caller receives its own reference.
+                self.account_pool
+                    .getAccount(completion.account_ref)
+                    .ref();
+            }
+
+            self.waiter_pool.destroyId(waiter_id);
+
+            if (entry.waiter_head != .null) {
+                // Round-robin completion delivery between ready accounts.
+                self.enqueueReady(entry_id);
+            } else {
+                self.retireEntry(entry_id);
+            }
+
+            return completion;
+        }
+
+        fn enqueueRooted(self: *Self, entry_id: EntryId) void {
+            const entry = entry_id.ptr(&self.entry_pool);
+            std.debug.assert(entry.queue_next == .null);
+
+            if (self.rooted_tail.opt()) |tail_id| {
+                tail_id.ptr(&self.entry_pool).queue_next = .init(entry_id);
+            } else {
+                self.rooted_head = .init(entry_id);
+            }
+
+            self.rooted_tail = .init(entry_id);
+        }
+
+        fn popRooted(self: *Self) ?EntryId {
+            const entry_id = self.rooted_head.opt() orelse return null;
+            const entry = entry_id.ptr(&self.entry_pool);
+
+            self.rooted_head = entry.queue_next;
+            if (self.rooted_head == .null)
+                self.rooted_tail = .null;
+
+            entry.queue_next = .null;
+            return entry_id;
+        }
+
+        /// Enqueue a ready entry to the ready queue, which is used to deliver completions to waiters.
+        fn enqueueReady(self: *Self, entry_id: EntryId) void {
+            const entry = self.entry_pool.indexToPtr(entry_id);
+            std.debug.assert(entry.queue_next == .null);
+            std.debug.assert(entry.state == .ready);
+
+            // Add the entry to the end of the ready queue.
+            if (self.ready_tail.opt()) |tail_id| {
+                // update current tail's next pointer to the new entry.
+                tail_id.ptr(&self.entry_pool).queue_next = .init(entry_id);
+            } else {
+                // Empty queue, so set the head to the new entry.
+                self.ready_head = .init(entry_id);
+            }
+
+            // Update the tail to the new entry.
+            self.ready_tail = .init(entry_id);
+        }
+
+        fn popReady(self: *Self) ?EntryId {
+            const entry_id = self.ready_head.opt() orelse return null;
+            const entry = entry_id.ptr(&self.entry_pool);
+
+            self.ready_head = entry.queue_next;
+            if (self.ready_head == .null)
+                self.ready_tail = .null;
+
+            entry.queue_next = .null;
+            return entry_id;
+        }
+
+        fn appendWaiter(self: *Self, entry_id: EntryId, waiter_id: WaiterId) void {
+            const entry = entry_id.ptr(&self.entry_pool);
+            const waiter = waiter_id.ptr(&self.waiter_pool);
+
+            std.debug.assert(waiter.next == .null);
+
+            if (entry.waiter_tail.opt()) |tail_id| {
+                tail_id.ptr(&self.waiter_pool).next = .init(waiter_id);
+            } else {
+                entry.waiter_head = .init(waiter_id);
+            }
+
+            entry.waiter_tail = .init(waiter_id);
+        }
+
+        fn retireEntry(self: *Self, entry_id: EntryId) void {
+            const entry = entry_id.ptr(&self.entry_pool);
+
+            std.debug.assert(entry.state == .ready);
+            std.debug.assert(entry.waiter_head == .null);
+            std.debug.assert(entry.waiter_tail == .null);
+
+            std.debug.assert(self.active_fetches.remove(entry.key));
+
+            self.releaseAccount(entry.result);
+
+            self.entry_pool.destroyId(entry_id);
+        }
+
+        fn submitRootedRequests(self: *Self) bool {
+            var writer = self.account_lookups.in.get(.writer);
+            var submitted: usize = 0;
+
+            while (self.rooted_head != .null) {
+                const request_out = writer.next() orelse break;
+
+                const entry_id = self.popRooted().?;
+                const entry = entry_id.ptr(&self.entry_pool);
+
+                std.debug.assert(entry.state == .queued_rooted);
+
+                request_out.* = .{
+                    .req_user_data = @intCast(entry_id.index()),
+                    .pubkey = entry.key.pubkey,
+                };
+
+                entry.state = .fetching_rooted;
+                submitted += 1;
+            }
+
+            if (submitted == 0)
+                return false;
+
+            writer.markUsed();
+            return true;
+        }
+
+        fn drainRootedResults(self: *Self) bool {
+            var reader = self.account_lookups.out.get(.reader);
+            var consumed: usize = 0;
+
+            while (reader.next()) |response| {
+                consumed += 1;
+                self.processRootedResult(response.*);
+            }
+
+            if (consumed == 0)
+                return false;
+
+            reader.markUsed();
+            return true;
+        }
+
+        fn processRootedResult(
+            self: *Self,
+            response: AccountLookups.Result,
+        ) void {
+            const entry_index = response.req_user_data;
+
+            if (entry_index >= self.entry_pool.len) {
+                self.releaseAccount(response.account_index);
+                return;
+            }
+
+            const entry_id = EntryId.fromInt(@intCast(entry_index));
+            const entry = entry_id.ptr(&self.entry_pool);
+
+            if (entry.state != .fetching_rooted) {
+                self.releaseAccount(response.account_index);
+                return;
+            }
+
+            std.debug.assert(response.pubkey.equals(&entry.key.pubkey));
+
+            entry.result = response.account_index;
+
+            entry.state = .ready;
+            self.enqueueReady(entry_id);
+        }
+
+        /// Release an account reference back to the account pool, if it's valid.
+        fn releaseAccount(self: *Self, account_ref: AccountRef) void {
+            if (account_ref == .invalid) return;
+            const account = self.account_pool.getAccount(account_ref);
+            if (account.unref()) self.account_pool.free(account_ref);
+        }
+    };
+}
+
+test "rooted miss completes as not found" {
+    const TestUnrooted = lib.replay.UnrootedType(.{
+        .max_blocks = 4,
+        .max_mutations_per_block = 8,
+    });
+    const TestFetcher = AccountFetcherType(TestUnrooted);
+
+    var account_pool: AccountPool = undefined;
+    account_pool.init(0);
+
+    var account_lookups: AccountLookups = undefined;
+    account_lookups.init();
+
+    var block_pool_memory: [BlockPool.size()]u8 align(@alignOf(BlockPool)) = undefined;
+    const block_pool: *BlockPool = @ptrCast(&block_pool_memory);
+    block_pool.init();
+
+    const block_ref = try block_pool.createId();
+    block_ref.ptr(block_pool).* = .{
+        .slot = .init(1),
+    };
+
+    var unrooted: TestUnrooted = undefined;
+    unrooted.init();
+
+    var fetcher: TestFetcher = undefined;
+    try fetcher.init(
+        std.testing.allocator,
+        &account_pool,
+        &account_lookups,
+        &unrooted,
+        block_pool,
+    );
+    defer fetcher.deinit();
+
+    const pubkey: Pubkey = .parse("AUCuaE1ZfgKAReZedngX55iW1NaCjFcDQ1pRvP4caix8");
+
+    try fetcher.submit(.{
+        .block_ref = block_ref,
+        .pubkey = pubkey,
+        .user_data = 42,
+    });
+
+    try std.testing.expect(fetcher.popCompletion() == null);
+
+    // Publish the queued Rooted request.
+    try std.testing.expect(fetcher.poll());
+
+    var request_reader = account_lookups.in.get(.reader);
+    const rooted_request = (request_reader.next() orelse
+        return error.MissingRootedRequest).*;
+    request_reader.markUsed();
+
+    try std.testing.expect(rooted_request.pubkey.equals(&pubkey));
+
+    // Simulate AccountsDB returning not-found.
+    var response_writer = account_lookups.out.get(.writer);
+    const response = response_writer.next() orelse
+        return error.ResponseRingFull;
+
+    response.* = .{
+        .req_user_data = rooted_request.req_user_data,
+        .pubkey = rooted_request.pubkey,
+        .account_index = .invalid,
+    };
+    response_writer.markUsed();
+
+    try std.testing.expect(fetcher.poll());
+
+    const completion = fetcher.popCompletion() orelse
+        return error.MissingCompletion;
+
+    try std.testing.expectEqual(@as(UserData, 42), completion.user_data);
+    try std.testing.expect(completion.pubkey.equals(&pubkey));
+    try std.testing.expectEqual(AccountRef.invalid, completion.account_ref);
+    try std.testing.expect(fetcher.popCompletion() == null);
+}
