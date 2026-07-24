@@ -31,16 +31,16 @@ pub const Config = extern struct {
 };
 
 test "Config populate and getArgs round-trip" {
-    var config: Config = undefined;
-    try config.populate(&.{ "--ledger", "/path/to/ledger", "--start-slot", "100" });
+    var ipc_config: Config = undefined;
+    try ipc_config.populate(&.{ "--ledger", "/path/to/ledger", "--start-slot", "100" });
     try std.testing.expectEqualStrings(
         "--ledger /path/to/ledger --start-slot 100",
-        config.getArgs(),
+        ipc_config.getArgs(),
     );
 }
 
 test "Config populate empty args" {
-    var config: Config = undefined;
-    try config.populate(&.{});
-    try std.testing.expectEqualStrings("", config.getArgs());
+    var ipc_config: Config = undefined;
+    try ipc_config.populate(&.{});
+    try std.testing.expectEqualStrings("", ipc_config.getArgs());
 }

@@ -23,6 +23,7 @@ pub fn build(b: *Build) !void {
     const install_step = b.getInstallStep();
     install_step.dependOn(sig.exe.installStep());
     install_step.dependOn(tools.lint.installStep());
+    install_step.dependOn(tools.shred_stream.installStep());
     for (unit_tests.tests.items) |exe| install_step.dependOn(exe.installStep());
     for (tools.topologies) |exe| install_step.dependOn(exe.installStep());
 
@@ -217,6 +218,7 @@ const Dependencies = struct {
 /// validator binary. Does not include any tests, developer tools, docs, etc.
 const Sig = struct {
     lib: *Build.Module,
+    shred_stream: *Build.Module,
     services_mod: *Build.Module,
     start_service: *Build.Module,
     service_libs: [services.len]Service,
@@ -287,6 +289,19 @@ const Sig = struct {
         });
         unit_tests.add("lib", lib);
 
+        // Shred stream library module — shared code for both the shred_streamer
+        // service and the shred-stream CLI script. Has rocksdb as a dependency
+        // but is NOT linked into the main lib module or sig-init binary.
+        const shred_stream_mod = b.createModule(.{
+            .root_source_file = b.path("lib/shred_streamer/lib.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = &.{
+                .{ .name = "rocksdb", .module = deps.rocksdb },
+                .{ .name = "rocksdb-c", .module = deps.rocksdb_c },
+            },
+        });
+
         const start_service = b.createModule(.{
             .root_source_file = b.path("init/start_service.zig"),
             .target = config.target,
@@ -337,10 +352,9 @@ const Sig = struct {
                     .{ .name = "services", .module = services_mod },
                 },
             });
-            // Only shred_streamer needs rocksdb (for reading Agave ledger).
+            // Only shred_streamer needs the shred_stream lib (for reading Agave ledger).
             if (comptime std.mem.eql(u8, service.name, "shred_streamer")) {
-                service_mod.addImport("rocksdb", deps.rocksdb);
-                service_mod.addImport("rocksdb-c", deps.rocksdb_c);
+                service_mod.addImport("shred_stream", shred_stream_mod);
             }
             unit_tests.add(service.name, service_mod);
 
@@ -364,6 +378,7 @@ const Sig = struct {
 
         return .{
             .lib = lib,
+            .shred_stream = shred_stream_mod,
             .services_mod = services_mod,
             .start_service = start_service,
             .service_libs = service_libs,
@@ -381,6 +396,7 @@ const Sig = struct {
 /// integration tests, etc.
 const Tools = struct {
     lint: Executable,
+    shred_stream: Executable,
     docs: *Build.Step.InstallDir,
     topologies: [topology_descriptions.len]Executable,
 
@@ -474,6 +490,27 @@ const Tools = struct {
             }
         }
 
+        // Standalone shred-stream CLI tool (uses shared shred_stream lib).
+        const shred_stream_script_mod = b.createModule(.{
+            .root_source_file = b.path("scripts/shred_stream.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = &.{
+                .{ .name = "lib", .module = sig.lib },
+                .{ .name = "shred_stream", .module = sig.shred_stream },
+                .{ .name = "rocksdb", .module = deps.rocksdb },
+                .{ .name = "rocksdb-c", .module = deps.rocksdb_c },
+            },
+        });
+        const shred_stream_exe: Executable = .init(b, .{
+            .install = config.exe.install,
+            .run = false,
+        }, .{
+            .name = "shred-stream",
+            .root_module = shred_stream_script_mod,
+            .use_llvm = config.use_llvm,
+        }, .{});
+
         // generates unified docs for all modules
         // NOTE: have to specify `-Dno-bin` & `-Dno-run` in order to
         // avoid needing to run codegen for the sig binaries.
@@ -527,6 +564,7 @@ const Tools = struct {
 
         return .{
             .lint = lint_exe,
+            .shred_stream = shred_stream_exe,
             .docs = install_docs,
             .topologies = topo_exes,
         };
