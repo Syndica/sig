@@ -9,12 +9,13 @@
 //! Lines containing URLs (any occurrence of "http") are exempt from length checks.
 //! This includes `[word] URL` reference patterns (e.g. `// [agave] https://...`).
 //!
-//! For code lines, trailing comments do not count toward line length. Lines between
-//! `// zig fmt: off` and `// zig fmt: on` are ignored, and `// sig fmt:` directives
-//! work the same way. Doc comment variants (`/// sig fmt: off/on`) are also supported.
+//! Lines between `// zig fmt: off` and `// zig fmt: on` are ignored, and
+//! `// sig fmt:` directives work the same way. Doc comment variants
+//! (`/// sig fmt: off/on`) are also supported.
 //!
-//! Generated and data-heavy files can be listed in `excluded_paths`. Stale entries are reported
-//! by `lintExcludedPathsExist` so exclusions stay tied to files that exist.
+//! Generated and data-heavy files can be listed in `excluded_paths`. Stale
+//! entries are reported by `lintExcludedPathsExist` so exclusions stay tied
+//! to files that exist.
 
 const std = @import("std");
 
@@ -69,14 +70,7 @@ pub fn lint(ctx: *core.Context, file: *const core.SourceFile) !void {
         // Lines containing URLs are exempt from line length limits.
         if (std.mem.indexOf(u8, line, "http") != null) continue;
 
-        // For full-line comments, measure the entire line.
-        // For code lines, measure only the code part (before any trailing comment).
-        const measured_len = if (std.mem.startsWith(u8, stripped_left, "//"))
-            line.len
-        else
-            std.mem.trimRight(u8, beforeLineComment(line), " ").len;
-
-        if (measured_len > max_line_length) {
+        if (line.len > max_line_length) {
             try ctx.addDiagnostic(
                 file.path,
                 line_no,
@@ -96,7 +90,10 @@ fn isExcluded(path: []const u8) bool {
 }
 
 fn startsFmtDirective(stripped: []const u8, state: []const u8) bool {
-    const prefixes = [_][]const u8{ "// zig fmt: ", "// sig fmt: ", "/// zig fmt: ", "/// sig fmt: " };
+    const prefixes = [_][]const u8{
+        "// zig fmt: ",  "// sig fmt: ",
+        "/// zig fmt: ", "/// sig fmt: ",
+    };
     for (prefixes) |prefix| {
         if (std.mem.startsWith(u8, stripped, prefix) and
             std.mem.eql(u8, stripped[prefix.len..], state))
@@ -107,12 +104,7 @@ fn startsFmtDirective(stripped: []const u8, state: []const u8) bool {
     return false;
 }
 
-fn beforeLineComment(line: []const u8) []const u8 {
-    if (std.mem.indexOf(u8, line, "//")) |index| return line[0..index];
-    return line;
-}
-
-test "detects code and comments, ignores multiline strings fmt-off and trailing comments" {
+test "detects code and comments, ignores multiline strings and fmt-off" {
     const allocator = std.heap.page_allocator;
     const config: cli.Config = .{};
     var ctx: core.Context = .{ .arena = allocator, .config = config };
@@ -128,7 +120,7 @@ test "detects code and comments, ignores multiline strings fmt-off and trailing 
         "12345678901234567890123456789012345678901;\n" ++
         "// zig fmt: on\n" ++
         "const z = 1; // 12345678901234567890123456789012345678901234567890" ++
-        "123456789012345678901234567890\n";
+        "12345678901234567890123456789012345\n";
     const source_z = try allocator.dupeZ(u8, source);
     const ast = try std.zig.Ast.parse(allocator, source_z, .zig);
     const file: core.SourceFile = .{
@@ -137,10 +129,13 @@ test "detects code and comments, ignores multiline strings fmt-off and trailing 
         .ast = ast,
     };
     try lint(&ctx, &file);
-    // Long code line (line 1) and long comment (line 2) are flagged.
-    // Multiline string (line 3), fmt-off code (line 5), and trailing comment (line 7)
-    // are not flagged.
-    try std.testing.expectEqual(2, ctx.diagnostics.items.len);
+    // Long code line (line 1), long comment (line 2), and long trailing
+    // comment (line 7) are flagged.
+    // Multiline string (line 3) and fmt-off code (line 5) are not flagged.
+    try std.testing.expectEqual(3, ctx.diagnostics.items.len);
+    try std.testing.expectEqual(1, ctx.diagnostics.items[0].line);
+    try std.testing.expectEqual(2, ctx.diagnostics.items[1].line);
+    try std.testing.expectEqual(7, ctx.diagnostics.items[2].line);
 }
 
 test "doc comment /// sig fmt: off/on directives are recognized" {
@@ -150,9 +145,13 @@ test "doc comment /// sig fmt: off/on directives are recognized" {
 
     const source =
         "/// sig fmt: off\n" ++
-        "///     \\phi_i'(x) = \\sum_{l: bit l set in i} S_l'(x) \\prod_{{l: bit l set in i} \\ {l}} S_{l'}(x) extra padding here\n" ++
+        "///     \\phi_i'(x) = \\sum_{l: bit l set in i}" ++
+        " S_l'(x) \\prod_{{l: bit l set in i} \\ {l}}" ++
+        " S_{l'}(x) extra padding here\n" ++
         "/// sig fmt: on\n" ++
-        "/// this long doc comment without fmt-off should be flagged 12345678901234567890123456789012345678901234567890\n";
+        "/// this long doc comment without fmt-off should" ++
+        " be flagged 12345678901234567890123456789012345" ++
+        "678901234567890\n";
     const source_z = try allocator.dupeZ(u8, source);
     const ast = try std.zig.Ast.parse(allocator, source_z, .zig);
     const file: core.SourceFile = .{
@@ -163,6 +162,7 @@ test "doc comment /// sig fmt: off/on directives are recognized" {
     try lint(&ctx, &file);
     // Only line 4 (the long doc comment outside fmt-off) should be flagged.
     try std.testing.expectEqual(1, ctx.diagnostics.items.len);
+    try std.testing.expectEqual(4, ctx.diagnostics.items[0].line);
 }
 
 test "lines containing URLs are exempt from line length" {
@@ -190,6 +190,7 @@ test "lines containing URLs are exempt from line length" {
     try lint(&ctx, &file);
     // Only the plain long code line should be flagged, not the URL lines.
     try std.testing.expectEqual(1, ctx.diagnostics.items.len);
+    try std.testing.expectEqual(4, ctx.diagnostics.items[0].line);
 }
 
 test "excluded paths report stale entries" {

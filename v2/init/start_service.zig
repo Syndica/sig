@@ -263,7 +263,8 @@ fn handleSegfault(
                 link: ?*std.c.ucontext_t,
                 mcsize: u64,
                 mcontext: *std.c.mcontext_t,
-                __mcontext_data: std.c.mcontext_t align(@sizeOf(usize)), // Disable padding after `mcontext`.
+                // Disable padding after `mcontext`.
+                __mcontext_data: std.c.mcontext_t align(@sizeOf(usize)),
             }, @ptrCast(ctx)).__mcontext_data;
         }
         std.debug.relocateContext(&new_ctx);

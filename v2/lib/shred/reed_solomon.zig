@@ -538,8 +538,8 @@ const Table = struct {
     ///
     /// sig fmt: off
     ///     \phi_i'(x) = \sum_{l: bit l set in i} S_l'(x) \prod_{{l: bit l set in i} \ {l}} S_{l'}(x)
-    /// sig fmt: on
     ///                = \sum_{l: bit l set in i} prime[l] \cdot \phi_{i ⊕ (1 << l)}(x)
+    /// sig fmt: on
     ///
     /// where we used S_l'(x) = prime[l]. Summing over all i:
     ///

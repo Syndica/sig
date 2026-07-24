@@ -987,8 +987,10 @@ pub fn GossipNode(comptime Effects: type) type {
                     }
 
                     if (!deprecated) {
-                        if (now <= wallclock +| threshold) break :blk true; // within threshold
-                        if (value.data == .contact_info) break :blk false; // Contact outside threshold
+                        // within threshold
+                        if (now <= wallclock +| threshold) break :blk true;
+                        // Contact outside threshold
+                        if (value.data == .contact_info) break :blk false;
                     }
 
                     // deprecated, or old non-Contact outside threshold

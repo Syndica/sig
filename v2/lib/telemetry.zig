@@ -616,7 +616,10 @@ pub const Histogram = struct {
         value: anytype,
     ) void {
         const float: f64 = if (@typeInfo(@TypeOf(value)) == .int) @floatFromInt(value) else value;
-        const shard_sync: ShardSync = @bitCast(self.shard_sync.fetchAdd(1, .acquire)); // acquires lock. must be first step.
+        // acquires lock. must be first step.
+        const shard_sync: ShardSync = @bitCast(
+            self.shard_sync.fetchAdd(1, .acquire),
+        );
         const shard = &self.shards[shard_sync.shard];
         for (self.upper_bounds, 0..) |bound, i| {
             if (float <= bound) {

@@ -598,10 +598,12 @@ const InProgressSets = struct {
         const new_idx: u32 = new_pool_id.index();
 
         self.ids[new_idx] = id;
-        self.eviction.add(new_pool_id) catch unreachable; // eviction can't be full, we *just* evicted
+        // eviction can't be full, we *just* evicted
+        self.eviction.add(new_pool_id) catch unreachable;
         self.signatures[new_idx] = signature.*;
         const result = self.signature_map.getOrPutAssumeCapacityAdapted(signature, map_ctx);
-        if (result.found_existing) unreachable; // you can't create a fecsetctx that already exists
+        // can't create a fecsetctx that already exists
+        if (result.found_existing) unreachable;
 
         const node: *FecSetCtx = self.ctx_pool.indexToPtr(@enumFromInt(new_idx));
 

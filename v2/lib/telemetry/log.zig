@@ -364,12 +364,16 @@ pub const Filter = struct {
                     if (!std.mem.eql(u8, filter_scope, scope)) continue;
                 }
                 break i;
-            } // if `filter.service` is null, that means every filter after this point will also have it as null.
+            }
+            // if `filter.service` is null, every filter after
+            // this point will also have it as null.
 
             if (filter.scope) |filter_scope| {
                 if (!std.mem.eql(u8, filter_scope, scope)) continue;
                 break i;
-            } // if `filter.scope` is null, that means every filter after this point will also have it as null.
+            }
+            // if `filter.scope` is null, every filter after
+            // this point will also have it as null.
 
             // there should be one level-only filter at the end
             std.debug.assert(i == filters.len - 1);
