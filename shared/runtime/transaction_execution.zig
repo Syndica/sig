@@ -589,18 +589,10 @@ fn transactionAccountsRentState(
             }) catch @panic("Account must exist in transaction context");
             defer account.release();
 
-            if (sig.runtime.ids.NATIVE_LOADER_ID.equals(&account.account.owner)) {
-                // TODO: Native programs should not be writable. Returning null here is correct
-                // with respect to this function. However, we need to fix the is writable bug
-                // and reenable this panic.
-                // @panic("Native programs should not be writable");
-                break :blk null;
-            } else {
-                break :blk rent_collector.getAccountRentState(
-                    account.account.lamports,
-                    account.account.data.len,
-                );
-            }
+            break :blk rent_collector.getAccountRentState(
+                account.account.lamports,
+                account.account.data.len,
+            );
         } else null;
         rent_states[i] = rent_state;
     }
@@ -973,4 +965,183 @@ test "loadAndExecuteTransaction: simple transfer transaction" {
         try std.testing.expectEqual(2_850, executed_transaction.compute_meter);
         try std.testing.expectEqual(0, executed_transaction.accounts_data_len_delta);
     }
+}
+
+fn runCreateAccountRentCheck(
+    allocator: std.mem.Allocator,
+    new_owner: Pubkey,
+) !struct { err: ?TransactionError, target_lamports: u64 } {
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const payer = Pubkey.initRandom(prng.random());
+    const target = Pubkey.initRandom(prng.random());
+    const recent_blockhash = Hash.initRandom(prng.random());
+
+    const instruction_data = try sig.bincode.writeAlloc(
+        allocator,
+        sig.runtime.program.system.Instruction{ .create_account = .{
+            .lamports = 1,
+            .space = 0,
+            .owner = new_owner,
+        } },
+        .{},
+    );
+    defer allocator.free(instruction_data);
+
+    var accounts: std.MultiArrayList(AccountMeta) = .{};
+    defer accounts.deinit(allocator);
+    try accounts.append(allocator, .{ .pubkey = payer, .is_signer = true, .is_writable = true });
+    try accounts.append(allocator, .{ .pubkey = target, .is_signer = true, .is_writable = true });
+    try accounts.append(allocator, .{
+        .pubkey = sig.runtime.program.system.ID,
+        .is_signer = false,
+        .is_writable = false,
+    });
+
+    var metas: sig.runtime.InstructionInfo.AccountMetas = .empty;
+    defer metas.deinit(allocator);
+    try metas.appendSlice(allocator, &.{
+        .{ .pubkey = payer, .index_in_transaction = 0, .is_signer = true, .is_writable = true },
+        .{ .pubkey = target, .index_in_transaction = 1, .is_signer = true, .is_writable = true },
+    });
+
+    var transaction: RuntimeTransaction = .{
+        .signature_count = 2,
+        .fee_payer = payer,
+        .msg_hash = Hash.initRandom(prng.random()),
+        .recent_blockhash = recent_blockhash,
+        .instructions = &.{.{
+            .program_meta = .{
+                .pubkey = sig.runtime.program.system.ID,
+                .index_in_transaction = 2,
+            },
+            .account_metas = metas,
+            .dedupe_map = blk: {
+                var dedupe_map: [InstructionInfo.MAX_ACCOUNT_METAS]u16 = @splat(0xffff);
+                dedupe_map[0] = 0;
+                dedupe_map[1] = 1;
+                break :blk dedupe_map;
+            },
+            .instruction_data = instruction_data,
+            .owned_instruction_data = false,
+        }},
+        .accounts = accounts,
+        .num_lookup_tables = 0,
+        .num_static_account_keys = @intCast(accounts.len),
+        .is_simple_vote_transaction = false,
+    };
+    transaction.compute_budget_instruction_details.num_non_compute_budget_instructions = 1;
+    transaction.compute_budget_instruction_details.num_non_migratable_builtin_instructions = 1;
+
+    var account_map = sig.utils.collections.PubkeyMap(sig.runtime.AccountSharedData){};
+    defer sig.runtime.testing.deinitAccountMap(account_map, allocator);
+    try account_map.put(allocator, payer, .{
+        .lamports = 10_000_000,
+        .data = &.{},
+        .owner = sig.runtime.program.system.ID,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+    // `target` is intentionally absent; the account loader supplies EMPTY.
+    try account_map.put(allocator, sig.runtime.program.system.ID, .{
+        .lamports = 1,
+        .data = &.{},
+        .owner = sig.runtime.ids.NATIVE_LOADER_ID,
+        .executable = true,
+        .rent_epoch = 0,
+    });
+
+    const feature_set: FeatureSet = .ALL_DISABLED;
+
+    const PassingStatusChecker = struct {
+        fn check(
+            _: *const anyopaque,
+            _: *const Hash,
+            _: *const Hash,
+            _: u64,
+        ) StatusChecker.Result {
+            return .recent_and_unprocessed;
+        }
+    };
+    const status_checker_context = PassingStatusChecker{};
+    const status_checker = StatusChecker{
+        .ctx = &status_checker_context,
+        .checkFn = PassingStatusChecker.check,
+    };
+
+    const sysvar_cache: SysvarCache = .{};
+    defer sysvar_cache.deinit(allocator);
+
+    const rent_collector = sig.core.rent_collector.defaultCollector(10);
+
+    const epoch_stake_reader_context: TestEpochStakeReaderContext = .{};
+
+    const environment = TransactionExecutionEnvironment{
+        .feature_set = &feature_set,
+        .status_checker = status_checker,
+        .sysvar_cache = &sysvar_cache,
+        .rent_collector = &rent_collector,
+        .epoch_stake_reader = .{
+            .ctx = &epoch_stake_reader_context,
+            .totalStakeFn = TestEpochStakeReaderContext.totalStake,
+            .stakeForVoteAccountFn = TestEpochStakeReaderContext.stakeForVoteAccount,
+        },
+        .vm_environment = &.{ .loader = .ALL_DISABLED, .config = .{} },
+        .next_vm_environment = null,
+        .slot = 0,
+        .max_age = 0,
+        .last_blockhash = transaction.recent_blockhash,
+        .next_durable_nonce = Hash.ZEROES,
+        .next_lamports_per_signature = 0,
+        .last_lamports_per_signature = 0,
+        .lamports_per_signature = 5000,
+    };
+
+    const config = TransactionExecutionConfig{
+        .log = false,
+        .log_messages_byte_limit = null,
+    };
+
+    var program_map = ProgramMap.empty;
+    defer program_map.deinit(allocator);
+
+    const result = try loadAndExecuteTransaction(
+        allocator,
+        allocator,
+        &transaction,
+        AccountReader.fromMap(&account_map),
+        &environment,
+        &config,
+        &program_map,
+    );
+    var processed_transaction = result.ok;
+    defer processed_transaction.deinit(allocator);
+
+    var target_lamports: u64 = 0;
+    for (processed_transaction.writes.constSlice()) |acct| {
+        if (acct.pubkey.equals(&target)) target_lamports = acct.account.lamports;
+    }
+    return .{ .err = processed_transaction.err, .target_lamports = target_lamports };
+}
+
+test "loadAndExecuteTransaction: native-loader owner does not skip rent-state verification" {
+    // Regression for #1714: a System CreateAccount can set owner = Native Loader, and the
+    // resulting sub-rent-exempt account must be rejected like any other owner (matches Agave).
+    const allocator = std.testing.allocator;
+
+    const native = try runCreateAccountRentCheck(allocator, sig.runtime.ids.NATIVE_LOADER_ID);
+    try std.testing.expect(native.err != null);
+    try std.testing.expectEqual(
+        TransactionError{ .InsufficientFundsForRent = .{ .account_index = 1 } },
+        native.err.?,
+    );
+    try std.testing.expectEqual(@as(u64, 0), native.target_lamports);
+
+    // System-owned control: rejected before and after the fix.
+    const control = try runCreateAccountRentCheck(allocator, sig.runtime.program.system.ID);
+    try std.testing.expect(control.err != null);
+    try std.testing.expectEqual(
+        TransactionError{ .InsufficientFundsForRent = .{ .account_index = 1 } },
+        control.err.?,
+    );
 }
