@@ -14,8 +14,7 @@ comptime {
     }
 }
 
-/// The native endian, which is what is used by telemetry for
-/// `std.Io.Writer` and `std.Io.Reader` IPC data.
+/// The native endian, which is what is used by telemetry for `std.Io.Writer` and `std.Io.Reader` IPC data.
 pub const endian = builtin.target.cpu.arch.endian();
 
 /// Data that's only relevant during startup.
@@ -46,8 +45,7 @@ pub const Region = extern struct {
         /// The length of the encoded log filters byte string.
         log_filters_len: u32,
 
-        /// Number of other services excluding the telemetry service
-        /// (of which there is presumably only instance).
+        /// Number of other services excluding the telemetry service (of which there is presumably only instance).
         /// This is also the maximum number of log streams to support.
         service_count: u32,
 
@@ -86,8 +84,7 @@ pub const Region = extern struct {
         port: u16,
         log_filters_encoded: []const u8,
 
-        /// Number of other services excluding the telemetry service
-        /// (of which there is presumably only instance).
+        /// Number of other services excluding the telemetry service (of which there is presumably only instance).
         /// This is also the maximum number of log streams to support.
         service_count: u32,
 
@@ -396,14 +393,11 @@ pub fn Logger(comptime scope_str: []const u8) type {
                             const expected_header = message.computeHeader();
                             const encoded_len = expected_header.encodedLength();
 
-                            // NOTE: although the retry path is highly unlikely
-                            // assuming the swapbuffer is sufficiently large,
-                            // there's an extremely slim but non-zero chance it
-                            // could happen. If it does happen, but the reader
-                            // is actually still responsive, it is unlikely to
-                            // happen many times in a row, so we'll retry a
-                            // handful of times before considering the channel
-                            // to be dead, and subsequently panic.
+                            // NOTE: although the retry path is highly unlikely assuming the swapbuffer is sufficiently large,
+                            // there's an extremely slim but non-zero chance it could happen.
+                            // If it does happen, but the reader is actually still responsive, it is unlikely to happen many
+                            // times in a row, so we'll retry a handful of times before considering the channel to be dead,
+                            // and subsequently panic.
                             const max_retries = 100;
 
                             const writable: log_zig.MessageStream.SwapBuffer.Writable =
@@ -418,8 +412,7 @@ pub fn Logger(comptime scope_str: []const u8) type {
 
                             var fbw: std.Io.Writer = .fixed(writable.slice);
                             const message_header = message.write(&fbw) catch |e| switch (e) {
-                                // we already know there's enough space
-                                // in the buffer for the message.
+                                // we already know there's enough space in the buffer for the message.
                                 error.WriteFailed => unreachable,
                             };
                             std.debug.assert(message_header.encodedLength() == encoded_len);
@@ -767,8 +760,7 @@ pub const Histogram = struct {
     }
 
     const ShardSync = packed struct {
-        /// The total count of events that have started to be recorded
-        /// (including those that finished).
+        /// The total count of events that have started to be recorded (including those that finished).
         /// If this is larger than the shard count, it means a write is in progress.
         count: u63 = 0,
         /// Index of the shard currently being used for writes.

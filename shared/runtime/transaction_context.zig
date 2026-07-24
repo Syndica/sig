@@ -150,8 +150,7 @@ pub const TransactionContext = struct {
         if (self.log_collector) |*lc| lc.deinit(self.allocator);
 
         // Clean up CPI instruction infos stored in the trace.
-        // Top-level instructions (depth == 1) are owned by ResolvedTransaction and cleaned up
-        // there.
+        // Top-level instructions (depth == 1) are owned by ResolvedTransaction and cleaned up there.
         // CPI instructions (depth > 1) are created during execution and owned by this trace.
         for (self.instruction_trace.slice()) |entry| {
             if (entry.depth > 1) {

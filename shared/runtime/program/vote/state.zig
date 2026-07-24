@@ -1,5 +1,4 @@
-//! [agave] Analogous to
-//! https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L1
+//! [agave] Analogous to https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L1
 const std = @import("std");
 const std14 = @import("std14");
 const sig = @import("../../../lib.zig");
@@ -69,12 +68,10 @@ pub const INITIAL_LOCKOUT: usize = 2;
 // Maximum number of credits history to keep around
 pub const MAX_EPOCH_CREDITS_HISTORY: usize = 64;
 
-// Number of slots of grace period for which maximum vote credits are awarded - votes landing within
-// this number of slots of the slot that is being voted on are awarded full credits.
+// Number of slots of grace period for which maximum vote credits are awarded - votes landing within this number of slots of the slot that is being voted on are awarded full credits.
 pub const VOTE_CREDITS_GRACE_SLOTS: u8 = 2;
 
-// Maximum number of credits to award for a vote; this number of credits is awarded to votes on
-// slots that land within the grace period. After that grace period, vote credits are reduced.
+// Maximum number of credits to award for a vote; this number of credits is awarded to votes on slots that land within the grace period. After that grace period, vote credits are reduced.
 pub const VOTE_CREDITS_MAXIMUM_PER_SLOT: u8 = 16;
 
 /// Port of Rust's `slice::binary_search_by` searching `items` for an entry
@@ -156,17 +153,14 @@ pub const Lockout = struct {
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L135
 pub const LandedVote = struct {
-    // Latency is the difference in slot number between the slot that was voted on (lockout.slot)
-    // and the slot in
-    // which the vote that added this Lockout landed. For votes which were cast before versions of
-    // the validator
+    // Latency is the difference in slot number between the slot that was voted on (lockout.slot) and the slot in
+    // which the vote that added this Lockout landed.  For votes which were cast before versions of the validator
     // software which recorded vote latencies, latency is recorded as 0.
     latency: u8,
     lockout: Lockout,
 };
 
-/// [agave] Analogous tuple [(Pubkey, Epoch, Epoch)]
-/// https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L444.
+/// [agave] Analogous tuple [(Pubkey, Epoch, Epoch)] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L444.
 pub const PriorVote = struct {
     /// authorized voter at the time of the vote.
     key: Pubkey,
@@ -176,8 +170,7 @@ pub const PriorVote = struct {
     end: Epoch,
 };
 
-/// [agave] Analogous tuple [(Epoch, u64, u64)]
-/// https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L448
+/// [agave] Analogous tuple [(Epoch, u64, u64)] https://github.com/anza-xyz/solana-sdk/blob/991954602e718d646c0d28717e135314f72cdb78/vote-interface/src/state/mod.rs#L448
 pub const EpochCredit = struct {
     epoch: Epoch,
     credits: u64,
@@ -762,12 +755,10 @@ pub const VoteStateVersions = union(enum(u32)) {
     /// callers wanting the bare struct (e.g. RPC account parsing in `parse_vote.zig`) call this
     /// directly. Takes ownership of the contained vote state and will either free it or return it.
     ///
-    /// [SIMD-0185] Returns VoteStateV4 with default values for new fields when converting from
-    /// older versions.
+    /// [SIMD-0185] Returns VoteStateV4 with default values for new fields when converting from older versions.
     /// vote_pubkey: when provided, used as inflation_rewards_collector default for old versions.
     ///
-    /// [agave] Analogous to [try_convert_to_vote_state_v4](
-    /// https://github.com/anza-xyz/agave/blob/v4.1/programs/vote/src/vote_state/handler.rs#L624)
+    /// [agave] Analogous to [try_convert_to_vote_state_v4](https://github.com/anza-xyz/agave/blob/v4.1/programs/vote/src/vote_state/handler.rs#L624)
     pub fn convertToV4(
         self: VoteStateVersions,
         /// must be the allocator used to allocate self
@@ -1340,8 +1331,7 @@ pub const VoteState1_14_11 = struct {
     /// when votes.len() is MAX_LOCKOUT_HISTORY.
     pub const MAX_VOTE_STATE_SIZE: usize = 3731;
 
-    // Offset of VoteState1_4_11::prior_voters, for determining initialization status without
-    // deserialization
+    // Offset of VoteState1_4_11::prior_voters, for determining initialization status without deserialization
     const DEFAULT_PRIOR_VOTERS_OFFSET: usize = 82;
 
     pub fn init(
@@ -1414,8 +1404,7 @@ pub const VoteStateV3 = struct {
     /// when votes.len() is MAX_LOCKOUT_HISTORY.
     pub const MAX_VOTE_STATE_SIZE: usize = 3762;
 
-    // Offset of VoteStateV3::prior_voters, for determining initialization status without
-    // deserialization
+    // Offset of VoteStateV3::prior_voters, for determining initialization status without deserialization
     const DEFAULT_PRIOR_VOTERS_OFFSET: usize = 114;
 
     pub const DEFAULT: VoteStateV3 = .{
@@ -1943,8 +1932,7 @@ pub const VoteStateV3 = struct {
 
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/fb8a9a06eb7ed1db556d9ef018eefafa5f707467/vote-interface/src/state/mod.rs#L772
     ///
-    /// Computes the vote latency for vote on voted_for_slot where the vote itself landed in
-    /// current_slot
+    /// Computes the vote latency for vote on voted_for_slot where the vote itself landed in current_slot
     pub fn computeVoteLatency(voted_for_slot: Slot, current_slot: Slot) u8 {
         return @min(current_slot -| voted_for_slot, std.math.maxInt(u8));
     }
@@ -2110,8 +2098,7 @@ pub const VoteStateV3 = struct {
         // 2) Conversely, `slot_hashes` is sorted from newest/largest vote to
         // the oldest/smallest vote
         //
-        // We check every proposed lockout because have to ensure that every slot is actually part
-        // of
+        // We check every proposed lockout because have to ensure that every slot is actually part of
         // the history, not just the most recent ones
         while (proposed_lockouts_index < proposed_lockouts.items.len and slot_hashes_index > 0) {
             const proposed_vote_slot: Slot = if (root_to_check) |root|
@@ -2132,8 +2119,7 @@ pub const VoteStateV3 = struct {
             switch (std.math.order(proposed_vote_slot, ancestor_slot)) {
                 .lt => {
                     if (slot_hashes_index == slot_hash_entries.len) {
-                        // The vote slot does not exist in the SlotHashes history because it's too
-                        // old,
+                        // The vote slot does not exist in the SlotHashes history because it's too old,
                         // i.e. older than the oldest slot in the history.
                         if (proposed_vote_slot >= earliest_slot_hash_in_history) {
                             return VoteError.assertion_failed;
@@ -2155,8 +2141,7 @@ pub const VoteStateV3 = struct {
                             std.debug.assert(new_proposed_root == proposed_vote_slot);
                             // 2. We know from the assert earlier in the function that
                             // `proposed_vote_slot < earliest_slot_hash_in_history`,
-                            // so from 1. we know that `new_proposed_root <
-                            // earliest_slot_hash_in_history`.
+                            // so from 1. we know that `new_proposed_root < earliest_slot_hash_in_history`.
                             if (new_proposed_root >= earliest_slot_hash_in_history) {
                                 return VoteError.assertion_failed;
                             }
@@ -2364,8 +2349,7 @@ pub const VoteStateV3 = struct {
 
         if (new_root) |proposed_new_root| {
             for (self.votes.items) |current_vote| {
-                // Sum credits for all votes in current state that are now rooted. (ie <=
-                // proposed_new_root).
+                // Sum credits for all votes in current state that are now rooted. (ie <= proposed_new_root).
                 if (current_vote.lockout.slot <= proposed_new_root) {
                     earned_credits = std.math.add(
                         u64,
@@ -2383,29 +2367,21 @@ pub const VoteStateV3 = struct {
             }
         }
 
-        // For any slots newly added to the new vote state, the vote latency of that slot is not
-        // provided by the
+        // For any slots newly added to the new vote state, the vote latency of that slot is not provided by the
         // vote instruction contents, but instead is computed from the actual latency of the vote
-        // instruction. This prevents other validators from manipulating their own vote latencies
-        // within their vote states
-        // and forcing the rest of the cluster to accept these possibly fraudulent latency values.
-        // If the
+        // instruction. This prevents other validators from manipulating their own vote latencies within their vote states
+        // and forcing the rest of the cluster to accept these possibly fraudulent latency values.  If the
         // timly_vote_credits feature is not enabled then vote latency is set to 0 for new votes.
         //
-        // For any slot that is in both the new state and the current state, the vote latency of the
-        // new state is taken
+        // For any slot that is in both the new state and the current state, the vote latency of the new state is taken
         // from the current state.
         //
-        // Thus vote latencies are set here for any newly vote-on slots when a vote instruction is
-        // received.
+        // Thus vote latencies are set here for any newly vote-on slots when a vote instruction is received.
         // They are copied into the new vote state after every vote for already voted-on slots.
-        // And when voted-on slots are rooted, the vote latencies stored in the vote state of all
-        // the rooted slots is used
+        // And when voted-on slots are rooted, the vote latencies stored in the vote state of all the rooted slots is used
         // to compute credits earned.
-        // All validators compute the same vote latencies because all process the same vote
-        // instruction at the
-        // same slot, and the only time vote latencies are ever computed is at the time that their
-        // slot is first voted on;
+        // All validators compute the same vote latencies because all process the same vote instruction at the
+        // same slot, and the only time vote latencies are ever computed is at the time that their slot is first voted on;
         // after that, the latencies are retained unaltered until the slot is rooted.
 
         // All the votes in our current vote state that are missing from the new vote state
@@ -2461,10 +2437,8 @@ pub const VoteStateV3 = struct {
         // `new_vote_state` passed all the checks, finalize the change by rewriting
         // our state.
 
-        // Now set the vote latencies on new slots not in the current state. New slots not in the
-        // current vote state will
-        // have had their latency initialized to 0 by the above loop. Those will now be updated to
-        // their actual latency.
+        // Now set the vote latencies on new slots not in the current state.  New slots not in the current vote state will
+        // have had their latency initialized to 0 by the above loop.  Those will now be updated to their actual latency.
         for (new_state) |*new_vote| {
             if (new_vote.latency == 0) {
                 new_vote.latency = VoteStateV3.computeVoteLatency(
@@ -2475,10 +2449,8 @@ pub const VoteStateV3 = struct {
         }
 
         if (self.root_slot != new_root) {
-            // Award vote credits based on the number of slots that were voted on and have reached
-            // finality
-            // For each finalized slot, there was one voted-on slot in the new vote state that was
-            // responsible for
+            // Award vote credits based on the number of slots that were voted on and have reached finality
+            // For each finalized slot, there was one voted-on slot in the new vote state that was responsible for
             // finalizing it. Each of those votes is awarded 1 credit.
             try self.incrementCredits(allocator, epoch, earned_credits);
         }
@@ -4866,8 +4838,7 @@ test "state.VoteStateV3.checkAndFilterProposedVoteState slots not ordered" {
         @panic("Missing vote slot hash");
     };
 
-    // Test with a `TowerSync` where the slots are out of order with empty TowerSync, should return
-    // EmptySlots error
+    // Test with a `TowerSync` where the slots are out of order with empty TowerSync, should return EmptySlots error
     {
         var tower_sync = try testTowerSync(
             allocator,

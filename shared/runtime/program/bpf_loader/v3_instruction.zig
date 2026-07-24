@@ -96,8 +96,7 @@ pub const Close = struct {
         recipient = 1,
         /// `[SIGNER]` The account's authority, Optional, required for initialized accounts.
         authority = 2,
-        /// `[WRITE]` The associated Program account if the account to close is a ProgramData
-        /// account.
+        /// `[WRITE]` The associated Program account if the account to close is a ProgramData account.
         program = 3,
     };
 };
@@ -105,8 +104,7 @@ pub const Close = struct {
 /// Minimum number of bytes that an `ExtendProgram` instruction must request
 /// when SIMD-0431 (`loader_v3_minimum_extend_program_size`) is active.
 ///
-/// [solana-sdk]
-/// https://github.com/anza-xyz/solana-sdk/blob/loader-v3-interface@v7.0.0/loader-v3-interface/src/instruction.rs#L18
+/// [solana-sdk] https://github.com/anza-xyz/solana-sdk/blob/loader-v3-interface@v7.0.0/loader-v3-interface/src/instruction.rs#L18
 pub const MINIMUM_EXTEND_PROGRAM_BYTES: u32 = 10240;
 
 pub const ExtendProgram = struct {

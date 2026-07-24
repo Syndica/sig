@@ -233,8 +233,7 @@ test "print_account" {
 }
 
 // Fails: Requires sol_alloc_free_ syscall
-// [program source]
-// https://github.com/solana-labs/solana-program-library/tree/master/shared-memory/program
+// [program source] https://github.com/solana-labs/solana-program-library/tree/master/shared-memory/program
 test "fast_copy" {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);

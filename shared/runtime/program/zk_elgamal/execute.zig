@@ -17,8 +17,7 @@ pub fn execute(
     const tc = ic.tc;
     const instruction_data = ic.ixn_info.instruction_data;
 
-    // [agave](
-    // https://github.com/anza-xyz/agave/blob/v2.2/programs/zk-elgamal-proof/src/lib.rs#L175-L187)
+    // [agave](https://github.com/anza-xyz/agave/blob/v2.2/programs/zk-elgamal-proof/src/lib.rs#L175-L187)
     if (tc.feature_set.active(.disable_zk_elgamal_proof_program, tc.slot) and
         !tc.feature_set.active(.reenable_zk_elgamal_proof_program, tc.slot))
     {

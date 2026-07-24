@@ -47,8 +47,7 @@ pub const SlotHashes = struct {
 
     pub fn add(self: *SlotHashes, slot: Slot, hash: Hash) void {
         const index = std.sort.lowerBound(Entry, self.entries.constSlice(), slot, Entry.searchCmp);
-        // If the slot is to old, do not insert. Otherwise if the entries are full, pop the last
-        // entry.
+        // If the slot is to old, do not insert. Otherwise if the entries are full, pop the last entry.
         if (index == MAX_ENTRIES) return;
 
         // If the entries are full, pop the last entry to make space for the new one.
@@ -58,8 +57,7 @@ pub const SlotHashes = struct {
         if (index < self.entries.len and self.entries.buffer[index].slot == slot) {
             self.entries.buffer[index].hash = hash;
         } else {
-            // SAFETY: entries has space for at least one more entry due to popping the last entry
-            // if it was full.
+            // SAFETY: entries has space for at least one more entry due to popping the last entry if it was full.
             self.entries.insert(index, .{ .slot = slot, .hash = hash }) catch unreachable;
         }
     }

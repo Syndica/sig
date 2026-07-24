@@ -15,8 +15,7 @@ const InstructionInfo = sig.runtime.InstructionInfo;
 const TransactionContext = sig.runtime.TransactionContext;
 const BorrowedAccount = sig.runtime.BorrowedAccount;
 
-/// `InstructionContext` holds all information required to execute a program instruction; excluding
-/// an allocator
+/// `InstructionContext` holds all information required to execute a program instruction; excluding an allocator
 /// it is the only argument passed to the program entrypoint function
 ///
 /// Current functionality supports the execution of a single `system_program` instruction

@@ -120,8 +120,7 @@ pub fn loadTransactionAccounts(
     var zone = tracy.Zone.init(@src(), .{ .name = "loadTransactionAccounts" });
     defer zone.deinit();
 
-    // [agave]
-    // https://github.com/anza-xyz/agave/commit/d5757e29aa - formalize_loaded_transaction_data_size hardcoded
+    // [agave] https://github.com/anza-xyz/agave/commit/d5757e29aa - formalize_loaded_transaction_data_size hardcoded
     const result = loadTransactionAccountsInner(
         account_reader,
         allocator,
@@ -227,8 +226,7 @@ fn loadTransactionAccountsInner(
                     if (programdata_address.equals(&key)) break :cont;
                 }
                 if (additional_loaded_accounts.contains(programdata_address)) break :cont;
-                // ...and the programdata account exists (if it doesn't, it is *not* a load
-                // failure)...
+                // ...and the programdata account exists (if it doesn't, it is *not* a load failure)...
                 if (try account_reader.get(allocator, programdata_address)) |programdata_account| {
                     defer programdata_account.deinit(allocator);
                     // ...count programdata toward this transaction's total size.
@@ -853,8 +851,7 @@ test "load accounts with simd 186 and loaderv3 program" {
     );
     defer loaded_accounts.deinit(allocator);
 
-    // fee payer: 64 + 1024 (passed directly), instruction: 64 + 17, program: 64 + bincode(State),
-    // programdata: 64 + 1024
+    // fee payer: 64 + 1024 (passed directly), instruction: 64 + 17, program: 64 + bincode(State), programdata: 64 + 1024
     try std.testing.expectEqual(2357, loaded_accounts.loaded_accounts_data_size);
     // Success path leaves `running_data_size_out` untouched.
     try std.testing.expectEqual(0, running_data_size);

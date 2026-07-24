@@ -281,14 +281,11 @@ pub const Filter = struct {
         fatal_last,
     };
 
-    /// Orders filters from least to most information, first by
-    /// `service`, and then `scope`; where the amount of information
-    /// is equal (both or neither `!= null`), they are ordered
-    /// lexicographically in the same order of priority, and then by
-    /// `level` (based on `params.level_order`).
+    /// Orders filters from least to most information, first by `service`, and then `scope`; where the
+    /// amount of information is equal (both or neither `!= null`), they are ordered lexicographically
+    /// in the same order of priority, and then by `level` (based on `params.level_order`).
     ///
-    /// NOTE: having multiple filters that would compare equal if
-    /// the `level` were ignored doesn't make a lot of sense.
+    /// NOTE: having multiple filters that would compare equal if the `level` were ignored doesn't make a lot of sense.
     pub fn order(
         self: Filter,
         other: Filter,
@@ -336,12 +333,10 @@ pub const Filter = struct {
         return a.order(b, .{ .level_order = .fatal_last }).invert() == .lt;
     }
 
-    /// Returns the index of the filter in a sorted list that most
-    /// specifically applies to the given service & scope pair.
+    /// Returns the index of the filter in a sorted list that most specifically applies to the given service & scope pair.
     pub fn findClosestFilter(
         params: struct {
-            /// Should be sorted such that
-            /// `sortLessThanInverted({}, filters[n], filters[n + 1]) == true`.
+            /// Should be sorted such that `sortLessThanInverted({}, filters[n], filters[n + 1]) == true`.
             filters: []const Filter,
             service: []const u8,
             scope: []const u8,
@@ -405,8 +400,7 @@ pub const Filter = struct {
         };
     }
 
-    /// Parses `str` as a comma-separated list of `Filter`s
-    /// (`std.mem.splitScalar` & `Filter.parse`).
+    /// Parses `str` as a comma-separated list of `Filter`s (`std.mem.splitScalar` & `Filter.parse`).
     /// If a default filter is missing (ie a filter for which `filter.isLevelOnly() == true`), the
     /// provided `default_root_log_level` will be used instead.
     /// `str.len == 0` is treated as an empty list (`default_log_level` will always be written).

@@ -38,8 +38,7 @@ const NONCED_TX_MARKER_IX_INDEX = 0;
 /// of the fee payer after collecting fees (but not rent) and the copied nonce
 /// account with its nonce already advanced.
 ///
-/// Analogous to [validate_transaction_fee_payer](
-/// https://github.com/anza-xyz/agave/blob/d70b1714b1153674c16e2b15b68790d274dfe953/svm/src/transaction_processor.rs#L557)
+/// Analogous to [validate_transaction_fee_payer](https://github.com/anza-xyz/agave/blob/d70b1714b1153674c16e2b15b68790d274dfe953/svm/src/transaction_processor.rs#L557)
 pub fn checkFeePayer(
     /// same allocator as batch account cache
     allocator: Allocator,
@@ -63,8 +62,7 @@ pub fn checkFeePayer(
     const fee_payer_key = transaction.accounts.items(.pubkey)[0];
     var payer_account = try accounts.get(allocator, fee_payer_key) orelse
         return .{ .err = .AccountNotFound };
-    // [agave]
-    // https://github.com/anza-xyz/agave/commit/d5757e29aa - formalize_loaded_transaction_data_size hardcoded
+    // [agave] https://github.com/anza-xyz/agave/commit/d5757e29aa - formalize_loaded_transaction_data_size hardcoded
     const payer_loaded_size = account_loader.TRANSACTION_ACCOUNT_BASE_SIZE +| payer_account.data.len;
     errdefer payer_account.deinit(allocator);
 

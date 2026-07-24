@@ -42,8 +42,7 @@ pub fn execute(
 
     const tc = ic.tc;
 
-    // Default compute units for the system program are applied via the declare_process_instruction
-    // macro
+    // Default compute units for the system program are applied via the declare_process_instruction macro
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/programs/vote/src/vote_processor.rs#L55
     try tc.consumeCompute(vote_program.COMPUTE_UNITS);
 
@@ -260,10 +259,8 @@ fn executeIntializeAccount(
 
 /// [agave] https://github.com/anza-xyz/agave/blob/ddec7bdbcf308a853d464f865ae4962acbc2b9cd/programs/vote/src/vote_state/mod.rs#L884-L903
 ///
-/// Note: Versioned state is not implemented for creating new vote account, as current check in
-/// Agaave implementation
-/// here
-/// https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/programs/vote/src/vote_state/mod.rs#L890-L892
+/// Note: Versioned state is not implemented for creating new vote account, as current check in Agaave implementation
+/// here https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/programs/vote/src/vote_state/mod.rs#L890-L892
 /// suggests creating only current version is supported.
 fn intializeAccount(
     allocator: std.mem.Allocator,
@@ -615,8 +612,7 @@ fn authorize(
             );
 
             // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/vote/src/vote_state/mod.rs#L701-L709
-            // The current authorized withdrawer or the epoch authorized voter must sign the
-            // transaction.
+            // The current authorized withdrawer or the epoch authorized voter must sign the transaction.
             validateIsSigner(vote_state.withdrawerKey().*, signers) catch {
                 // If the vote state isn't a valid signer, check if the epoch voter is.
                 try validateIsSigner(epoch_authorized_voter, signers);
@@ -723,8 +719,7 @@ fn executeAuthorizeWithSeed(
     );
 }
 
-/// [agave] Analogous to [process_authorize_with_seed_instruction]
-/// https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L19
+/// [agave] Analogous to [process_authorize_with_seed_instruction] https://github.com/anza-xyz/agave/blob/0603d1cbc3ac6737df8c9e587c1b7a5c870e90f4/programs/vote/src/vote_processor.rs#L19
 fn authorizeWithSeed(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -1219,10 +1214,8 @@ fn widthraw(
                 const last_epoch_credit = epoch_credits[epoch_credits.len - 1];
                 const current_epoch = clock.epoch;
                 const last_epoch_with_credits = last_epoch_credit.epoch;
-                // if current_epoch - last_epoch_with_credits < 2 then the validator has received
-                // credits
-                // either in the current epoch or the previous epoch. If it's >= 2 then it has been
-                // at least
+                // if current_epoch - last_epoch_with_credits < 2 then the validator has received credits
+                // either in the current epoch or the previous epoch. If it's >= 2 then it has been at least
                 // one full epoch since the validator has received credits.
                 break :blk (current_epoch -| last_epoch_with_credits) < 2;
             } else {
@@ -1235,8 +1228,7 @@ fn widthraw(
             return InstructionError.Custom;
         } else switch (target_version) {
             // [agave] deinitialize_vote_account_state — `match target_version { V4 => ... }`.
-            // [SIMD-0185] Withdraw: completely zero vote account data for fully withdrawn v4
-            // accounts.
+            // [SIMD-0185] Withdraw: completely zero vote account data for fully withdrawn v4 accounts.
             .v4 => {
                 const data = try vote_account.mutableAccountData();
                 @memset(data, 0);
@@ -1493,8 +1485,7 @@ fn towerSync(
 }
 
 /// Deserialize and validate the vote state from an account, converting to the V4 target.
-/// [agave] Analogous to [get_vote_state_handler_checked](
-/// https://github.com/anza-xyz/agave/blob/v4.1/programs/vote/src/vote_state/mod.rs#L33)
+/// [agave] Analogous to [get_vote_state_handler_checked](https://github.com/anza-xyz/agave/blob/v4.1/programs/vote/src/vote_state/mod.rs#L33)
 fn getVoteStateChecked(
     allocator: std.mem.Allocator,
     vote_account: *BorrowedAccount,
@@ -7605,8 +7596,7 @@ const PopFixture = struct {
 //     DST / encoding drift that a self-generated vector alone would not
 //     surface.
 //       vote_pubkey hex: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-// bls_pk hex:
-// b8778284f744f6ae2791145183ef8fcb66dcd6602da8ca1add3e6828904db482708fb1d9bd2cbeb72320cdef56d173bc
+//       bls_pk hex:      b8778284f744f6ae2791145183ef8fcb66dcd6602da8ca1add3e6828904db482708fb1d9bd2cbeb72320cdef56d173bc
 //       pop hex:         b21b2bc4933e1d2cd32e9b976cc89a98d14f45c89356bb67afab0bc48a6ff9c2
 //                        d3c4d2394d68706077e5dd7596459da70227c70f2f14adbfbcf6b46ae34f970f
 //                        88b49dd8185f705333f682eb27674e8abbdf21519dd01424f6993713c9e4632d

@@ -210,8 +210,7 @@ pub const Receiver = struct {
                 .mismatching_signature => return error.EquivocationDifferentHashForSameFecSetId,
             }
 
-            // if we have this FecSetId with a different signature, this means
-            // equivocation has occured
+            // if we have this FecSetId with a different signature, this means equivocation has occured
             if (state.in_progress.containsId(fec_set_id)) {
                 // NOTE: see above note.
                 return error.EquivocationMatchingFecSetWithDifferentSignatureAlreadyInProgress;
@@ -276,8 +275,7 @@ pub const Receiver = struct {
 
         tracy.plot(u8, "totalShredsReceived", fec_set_ctx.totalShredsReceived());
 
-        // We now have a new shred that has passed validation, time to add it to
-        // our in-progress fec set
+        // We now have a new shred that has passed validation, time to add it to our in-progress fec set
 
         if (shred.variant.isCode()) {
             if (fec_set_ctx.code_shreds_received.isSet(in_type_idx)) return .shred_already_seen;
@@ -357,10 +355,10 @@ pub const Receiver = struct {
             };
 
             const finished: *DeshreddedFecSet = deshred_writer.next() orelse
-                // If there's nowhere to write to, then this means that services
-                // downstream haven't been keeping up for a while.
-                // For now let's just exit if this happens, however this might
-                // leave us vulnerable to denial of service.
+                // If there's nowhere to write to, then this means that services downstream haven't been
+                // keeping up for a while.
+                // For now let's just exit if this happens, however this might leave us vulnerable to denial
+                // of service.
                 //
                 // TODO: consider handling this case by pausing writing to this ring.
                 @panic("Can't send deshredded fec sets to replay, is it alive?");

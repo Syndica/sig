@@ -9,12 +9,10 @@ const Pubkey = sig.core.Pubkey;
 const DynamicArrayBitSet = sig.bloom.bit_set.DynamicArrayBitSet;
 const BitVecConfig = sig.bloom.bit_vec.BitVecConfig;
 
-/// Analogous to [Check](
-/// https://github.com/anza-xyz/agave/blob/fc2a8794be2526e9fd6cdbc9b304c055b2d9cc57/sdk/program/src/slot_history.rs#L46)
+/// Analogous to [Check](https://github.com/anza-xyz/agave/blob/fc2a8794be2526e9fd6cdbc9b304c055b2d9cc57/sdk/program/src/slot_history.rs#L46)
 pub const SlotCheckResult = enum { future, too_old, found, not_found };
 
-/// Analogous to [SlotHistory](
-/// https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/slot_history.rs#L16)
+/// Analogous to [SlotHistory](https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/sdk/program/src/slot_history.rs#L16)
 pub const SlotHistory = struct {
     bits: DynamicArrayBitSet(u64),
     next_slot: Slot,

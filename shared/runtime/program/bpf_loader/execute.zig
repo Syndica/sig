@@ -59,8 +59,7 @@ pub fn execute(
     }
 
     // NOTE: We double borrow the program account within `executeBpfProgram`, which adds an
-    // additional borrow relative to Agave. This difference should not cause any issues, but is
-    // worth noting.
+    // additional borrow relative to Agave. This difference should not cause any issues, but is worth noting.
     // [agave] https://github.com/anza-xyz/agave/blob/a2af4430d278fcf694af7a2ea5ff64e8a1f5b05b/programs/bpf_loader/src/lib.rs#L458-L518
     executeBpfProgram(allocator, ic) catch |err| {
         // [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L574-L588

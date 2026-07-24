@@ -17,8 +17,7 @@ pub const Status = enum(u64) {
 pub const State = extern struct {
     /// Slot in which the program was last deployed, retracted or initialized.
     slot: u64,
-    /// Address of signer which can send program management instructions when the status is not
-    /// finalized.
+    /// Address of signer which can send program management instructions when the status is not finalized.
     /// Otherwise a forwarding to the next version of the finalized program.
     authority_address_or_next_version: Pubkey,
     /// Deployment status.

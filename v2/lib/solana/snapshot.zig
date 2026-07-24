@@ -35,17 +35,13 @@ pub const StatusCache = struct {
             // slot(Slot) + is_root(bool)
             try r.discardAll(8 + 1);
 
-            // sig fmt: off
             // status_map: HashMap(Hash, { fork_count: u64, entries: Vec({ key_slice: [20]u8, result: union }) })
-            // sig fmt: on
             const status_map_len = try readInt(u64, r);
             for (0..status_map_len) |_| {
                 // key: Hash + value.fork_count: u64
                 try r.discardAll(32 + 8);
 
-                // sig fmt: off
                 // value.entries: Vec({ key_slice: KeySlice, result: union(enum(u32)) { ok, err: TransactionError } })
-                // sig fmt: on
                 const entries_len = try readInt(u64, r);
                 for (0..entries_len) |_| {
                     // key_slice: [20]u8 + result tag: u32
@@ -78,8 +74,7 @@ pub const StatusCache = struct {
         }
     }
 
-    /// Discards an InstructionError union. Most variants are void;
-    /// Custom is u32; BorshIoError is Vec(u8).
+    /// Discards an InstructionError union. Most variants are void; Custom is u32; BorshIoError is Vec(u8).
     ///
     /// See SerdeInstructionError in agave's runtime/src/serde_snapshot/status_cache.rs
     fn discardInstructionError(r: anytype) !void {
@@ -277,9 +272,7 @@ pub const BankFields = struct {
                 8, // stakes.epoch: Epoch
         );
 
-        // sig fmt: off
         //   stake_history: Vec({ epoch: Epoch, effective: u64, activating: u64, deactivating: u64 })
-        // sig fmt: on
         const stake_history_len = try readInt(u64, r);
         try r.discardAll(stake_history_len * (8 + // epoch: Epoch
             8 + // effective: u64
@@ -392,9 +385,7 @@ pub const ExtraFields = struct {
             else => |e| return e,
         };
 
-        // sig fmt: off
         // _unused_incremental_snapshot_persistence: NullOnEof(?{ full: SlotAndHash, full_capitalization: u64, incremental_hash: Hash, incremental_capitalization: u64 })
-        // sig fmt: on
         {
             const is_some = readBool(r) catch |err| switch (err) {
                 error.EndOfStream => false,
@@ -418,9 +409,7 @@ pub const ExtraFields = struct {
             if (is_some) try r.discardAll(32);
         }
 
-        // sig fmt: off
         // versioned_epoch_stakes: NullOnEof(Vec({ epoch: u64, value: union(enum(u32)) { current: ... } }))
-        // sig fmt: on
         {
             const outer_len = readInt(u64, r) catch |err| switch (err) {
                 error.EndOfStream => 0,
@@ -436,9 +425,7 @@ pub const ExtraFields = struct {
                 //   vote_accounts: VoteAccounts
                 try discardVoteAccounts(r);
 
-                // sig fmt: off
                 //   stake_delegations: HashMap(Pubkey, { delegation: Delegation, credits_observed: u64 })
-                // sig fmt: on
                 const stake_del_len = try readInt(u64, r);
                 try r.discardAll(stake_del_len * (32 + // key: Pubkey
                     32 + // delegation.voter_pubkey: Pubkey
@@ -454,18 +441,14 @@ pub const ExtraFields = struct {
                         8, // stakes.epoch: Epoch
                 );
 
-                // sig fmt: off
                 //   stake_history: Vec({ epoch: Epoch, effective: u64, activating: u64, deactivating: u64 })
-                // sig fmt: on
                 const sh_len = try readInt(u64, r);
                 try r.discardAll(sh_len * (8 + 8 + 8 + 8));
 
                 // current.total_stake: u64
                 try r.discardAll(8);
 
-                // sig fmt: off
                 // current.node_id_to_vote_accounts: HashMap(Pubkey, { vote_accounts: Vec(Pubkey), total_stake: u64 })
-                // sig fmt: on
                 const nv_len = try readInt(u64, r);
                 for (0..nv_len) |_| {
                     // key: Pubkey

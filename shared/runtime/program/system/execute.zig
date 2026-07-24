@@ -26,8 +26,7 @@ pub fn execute(
     const zone = tracy.Zone.init(@src(), .{ .name = "system: execute" });
     defer zone.deinit();
 
-    // Default compute units for the system program are applied via the declare_process_instruction
-    // macro
+    // Default compute units for the system program are applied via the declare_process_instruction macro
     // [agave] https://github.com/anza-xyz/agave/blob/v2.0.22/programs/system/src/system_processor.rs#L298
     try ic.tc.consumeCompute(system_program.COMPUTE_UNITS);
 
@@ -122,8 +121,7 @@ pub fn execute(
     };
 }
 
-//// [agave]
-///https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L315-L334
+//// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L315-L334
 fn executeCreateAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -147,8 +145,7 @@ fn executeCreateAccount(
     );
 }
 
-//// [agave]
-///https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L343-L362
+//// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L343-L362
 fn executeCreateAccountWithSeed(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,
@@ -221,8 +218,7 @@ fn executeCreateAccountAllowPrefund(
     }
 }
 
-//// [agave]
-///https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L365-L375
+//// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L365-L375
 fn executeAssign(
     ic: *InstructionContext,
     owner: Pubkey,
@@ -241,8 +237,7 @@ fn executeAssign(
     );
 }
 
-//// [agave]
-///https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L378-L386
+//// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L378-L386
 fn executeTransfer(
     ic: *InstructionContext,
     lamports: u64,
@@ -676,8 +671,7 @@ fn checkWithdrawNonceSigner(
     }
 }
 
-//// [agave]
-///https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_instruction.rs#L73-L74
+//// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_instruction.rs#L73-L74
 fn withdrawNonceAccount(
     allocator: std.mem.Allocator,
     ic: *InstructionContext,

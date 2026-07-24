@@ -22,8 +22,7 @@ pub const SnapshotSource = extern struct {
 };
 
 pub const SnapshotConfig = extern struct {
-    // TODO: Can this be configurable at runtime in the future? Requires
-    // dynamically sizing this config region.
+    // TODO: Can this be configurable at runtime in the future? Requires dynamically sizing this config region.
     pub const MAX_KNOWN_VALIDATORS = 64;
 
     folder_buffer: [std.fs.max_path_bytes]u8,

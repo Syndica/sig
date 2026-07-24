@@ -5,8 +5,7 @@
 //!
 //! References:
 //! - SPL Token: https://github.com/solana-labs/solana-program-library/tree/master/token/program
-//! - Token-2022:
-//!   https://github.com/solana-labs/solana-program-library/tree/master/token/program-2022
+//! - Token-2022: https://github.com/solana-labs/solana-program-library/tree/master/token/program-2022
 
 const std = @import("std");
 const std14 = @import("std14");

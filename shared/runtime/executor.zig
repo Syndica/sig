@@ -47,16 +47,14 @@ pub fn executeNativeCpiInstruction(
 ) (error{OutOfMemory} || InstructionError)!void {
     const instruction_info = try prepareCpiInstructionInfo(tc, instruction, signers);
     // NOTE: We don't call instruction_info.deinit() here because the InstructionInfo is stored
-    // in the instruction_trace (by value copy in pushInstruction). The trace needs the
-    // account_metas
+    // in the instruction_trace (by value copy in pushInstruction). The trace needs the account_metas
     // memory to remain valid until the transaction completes. Cleanup happens in
     // TransactionContext.deinit() which iterates over the trace and deinits each CPI entry.
 
     try executeInstruction(allocator, tc, instruction_info);
 }
 
-/// Push an instruction onto the instruction stack and an associated entry onto the instruction
-/// trace\
+/// Push an instruction onto the instruction stack and an associated entry onto the instruction trace\
 /// Checks for reentrancy violations\
 /// Returns a reference to the pushed instruction context\
 /// [agave] https://github.com/anza-xyz/agave/blob/a705c76e5a4768cfc5d06284d4f6a77779b24c96/program-runtime/src/invoke_context.rs#L471-L475
@@ -185,14 +183,9 @@ fn processNextInstruction(
         return InstructionError.UnsupportedProgramId;
     };
 
-    // NOTE: Precompiles do not log invocations because they are not considered "programs" in the
-    // same sense as BPF or native programs, and they may be called by other programs which would
-    // already log the invocation.
-    // Additionally, some precompiles are used for utility functions that may be called frequently,
-    // and logging every invocation could lead to excessive log spam.
-    // For example, the Keccak256 precompile is often used for hashing in other programs, and
-    // logging every call to it would generate a large number of logs that may not be useful for end
-    // users.
+    // NOTE: Precompiles do not log invocations because they are not considered "programs" in the same sense as BPF or native programs, and they may be called by other programs which would already log the invocation.
+    // Additionally, some precompiles are used for utility functions that may be called frequently, and logging every invocation could lead to excessive log spam.
+    // For example, the Keccak256 precompile is often used for hashing in other programs, and logging every call to it would generate a large number of logs that may not be useful for end users.
     if (!is_precompile) {
         // Invoke the program and log the result
         // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/program-runtime/src/invoke_context.rs#L549

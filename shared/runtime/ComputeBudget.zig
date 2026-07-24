@@ -7,8 +7,7 @@ const ComputeBudget = @This();
 /// allowed to consume. Compute units are consumed by program execution,
 /// resources they use, etc...
 ///
-/// TODO: we should remove this from the ComputeBudget and combine it with the compute budget native
-/// program's types
+/// TODO: we should remove this from the ComputeBudget and combine it with the compute budget native program's types
 compute_unit_limit: u64,
 /// Number of compute units consumed by a log_u64 call
 log_64_units: u64,

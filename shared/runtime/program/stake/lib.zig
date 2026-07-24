@@ -514,7 +514,7 @@ pub const Instruction = union(enum) {
     ///
     /// Upon success:
     ///   * the balance of the delegated stake account will be reduced to the undelegated amount in
-    /// the account (rent exempt minimum and any additional lamports not part of the delegation),
+    ///     the account (rent exempt minimum and any additional lamports not part of the delegation),
     ///     and scheduled for deactivation.
     ///   * the provided uninitialized stake account will receive the original balance of the
     ///     delegated stake account, minus the rent exempt minimum, and scheduled for activation to
@@ -558,8 +558,7 @@ pub const Instruction = union(enum) {
     /// authority.
     ///
     /// The source account must be fully active or fully inactive. The destination may be in any
-    /// mergeable state (active, inactive, or activating, but not in warmup cooldown). Only lamports
-    /// that
+    /// mergeable state (active, inactive, or activating, but not in warmup cooldown). Only lamports that
     /// are neither backing a delegation nor required for rent-exemption may be moved.
     ///
     /// # Account references

@@ -347,8 +347,7 @@ pub const Shred = extern struct {
         const header_size = shred.variant.headerSize();
         if (header_size == 0) unreachable; // we should have gotten rid of this shred earlier?
 
-        // capacity = payload_size - headers_size - chained_merkle_root
-        //          - merkle_proof - retransmitter_sig
+        // capacity = payload_size - headers_size - chained_merkle_root - merkle_proof - retransmitter_sig
         const payload_size: usize = if (shred.variant.isData()) min_size else max_size;
         // NOTE: all shreds are now chained
         const chained_size: usize = merkle_root_size;

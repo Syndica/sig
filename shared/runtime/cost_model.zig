@@ -205,8 +205,7 @@ fn calculateTransactionCostInternal(
     }
 
     // Dynamic calculation
-    // 1. Signature cost: includes transaction sigs + precompile sigs (ed25519, secp256k1,
-    // secp256r1)
+    // 1. Signature cost: includes transaction sigs + precompile sigs (ed25519, secp256k1, secp256r1)
     const signature_cost = getSignatureCost(transaction);
 
     // 2. Write lock cost: 300 CU per writable account

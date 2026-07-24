@@ -32,8 +32,7 @@ const VOTE_CREDITS_GRACE_SLOTS = state.VOTE_CREDITS_GRACE_SLOTS;
 const VOTE_CREDITS_MAXIMUM_PER_SLOT = state.VOTE_CREDITS_MAXIMUM_PER_SLOT;
 const BLS_PUBLIC_KEY_COMPRESSED_SIZE = state.BLS_PUBLIC_KEY_COMPRESSED_SIZE;
 
-/// SIMD-0185:
-/// https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0185-vote-account-v4.md
+/// SIMD-0185: https://github.com/solana-foundation/solana-improvement-documents/blob/main/proposals/0185-vote-account-v4.md
 pub const VoteStateV4 = struct {
     /// The validator identity that signs the votes in this account.
     node_pubkey: Pubkey,
@@ -93,8 +92,7 @@ pub const VoteStateV4 = struct {
         .last_timestamp = .{ .slot = 0, .timestamp = 0 },
     };
 
-    /// Integer percentage (0-100) for backward compatibility; inflation_rewards_commission_bps /
-    /// 100.
+    /// Integer percentage (0-100) for backward compatibility; inflation_rewards_commission_bps / 100.
     /// Matches Agave's `CommissionView::commission_percent`, which saturates at `u8::MAX`
     /// rather than panicking when the stored basis-points value exceeds 25,500.
     /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.8/vote/src/vote_state_view/field_frames.rs
@@ -690,8 +688,7 @@ pub const VoteStateV4 = struct {
         // 2) Conversely, `slot_hashes` is sorted from newest/largest vote to
         // the oldest/smallest vote
         //
-        // We check every proposed lockout because have to ensure that every slot is actually part
-        // of
+        // We check every proposed lockout because have to ensure that every slot is actually part of
         // the history, not just the most recent ones
         while (proposed_lockouts_index < proposed_lockouts.items.len and slot_hashes_index > 0) {
             const proposed_vote_slot: Slot = if (root_to_check) |root|
@@ -712,8 +709,7 @@ pub const VoteStateV4 = struct {
             switch (std.math.order(proposed_vote_slot, ancestor_slot)) {
                 .lt => {
                     if (slot_hashes_index == slot_hash_entries.len) {
-                        // The vote slot does not exist in the SlotHashes history because it's too
-                        // old,
+                        // The vote slot does not exist in the SlotHashes history because it's too old,
                         // i.e. older than the oldest slot in the history.
                         if (proposed_vote_slot >= earliest_slot_hash_in_history) {
                             return VoteError.assertion_failed;
@@ -735,8 +731,7 @@ pub const VoteStateV4 = struct {
                             std.debug.assert(new_proposed_root == proposed_vote_slot);
                             // 2. We know from the assert earlier in the function that
                             // `proposed_vote_slot < earliest_slot_hash_in_history`,
-                            // so from 1. we know that `new_proposed_root <
-                            // earliest_slot_hash_in_history`.
+                            // so from 1. we know that `new_proposed_root < earliest_slot_hash_in_history`.
                             if (new_proposed_root >= earliest_slot_hash_in_history) {
                                 return VoteError.assertion_failed;
                             }
