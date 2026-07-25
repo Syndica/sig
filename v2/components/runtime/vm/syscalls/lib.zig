@@ -436,20 +436,45 @@ pub fn getProcessedSiblingInstruction(
 
     if (maybe_info) |info| {
         const check_aligned = tc.getCheckAligned();
-        const header = try memory_map.translateType(
+        var header = try memory_map.translateType(
             ProcessedSiblingInstruction,
             .mutable,
             meta_addr,
             check_aligned,
         );
 
-        if (header.data_len == info.instruction_data.len and
-            header.accounts_len == info.account_metas.items.len)
+        // Copy the guest-supplied lengths out before translating anything else:
+        // the translations below may strand `header`, so they must not be sized
+        // by reads through it.
+        // [agave] https://github.com/anza-xyz/agave/blob/182084b82aae88b1b0731540f63bf7416f27773a/syscalls/src/lib.rs#L698-L699
+        const data_len = header.data_len;
+        const accounts_len = header.accounts_len;
+
+        if (data_len == info.instruction_data.len and
+            accounts_len == info.account_metas.items.len)
         {
+            // Pre-translate every mutable output — `meta_addr` included — so
+            // SIMD-0460's access-violation handler settles before we keep any
+            // pointers, then re-acquire all of them against the post-growth
+            // regions. Zero-length ranges are skipped to match `translateSlice`,
+            // which never translates them. Agave likewise re-maps `meta_addr` in
+            // its second `translate_mut!` so the overlap checks below compare
+            // live host ranges.
+            // [agave] https://github.com/anza-xyz/agave/blob/182084b82aae88b1b0731540f63bf7416f27773a/syscalls/src/lib.rs#L2064-L2071
+            _ = try memory_map.vmap(.mutable, program_id_addr, @sizeOf(Pubkey));
+            if (data_len != 0) _ = try memory_map.vmap(.mutable, data_addr, data_len);
+            if (accounts_len != 0) _ = try memory_map.vmap(
+                .mutable,
+                accounts_addr,
+                accounts_len *| @sizeOf(AccountMeta),
+            );
+            _ = try memory_map.vmap(.mutable, meta_addr, @sizeOf(ProcessedSiblingInstruction));
+
             // sig fmt: off
             const program_id = try memory_map.translateType(Pubkey, .mutable, program_id_addr, check_aligned);
-            const data = try memory_map.translateSlice(u8, .mutable, data_addr, header.data_len, check_aligned);
-            const accounts = try memory_map.translateSlice(AccountMeta, .mutable, accounts_addr, header.accounts_len, check_aligned);
+            const data = try memory_map.translateSlice(u8, .mutable, data_addr, data_len, check_aligned);
+            const accounts = try memory_map.translateSlice(AccountMeta, .mutable, accounts_addr, accounts_len, check_aligned);
+            header = try memory_map.translateType(ProcessedSiblingInstruction, .mutable, meta_addr, check_aligned);
             // sig fmt: on
 
             if (memops.isOverlapping(header, program_id) or
@@ -548,6 +573,14 @@ pub fn getReturnData(
     if (length != 0) {
         const cost = (length +| @sizeOf(Pubkey)) / tc.compute_budget.cpi_bytes_per_unit;
         try tc.consumeCompute(cost);
+
+        // Pre-translate both outputs so SIMD-0460's access-violation handler
+        // settles before we keep any pointers: under direct_mapping it may
+        // `account.resize` and re-anchor `region.host_memory`, stranding a
+        // pointer obtained from an earlier translate.
+        // [agave] https://github.com/anza-xyz/agave/blob/182084b82aae88b1b0731540f63bf7416f27773a/syscalls/src/lib.rs#L1977
+        _ = try memory_map.vmap(.mutable, return_data_addr, length);
+        _ = try memory_map.vmap(.mutable, program_id_addr, @sizeOf(Pubkey));
 
         const return_data_ptr = try memory_map.translateSlice(
             u8,
@@ -1357,6 +1390,112 @@ test getProcessedSiblingInstruction {
     }
 }
 
+test "getProcessedSiblingInstruction reacquires outputs after growth" {
+    const testing = sig.runtime.testing;
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const vm_addr = memory.INPUT_START;
+    const meta_offset = 0;
+    const program_id_offset = meta_offset + @sizeOf(ProcessedSiblingInstruction); // 16
+    const data_offset = program_id_offset + @sizeOf(Pubkey); // 48
+
+    var old: [data_offset]u8 align(8) = @splat(0);
+    var new: [128]u8 align(8) = @splat(0);
+
+    const sibling_data = [_]u8{0xAA} ** 8;
+
+    std.mem.writeInt(u64, old[0..8], sibling_data.len, .little); // data_len
+    std.mem.writeInt(u64, old[8..16], 0, .little); // accounts_len
+
+    const Grow = struct {
+        old: *[data_offset]u8,
+        new: *[128]u8,
+
+        fn handle(
+            raw: *anyopaque,
+            region: *memory.Region,
+            _: u64,
+            _: memory.MemoryState,
+            _: u64,
+            _: u64,
+        ) void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            @memcpy(self.new[0..self.old.len], self.old);
+            region.host_memory = .{ .mutable = self.new };
+            region.vm_addr_end = region.vm_addr_start + self.new.len;
+        }
+    };
+    var grow = Grow{ .old = &old, .new = &new };
+
+    var memory_map = try MemoryMap.init(
+        allocator,
+        &.{memory.Region.init(.mutable, &old, vm_addr)},
+        .v2,
+        .{ .aligned_memory_mapping = false, .virtual_address_space_adjustments = true },
+    );
+    defer memory_map.deinit(allocator);
+    memory_map.setAccessViolationHandler(.{ .ctx = &grow, .call = Grow.handle });
+
+    var cache, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
+        .accounts = &.{.{
+            .pubkey = Pubkey.initRandom(prng.random()),
+            .owner = sig.runtime.program.bpf_loader.v2.ID,
+        }},
+    });
+    defer {
+        testing.deinitTransactionContext(allocator, &tc);
+        cache.deinit(allocator);
+    }
+
+    const info = InstructionInfo{
+        .program_meta = .{
+            .pubkey = tc.accounts[0].pubkey,
+            .index_in_transaction = 0,
+        },
+        .account_metas = .empty,
+        .dedupe_map = @splat(0xffff),
+        .instruction_data = &sibling_data,
+        .owned_instruction_data = false,
+    };
+
+    // stack_height == 1, with two depth-1 trace entries so that index 0 resolves
+    // to the first of them (the syscall scans the trace in reverse).
+    tc.instruction_stack.appendAssumeCapacity(.{
+        .tc = &tc,
+        .ixn_info = info,
+        .depth = 0,
+    });
+    tc.instruction_trace.appendAssumeCapacity(.{ .ixn_info = info, .depth = 1 });
+    tc.instruction_trace.appendAssumeCapacity(.{ .ixn_info = info, .depth = 1 });
+
+    tc.compute_meter = tc.compute_budget.syscall_base_cost;
+    var registers = RegisterMap.initFill(0);
+    registers.set(.r1, 0); // index
+    registers.set(.r2, vm_addr +| meta_offset);
+    registers.set(.r3, vm_addr +| program_id_offset);
+    registers.set(.r4, vm_addr +| data_offset); // forces the region to grow
+    registers.set(.r5, vm_addr +| data_offset); // accounts_len == 0, never translated
+    try getProcessedSiblingInstruction(&tc, &memory_map, &registers);
+
+    try std.testing.expectEqual(1, registers.get(.r0));
+
+    // The instruction data was translated after the growth, so it lands in the
+    // live region.
+    try std.testing.expectEqualSlices(
+        u8,
+        &sibling_data,
+        new[data_offset..][0..sibling_data.len],
+    );
+    // The program id was translated *before* the growth. It must still reach the
+    // live region, not the stale pre-growth backing.
+    try std.testing.expectEqualSlices(
+        u8,
+        &tc.accounts[0].pubkey.data,
+        new[program_id_offset..][0..@sizeOf(Pubkey)],
+    );
+}
+
 test getEpochStake {
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
@@ -1556,4 +1695,69 @@ test "set and get return data" {
             getReturnData(&tc, &memory_map, &registers),
         );
     }
+}
+
+test "getReturnData reacquires output after growth" {
+    const allocator = std.testing.allocator;
+    const vm_addr = memory.INPUT_START;
+
+    var old: [8]u8 align(8) = @splat(0);
+    var new: [40]u8 align(8) = @splat(0);
+    const Grow = struct {
+        old: *[8]u8,
+        new: *[40]u8,
+
+        fn handle(
+            raw: *anyopaque,
+            region: *memory.Region,
+            _: u64,
+            _: memory.MemoryState,
+            _: u64,
+            _: u64,
+        ) void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            @memcpy(self.new[0..self.old.len], self.old);
+            region.host_memory = .{ .mutable = self.new };
+            region.vm_addr_end = region.vm_addr_start + self.new.len;
+        }
+    };
+    var grow = Grow{ .old = &old, .new = &new };
+
+    var map = try MemoryMap.init(
+        allocator,
+        &.{memory.Region.init(.mutable, &old, vm_addr)},
+        .v2,
+        .{ .aligned_memory_mapping = false, .virtual_address_space_adjustments = true },
+    );
+    defer map.deinit(allocator);
+    map.setAccessViolationHandler(.{ .ctx = &grow, .call = Grow.handle });
+
+    var prng = std.Random.DefaultPrng.init(0);
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{
+            .compute_meter = 10_000,
+            .return_data = .{
+                .program_id = sig.runtime.program.bpf_loader.v2.ID,
+                .data = &.{ 0x11, 0x22, 0x33, 0x44 },
+            },
+        },
+    );
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
+        cache.deinit(allocator);
+    }
+
+    var registers = RegisterMap.initFill(0);
+    registers.set(.r1, vm_addr); // return data: [0, 4)
+    registers.set(.r2, 4);
+    registers.set(.r3, vm_addr + 8); // program ID triggers growth
+    try getReturnData(&tc, &map, &registers);
+
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 0x11, 0x22, 0x33, 0x44 },
+        new[0..4],
+    );
 }
