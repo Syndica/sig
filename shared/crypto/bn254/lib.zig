@@ -178,7 +178,11 @@ pub const G2 = struct {
         };
     }
 
-    fn isWellFormed(p: G2) !void {
+    /// Whether G2 decoding runs the prime-order subgroup check on top of the curve
+    /// equation. V0 addition validates the curve only; mul and pairing need both.
+    const Validate = enum { curve_only, curve_and_subgroup };
+
+    fn isWellFormed(p: G2, validate: Validate) !void {
         // zero-point always well formed, no matter what X and Y are
         if (p.isZero()) return;
 
@@ -186,6 +190,10 @@ pub const G2 = struct {
         const y2 = p.y.sq();
         const x3b = p.x.sq().mul(p.x).add(Fp2.constants.twist_b_mont);
         if (!y2.eql(x3b)) return error.NotWellFormed;
+
+        // V0 G2 addition validates the curve equation only (matches Agave
+        // `into_affine_unchecked` and Firedancer `_check_eq_only`). Mul and pairing keep the check.
+        if (validate == .curve_only) return;
 
         // G2 does *not* have prime order, so we need to perform a secondary subgroup membership check.
         // https://eprint.iacr.org/2022/348, Sec 3.1.
@@ -201,7 +209,7 @@ pub const G2 = struct {
         if (!l.eql(r)) return error.NotWellFormed;
     }
 
-    fn fromBytes(input: *const [128]u8, endian: std.builtin.Endian) !G2 {
+    fn fromBytes(input: *const [128]u8, endian: std.builtin.Endian, validate: Validate) !G2 {
         var g2: G2 = try .fromBytesInternal(input, endian);
         if (g2.isZero()) return g2;
 
@@ -209,7 +217,7 @@ pub const G2 = struct {
         g2.y.toMont();
         g2.z = .one;
 
-        try g2.isWellFormed();
+        try g2.isWellFormed(validate);
 
         return g2;
     }
@@ -370,14 +378,14 @@ pub const G2 = struct {
     }
 
     pub fn addSyscall(out: *[128]u8, input: *const [256]u8, endian: std.builtin.Endian) !void {
-        const x: G2 = try .fromBytes(input[0..128], endian);
-        const y: G2 = try .fromBytes(input[128..256], endian);
+        const x: G2 = try .fromBytes(input[0..128], endian, .curve_only);
+        const y: G2 = try .fromBytes(input[128..256], endian, .curve_only);
         const result = shared.affineAdd(x, y);
         result.toBytes(out, endian);
     }
 
     pub fn mulSyscall(out: *[128]u8, input: *const [160]u8, endian: std.builtin.Endian) !void {
-        const a: G2 = try .fromBytes(input[0..128], endian);
+        const a: G2 = try .fromBytes(input[0..128], endian, .curve_and_subgroup);
         const scalar = input[128..][0..32].*;
         const b: u256 = @bitCast(switch (endian) {
             .big => Fp.byteSwap(scalar),
@@ -551,7 +559,7 @@ pub fn pairingSyscall(out: *[32]u8, input: []const u8, endian: std.builtin.Endia
     var r: Fp12 = .one;
     for (0..num_elements) |i| {
         const a: G1 = try .fromBytes(input[i * 192 ..][0..64], endian);
-        const b: G2 = try .fromBytes(input[i * 192 ..][64..][0..128], endian);
+        const b: G2 = try .fromBytes(input[i * 192 ..][64..][0..128], endian, .curve_and_subgroup);
 
         // Skip any pair where either A or B are points at infinity.
         if (a.isZero() or b.isZero()) continue;
