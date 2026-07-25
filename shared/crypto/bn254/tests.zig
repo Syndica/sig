@@ -579,6 +579,10 @@ test "edge cases" {
     }
 }
 
+// Regression for #1713: ALT_BN128_G2_ADD must accept any on-curve G2 point. G2 has a
+// large cofactor, so add decodes curve-only (Agave into_affine_unchecked, Firedancer
+// g2_frombytes_check_eq_only); only mul and pairing check subgroup membership. P below is
+// on curve but outside the order-r subgroup (the same point test "edge cases" rejects).
 test "G2 addition accepts on-curve non-subgroup point" {
     const point_hex =
         "0000000000000000000000000000000000000000000000000000000000000001" ++
