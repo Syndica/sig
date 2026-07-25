@@ -279,6 +279,7 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
             self.enqueueRooted(entry_id);
         }
 
+        /// Poll the fetcher to drive any pending rooted requests and process any completed results.
         pub fn poll(self: *Self) bool {
             var progressed = false;
             progressed = self.drainRootedResults() or progressed;
@@ -292,11 +293,14 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
 
             std.debug.assert(entry.state == .ready);
 
-            const waiter_id = entry.waiter_head.opt() orelse
-                unreachable;
+            // Pop the first waiter from the entry's waiter list.
+            const waiter_id = entry.waiter_head.opt() orelse unreachable;
             const waiter = waiter_id.ptr(&self.waiter_pool);
 
+            // Move waiter head forward to the next waiter in this entry's list.
             entry.waiter_head = waiter.next;
+
+            // If there are no more waiters, set the tail to null as well.
             if (entry.waiter_head == .null)
                 entry.waiter_tail = .null;
 
@@ -315,10 +319,14 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
 
             self.waiter_pool.destroyId(waiter_id);
 
+            // If there are more waiters for this entry, re-enqueue it to the ready queue
+            // so the next waiter can receive its completion.
+            // TODO: do we want batched-completitions?
             if (entry.waiter_head != .null) {
                 // Round-robin completion delivery between ready accounts.
                 self.enqueueReady(entry_id);
             } else {
+                // No more waiters for this entry, retire it and free its resources.
                 self.retireEntry(entry_id);
             }
 
@@ -338,6 +346,7 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
             self.rooted_tail = .init(entry_id);
         }
 
+        /// Dequeue the next entry from the rooted queue.
         fn popRooted(self: *Self) ?EntryId {
             const entry_id = self.rooted_head.opt() orelse return null;
             const entry = entry_id.ptr(&self.entry_pool);
@@ -369,10 +378,12 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
             self.ready_tail = .init(entry_id);
         }
 
+        /// Dequeue the next entry from the ready queue.
         fn popReady(self: *Self) ?EntryId {
             const entry_id = self.ready_head.opt() orelse return null;
             const entry = entry_id.ptr(&self.entry_pool);
 
+            // update the head to the next entry in the queue.
             self.ready_head = entry.queue_next;
             if (self.ready_head == .null)
                 self.ready_tail = .null;
@@ -410,6 +421,9 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
             self.entry_pool.destroyId(entry_id);
         }
 
+        /// Empty rooted queue of requests by submitting them to rooted.
+        ///
+        /// Returns true if any requests were submitted, false if the queue was empty.
         fn submitRootedRequests(self: *Self) bool {
             var writer = self.account_lookups.in.get(.writer);
             var submitted: usize = 0;
@@ -417,6 +431,7 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
             while (self.rooted_head != .null) {
                 const request_out = writer.next() orelse break;
 
+                // NOTE: safe to unwrap since checked in loop condition.
                 const entry_id = self.popRooted().?;
                 const entry = entry_id.ptr(&self.entry_pool);
 
@@ -438,6 +453,12 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
             return true;
         }
 
+        /// Drains results from the rooted DB.
+        ///
+        /// For each account drained, the corresponding fetch entry is
+        /// updated with the result and moved to the ready queue.
+        ///
+        /// Returns true if any results were processed, false if the queue was empty.
         fn drainRootedResults(self: *Self) bool {
             var reader = self.account_lookups.out.get(.reader);
             var consumed: usize = 0;
@@ -447,6 +468,7 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
                 self.processRootedResult(response.*);
             }
 
+            // If we didn't consume any results, return false to indicate no progress was made.
             if (consumed == 0)
                 return false;
 
@@ -454,12 +476,16 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
             return true;
         }
 
+        /// Processes a single result from the rooted DB, updating the corresponding fetch entry
+        /// and moving it to the ready queue.
         fn processRootedResult(
             self: *Self,
             response: AccountLookups.Result,
         ) void {
             const entry_index = response.req_user_data;
 
+            // Totally unexpected if the entry index is out of bounds, this should never happen.
+            // TODO: make this a panic?
             if (entry_index >= self.entry_pool.len) {
                 self.releaseAccount(response.account_index);
                 return;
@@ -468,6 +494,8 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
             const entry_id = EntryId.fromInt(@intCast(entry_index));
             const entry = entry_id.ptr(&self.entry_pool);
 
+            // We don't expect to receive a result for an entry that isn't in the fetching state.
+            // TODO: make this a panic?
             if (entry.state != .fetching_rooted) {
                 self.releaseAccount(response.account_index);
                 return;
@@ -475,9 +503,11 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
 
             std.debug.assert(response.pubkey.equals(&entry.key.pubkey));
 
+            // Mark the entry as ready and store the result.
             entry.result = response.account_index;
-
             entry.state = .ready;
+
+            // Move the entry into the ready queue.
             self.enqueueReady(entry_id);
         }
 
