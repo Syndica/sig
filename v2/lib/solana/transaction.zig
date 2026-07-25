@@ -577,7 +577,7 @@ pub const SliceReader = struct {
     }
 };
 
-pub const VersionedMessage = union(enum) {
+pub const VersionedMessage = union(VersionByte) {
     // first byte & 0x80 == 0
     legacy: LegacyMessage,
     // first byte & 0x80 != 0
@@ -593,10 +593,7 @@ pub const VersionedMessage = union(enum) {
     };
 
     pub fn versionByte(self: *const VersionedMessage) VersionByte {
-        return switch (self.*) {
-            .legacy => .legacy,
-            .v0 => .v0,
-        };
+        return @as(VersionByte, self.*);
     }
 
     pub fn bincodeRead(
