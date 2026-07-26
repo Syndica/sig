@@ -252,6 +252,7 @@ pub const Appender = struct {
         comptime id: Id,
         comptime layout: tel.LatencyHistogram.Layout,
     ) tel.LatencyHistogram {
+        comptime layout.comptimeValidate();
         comptime if (!std.mem.endsWith(u8, id.name, "_ns")) @compileError(
             std.fmt.comptimePrint(
                 "LatencyHistogram metric '{s}' must end in `_ns`: it records raw nanoseconds, " ++
@@ -321,7 +322,10 @@ pub const Appender = struct {
                     .initNameOnly(id_name),
                     field_config.layout orelse @compileError(
                         std.fmt.comptimePrint(
-                            "LatencyHistogram metric '{s}' requires a `.layout`.\n",
+                            "LatencyHistogram metric '{s}' requires a `.layout`, e.g. " ++
+                                "`.{{ .min_upper_bound_ns = 1_024, " ++
+                                ".max_upper_bound_ns = 65_536, " ++
+                                ".bounds_per_doubling = 8 }}`.\n",
                             .{s_field.name},
                         ),
                     ),
@@ -339,7 +343,10 @@ pub const Appender = struct {
                                     &tel.Histogram.DEFAULT_UPPER_BOUNDS,
                                 .latency => field_config.layout orelse
                                     @compileError(std.fmt.comptimePrint(
-                                        "VariantHistogram metric '{s}' requires a `.layout`.\n",
+                                        "VariantHistogram metric '{s}' requires a `.layout`, " ++
+                                            "e.g. `.{{ .min_upper_bound_ns = 1_024, " ++
+                                            ".max_upper_bound_ns = 65_536, " ++
+                                            ".bounds_per_doubling = 8 }}`.\n",
                                         .{s_field.name},
                                     )),
                             },
@@ -389,9 +396,10 @@ pub const Appender = struct {
 
     pub fn appendLatencyHistogramRaw(
         self: Appender,
-        id: Id,
+        comptime id: Id,
         comptime layout: tel.LatencyHistogram.Layout,
     ) tel.LatencyHistogram.Raw {
+        comptime layout.comptimeValidate();
         const header_words = tel.LatencyHistogram.Layout.header_words;
         const element_count = layout.elementsFromBucketCount();
         const elem_offs = self.histogram_data_end.fetchAdd(header_words + element_count, .acq_rel);
@@ -437,7 +445,7 @@ pub const FieldConfigHistogram = struct {
 
 pub const FieldConfigLatencyHistogram = struct {
     id_override: ?[]const u8 = null,
-    /// Required: selects the bucket layout & count.
+    /// Required: the window and resolution of the bound ladder.
     layout: ?tel.LatencyHistogram.Layout = null,
 
     const default: FieldConfigLatencyHistogram = .{};
@@ -668,7 +676,7 @@ test "variant histogram: appendVariantHistogram registers one latency series per
         "req_latency_ns",
         Method,
         .latency,
-        .{ .schema = 2, .min_ns = 512, .octaves = 4 },
+        .{ .min_upper_bound_ns = 512, .max_upper_bound_ns = 512 << 4, .bounds_per_doubling = 4 },
     );
 
     // Observations land in the histogram for their own tag and nowhere else.
@@ -757,7 +765,11 @@ test "variant histogram: appendFields registers latency and bounds variants" {
     const metrics_struct = region.metricAppender().appendFields(Metrics, .{
         .prefix = "svc",
         .fields = .{
-            .latency_ns = .{ .layout = .{ .schema = 2, .min_ns = 512, .octaves = 4 } },
+            .latency_ns = .{ .layout = .{
+                .min_upper_bound_ns = 512,
+                .max_upper_bound_ns = 512 << 4,
+                .bounds_per_doubling = 4,
+            } },
             .sizes = .{ .id_override = null, .upper_bounds = &.{ 1, 10, 100 } },
         },
     });

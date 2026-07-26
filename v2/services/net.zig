@@ -31,9 +31,9 @@ pub fn serviceMain(
         .prefix = @tagName(name),
         .fields = .{
             .packet_latency_ns = .{ .layout = .{
-                .schema = 2,
-                .min_ns = 512,
-                .octaves = 12,
+                .min_upper_bound_ns = 512,
+                .max_upper_bound_ns = 512 << 12,
+                .bounds_per_doubling = 4,
             } },
         },
     });

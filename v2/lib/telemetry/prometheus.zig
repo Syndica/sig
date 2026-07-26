@@ -201,11 +201,12 @@ test "prometheus: latency histogram emits ns-suffixed raw nanoseconds" {
     const gpa = std.testing.allocator;
     const Layout = tel.LatencyHistogram.Layout;
 
-    // schema 2, window at 512ns: rounded geometric le-bounds 512, 609, 724, 861, 1024, ...; +Inf.
+    // 4 bounds per doubling over [512, 1024]: rounded geometric le-bounds 512, 609, 724, 861,
+    // 1024; +Inf.
     const histogram: tel.LatencyHistogram = try .initForTest(gpa, Layout{
-        .schema = 2,
-        .min_ns = 512,
-        .octaves = 2,
+        .min_upper_bound_ns = 512,
+        .max_upper_bound_ns = 1024,
+        .bounds_per_doubling = 4,
     });
     defer histogram.deinitForTest(gpa);
 
@@ -228,9 +229,6 @@ test "prometheus: latency histogram emits ns-suffixed raw nanoseconds" {
         \\test_latency_ns_bucket{le="724"} 3
         \\test_latency_ns_bucket{le="861"} 3
         \\test_latency_ns_bucket{le="1024"} 4
-        \\test_latency_ns_bucket{le="1218"} 4
-        \\test_latency_ns_bucket{le="1448"} 4
-        \\test_latency_ns_bucket{le="1722"} 4
         \\test_latency_ns_bucket{le="+Inf"} 5
         \\test_latency_ns_sum 4749
         \\test_latency_ns_count 5

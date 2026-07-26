@@ -364,7 +364,7 @@ const NativeHistogramWriter = struct {
         std.debug.assert(total_count >= prev_cumulative);
         counts[bucket_count] = @as(u64, total_count) -| prev_cumulative;
 
-        try writeSint32Field(hw, Histogram.schema, @intCast(self.layout.schema));
+        try writeSint32Field(hw, Histogram.schema, @intCast(self.layout.schema()));
         try writeDoubleField(hw, Histogram.zero_threshold, 0.0);
         try writeVarintField(hw, Histogram.zero_count, 0);
         try writeVarintField(hw, Histogram.sample_count, total_count);
@@ -494,14 +494,18 @@ test "prometheus_proto: native histogram round-trips through the wire" {
     const gpa = testing.allocator;
     const Layout = tel.LatencyHistogram.Layout;
 
-    const layout: Layout = .{ .schema = 2, .min_ns = 512, .octaves = 2 };
+    const layout: Layout = .{
+        .min_upper_bound_ns = 512,
+        .max_upper_bound_ns = 1024,
+        .bounds_per_doubling = 4,
+    };
     const hist: tel.LatencyHistogram = try .initForTest(gpa, layout);
     defer hist.deinitForTest(gpa);
 
     hist.observe(512); // bucket 0 (global native index 36)
     hist.observe(513); // bucket 1 (global native index 37)
     hist.observe(700); // bucket 2 (global native index 38)
-    hist.observe(2000); // above the ~1.7us window top -> overflow bucket (storage index 8)
+    hist.observe(2000); // above the 1024ns window top -> overflow bucket (storage index 5)
 
     var metrics: Map = .empty;
     defer metrics.deinit(gpa);
@@ -578,24 +582,25 @@ test "prometheus_proto: native histogram round-trips through the wire" {
         }
     }
 
-    try testing.expectEqual(@as(i64, 2), schema); // schema 2
+    // `bounds_per_doubling` 4 renders as native schema 2.
+    try testing.expectEqual(@as(i64, 2), schema);
     try testing.expectEqual(@as(u64, 4), sample_count); // 4 observations total (incl. the overflow)
     try testing.expectEqual(@as(f64, 512 + 513 + 700 + 2000), sample_sum);
     try testing.expectEqual(@as(i64, 36), span_offset); // base_index 36, first populated bucket 0
-    try testing.expectEqual(@as(u64, 9), span_length); // buckets 0..8 (2000 lands in overflow bucket 8)
+    try testing.expectEqual(@as(u64, 6), span_length); // buckets 0..5 (2000 -> overflow bucket 5)
 
     // Reconstruct per-bucket populations from the delta stream. The key invariant Prometheus enforces
     // for native histograms: sample_count must equal the sum of bucket populations (no implicit +Inf).
     var pop_sum: u64 = 0;
     var acc: i64 = 0;
-    var populated_at_8: u64 = 0;
+    var populated_at_5: u64 = 0;
     for (deltas.items, 0..) |d, k| {
         acc += d;
         pop_sum += @intCast(acc);
-        if (k == 8) populated_at_8 = @intCast(acc);
+        if (k == 5) populated_at_5 = @intCast(acc);
     }
     try testing.expectEqual(sample_count, pop_sum); // 512,513,700 in-window + 2000 overflow = 4
-    try testing.expectEqual(@as(u64, 1), populated_at_8); // the 2000 observation, not dropped
+    try testing.expectEqual(@as(u64, 1), populated_at_5); // the 2000 observation, not dropped
 }
 
 test "prometheus_proto: a histogram family emits every series, not just the first" {
@@ -605,7 +610,11 @@ test "prometheus_proto: a histogram family emits every series, not just the firs
     // Prometheus over the protobuf path while the text path showed them all.
     const gpa = testing.allocator;
     const Layout = tel.LatencyHistogram.Layout;
-    const layout: Layout = .{ .schema = 2, .min_ns = 512, .octaves = 2 };
+    const layout: Layout = .{
+        .min_upper_bound_ns = 512,
+        .max_upper_bound_ns = 1024,
+        .bounds_per_doubling = 4,
+    };
 
     const h1: tel.LatencyHistogram = try .initForTest(gpa, layout);
     defer h1.deinitForTest(gpa);

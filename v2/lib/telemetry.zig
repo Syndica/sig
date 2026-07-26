@@ -881,53 +881,154 @@ pub const LatencyHistogram = struct {
     shards: [2]Shard,
 
     /// A windowed Prometheus native histogram: geometric (log-exponential) buckets aligned 1:1 with a
-    /// native-histogram `schema`. Bucket `i`'s upper bound is `2^((base_index + i) / 2^schema)` ns,
-    /// where `base_index = baseIndex()`; there are `2^schema` buckets per power-of-two octave.
+    /// native-histogram `schema`. Bucket `i`'s upper bound is
+    /// `2^((base_index + i) / bounds_per_doubling)` ns, where `base_index = baseIndex()`.
     ///
-    /// `min_ns`/`octaves` bound the fixed storage window — native histograms are unbounded/sparse,
-    /// but the IPC region is dense/fixed. Observations below the window clamp into bucket 0; those
-    /// above it land in the implicit `+Inf` bucket (counted, but in no explicit bucket).
+    /// Native histograms are unbounded and sparse, but the IPC region is dense and fixed, so the
+    /// window has to be pinned: observations below bucket 0's bound clamp into it, and those above
+    /// the final bucket's bound land in the implicit `+Inf` bucket (counted in `sum`/`count`, but in
+    /// no explicit bucket).
+    ///
+    /// Both endpoints are inclusive, so a `[512, 2048]` window at 4 bounds per doubling holds
+    /// `2 * 4 + 1` = 9 buckets:
+    ///
+    ///     512, 609, 724, 861, 1024, 1218, 1448, 1722, 2048
     pub const Layout = struct {
-        /// Native histogram schema `n`; buckets per octave = `2^n`. Valid range 0..8.
-        schema: u4,
-        /// Lower window edge in ns; storage bucket 0 has global native index `baseIndex()`.
-        min_ns: u64,
-        /// Number of power-of-two octaves of range; `bucketCount = octaves << schema`.
-        octaves: u64,
+        /// The smallest upper bound in the histogram: bucket 0's. Every observation at or below it
+        /// lands in bucket 0 — counted, but not resolved. Rounds up to the nearest representable
+        /// bound when it is not a power of two, taking `max_upper_bound_ns` up with it by the same
+        /// factor; prefer a power of two so no rounding happens.
+        min_upper_bound_ns: u64,
+        /// The largest upper bound in the histogram: the final bucket's. Must be
+        /// `min_upper_bound_ns` times a power of two. Observations above it land in the implicit
+        /// `+Inf` bucket.
+        max_upper_bound_ns: u64,
+        /// How many upper bounds fall in each doubling — each `x` to `2x` range. Power of two in
+        /// 1..256. Each bound is `2^(1 / bounds_per_doubling)` times the one below it: 4 leaves them
+        /// 18.9% apart, 8 -> 9.1%, 16 -> 4.4%.
+        bounds_per_doubling: u16 = 8,
 
-        /// Number of leading `u64` words (at `Detail.index`) encoding `layout` — `[schema, min_ns,
-        /// octaves]` — before the `Raw` shard elements.
+        /// Backstop on the share of the fixed histogram region a single metric may claim. Not a
+        /// budget — a layout anywhere near this is a typo, not a decision. At the ceiling one metric
+        /// costs `header_words + 1 + 2 * (2 + 512)` = 1032 u64 words, ~8 KiB. It is also what bounds
+        /// `bounds_per_doubling` against window width: the two trade directly, so at 256 bounds per
+        /// doubling one doubling fits (257 buckets) and two do not (513).
+        pub const max_bucket_count: u64 = 512;
+
+        /// Number of leading `u64` words (at `Detail.index`) encoding `layout` —
+        /// `[bounds_per_doubling, min_upper_bound_ns, max_upper_bound_ns]` — before the `Raw` shard
+        /// elements.
         pub const header_words: u32 = 3;
 
         pub fn initFromHeader(src: []const u64) Layout {
             std.debug.assert(src.len == header_words);
-            return .{
-                .schema = @intCast(src[0]),
-                .min_ns = src[1],
-                .octaves = src[2],
+            const layout: Layout = .{
+                .bounds_per_doubling = @intCast(src[0]),
+                .min_upper_bound_ns = src[1],
+                .max_upper_bound_ns = src[2],
             };
+            // Everything reaching here was written by `writeHeader` from a `comptimeValidate`-checked
+            // layout, and `signalReady` orders that write ahead of any read. A torn or zeroed header
+            // is the one bad layout no `comptime` can reach — these words cross a region boundary —
+            // and it is worth catching here because a `bounds_per_doubling` that is not a power of
+            // two fails silently: `@ctz` just reads it as a smaller schema. Every accessor below
+            // assumes either these checks or `comptimeValidate` has run.
+            std.debug.assert(layout.bounds_per_doubling != 0 and
+                layout.bounds_per_doubling <= 256 and
+                std.math.isPowerOfTwo(layout.bounds_per_doubling));
+            std.debug.assert(layout.min_upper_bound_ns != 0);
+            std.debug.assert(layout.max_upper_bound_ns > layout.min_upper_bound_ns);
+            const ratio = layout.max_upper_bound_ns / layout.min_upper_bound_ns;
+            std.debug.assert(ratio * layout.min_upper_bound_ns == layout.max_upper_bound_ns);
+            std.debug.assert(std.math.isPowerOfTwo(ratio));
+            return layout;
         }
 
         /// Serialize `layout` into a `header_words`-length region header.
         pub fn writeHeader(self: Layout, dst: []u64) void {
             std.debug.assert(dst.len == header_words);
-            dst[0] = self.schema;
-            dst[1] = self.min_ns;
-            dst[2] = self.octaves;
+            dst[0] = self.bounds_per_doubling;
+            dst[1] = self.min_upper_bound_ns;
+            dst[2] = self.max_upper_bound_ns;
         }
 
+        /// Note the `@popCount`/`@clz` builtins and `comptime` prefixes throughout: a plain call to
+        /// a non-`inline` helper yields a runtime-known value even here, which would leave every
+        /// `@compileError` branch live and fire them all unconditionally.
         pub fn comptimeValidate(comptime self: Layout) void {
-            if (self.octaves == 0) @compileError("Layout requires at least one octave");
-            if (self.schema > 8) @compileError("Layout schema must be in 0..8");
-            if (self.min_ns == 0) @compileError("Layout requires min_ns > 0");
-            // The top bucket's bound is ~`min_ns << octaves` (one native octave == one power-of-two
-            // octave); keep the shift in range and the bound within u64.
-            if (self.octaves >= 64 or self.min_ns > std.math.maxInt(u64) >> self.octaves)
-                @compileError("bucket bounds overflow u64: reduce octaves or min_ns");
+            if (self.bounds_per_doubling == 0 or self.bounds_per_doubling > 256 or
+                @popCount(self.bounds_per_doubling) != 1)
+                @compileError(std.fmt.comptimePrint(
+                    "Layout bounds_per_doubling must be a power of two in 1..256; got {d}.",
+                    .{self.bounds_per_doubling},
+                ));
+            if (self.min_upper_bound_ns == 0)
+                @compileError("Layout requires min_upper_bound_ns > 0");
+            if (self.max_upper_bound_ns <= self.min_upper_bound_ns)
+                @compileError(std.fmt.comptimePrint(
+                    "Layout max_upper_bound_ns ({d}) must exceed min_upper_bound_ns ({d}).",
+                    .{ self.max_upper_bound_ns, self.min_upper_bound_ns },
+                ));
+            // Keeps `upperBoundNs`'s `exp2` -> u64 conversion in range, rounding included.
+            if (self.max_upper_bound_ns > 1 << 62)
+                @compileError("Layout max_upper_bound_ns must be <= 2^62");
+
+            // A power-of-two ratio is what keeps every derived quantity in integer arithmetic, and
+            // what makes it impossible to name a bound sitting a hair off a representable one.
+            const ratio = self.max_upper_bound_ns / self.min_upper_bound_ns;
+            if (ratio * self.min_upper_bound_ns != self.max_upper_bound_ns or
+                @popCount(ratio) != 1)
+            {
+                // `ratio` floors to 1 for any `max` inside the first doubling, and `min` itself is
+                // not a legal `max` — so the pair to name there is the first two rungs, not `min`.
+                const lower: comptime_int = if (ratio < 2)
+                    @as(comptime_int, self.min_upper_bound_ns) * 2
+                else
+                    @as(comptime_int, self.min_upper_bound_ns) << (63 - @clz(ratio));
+                @compileError(std.fmt.comptimePrint(
+                    "Layout max_upper_bound_ns must be min_upper_bound_ns ({d}) times a " ++
+                        "power of two; {d} is not. Nearest legal values: {d} and {d}.",
+                    .{ self.min_upper_bound_ns, self.max_upper_bound_ns, lower, lower * 2 },
+                ));
+            }
+
+            const count = comptime self.bucketCount();
+            const words = comptime header_words + self.elementsFromBucketCount();
+            if (count > max_bucket_count) {
+                // Spell out the product rather than just the total: the two factors are the two
+                // knobs, and which one to turn is the whole question the error has to answer.
+                const spans = comptime self.doublings();
+                // Widest ladder that still fits at this window width. `spans` is at most 62 and
+                // the branch needs `spans * bounds_per_doubling >= 512`, so this never floors to 0.
+                const fits = comptime std.math.floorPowerOfTwo(
+                    u64,
+                    (max_bucket_count - 1) / spans,
+                );
+                @compileError(std.fmt.comptimePrint(
+                    "Layout resolves to {d} doublings x {d} bounds + 1 = {d} buckets " ++
+                        "({d} u64 words), over the {d}-bucket ceiling. Lower " ++
+                        "bounds_per_doubling to {d}, or narrow the window.",
+                    .{ spans, self.bounds_per_doubling, count, words, max_bucket_count, fits },
+                ));
+            }
         }
 
+        /// The Prometheus native-histogram `schema` this layout renders as: `log2` of
+        /// `bounds_per_doubling`. Prometheus calls a doubling an octave and encodes the exponent;
+        /// callers think in bounds, so the field carries the count and the wire gets this.
+        pub fn schema(self: Layout) u4 {
+            return @intCast(@ctz(self.bounds_per_doubling));
+        }
+
+        /// Number of `x` -> `2x` ranges the window spans. Assumes an exact power-of-two ratio;
+        /// `comptimeValidate` and `initFromHeader` are what prove it.
+        fn doublings(self: Layout) u6 {
+            return @intCast(@ctz(self.max_upper_bound_ns / self.min_upper_bound_ns));
+        }
+
+        /// Both endpoints are inclusive, hence the `+ 1`.
         pub fn bucketCount(self: Layout) u64 {
-            return @intCast(self.octaves << @as(u6, self.schema));
+            return @as(u64, self.doublings()) * self.bounds_per_doubling + 1;
         }
 
         pub fn elementsFromBucketCount(self: Layout) u32 {
@@ -937,16 +1038,16 @@ pub const LatencyHistogram = struct {
         /// Global native bucket index of storage bucket 0; storage bucket `i` has global index
         /// `baseIndex() + i`. This is the `sint32` `positive_span` offset in the native histogram.
         pub fn baseIndex(self: Layout) i64 {
-            return nativeBucketIndex(self.schema, self.min_ns);
+            return nativeBucketIndex(self.schema(), self.min_upper_bound_ns);
         }
 
         /// The inclusive `le` upper bound (in ns) for bucket `index`, rounded to an integer:
-        /// `2^((base_index + index) / 2^schema)`. Used only by the classic (text) render path; the
-        /// native protobuf path uses bucket indices directly via `baseIndex`.
-        pub fn upperBoundNs(self: Layout, index: usize) u64 {
+        /// `2^((base_index + index) / bounds_per_doubling)`. Used only by the classic (text) render
+        /// path; the native protobuf path uses bucket indices directly via `baseIndex`.
+        fn upperBoundNs(self: Layout, index: usize) u64 {
             const gi = self.baseIndex() + @as(i64, @intCast(index));
-            const per_octave: f64 = @floatFromInt(@as(u64, 1) << @as(u6, self.schema));
-            const bound = std.math.exp2(@as(f64, @floatFromInt(gi)) / per_octave);
+            const per_doubling: f64 = @floatFromInt(self.bounds_per_doubling);
+            const bound = std.math.exp2(@as(f64, @floatFromInt(gi)) / per_doubling);
             return @intFromFloat(@round(bound));
         }
     };
@@ -1019,7 +1120,7 @@ pub const LatencyHistogram = struct {
         // values above the top land in the implicit `+Inf` bucket via `observe`'s `index <
         // buckets.len` guard.
         if (ns == 0) return 0;
-        const local = nativeBucketIndex(self.layout.schema, ns) - self.layout.baseIndex();
+        const local = nativeBucketIndex(self.layout.schema(), ns) - self.layout.baseIndex();
         return if (local < 0) 0 else @intCast(local);
     }
 
@@ -1449,12 +1550,80 @@ test "histogram: totals add up after concurrent reads and writes" {
     ));
 }
 
+test "latency histogram: both window endpoints are inclusive" {
+    const Layout = LatencyHistogram.Layout;
+    // The regression this API shape exists for: the old `bucketCount = octaves << schema` left the
+    // final bound one rung short of the top anyone wrote down (60097 where 65536 was meant).
+    const layout: Layout = .{
+        .min_upper_bound_ns = 1_024,
+        .max_upper_bound_ns = 65_536,
+        .bounds_per_doubling = 8,
+    };
+    try std.testing.expectEqual(@as(u6, 6), layout.doublings());
+    try std.testing.expectEqual(@as(u64, 49), layout.bucketCount());
+    try std.testing.expectEqual(@as(u64, 1_024), layout.upperBoundNs(0));
+    try std.testing.expectEqual(@as(u64, 65_536), layout.upperBoundNs(48));
+}
+
+test "latency histogram: bounds that are not powers of two round up together" {
+    const Layout = LatencyHistogram.Layout;
+    // 1000 sits between the representable bounds 964 and 1024, so the window opens at 1024 and the
+    // top rises by the same factor.
+    const layout: Layout = .{
+        .min_upper_bound_ns = 1_000,
+        .max_upper_bound_ns = 16_000,
+        .bounds_per_doubling = 8,
+    };
+    // Rounding shifts the window without changing its span: still 4 doublings, 33 buckets.
+    try std.testing.expectEqual(@as(u6, 4), layout.doublings());
+    try std.testing.expectEqual(@as(u64, 33), layout.bucketCount());
+    try std.testing.expectEqual(@as(u64, 1_024), layout.upperBoundNs(0));
+    try std.testing.expectEqual(@as(u64, 16_384), layout.upperBoundNs(32));
+    // The fields keep what the caller wrote.
+    try std.testing.expectEqual(@as(u64, 1_000), layout.min_upper_bound_ns);
+    try std.testing.expectEqual(@as(u64, 16_000), layout.max_upper_bound_ns);
+}
+
+test "latency histogram: bounds_per_doubling maps onto the native schema" {
+    const Layout = LatencyHistogram.Layout;
+    const cases = [_]struct { u16, u4 }{
+        .{ 1, 0 }, .{ 2, 1 }, .{ 4, 2 }, .{ 8, 3 }, .{ 16, 4 }, .{ 256, 8 },
+    };
+    for (cases) |case| {
+        const bounds_per_doubling, const schema = case;
+        const layout: Layout = .{
+            .min_upper_bound_ns = 512,
+            .max_upper_bound_ns = 1_024,
+            .bounds_per_doubling = bounds_per_doubling,
+        };
+        try std.testing.expectEqual(schema, layout.schema());
+    }
+}
+
+test "latency histogram: the pre-rename layout keeps its bounds" {
+    const Layout = LatencyHistogram.Layout;
+    // `{schema = 2, min_ns = 512, octaves = 12}` spelled in the current API. Its 48 bounds are
+    // unchanged; the 49th is the top rung the old arithmetic dropped.
+    const layout: Layout = .{
+        .min_upper_bound_ns = 512,
+        .max_upper_bound_ns = 2_097_152,
+        .bounds_per_doubling = 4,
+    };
+    try std.testing.expectEqual(@as(i64, 36), layout.baseIndex());
+    try std.testing.expectEqual(@as(u64, 49), layout.bucketCount());
+    const head = [_]u64{ 512, 609, 724, 861, 1024, 1218, 1448, 1722, 2048 };
+    for (head, 0..) |bound, i| try std.testing.expectEqual(bound, layout.upperBoundNs(i));
+    try std.testing.expectEqual(@as(u64, 1_763_488), layout.upperBoundNs(47));
+    try std.testing.expectEqual(@as(u64, 2_097_152), layout.upperBoundNs(48));
+}
+
 test "latency histogram: layout header round-trips" {
     const Layout = LatencyHistogram.Layout;
     const cases = [_]Layout{
-        .{ .schema = 2, .min_ns = 512, .octaves = 12 },
-        .{ .schema = 0, .min_ns = 64, .octaves = 10 },
-        .{ .schema = 8, .min_ns = 1_000, .octaves = 4 },
+        .{ .min_upper_bound_ns = 512, .max_upper_bound_ns = 512 << 12, .bounds_per_doubling = 4 },
+        .{ .min_upper_bound_ns = 64, .max_upper_bound_ns = 64 << 10, .bounds_per_doubling = 1 },
+        // 1_000 is not a power of two, so this case round-trips a layout whose bounds round up.
+        .{ .min_upper_bound_ns = 1_000, .max_upper_bound_ns = 16_000, .bounds_per_doubling = 16 },
     };
     for (cases) |layout| {
         var header: [Layout.header_words]u64 = undefined;
@@ -1465,39 +1634,64 @@ test "latency histogram: layout header round-trips" {
 
 test "latency histogram: comptimeValidate accepts well-formed layouts" {
     const Layout = LatencyHistogram.Layout;
-    Layout.comptimeValidate(.{ .schema = 2, .min_ns = 512, .octaves = 12 });
-    Layout.comptimeValidate(.{ .schema = 0, .min_ns = 1, .octaves = 8 });
-    Layout.comptimeValidate(.{ .schema = 8, .min_ns = 1_000, .octaves = 4 });
+    Layout.comptimeValidate(.{
+        .min_upper_bound_ns = 512,
+        .max_upper_bound_ns = 512 << 12,
+        .bounds_per_doubling = 4,
+    });
+    Layout.comptimeValidate(.{
+        .min_upper_bound_ns = 1,
+        .max_upper_bound_ns = 1 << 8,
+        .bounds_per_doubling = 1,
+    });
+    Layout.comptimeValidate(.{
+        .min_upper_bound_ns = 1_000,
+        .max_upper_bound_ns = 16_000,
+        .bounds_per_doubling = 16,
+    });
 }
 
 test "latency histogram: geometric bounds and base index" {
     const Layout = LatencyHistogram.Layout;
-    // schema 2 (4 buckets/octave), window anchored at 512ns == native index 36. Bounds are
-    // `2^((36 + i) / 4)` rounded: 512, 609, 724, 861, 1024, 1218, 1448, 1722.
-    const layout: Layout = .{ .schema = 2, .min_ns = 512, .octaves = 2 };
-    const want = [_]u64{ 512, 609, 724, 861, 1024, 1218, 1448, 1722 };
+    // 4 bounds per doubling, window anchored at 512ns == native index 36. Bounds are
+    // `2^((36 + i) / 4)` rounded, both endpoints inclusive.
+    const layout: Layout = .{
+        .min_upper_bound_ns = 512,
+        .max_upper_bound_ns = 2048,
+        .bounds_per_doubling = 4,
+    };
+    const want = [_]u64{ 512, 609, 724, 861, 1024, 1218, 1448, 1722, 2048 };
     for (want, 0..) |bound, i| try std.testing.expectEqual(bound, layout.upperBoundNs(i));
 
-    // Storage bucket 0 is native index 36 (== 2^schema * log2(512), exact since 512 is a power of 2);
-    // this is the `positive_span` offset the protobuf encoder emits.
+    // Storage bucket 0 is native index 36 (== bounds_per_doubling * log2(512), exact since 512 is a
+    // power of 2); this is the `positive_span` offset the protobuf encoder emits.
     try std.testing.expectEqual(@as(i64, 36), layout.baseIndex());
-    try std.testing.expectEqual(@as(u64, 8), layout.bucketCount());
+    try std.testing.expectEqual(@as(u64, 2), layout.doublings());
+    try std.testing.expectEqual(@as(u4, 2), layout.schema());
+    // Two doublings at 4 bounds each, plus the closing bound.
+    try std.testing.expectEqual(@as(u64, 9), layout.bucketCount());
 }
 
 test "latency histogram: bins geometrically" {
     const gpa = std.testing.allocator;
     const Layout = LatencyHistogram.Layout;
 
-    // schema 2, min_ns 512, 2 octaves -> 8 buckets. Octave boundaries (512, 1024) exercise the
-    // fp-safe `frexp` binning; 513/700 are mid-octave; 2000 overflows into the implicit `+Inf`.
-    const layout: Layout = .{ .schema = 2, .min_ns = 512, .octaves = 2 };
+    // [512, 1024] at 4 bounds per doubling -> 5 buckets. Both endpoints are doubling boundaries and
+    // both are observed, exercising the fp-safe `frexp` binning; 513/700 are mid-doubling; 861 stays
+    // empty, so an interior bucket holds the running cumulative; 2000 is above the window and lands
+    // in the implicit `+Inf`.
+    const layout: Layout = .{
+        .min_upper_bound_ns = 512,
+        .max_upper_bound_ns = 1024,
+        .bounds_per_doubling = 4,
+    };
     const hist: LatencyHistogram = try .initForTest(gpa, layout);
     defer hist.deinitForTest(gpa);
 
-    hist.observe(512); // bucket 0 (le=512, inclusive octave boundary)
+    hist.observe(512); // bucket 0 (le=512, inclusive doubling boundary)
     hist.observe(513); // bucket 1 (le=609)
     hist.observe(700); // bucket 2 (le=724)
-    hist.observe(1024); // bucket 4 (le=1024, inclusive octave boundary)
+    hist.observe(1024); // bucket 4 (le=1024, inclusive doubling boundary)
     hist.observe(2000); // +Inf
 
     try hist.testExpectBuckets(5, &.{
@@ -1506,9 +1700,6 @@ test "latency histogram: bins geometrically" {
         .{ .upper_bound = 724, .cumulative_count = 3 },
         .{ .upper_bound = 861, .cumulative_count = 3 },
         .{ .upper_bound = 1024, .cumulative_count = 4 },
-        .{ .upper_bound = 1218, .cumulative_count = 4 },
-        .{ .upper_bound = 1448, .cumulative_count = 4 },
-        .{ .upper_bound = 1722, .cumulative_count = 4 },
     });
 }
 
@@ -1516,7 +1707,11 @@ test "latency histogram: values accumulate across snapshots" {
     const gpa = std.testing.allocator;
     const Layout = LatencyHistogram.Layout;
 
-    const layout: Layout = .{ .schema = 2, .min_ns = 512, .octaves = 2 };
+    const layout: Layout = .{
+        .min_upper_bound_ns = 512,
+        .max_upper_bound_ns = 1024,
+        .bounds_per_doubling = 4,
+    };
     const hist: LatencyHistogram = try .initForTest(gpa, layout);
     defer hist.deinitForTest(gpa);
 
@@ -1528,9 +1723,6 @@ test "latency histogram: values accumulate across snapshots" {
         .{ .upper_bound = 724, .cumulative_count = 2 },
         .{ .upper_bound = 861, .cumulative_count = 2 },
         .{ .upper_bound = 1024, .cumulative_count = 2 },
-        .{ .upper_bound = 1218, .cumulative_count = 2 },
-        .{ .upper_bound = 1448, .cumulative_count = 2 },
-        .{ .upper_bound = 1722, .cumulative_count = 2 },
     });
 
     // The prior snapshot folds its counts back into the hot shard, so totals accumulate.
@@ -1541,9 +1733,6 @@ test "latency histogram: values accumulate across snapshots" {
         .{ .upper_bound = 724, .cumulative_count = 3 },
         .{ .upper_bound = 861, .cumulative_count = 3 },
         .{ .upper_bound = 1024, .cumulative_count = 3 },
-        .{ .upper_bound = 1218, .cumulative_count = 3 },
-        .{ .upper_bound = 1448, .cumulative_count = 3 },
-        .{ .upper_bound = 1722, .cumulative_count = 3 },
     });
 }
 
@@ -1551,7 +1740,11 @@ test "latency histogram: values below the window floor into bucket 0" {
     const gpa = std.testing.allocator;
     const Layout = LatencyHistogram.Layout;
 
-    const layout: Layout = .{ .schema = 2, .min_ns = 512, .octaves = 2 };
+    const layout: Layout = .{
+        .min_upper_bound_ns = 512,
+        .max_upper_bound_ns = 1024,
+        .bounds_per_doubling = 4,
+    };
     const hist: LatencyHistogram = try .initForTest(gpa, layout);
     defer hist.deinitForTest(gpa);
 
@@ -1565,18 +1758,15 @@ test "latency histogram: values below the window floor into bucket 0" {
         .{ .upper_bound = 724, .cumulative_count = 3 },
         .{ .upper_bound = 861, .cumulative_count = 3 },
         .{ .upper_bound = 1024, .cumulative_count = 3 },
-        .{ .upper_bound = 1218, .cumulative_count = 3 },
-        .{ .upper_bound = 1448, .cumulative_count = 3 },
-        .{ .upper_bound = 1722, .cumulative_count = 3 },
     });
 }
 
 // A window of 512ns .. ~537ms. Wide enough that a measured span lands in an explicit bucket rather
 // than the implicit `+Inf` one.
 const observer_test_layout: LatencyHistogram.Layout = .{
-    .schema = 2,
-    .min_ns = 512,
-    .octaves = 20,
+    .min_upper_bound_ns = 512,
+    .max_upper_bound_ns = 512 << 20,
+    .bounds_per_doubling = 4,
 };
 
 // Bounds for the `.standard` observer tests, in nanoseconds per the contract on
