@@ -2571,7 +2571,7 @@ pub const DependencyStubs = struct {
         );
         errdefer epoch_tracker.deinit();
 
-        const root_slot_constants = try sig.core.SlotConstants.fromBankFields(
+        const root_slot_constants = try sig.core.SlotConstants.fromBankFieldsForTest(
             allocator,
             bank_fields,
             feature_set,
@@ -2580,10 +2580,8 @@ pub const DependencyStubs = struct {
 
         const lt_hash = collapsed_manifest.bank_extra.accounts_lt_hash;
 
-        const account_store = sig.accounts_db.AccountStore{
-            .accounts_db = &self.accounts_db_state.db,
-        };
-        const account_reader = account_store.reader().forSlot(&bank_fields.ancestors);
+        const account_reader = self.accountReader().forSlot(&bank_fields.ancestors);
+
         var root_slot_state =
             try sig.core.SlotState.fromBankFields(allocator, bank_fields, lt_hash, account_reader);
         errdefer root_slot_state.deinit(allocator);
