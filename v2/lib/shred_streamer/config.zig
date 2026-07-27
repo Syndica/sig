@@ -1,6 +1,7 @@
 const std = @import("std");
+const lib = @import("lib");
 
-pub const Slot = u64;
+pub const Slot = lib.solana.Slot;
 
 /// Direction for iterating through the blockstore. Decoupled from rocksdb
 /// so this type can live in lib without a rocksdb dependency.
@@ -17,14 +18,9 @@ pub const TestMode = enum {
     corrupt,
 
     pub fn parse(raw: []const u8) ?TestMode {
-        if (std.mem.eql(u8, raw, "linear")) return .linear;
-        if (std.mem.eql(u8, raw, "reverse")) return .reverse;
-        if (std.mem.eql(u8, raw, "shuffle-global")) return .shuffle_global;
-        if (std.mem.eql(u8, raw, "shuffle-slot")) return .shuffle_slot;
-        if (std.mem.eql(u8, raw, "drop")) return .drop;
-        if (std.mem.eql(u8, raw, "late")) return .late;
-        if (std.mem.eql(u8, raw, "duplicate")) return .duplicate;
-        if (std.mem.eql(u8, raw, "corrupt")) return .corrupt;
+        inline for (@typeInfo(TestMode).@"enum".fields) |e_field| {
+            if (std.mem.eql(u8, kebabify(e_field.name), raw)) return @enumFromInt(e_field.value);
+        }
         return null;
     }
 
@@ -49,24 +45,28 @@ pub const TestMode = enum {
     }
 };
 
+/// Converts a snake_case identifier to kebab-case at comptime.
+/// Used for parsing kebab-case CLI values into snake_case enum fields.
+inline fn kebabify(comptime str: []const u8) []const u8 {
+    comptime {
+        var kebab = str[0..].*;
+        std.mem.replaceScalar(u8, &kebab, '_', '-');
+        const copy = kebab;
+        return &copy;
+    }
+}
+
 pub const ShredKindFilter = enum {
     any,
     data,
     code,
 
     pub fn parse(raw: []const u8) ?ShredKindFilter {
-        if (std.mem.eql(u8, raw, "any")) return .any;
-        if (std.mem.eql(u8, raw, "data")) return .data;
-        if (std.mem.eql(u8, raw, "code")) return .code;
-        return null;
+        return std.meta.stringToEnum(ShredKindFilter, raw);
     }
 
     pub fn kindName(self: ShredKindFilter) []const u8 {
-        return switch (self) {
-            .any => "any",
-            .data => "data",
-            .code => "code",
-        };
+        return @tagName(self);
     }
 
     pub fn matches(self: ShredKindFilter, kind: ShredKind) bool {
@@ -141,9 +141,9 @@ pub const PartialConfig = struct {
     corrupt_bytes: ?usize = null,
     dry_run: bool = false,
 
-    pub fn finalize(self: PartialConfig, stdout: *std.Io.Writer) ParseArgsError!Config {
+    pub fn finalize(self: PartialConfig, err_writer: *std.Io.Writer) ParseArgsError!Config {
         const ledger = self.ledger orelse {
-            try stdout.print("missing required argument: --ledger <path>\n", .{});
+            try err_writer.print("missing required argument: --ledger <path>\n", .{});
             return error.InvalidArguments;
         };
         // --target is optional: only needed by the legacy UDP path (legacyMain),
@@ -154,14 +154,14 @@ pub const PartialConfig = struct {
             self.end_slot != null and
             self.end_slot.? < self.start_slot.?)
         {
-            try stdout.print("--end-slot must be greater than or equal to --start-slot\n", .{});
+            try err_writer.print("--end-slot must be greater than or equal to --start-slot\n", .{});
             return error.InvalidArguments;
         }
 
         switch (self.test_mode) {
             .linear, .reverse => {
                 if (self.seed != null) {
-                    try stdout.print(
+                    try err_writer.print(
                         "--seed is only valid with --test-mode shuffle-global, " ++
                             "shuffle-slot, drop, late, duplicate, or corrupt\n",
                         .{},
@@ -171,14 +171,14 @@ pub const PartialConfig = struct {
             },
             .shuffle_global, .shuffle_slot, .drop, .late, .duplicate, .corrupt => {
                 if (self.seed == null) {
-                    try stdout.print(
+                    try err_writer.print(
                         "--test-mode {s} requires --seed\n",
                         .{self.test_mode.modeName()},
                     );
                     return error.InvalidArguments;
                 }
                 if (self.start_slot == null or self.end_slot == null) {
-                    try stdout.print(
+                    try err_writer.print(
                         "--test-mode {s} requires both --start-slot and --end-slot\n",
                         .{self.test_mode.modeName()},
                     );
@@ -189,14 +189,14 @@ pub const PartialConfig = struct {
 
         if (!self.test_mode.usesSelectedShreds()) {
             if (self.selected_count != null) {
-                try stdout.print(
+                try err_writer.print(
                     "--count is only valid with --test-mode drop, late, duplicate, or corrupt\n",
                     .{},
                 );
                 return error.InvalidArguments;
             }
             if (self.shred_kind != null) {
-                try stdout.print(
+                try err_writer.print(
                     "--shred-kind is only valid with --test-mode drop, late, " ++
                         "duplicate, or corrupt\n",
                     .{},
@@ -204,7 +204,7 @@ pub const PartialConfig = struct {
                 return error.InvalidArguments;
             }
             if (self.plan_limit != null) {
-                try stdout.print(
+                try err_writer.print(
                     "--plan-limit is only valid with --test-mode drop, late, " ++
                         "duplicate, or corrupt\n",
                     .{},
@@ -212,11 +212,14 @@ pub const PartialConfig = struct {
                 return error.InvalidArguments;
             }
             if (self.corrupt_bytes != null) {
-                try stdout.print("--corrupt-bytes is only valid with --test-mode corrupt\n", .{});
+                try err_writer.print(
+                    "--corrupt-bytes is only valid with --test-mode corrupt\n",
+                    .{},
+                );
                 return error.InvalidArguments;
             }
         } else if (self.test_mode != .corrupt and self.corrupt_bytes != null) {
-            try stdout.print("--corrupt-bytes is only valid with --test-mode corrupt\n", .{});
+            try err_writer.print("--corrupt-bytes is only valid with --test-mode corrupt\n", .{});
             return error.InvalidArguments;
         }
 
@@ -311,7 +314,7 @@ pub const no_current_slot = std.math.maxInt(Slot);
 
 // --- Arg parsing functions ---
 
-pub fn parseArgs(stdout: *std.Io.Writer, args: []const []const u8) ParseArgsError!ParseResult {
+pub fn parseArgs(err_writer: *std.Io.Writer, args: []const []const u8) ParseArgsError!ParseResult {
     var config: PartialConfig = .{};
     var seen: std.EnumSet(Arg) = .initEmpty();
 
@@ -320,9 +323,9 @@ pub fn parseArgs(stdout: *std.Io.Writer, args: []const []const u8) ParseArgsErro
         const arg = args[i];
         const parsed_arg = Arg.parse(arg) orelse {
             if (std.mem.startsWith(u8, arg, "-")) {
-                try stdout.print("unknown flag: {s}\n", .{arg});
+                try err_writer.print("unknown flag: {s}\n", .{arg});
             } else {
-                try stdout.print("unexpected argument: {s}\n", .{arg});
+                try err_writer.print("unexpected argument: {s}\n", .{arg});
             }
             return error.InvalidArguments;
         };
@@ -330,68 +333,68 @@ pub fn parseArgs(stdout: *std.Io.Writer, args: []const []const u8) ParseArgsErro
         if (parsed_arg == .help) return .help;
 
         if (seen.contains(parsed_arg)) {
-            try stdout.print("duplicate argument: {s}\n", .{parsed_arg.flagName()});
+            try err_writer.print("duplicate argument: {s}\n", .{parsed_arg.flagName()});
             return error.InvalidArguments;
         }
         seen.insert(parsed_arg);
 
         switch (parsed_arg) {
             .help => unreachable,
-            .ledger => config.ledger = try nextValue(stdout, args, &i, parsed_arg.flagName()),
-            .target => config.target = try nextValue(stdout, args, &i, parsed_arg.flagName()),
+            .ledger => config.ledger = try nextValue(err_writer, args, &i, parsed_arg.flagName()),
+            .target => config.target = try nextValue(err_writer, args, &i, parsed_arg.flagName()),
             .start_slot => config.start_slot = try parseSlot(
-                stdout,
-                try nextValue(stdout, args, &i, parsed_arg.flagName()),
+                err_writer,
+                try nextValue(err_writer, args, &i, parsed_arg.flagName()),
                 parsed_arg.flagName(),
             ),
             .end_slot => config.end_slot = try parseSlot(
-                stdout,
-                try nextValue(stdout, args, &i, parsed_arg.flagName()),
+                err_writer,
+                try nextValue(err_writer, args, &i, parsed_arg.flagName()),
                 parsed_arg.flagName(),
             ),
             .rate_hz => config.rate_hz = try parseRateHz(
-                stdout,
-                try nextValue(stdout, args, &i, parsed_arg.flagName()),
+                err_writer,
+                try nextValue(err_writer, args, &i, parsed_arg.flagName()),
             ),
             .test_mode => config.test_mode = try parseTestMode(
-                stdout,
-                try nextValue(stdout, args, &i, parsed_arg.flagName()),
+                err_writer,
+                try nextValue(err_writer, args, &i, parsed_arg.flagName()),
             ),
             .seed => config.seed = try parseSeed(
-                stdout,
-                try nextValue(stdout, args, &i, parsed_arg.flagName()),
+                err_writer,
+                try nextValue(err_writer, args, &i, parsed_arg.flagName()),
             ),
             .count => config.selected_count = try parseSelectedCount(
-                stdout,
-                try nextValue(stdout, args, &i, parsed_arg.flagName()),
+                err_writer,
+                try nextValue(err_writer, args, &i, parsed_arg.flagName()),
             ),
             .shred_kind => config.shred_kind = try parseShredKind(
-                stdout,
-                try nextValue(stdout, args, &i, parsed_arg.flagName()),
+                err_writer,
+                try nextValue(err_writer, args, &i, parsed_arg.flagName()),
             ),
             .plan_limit => config.plan_limit = try parsePlanLimit(
-                stdout,
-                try nextValue(stdout, args, &i, parsed_arg.flagName()),
+                err_writer,
+                try nextValue(err_writer, args, &i, parsed_arg.flagName()),
             ),
             .corrupt_bytes => config.corrupt_bytes = try parseCorruptBytes(
-                stdout,
-                try nextValue(stdout, args, &i, parsed_arg.flagName()),
+                err_writer,
+                try nextValue(err_writer, args, &i, parsed_arg.flagName()),
             ),
             .dry_run => config.dry_run = true,
         }
     }
 
-    return .{ .config = try config.finalize(stdout) };
+    return .{ .config = try config.finalize(err_writer) };
 }
 
 fn nextValue(
-    stdout: *std.Io.Writer,
+    err_writer: *std.Io.Writer,
     args: []const []const u8,
     index: *usize,
     flag: []const u8,
 ) ParseArgsError![]const u8 {
     if (index.* + 1 >= args.len) {
-        try stdout.print("missing value for {s}\n", .{flag});
+        try err_writer.print("missing value for {s}\n", .{flag});
         return error.InvalidArguments;
     }
 
@@ -399,31 +402,31 @@ fn nextValue(
     return args[index.*];
 }
 
-fn parseSlot(stdout: *std.Io.Writer, value: []const u8, flag: []const u8) ParseArgsError!Slot {
+fn parseSlot(err_writer: *std.Io.Writer, value: []const u8, flag: []const u8) ParseArgsError!Slot {
     return std.fmt.parseUnsigned(Slot, value, 10) catch {
-        try stdout.print("invalid slot for {s}: {s}\n", .{ flag, value });
+        try err_writer.print("invalid slot for {s}: {s}\n", .{ flag, value });
         return error.InvalidArguments;
     };
 }
 
-fn parseRateHz(stdout: *std.Io.Writer, value: []const u8) ParseArgsError!f64 {
+fn parseRateHz(err_writer: *std.Io.Writer, value: []const u8) ParseArgsError!f64 {
     const rate_hz = std.fmt.parseFloat(f64, value) catch {
-        try stdout.print("invalid rate for --rate-hz: {s}\n", .{value});
+        try err_writer.print("invalid rate for --rate-hz: {s}\n", .{value});
         return error.InvalidArguments;
     };
 
     if (!(rate_hz > 0) or !std.math.isFinite(rate_hz)) {
-        try stdout.print("--rate-hz must be a finite positive value\n", .{});
+        try err_writer.print("--rate-hz must be a finite positive value\n", .{});
         return error.InvalidArguments;
     }
 
     return rate_hz;
 }
 
-fn parseTestMode(stdout: *std.Io.Writer, value: []const u8) ParseArgsError!TestMode {
+fn parseTestMode(err_writer: *std.Io.Writer, value: []const u8) ParseArgsError!TestMode {
     return TestMode.parse(value) orelse {
-        try stdout.print("invalid test mode for --test-mode: {s}\n", .{value});
-        try stdout.print(
+        try err_writer.print("invalid test mode for --test-mode: {s}\n", .{value});
+        try err_writer.print(
             "valid test modes: linear, reverse, shuffle-global, shuffle-slot, drop, late, " ++
                 "duplicate, corrupt\n",
             .{},
@@ -432,54 +435,54 @@ fn parseTestMode(stdout: *std.Io.Writer, value: []const u8) ParseArgsError!TestM
     };
 }
 
-fn parseSeed(stdout: *std.Io.Writer, value: []const u8) ParseArgsError!u64 {
+fn parseSeed(err_writer: *std.Io.Writer, value: []const u8) ParseArgsError!u64 {
     if (std.mem.startsWith(u8, value, "0x") or std.mem.startsWith(u8, value, "0X")) {
         return std.fmt.parseUnsigned(u64, value[2..], 16) catch {
-            try stdout.print("invalid seed for --seed: {s}\n", .{value});
+            try err_writer.print("invalid seed for --seed: {s}\n", .{value});
             return error.InvalidArguments;
         };
     }
 
     return std.fmt.parseUnsigned(u64, value, 10) catch {
-        try stdout.print("invalid seed for --seed: {s}\n", .{value});
+        try err_writer.print("invalid seed for --seed: {s}\n", .{value});
         return error.InvalidArguments;
     };
 }
 
-fn parseSelectedCount(stdout: *std.Io.Writer, value: []const u8) ParseArgsError!usize {
+fn parseSelectedCount(err_writer: *std.Io.Writer, value: []const u8) ParseArgsError!usize {
     const selected_count = std.fmt.parseUnsigned(usize, value, 10) catch {
-        try stdout.print("invalid count for --count: {s}\n", .{value});
+        try err_writer.print("invalid count for --count: {s}\n", .{value});
         return error.InvalidArguments;
     };
     if (selected_count == 0) {
-        try stdout.print("--count must be greater than zero\n", .{});
+        try err_writer.print("--count must be greater than zero\n", .{});
         return error.InvalidArguments;
     }
     return selected_count;
 }
 
-fn parseShredKind(stdout: *std.Io.Writer, value: []const u8) ParseArgsError!ShredKindFilter {
+fn parseShredKind(err_writer: *std.Io.Writer, value: []const u8) ParseArgsError!ShredKindFilter {
     return ShredKindFilter.parse(value) orelse {
-        try stdout.print("invalid shred kind for --shred-kind: {s}\n", .{value});
-        try stdout.print("valid shred kinds: any, data, code\n", .{});
+        try err_writer.print("invalid shred kind for --shred-kind: {s}\n", .{value});
+        try err_writer.print("valid shred kinds: any, data, code\n", .{});
         return error.InvalidArguments;
     };
 }
 
-fn parsePlanLimit(stdout: *std.Io.Writer, value: []const u8) ParseArgsError!usize {
+fn parsePlanLimit(err_writer: *std.Io.Writer, value: []const u8) ParseArgsError!usize {
     return std.fmt.parseUnsigned(usize, value, 10) catch {
-        try stdout.print("invalid limit for --plan-limit: {s}\n", .{value});
+        try err_writer.print("invalid limit for --plan-limit: {s}\n", .{value});
         return error.InvalidArguments;
     };
 }
 
-fn parseCorruptBytes(stdout: *std.Io.Writer, value: []const u8) ParseArgsError!usize {
+fn parseCorruptBytes(err_writer: *std.Io.Writer, value: []const u8) ParseArgsError!usize {
     const corrupt_bytes = std.fmt.parseUnsigned(usize, value, 10) catch {
-        try stdout.print("invalid byte count for --corrupt-bytes: {s}\n", .{value});
+        try err_writer.print("invalid byte count for --corrupt-bytes: {s}\n", .{value});
         return error.InvalidArguments;
     };
     if (corrupt_bytes == 0) {
-        try stdout.print("--corrupt-bytes must be greater than zero\n", .{});
+        try err_writer.print("--corrupt-bytes must be greater than zero\n", .{});
         return error.InvalidArguments;
     }
     return corrupt_bytes;
@@ -709,7 +712,7 @@ pub fn countEligibleShreds(refs: []const ShredRef, shred_kind: ShredKindFilter) 
 
 pub fn chooseSelectedRefIndices(
     allocator: std.mem.Allocator,
-    stdout: *std.Io.Writer,
+    err_writer: *std.Io.Writer,
     refs: []const ShredRef,
     shred_kind: ShredKindFilter,
     count: usize,
@@ -725,7 +728,7 @@ pub fn chooseSelectedRefIndices(
     }
 
     if (count > candidates.items.len) {
-        try stdout.print(
+        try err_writer.print(
             "--count {d} exceeds {d} eligible {s} shreds\n",
             .{ count, candidates.items.len, shred_kind.kindName() },
         );
@@ -1167,7 +1170,14 @@ test "choose shred target indices" {
         try std.testing.expect(refs[index].kind == .data);
     }
 
-    var code_result = try chooseSelectedRefIndices(allocator, &discarding.writer, &refs, .code, 2, 12345);
+    var code_result = try chooseSelectedRefIndices(
+        allocator,
+        &discarding.writer,
+        &refs,
+        .code,
+        2,
+        12345,
+    );
     defer code_result.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 2), code_result.items.len);
     for (code_result.items) |index| {
