@@ -161,8 +161,6 @@ pub const Pubkey = extern struct {
     }
 };
 
-const Error = error{ InvalidBytesLength, InvalidEncodedLength, InvalidEncodedValue };
-
 test "pubkey format roundtrip" {
     const str = "SyndicAgdEphcy5xhAKZAomTYhcF8xhC7za2UD9xeug";
     const pk = try Pubkey.parseRuntime(str);
