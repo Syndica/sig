@@ -28,22 +28,24 @@ const SnapshotSource = struct {
 const TestMetricStore = lib.telemetry.TestMetricStore;
 
 allocator: std.mem.Allocator,
-// Backing memory for the node's fixed-buffer allocations, reused by reset.
+/// Backing memory for the node's fixed-buffer allocations, reused by reset.
 scratch: []u8,
 metric_store: TestMetricStore,
-effects_state: *EffectsState,
+effects: *Effects,
+/// GossipNode under test, reinitialized by reset.
 node: Node,
-// Wall time in milliseconds tracked to simulate time passing
+/// Wall time in milliseconds tracked to simulate time passing.
 now_ms: u64,
 
 const TestNode = @This();
-const Node = GossipNode(Effects);
+const Node = GossipNode(*Effects);
 
 const scratch_size = 4 * 1024 * 1024;
 const packet_capacity = 256;
 const snapshot_source_capacity = 16;
 
-const EffectsState = struct {
+/// Implementation of the GossipNode effects interface that captures state for test assertions.
+const Effects = struct {
     keypair: KeyPair,
     // These fields back slices retained by the node configuration.
     socket_builder: SocketMap.Builder,
@@ -55,50 +57,45 @@ const EffectsState = struct {
     pending_packets_len: usize,
     snapshot_sources: [snapshot_source_capacity]SnapshotSource,
     snapshot_sources_len: usize,
-};
 
-// Implementation for GossipNode Effects interface to capture state for test asserts.
-const Effects = struct {
-    state: *EffectsState,
-
-    pub fn writePacket(self: Effects) *Packet {
-        const index = self.state.packets_len + self.state.pending_packets_len;
-        const capacity = self.state.packets.len;
+    pub fn writePacket(self: *Effects) *Packet {
+        const index = self.packets_len + self.pending_packets_len;
+        const capacity = self.packets.len;
         std.debug.assert(index < capacity);
-        self.state.pending_packets_len += 1;
-        return &self.state.packets[index];
+        self.pending_packets_len += 1;
+        return &self.packets[index];
     }
 
-    pub fn flushWrittenPackets(self: Effects) void {
+    pub fn flushWrittenPackets(self: *Effects) void {
         // Publish every packet reserved since the previous flush.
-        self.state.packets_len += self.state.pending_packets_len;
-        self.state.pending_packets_len = 0;
+        self.packets_len += self.pending_packets_len;
+        self.pending_packets_len = 0;
     }
 
-    pub fn getIdentity(self: Effects) Pubkey {
-        return self.state.keypair.pubkey;
+    pub fn getIdentity(self: *Effects) Pubkey {
+        return self.keypair.pubkey;
     }
 
-    pub fn sign(self: Effects, message: []const u8) Signature {
-        return self.state.keypair.sign(message) catch unreachable;
+    pub fn sign(self: *Effects, message: []const u8) Signature {
+        return self.keypair.sign(message) catch unreachable;
     }
 
     pub fn reportSnapshotSource(
-        self: Effects,
+        self: *Effects,
         from: Pubkey,
         address: std.net.Address,
         slot: Slot,
         hash: Hash,
     ) void {
-        const capacity = self.state.snapshot_sources.len;
-        std.debug.assert(self.state.snapshot_sources_len < capacity);
-        self.state.snapshot_sources[self.state.snapshot_sources_len] = .{
+        const capacity = self.snapshot_sources.len;
+        std.debug.assert(self.snapshot_sources_len < capacity);
+        self.snapshot_sources[self.snapshot_sources_len] = .{
             .from = from,
             .rpc_addr = .fromNetAddress(address),
             .slot = slot,
             .hash = hash,
         };
-        self.state.snapshot_sources_len += 1;
+        self.snapshot_sources_len += 1;
     }
 };
 
@@ -112,9 +109,9 @@ pub fn init(
     std.debug.assert(entrypoints.len <= ClusterInfo.MAX_ENTRY_ADDRS);
 
     // Keep shared effect state at a stable address if the harness moves.
-    const effects_state = try allocator.create(EffectsState);
-    errdefer allocator.destroy(effects_state);
-    effects_state.* = .{
+    const effects = try allocator.create(Effects);
+    errdefer allocator.destroy(effects);
+    effects.* = .{
         .keypair = try testing.deterministicKeyPair(identity_seed),
         .socket_builder = .{},
         .entrypoints = undefined,
@@ -125,8 +122,8 @@ pub fn init(
         .snapshot_sources = undefined,
         .snapshot_sources_len = 0,
     };
-    @memcpy(effects_state.entrypoints[0..entrypoints.len], entrypoints);
-    effects_state.socket_builder.set(.gossip, address);
+    @memcpy(effects.entrypoints[0..entrypoints.len], entrypoints);
+    effects.socket_builder.set(.gossip, address);
 
     const scratch = try allocator.alloc(u8, scratch_size);
     errdefer allocator.free(scratch);
@@ -136,12 +133,11 @@ pub fn init(
     errdefer metric_store.deinit();
     const metrics = appendGossipMetrics(&metric_store);
 
-    const effects: Effects = .{ .state = effects_state };
     const node = try Node.init(&fixed_buffer, now_ms, metrics, .{
         .effects = effects,
         .shred_version = 42,
-        .socket_map = effects_state.socket_builder.asSocketMap(),
-        .entrypoints = effects_state.entrypoints[0..effects_state.entrypoints_len],
+        .socket_map = effects.socket_builder.asSocketMap(),
+        .entrypoints = effects.entrypoints[0..effects.entrypoints_len],
         .limits = .{
             .table = 256,
             .expired = 256,
@@ -153,7 +149,7 @@ pub fn init(
         .allocator = allocator,
         .scratch = scratch,
         .metric_store = metric_store,
-        .effects_state = effects_state,
+        .effects = effects,
         .node = node,
         .now_ms = now_ms,
     };
@@ -162,7 +158,7 @@ pub fn init(
 pub fn deinit(self: *TestNode) void {
     self.metric_store.deinit();
     self.allocator.free(self.scratch);
-    self.allocator.destroy(self.effects_state);
+    self.allocator.destroy(self.effects);
 }
 
 fn appendGossipMetrics(metric_store: *TestMetricStore) Metrics {
@@ -172,9 +168,9 @@ fn appendGossipMetrics(metric_store: *TestMetricStore) Metrics {
 }
 
 pub fn reset(self: *TestNode, now_ms: u64) !void {
-    std.debug.assert(self.effects_state.pending_packets_len == 0);
-    self.effects_state.packets_len = 0;
-    self.effects_state.snapshot_sources_len = 0;
+    std.debug.assert(self.effects.pending_packets_len == 0);
+    self.effects.packets_len = 0;
+    self.effects.snapshot_sources_len = 0;
 
     self.metric_store.reset();
     const metrics = appendGossipMetrics(&self.metric_store);
@@ -187,7 +183,7 @@ pub fn reset(self: *TestNode, now_ms: u64) !void {
 }
 
 pub fn identity(self: *const TestNode) Pubkey {
-    return self.effects_state.keypair.pubkey;
+    return self.effects.keypair.pubkey;
 }
 
 pub fn poll(self: *TestNode) !void {
@@ -215,14 +211,14 @@ pub fn receiveMessage(
 
 pub fn outgoingPackets(self: *const TestNode) []const Packet {
     // Packets remain hidden from tests until the Effects implementation flushes them.
-    return self.effects_state.packets[0..self.effects_state.packets_len];
+    return self.effects.packets[0..self.effects.packets_len];
 }
 
 pub fn clearOutgoingPackets(self: *TestNode) void {
-    std.debug.assert(self.effects_state.pending_packets_len == 0);
-    self.effects_state.packets_len = 0;
+    std.debug.assert(self.effects.pending_packets_len == 0);
+    self.effects.packets_len = 0;
 }
 
 pub fn snapshotSources(self: *const TestNode) []const SnapshotSource {
-    return self.effects_state.snapshot_sources[0..self.effects_state.snapshot_sources_len];
+    return self.effects.snapshot_sources[0..self.effects.snapshot_sources_len];
 }
