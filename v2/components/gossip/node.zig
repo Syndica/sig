@@ -129,7 +129,7 @@ pub fn GossipNode(comptime Effects: type) type {
             wallclock_ms: u64,
             deprecated: bool,
 
-            fn fromData(data: GossipData) EntryInfo {
+            fn fromData(data: GossipData) error{DeprecatedValue}!EntryInfo {
                 const Fields = struct {
                     from: Pubkey,
                     wallclock_ms: u64,
@@ -163,7 +163,7 @@ pub fn GossipNode(comptime Effects: type) type {
                     },
                     inline else => |value| {
                         comptime std.debug.assert(@TypeOf(value) == bincode.Deprecated);
-                        unreachable;
+                        return error.DeprecatedValue;
                     },
                 };
 
@@ -455,7 +455,7 @@ pub fn GossipNode(comptime Effects: type) type {
                 const value = bincodeReadBoundedGossipValue(&alloc_buf, &reader) catch unreachable;
                 value.signature.verify(&key.from, bytes[64..]) catch unreachable;
 
-                const entry_info = EntryInfo.fromData(value.data);
+                const entry_info = EntryInfo.fromData(value.data) catch unreachable;
                 assert(key.from.equals(&entry_info.key.from));
                 assert(key.tag == entry_info.key.tag);
                 assert(key.index == entry_info.key.index);
@@ -1056,7 +1056,8 @@ pub fn GossipNode(comptime Effects: type) type {
             value: GossipValue,
         ) InsertValueError!?struct { Key, u8 } {
             // Extract table entry information from the data.
-            const entry_info = EntryInfo.fromData(value.data);
+            const entry_info = EntryInfo.fromData(value.data) catch
+                return error.InvalidTableValue;
             const key = entry_info.key;
             const from = key.from;
             const wallclock_ms = entry_info.wallclock_ms;
