@@ -26,14 +26,7 @@ pub const TestMode = enum {
 
     pub fn modeName(self: TestMode) []const u8 {
         return switch (self) {
-            .linear => "linear",
-            .reverse => "reverse",
-            .shuffle_global => "shuffle-global",
-            .shuffle_slot => "shuffle-slot",
-            .drop => "drop",
-            .late => "late",
-            .duplicate => "duplicate",
-            .corrupt => "corrupt",
+            inline else => |itag| kebabify(@tagName(itag)),
         };
     }
 
