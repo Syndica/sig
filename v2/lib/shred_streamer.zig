@@ -1,5 +1,18 @@
 const std = @import("std");
 
+// The `lib/shred_streamer/` directory is a separate module (`shred_stream_mod`)
+// with its own test runner. Its tests are not included here to avoid
+// double-inclusion. See v2/build.zig where `shred_stream_mod` is created.
+comptime {
+    if (@import("builtin").is_test) {
+        // lint: skip shred_streamer/lib.zig
+        // lint: skip shred_streamer/config.zig
+        // lint: skip shred_streamer/agave_blockstore.zig
+        // lint: skip shred_streamer/plan.zig
+        // lint: skip shred_streamer/stream.zig
+    }
+}
+
 /// Shared-memory configuration for the shred_streamer service.
 ///
 /// This is a strongly-typed extern struct that lives in a shared memory region.
@@ -30,6 +43,11 @@ pub const Config = extern struct {
 
     pub const max_path_len = 4096;
 
+    // NOTE: The TestMode and ShredKindFilter enums here must match the ones in
+    // v2/lib/shred_streamer/config.zig (shred_stream module) by ordinal.
+    // The service converts between them via @enumFromInt(@intFromEnum(...)).
+    // Field order MUST match config.TestMode / config.ShredKindFilter.
+
     pub const TestMode = enum(u8) {
         linear = 0,
         reverse = 1,
@@ -51,38 +69,8 @@ pub const Config = extern struct {
         return self.ledger_data[0..self.ledger_len];
     }
 
-    /// Populate from a parsed streaming config (from the shred_stream module).
-    /// Called by the topology launcher after parsing CLI args.
-    pub fn populateFromArgs(self: *Config, args: []const []const u8) !void {
-        // Parse args using the shared config module's parseArgs.
-        // This is a fallback for when the caller passes raw CLI args.
-        // We store them as a joined string and will parse in the service.
-        // NOTE: For strongly-typed passing, use populateFromConfig instead.
-        var pos: usize = 0;
-        for (args, 0..) |arg, i| {
-            if (i > 0) {
-                if (pos >= max_path_len) return error.ArgsTooLong;
-                self.ledger_data[pos] = ' ';
-                pos += 1;
-            }
-            if (pos + arg.len > max_path_len) return error.ArgsTooLong;
-            @memcpy(self.ledger_data[pos..][0..arg.len], arg);
-            pos += arg.len;
-        }
-        // Store as "unparsed" marker: ledger_len = 0xFFFF signals string mode
-        self.ledger_len = unparsed_marker;
-        // Reuse start_slot field to store the string length
-        self.start_slot = pos;
-    }
-
-    /// Returns the raw args string when in string-passthrough mode.
-    pub fn getRawArgs(self: *const Config) ?[]const u8 {
-        if (self.ledger_len != unparsed_marker) return null;
-        return self.ledger_data[0..@intCast(self.start_slot)];
-    }
-
     /// Populate from strongly-typed fields. Called by the topology launcher
-    /// when it has already parsed the config.
+    /// after parsing CLI args.
     pub fn populate(
         self: *Config,
         ledger: []const u8,
@@ -119,8 +107,6 @@ pub const Config = extern struct {
         self.corrupt_bytes = corrupt_bytes;
         self.dry_run = dry_run;
     }
-
-    const unparsed_marker: u16 = 0xFFFF;
 };
 
 test "Config populate and read back" {
@@ -147,14 +133,4 @@ test "Config populate and read back" {
     try std.testing.expectEqual(Config.TestMode.linear, cfg.test_mode);
     try std.testing.expect(!cfg.has_seed);
     try std.testing.expect(!cfg.dry_run);
-}
-
-test "Config populateFromArgs round-trip" {
-    var cfg: Config = undefined;
-    try cfg.populateFromArgs(&.{ "--ledger", "/path/to/ledger", "--start-slot", "100" });
-    const raw = cfg.getRawArgs().?;
-    try std.testing.expectEqualStrings(
-        "--ledger /path/to/ledger --start-slot 100",
-        raw,
-    );
 }
