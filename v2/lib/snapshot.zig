@@ -102,7 +102,8 @@ pub const SnapshotConfig = extern struct {
                 );
             }
             self.known_validators_allow_all = true;
-            // NOTE: we zero out known_validators_len to make it clear that no validator pubkeys were provided.
+            // NOTE: we zero out known_validators_len to make it clear that no
+            // validator pubkeys were provided.
             self.known_validators_len = 0;
         } else {
             self.known_validators_allow_all = false;
