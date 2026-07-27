@@ -613,7 +613,8 @@ test "parseTransaction: TooManyInstructions" {
     var b = try Builder.baselineLegacy(testing.allocator);
     defer b.deinit();
     var i: usize = 0;
-    while (i < VersionedTransaction.MAX_INSTRUCTIONS) : (i += 1) try b.pushInstr(1, &.{}); // total: 1 baseline + MAX
+    // total: 1 baseline + MAX
+    while (i < VersionedTransaction.MAX_INSTRUCTIONS) : (i += 1) try b.pushInstr(1, &.{});
     try testing.expectError(error.TooManyInstructions, b.parse(.legacy));
 }
 

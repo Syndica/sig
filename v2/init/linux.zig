@@ -238,8 +238,9 @@ pub const Memfd = extern struct {
         };
     }
 
-    /// Helper equivalent to `mmap`, but casts to defined-layout `T`, asserting the runtime size matches.
-    /// This is to be used for mapping a structure whose entire layout is statically-known.
+    /// Helper equivalent to `mmap`, but casts to defined-layout `T`,
+    /// asserting the runtime size matches. This is to be used for
+    /// mapping a structure whose entire layout is statically-known.
     pub fn mmapStaticSize(
         self: Memfd,
         access: Access,
@@ -254,8 +255,10 @@ pub const Memfd = extern struct {
         return @ptrCast(try self.mmapRaw(access, args.toAny()));
     }
 
-    /// Helper equivalent to `mmap`, but casts to defined-layout `T`, asserting the runtime size suffices.
-    /// This is to be used for mapping a structure with a statically-sized "header" followed by runtime-sized data.
+    /// Helper equivalent to `mmap`, but casts to defined-layout `T`,
+    /// asserting the runtime size suffices. This is to be used for
+    /// mapping a structure with a statically-sized "header" followed
+    /// by runtime-sized data.
     pub fn mmapDynamicSize(
         self: Memfd,
         access: Access,
@@ -352,7 +355,8 @@ pub const bpf = struct {
     /// The filter allows service runtime basics, telemetry sockets, snapshot file and
     /// io_uring operations, accounts DB fsync, and writes to stderr.
     ///
-    /// TODO(1378): Per-service filter config to restrict syscalls to only what is needed for that service.
+    /// TODO(1378): Per-service filter config to restrict syscalls to
+    /// only what is needed for that service.
     pub fn seccompFilters(maybe_stderr: ?std.os.linux.fd_t) [68]sock_filter {
         // load syscall number
         const preamble = .{stmt(LD + W + ABS, @offsetOf(SECCOMP.data, "nr"))};
