@@ -248,7 +248,8 @@ pub const BloomFilter = struct {
     }
 };
 
-/// Gossip nodes communicate with this message type (bincode serialized) to pass GossipValues around.
+/// Gossip nodes communicate with this message type (bincode serialized)
+/// to pass GossipValues around.
 pub const GossipMessage = union(enum(u32)) {
     pull_request: struct {
         ignoring: BloomFilter,
@@ -401,9 +402,10 @@ pub const Vote = struct {
     wallclock: u64,
 };
 
-/// The addresses and service information for a gossip node instance participating in the cluster.
-/// Its handled specially in the gossip protocol, so the concrete type definition is exported instead
-/// of living only in GossipData.
+/// The addresses and service information for a gossip node instance
+/// participating in the cluster. Its handled specially in the gossip
+/// protocol, so the concrete type definition is exported instead of
+/// living only in GossipData.
 pub const ContactInfo = struct {
     from: Pubkey,
     wallclock: bincode.VarInt(u64),
