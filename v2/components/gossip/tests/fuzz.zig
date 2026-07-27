@@ -2,9 +2,15 @@ const std = @import("std");
 const TestNode = @import("TestNode.zig");
 const lib = @import("lib");
 const api = @import("gossip_api");
+
+const Packet = lib.net.Packet;
+const Address = api.Address;
+const GossipValue = api.GossipValue;
+const KeyPair = lib.crypto.KeyPair;
+const SocketMap = api.SocketMap;
 const testing = @import("testing.zig");
 
-const local_address: api.Address = .fromNetAddress(.initIp4(.{ 127, 0, 0, 1 }, 8001));
+const local_address: Address = .fromNetAddress(.initIp4(.{ 127, 0, 0, 1 }, 8001));
 const remote_address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9001);
 const start_ms = 1_000_000;
 
@@ -18,9 +24,9 @@ fn expectOutgoingPacketsDecodable(test_node: *const TestNode) !void {
 fn fuzzPacket(test_node: *TestNode, input: []const u8) !void {
     try test_node.reset(start_ms);
 
-    var packet: lib.net.Packet = .{
+    var packet: Packet = .{
         .data = @splat(0),
-        .len = @intCast(@min(input.len, lib.net.Packet.capacity)),
+        .len = @intCast(@min(input.len, Packet.capacity)),
         .addr = remote_address,
     };
     @memcpy(packet.data[0..packet.len], input[0..packet.len]);
@@ -31,7 +37,7 @@ fn fuzzPacket(test_node: *TestNode, input: []const u8) !void {
 
 // Feeds arbitrary wire bytes into gossip and verifies state and emitted packets.
 test "fuzz packet input" {
-    const remote_keypair = try testing.deterministicKeyPair(2);
+    const remote_keypair = try testing.deterministicKeyPair(@splat(2));
     const ping_packet = try testing.packetFromMessage(
         remote_address,
         try testing.pingMessage(&remote_keypair, @splat(12)),
@@ -41,7 +47,7 @@ test "fuzz packet input" {
     var test_node = try TestNode.init(
         std.heap.page_allocator,
         start_ms,
-        1,
+        @splat(1),
         local_address,
         &.{},
     );
@@ -52,7 +58,7 @@ test "fuzz packet input" {
 
 const ScenarioContext = struct {
     test_node: *TestNode,
-    remote_keypair: lib.crypto.KeyPair,
+    remote_keypair: KeyPair,
 };
 
 const ScenarioOperation = enum {
@@ -87,9 +93,9 @@ fn fuzzScenario(context: *ScenarioContext, input: []const u8) !void {
                 );
             },
             .random_packet => {
-                var packet: lib.net.Packet = .{
+                var packet: Packet = .{
                     .data = undefined,
-                    .len = random.uintLessThan(u16, lib.net.Packet.capacity + 1),
+                    .len = random.uintLessThan(u16, Packet.capacity + 1),
                     .addr = remote_address,
                 };
                 random.bytes(packet.data[0..packet.len]);
@@ -101,9 +107,9 @@ fn fuzzScenario(context: *ScenarioContext, input: []const u8) !void {
                 try context.test_node.receiveMessage(remote_address, message);
             },
             .contact_info => {
-                var socket_builder: api.SocketMap.Builder = .{};
+                var socket_builder: SocketMap.Builder = .{};
                 socket_builder.set(.gossip, .fromNetAddress(remote_address));
-                var values = [_]api.GossipValue{try testing.signedContactInfo(
+                var values = [_]GossipValue{try testing.signedContactInfo(
                     &context.remote_keypair,
                     context.test_node.now_ms,
                     start_ms,
@@ -126,7 +132,7 @@ test "fuzz stateful scenario seed" {
     var test_node = try TestNode.init(
         std.heap.page_allocator,
         start_ms,
-        1,
+        @splat(1),
         local_address,
         &.{},
     );
@@ -134,7 +140,7 @@ test "fuzz stateful scenario seed" {
 
     var context: ScenarioContext = .{
         .test_node = &test_node,
-        .remote_keypair = try testing.deterministicKeyPair(2),
+        .remote_keypair = try testing.deterministicKeyPair(@splat(2)),
     };
     try std.testing.fuzz(&context, fuzzScenario, .{});
 }

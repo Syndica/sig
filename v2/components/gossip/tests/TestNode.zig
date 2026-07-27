@@ -3,20 +3,29 @@
 const std = @import("std");
 const lib = @import("lib");
 const api = @import("gossip_api");
-const TestMetricStore = lib.telemetry.TestMetricStore;
-const testing = @import("testing.zig");
 
 const Packet = lib.net.Packet;
+const Hash = lib.solana.Hash;
+const Pubkey = lib.solana.Pubkey;
+const Signature = lib.solana.Signature;
+const Slot = lib.solana.Slot;
+
+const Address = api.Address;
+const ClusterInfo = api.ClusterInfo;
+const GossipMessage = api.GossipMessage;
+const GossipNode = @import("../node.zig").GossipNode;
 const KeyPair = lib.crypto.KeyPair;
 const Metrics = @import("../Metrics.zig");
-const GossipNode = @import("../node.zig").GossipNode;
+const SocketMap = api.SocketMap;
+const testing = @import("testing.zig");
 
 const SnapshotSource = struct {
-    from: lib.solana.Pubkey,
+    from: Pubkey,
     rpc_addr: lib.net.Address,
-    slot: lib.solana.Slot,
-    hash: lib.solana.Hash,
+    slot: Slot,
+    hash: Hash,
 };
+const TestMetricStore = lib.telemetry.TestMetricStore;
 
 allocator: std.mem.Allocator,
 // Backing memory for the node's fixed-buffer allocations, reused by reset.
@@ -37,8 +46,8 @@ const snapshot_source_capacity = 16;
 const EffectsState = struct {
     keypair: KeyPair,
     // These fields back slices retained by the node configuration.
-    socket_builder: api.SocketMap.Builder,
-    entrypoints: [api.ClusterInfo.MAX_ENTRY_ADDRS]api.Address,
+    socket_builder: SocketMap.Builder,
+    entrypoints: [ClusterInfo.MAX_ENTRY_ADDRS]Address,
     entrypoints_len: usize,
     // Flushed packets come first, followed by packets pending the next flush.
     packets: [packet_capacity]Packet,
@@ -66,20 +75,20 @@ const Effects = struct {
         self.state.pending_packets_len = 0;
     }
 
-    pub fn getIdentity(self: Effects) lib.solana.Pubkey {
+    pub fn getIdentity(self: Effects) Pubkey {
         return self.state.keypair.pubkey;
     }
 
-    pub fn sign(self: Effects, message: []const u8) lib.solana.Signature {
+    pub fn sign(self: Effects, message: []const u8) Signature {
         return self.state.keypair.sign(message) catch unreachable;
     }
 
     pub fn reportSnapshotSource(
         self: Effects,
-        from: lib.solana.Pubkey,
+        from: Pubkey,
         address: std.net.Address,
-        slot: lib.solana.Slot,
-        hash: lib.solana.Hash,
+        slot: Slot,
+        hash: Hash,
     ) void {
         const capacity = self.state.snapshot_sources.len;
         std.debug.assert(self.state.snapshot_sources_len < capacity);
@@ -96,11 +105,11 @@ const Effects = struct {
 pub fn init(
     allocator: std.mem.Allocator,
     now_ms: u64,
-    identity_seed: u8,
-    address: api.Address,
-    entrypoints: []const api.Address,
+    identity_seed: [std.crypto.sign.Ed25519.KeyPair.seed_length]u8,
+    address: Address,
+    entrypoints: []const Address,
 ) !TestNode {
-    std.debug.assert(entrypoints.len <= api.ClusterInfo.MAX_ENTRY_ADDRS);
+    std.debug.assert(entrypoints.len <= ClusterInfo.MAX_ENTRY_ADDRS);
 
     // Keep shared effect state at a stable address if the harness moves.
     const effects_state = try allocator.create(EffectsState);
@@ -177,7 +186,7 @@ pub fn reset(self: *TestNode, now_ms: u64) !void {
     self.node.assertInvariants();
 }
 
-pub fn identity(self: *const TestNode) lib.solana.Pubkey {
+pub fn identity(self: *const TestNode) Pubkey {
     return self.effects_state.keypair.pubkey;
 }
 
@@ -198,7 +207,7 @@ pub fn receivePacket(self: *TestNode, packet: *const Packet) void {
 pub fn receiveMessage(
     self: *TestNode,
     source: std.net.Address,
-    message: api.GossipMessage,
+    message: GossipMessage,
 ) !void {
     const packet = try testing.packetFromMessage(source, message);
     self.receivePacket(&packet);

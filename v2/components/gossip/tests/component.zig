@@ -2,19 +2,26 @@ const std = @import("std");
 const TestNode = @import("TestNode.zig");
 const lib = @import("lib");
 const api = @import("gossip_api");
+
+const Hash = lib.solana.Hash;
+const Address = api.Address;
+const GossipData = api.GossipData;
+const GossipMessage = api.GossipMessage;
+const GossipValue = api.GossipValue;
+const SocketMap = api.SocketMap;
 const testing = @import("testing.zig");
 
-const local_address: api.Address = .fromNetAddress(.initIp4(.{ 127, 0, 0, 1 }, 8001));
+const local_address: Address = .fromNetAddress(.initIp4(.{ 127, 0, 0, 1 }, 8001));
 const remote_address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9001);
 const rpc_address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 8899);
-const entrypoint: api.Address = .fromNetAddress(remote_address);
+const entrypoint: Address = .fromNetAddress(remote_address);
 
 // Verifies that a valid ping/pong exchange moves a peer from tracked to verified.
 test "valid ping handshake verifies peer" {
     const allocator = std.testing.allocator;
-    const remote_keypair = try testing.deterministicKeyPair(2);
+    const remote_keypair = try testing.deterministicKeyPair(@splat(2));
 
-    var test_node = try TestNode.init(allocator, 1_000_000, 1, local_address, &.{});
+    var test_node = try TestNode.init(allocator, 1_000_000, @splat(1), local_address, &.{});
     defer test_node.deinit();
 
     // Process the peer's ping and inspect the expected pong and verification ping.
@@ -22,7 +29,7 @@ test "valid ping handshake verifies peer" {
     try test_node.receiveMessage(remote_address, try testing.pingMessage(&remote_keypair, token));
 
     try std.testing.expectEqual(2, test_node.outgoingPackets().len);
-    var found_ping: ?api.GossipMessage = null;
+    var found_ping: ?GossipMessage = null;
     var found_pong = false;
     for (test_node.outgoingPackets()) |*packet| {
         var message_memory: [16 * 1024]u8 = undefined;
@@ -34,7 +41,7 @@ test "valid ping handshake verifies peer" {
                 found_ping = message;
             },
             .pong_message => |pong| {
-                const expected_hash = lib.solana.Hash.initMany(&.{ "SOLANA_PING_PONG", &token });
+                const expected_hash = Hash.initMany(&.{ "SOLANA_PING_PONG", &token });
                 try std.testing.expectEqual(test_node.identity(), pong.from);
                 try std.testing.expect(pong.hash.eql(&expected_hash));
                 try pong.signature.verify(&pong.from, &pong.hash.data);
@@ -51,8 +58,8 @@ test "valid ping handshake verifies peer" {
     try std.testing.expectEqual(.tracked, test_node.node.peerStatus(remote_keypair.pubkey));
 
     // Answer the node's verification ping to complete peer verification.
-    const ping_hash = lib.solana.Hash.initMany(&.{ "SOLANA_PING_PONG", &ping.token });
-    const pong_message: api.GossipMessage = .{ .pong_message = .{
+    const ping_hash = Hash.initMany(&.{ "SOLANA_PING_PONG", &ping.token });
+    const pong_message: GossipMessage = .{ .pong_message = .{
         .from = remote_keypair.pubkey,
         .hash = ping_hash,
         .signature = try remote_keypair.sign(&ping_hash.data),
@@ -65,13 +72,13 @@ test "valid ping handshake verifies peer" {
 // Ensures an invalid ping has no effects or state changes and records the expected metric.
 test "invalid ping is inert" {
     const allocator = std.testing.allocator;
-    const remote_keypair = try testing.deterministicKeyPair(2);
+    const remote_keypair = try testing.deterministicKeyPair(@splat(2));
 
-    var test_node = try TestNode.init(allocator, 1_000_000, 1, local_address, &.{});
+    var test_node = try TestNode.init(allocator, 1_000_000, @splat(1), local_address, &.{});
     defer test_node.deinit();
 
     // Submit a ping with an invalid signature.
-    const message: api.GossipMessage = .{ .ping_message = .{
+    const message: GossipMessage = .{ .ping_message = .{
         .from = remote_keypair.pubkey,
         .token = @splat(12),
         .signature = .ZEROES,
@@ -91,12 +98,12 @@ test "invalid ping is inert" {
 test "deprecated gossip messages are handled" {
     const allocator = std.testing.allocator;
     const now_ms = 1_000_000;
-    const remote_keypair = try testing.deterministicKeyPair(2);
+    const remote_keypair = try testing.deterministicKeyPair(@splat(2));
 
-    var test_node = try TestNode.init(allocator, now_ms, 1, local_address, &.{});
+    var test_node = try TestNode.init(allocator, now_ms, @splat(1), local_address, &.{});
     defer test_node.deinit();
 
-    const deprecated_data = [_]lib.gossip.GossipData{
+    const deprecated_data = [_]GossipData{
         .legacy_contact_info,
         .legacy_snapshot_hashes,
         .account_hashes,
@@ -105,7 +112,7 @@ test "deprecated gossip messages are handled" {
         .node_instance,
     };
     for (deprecated_data) |data| {
-        var values = [_]lib.gossip.GossipValue{try testing.signedValue(&remote_keypair, data)};
+        var values = [_]GossipValue{try testing.signedValue(&remote_keypair, data)};
         try test_node.receiveMessage(
             remote_address,
             testing.pushMessage(remote_keypair.pubkey, &values),
@@ -127,13 +134,13 @@ const SnapshotDiscoveryOrder = enum {
 fn runSnapshotDiscoveryScenario(order: SnapshotDiscoveryOrder) !void {
     const allocator = std.testing.allocator;
     const now_ms = 1_000_000;
-    const remote_keypair = try testing.deterministicKeyPair(2);
-    const snapshot_hash = lib.solana.Hash.init("snapshot");
+    const remote_keypair = try testing.deterministicKeyPair(@splat(2));
+    const snapshot_hash = Hash.init("snapshot");
 
-    var test_node = try TestNode.init(allocator, now_ms, 1, local_address, &.{});
+    var test_node = try TestNode.init(allocator, now_ms, @splat(1), local_address, &.{});
     defer test_node.deinit();
 
-    var socket_builder: api.SocketMap.Builder = .{};
+    var socket_builder: SocketMap.Builder = .{};
     socket_builder.set(.gossip, .fromNetAddress(remote_address));
     socket_builder.set(.rpc, .fromNetAddress(rpc_address));
 
@@ -144,12 +151,12 @@ fn runSnapshotDiscoveryScenario(order: SnapshotDiscoveryOrder) !void {
         42,
         socket_builder.asSocketMap(),
     );
-    const snapshot = try testing.signedSnapshotHashes(
-        &remote_keypair,
-        now_ms,
-        123,
-        snapshot_hash,
-    );
+    const snapshot = try testing.signedValue(&remote_keypair, .{ .snapshot_hashes = .{
+        .from = remote_keypair.pubkey,
+        .full = .{ .slot = 123, .hash = snapshot_hash },
+        .incremental = .{ .items = &.{} },
+        .wallclock = now_ms,
+    } });
 
     const first_value, const second_value = switch (order) {
         .contact_first => .{ contact, snapshot },
@@ -157,7 +164,7 @@ fn runSnapshotDiscoveryScenario(order: SnapshotDiscoveryOrder) !void {
     };
 
     // Submit one half of the source metadata and confirm discovery is still incomplete.
-    var values = [_]api.GossipValue{first_value};
+    var values = [_]GossipValue{first_value};
     try test_node.receiveMessage(
         remote_address,
         testing.pushMessage(remote_keypair.pubkey, &values),
@@ -175,7 +182,7 @@ fn runSnapshotDiscoveryScenario(order: SnapshotDiscoveryOrder) !void {
     const source = test_node.snapshotSources()[0];
     try std.testing.expectEqual(remote_keypair.pubkey, source.from);
     try std.testing.expect(std.meta.eql(
-        api.Address.fromNetAddress(rpc_address),
+        Address.fromNetAddress(rpc_address),
         source.rpc_addr,
     ));
     try std.testing.expectEqual(123, source.slot);
@@ -192,12 +199,12 @@ test "snapshot source discovery is arrival-order independent" {
 test "older gossip value does not replace newer entry" {
     const allocator = std.testing.allocator;
     const now_ms = 1_000_000;
-    const remote_keypair = try testing.deterministicKeyPair(2);
+    const remote_keypair = try testing.deterministicKeyPair(@splat(2));
 
-    var test_node = try TestNode.init(allocator, now_ms, 1, local_address, &.{});
+    var test_node = try TestNode.init(allocator, now_ms, @splat(1), local_address, &.{});
     defer test_node.deinit();
 
-    var socket_builder: api.SocketMap.Builder = .{};
+    var socket_builder: SocketMap.Builder = .{};
     socket_builder.set(.gossip, .fromNetAddress(remote_address));
     const socket_map = socket_builder.asSocketMap();
 
@@ -217,7 +224,7 @@ test "older gossip value does not replace newer entry" {
     );
 
     // Establish the newer table entry.
-    var values = [_]api.GossipValue{newer};
+    var values = [_]GossipValue{newer};
     try test_node.receiveMessage(
         remote_address,
         testing.pushMessage(remote_keypair.pubkey, &values),
@@ -244,7 +251,7 @@ test "periodic push follows simulated wallclock" {
     const allocator = std.testing.allocator;
     const start_ms = 1_000_000;
 
-    var test_node = try TestNode.init(allocator, start_ms, 1, local_address, &.{entrypoint});
+    var test_node = try TestNode.init(allocator, start_ms, @splat(1), local_address, &.{entrypoint});
     defer test_node.deinit();
 
     // Establish the initial deadlines and discard bootstrap output.
