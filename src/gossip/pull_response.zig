@@ -147,3 +147,42 @@ test "gossip.pull_response: test filtering values works" {
         return err;
     };
 }
+
+test "gossip.pull_response: zero-capacity filter does not divide by zero" {
+    // a filter with keys but a zero-length bit array makes the response call
+    // contains on a zero-capacity filter
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const random = prng.random();
+
+    var gossip_table = try GossipTable.init(std.testing.allocator, std.testing.allocator);
+    defer gossip_table.deinit();
+
+    const kp = try KeyPair.generateDeterministic([_]u8{1} ** 32);
+    for (0..8) |_| {
+        const id = Pubkey.initRandom(random);
+        var legacy_contact_info = LegacyContactInfo.default(id);
+        legacy_contact_info.wallclock = 0;
+        const value = SignedGossipData.initSigned(&kp, .{
+            .LegacyContactInfo = legacy_contact_info,
+        });
+        _ = try gossip_table.insert(value, 0);
+    }
+
+    // mask_bits 0 matches every entry, so the filter is queried against them
+    var filter = try GossipPullFilter.init(std.testing.allocator);
+    defer filter.deinit();
+    try filter.filter.addKey(1);
+
+    var result = try filterSignedGossipDatas(
+        random,
+        std.testing.allocator,
+        &gossip_table,
+        &filter,
+        0,
+        100,
+    );
+    defer result.deinit();
+
+    // the filter matches nothing, so all 8 inserted entries pass through
+    try std.testing.expectEqual(@as(usize, 8), result.items.len);
+}

@@ -924,6 +924,9 @@ pub const GossipService = struct {
         var entrypoints_identified = false;
         var shred_version_assigned = false;
 
+        var no_peers_since: ?u64 = null;
+        const no_peers_error_threshold_ms = 60_000;
+
         while (exit_condition.shouldRun()) {
             defer loop_timer.reset();
 
@@ -937,9 +940,22 @@ pub const GossipService = struct {
                     pull_request.MAX_BLOOM_SIZE,
                     now,
                 ) catch |e| {
-                    self.logger.err().logf("failed to generate pull requests: {any}", .{e});
+                    const log_level: sig.trace.Level = if (e != error.NoPeers)
+                        .@"error"
+                    else if (no_peers_since == null) blk: {
+                        no_peers_since = now;
+                        break :blk .warn;
+                    } else if (now -| no_peers_since.? > no_peers_error_threshold_ms)
+                        .@"error"
+                    else
+                        .warn;
+
+                    self.logger.entry(log_level)
+                        .logf("failed to generate pull requests: {any}", .{e});
+
                     break :pull_blk;
                 };
+                no_peers_since = null;
                 defer pull_req_packets.deinit(self.allocator);
                 for (pull_req_packets.items) |packet| {
                     try self.packet_outgoing_channel.send(packet);

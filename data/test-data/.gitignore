@@ -14,3 +14,5 @@
 !shreds
 !shreds/*
 !blocks/*
+!test-snapshot-v4.2.0-beta.1.json
+!test-snapshot-v4.2.0-beta.1.tar.zst

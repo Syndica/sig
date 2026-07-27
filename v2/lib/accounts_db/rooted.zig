@@ -102,7 +102,7 @@ pub const Rooted = struct {
             };
             defer read_file.close();
 
-            logger.info().logf("loading from existing rooted db", .{});
+            logger.info().log("loading from existing rooted db");
             self.loadExisting(
                 .from(logger),
                 runner,

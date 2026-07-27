@@ -1,0 +1,17 @@
+.{
+    .schema_version = 1,
+
+    .slots = .{
+        .{
+            .slot = 410010000,
+            .fec_sets = .{
+                .{
+                    .fec_set_index = 0,
+                    .path = "slot-410010000/fecset-000000/manifest.zon",
+                    .entry_count = 65,
+                    .transaction_count = 74,
+                },
+            },
+        },
+    },
+}

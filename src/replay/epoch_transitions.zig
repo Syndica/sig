@@ -411,14 +411,7 @@ pub fn applyFeatureActivations(
     // rent.lamports_per_byte_year is set directly. If multiple gates activate
     // in the same epoch, or out of order, the last one in this list wins.
     // [agave] https://github.com/anza-xyz/agave/blob/v4.0.0-beta.6/runtime/src/bank.rs#L5645-L5677
-    const rent_feature_gates = [_]struct { sig.core.features.Feature, u64 }{
-        .{ .set_lamports_per_byte_to_6333, 6333 },
-        .{ .set_lamports_per_byte_to_5080, 5080 },
-        .{ .set_lamports_per_byte_to_2575, 2575 },
-        .{ .set_lamports_per_byte_to_1322, 1322 },
-        .{ .set_lamports_per_byte_to_696, 696 },
-    };
-    for (rent_feature_gates) |gate| {
+    for (sig.core.rent_collector.RENT_FEATURE_GATES) |gate| {
         const feature, const lamports_per_byte = gate;
         if (new_activations.active(feature, slot)) {
             slot_constants.rent_collector.rent.lamports_per_byte_year = lamports_per_byte;
@@ -1637,13 +1630,7 @@ test "applyFeatureActivations: basic activations" {
 test "applyFeatureActivations: SIMD-0437 incremental rent reduction" {
     const allocator = std.testing.allocator;
 
-    const cases = [_]struct { features.Feature, u64 }{
-        .{ .set_lamports_per_byte_to_6333, 6333 },
-        .{ .set_lamports_per_byte_to_5080, 5080 },
-        .{ .set_lamports_per_byte_to_2575, 2575 },
-        .{ .set_lamports_per_byte_to_1322, 1322 },
-        .{ .set_lamports_per_byte_to_696, 696 },
-    };
+    const cases = sig.core.rent_collector.RENT_FEATURE_GATES;
 
     // Each gate, on first activation, sets lamports_per_byte_year to its target.
     for (cases) |case| {
