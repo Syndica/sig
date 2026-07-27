@@ -1,7 +1,5 @@
 const std = @import("std");
 
-const Allocator = std.mem.Allocator;
-
 const cli = @import("cli.zig");
 const core = @import("core.zig");
 const line_length = @import("line_length.zig");

@@ -5,9 +5,7 @@ const std = @import("std");
 const start = @import("start_service");
 const lib = @import("lib");
 const services = @import("services");
-const tel = lib.telemetry;
 
-const Pair = lib.net.Pair;
 const Packet = lib.net.Packet;
 
 const Pubkey = lib.solana.Pubkey;
