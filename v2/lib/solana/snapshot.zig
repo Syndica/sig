@@ -80,64 +80,290 @@ pub fn RelativeOffset(comptime T: type) type {
     };
 }
 
-fn readInt(Int: type, r: anytype) !u64 {
-    var buf: [@sizeOf(Int)]u8 = undefined;
-    try r.readSliceAll(&buf);
-    return std.mem.readInt(Int, &buf, .little);
-}
-
 fn readBool(r: anytype) !bool {
-    var buf: [1]u8 = undefined;
-    try r.readSliceAll(&buf);
-    if (buf[0] > 1) return error.InvalidBool;
-    return buf[0] > 0;
+    return switch (try r.takeByte()) {
+        0 => false,
+        1 => true,
+        else => return error.InvalidBool,
+    };
 }
 
 pub const StatusCache = extern struct {
-    /// Placeholder — the deserialized contents are currently discarded. Kept as an
-    /// extern struct so it can live inline in `SnapshotMetadata` and be persisted
-    /// alongside the `Manifest` in the rooted DB blob.
-    _reserved: u8 = 0,
+    slot_deltas: RelativeSlice(SlotDelta),
 
-    pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !StatusCache {
+    pub fn read(fba_state: *std.heap.FixedBufferAllocator, r: anytype) !StatusCache {
         const zone = tracy.Zone.init(@src(), .{ .name = "StatusCache.read" });
         defer zone.deinit();
 
-        _ = fba;
+        const fba = fba_state.allocator();
 
-        // slot_deltas: Vec({ slot: Slot, is_root: bool, status_map: StatusMap })
-        const slot_deltas_len = try readInt(u64, r);
-        for (0..slot_deltas_len) |_| {
-            // slot(Slot) + is_root(bool)
-            try r.discardAll(8 + 1);
+        const sc_header: StatusCacheHeader = try .init(r);
+        var sd_iter = sc_header.slot_deltas.iterator();
 
-            // status_map: HashMap(Hash, { fork_count: u64, entries: Vec({ key_slice: [20]u8, result: union }) })
-            const status_map_len = try readInt(u64, r);
-            for (0..status_map_len) |_| {
-                // key: Hash + value.fork_count: u64
-                try r.discardAll(32 + 8);
+        const slot_deltas = try fba.alloc(
+            SlotDelta,
+            sd_iter.slot_deltas_remaining,
+        );
+        for (slot_deltas) |*slot_delta| {
+            const sd_header = try sd_iter.next(r) orelse unreachable;
+            var sme_iter = sd_header.status_map.iterator();
 
-                // value.entries: Vec({ key_slice: KeySlice, result: union(enum(u32)) { ok, err: TransactionError } })
-                const entries_len = try readInt(u64, r);
-                for (0..entries_len) |_| {
-                    // key_slice: [20]u8 + result tag: u32
-                    try r.discardAll(20);
-                    switch (try readInt(u32, r)) {
-                        0 => {}, // ok: void
-                        1 => try discardTransactionError(r), // err: TransactionError
-                        else => return error.InvalidResultTag,
-                    }
+            const status_map_entries = try fba.alloc(
+                StatusMap.Entry,
+                sme_iter.status_map_entries_remaining,
+            );
+            for (status_map_entries) |*sme| {
+                const sm_header = try sme_iter.next(r) orelse unreachable;
+                var sle_iter = sm_header.status_list.iterator();
+
+                const status_entries = try fba.alloc(
+                    StatusCacheHeader.Status,
+                    sle_iter.status_entries_remaining,
+                );
+                for (status_entries) |*status_entry| {
+                    status_entry.* = try sle_iter.next(r) orelse unreachable;
+                }
+                if (try sle_iter.next(r) != null) unreachable;
+
+                if (sm_header.key_index != 0) return error.InvalidKeyIndex;
+                const key_index: u0 = @intCast(sm_header.key_index);
+
+                sme.* = .{
+                    .hash = sm_header.hash,
+                    .key_index = key_index,
+                    .status_list = .fromSlice(fba_state.buffer.ptr, status_entries),
+                };
+            }
+            if (try sme_iter.next(r) != null) unreachable;
+
+            slot_delta.* = .{
+                .slot = sd_header.slot,
+                .is_root = sd_header.is_root,
+                .status_map = .{
+                    .entries = .fromSlice(fba_state.buffer.ptr, status_map_entries),
+                },
+            };
+        }
+        if (try sd_iter.next(r) != null) unreachable;
+
+        return .{
+            .slot_deltas = .fromSlice(fba_state.buffer.ptr, slot_deltas),
+        };
+    }
+
+    pub const SlotDelta = extern struct {
+        slot: Slot,
+        is_root: bool,
+        status_map: StatusMap,
+    };
+
+    pub const StatusMap = extern struct {
+        entries: RelativeSlice(Entry),
+
+        pub const Entry = extern struct {
+            hash: lib.solana.Hash,
+            key_index: u0,
+            status_list: RelativeSlice(StatusCacheHeader.Status),
+        };
+    };
+};
+
+pub const StatusCacheHeader = struct {
+    slot_deltas: SlotDeltas,
+
+    pub fn init(
+        /// `std.Io.Reader` or equivalent interface.
+        r: anytype,
+    ) !StatusCacheHeader {
+        return .{
+            .slot_deltas = .{ .len = try r.takeInt(u64, .little) },
+        };
+    }
+
+    pub const SlotDeltas = struct {
+        len: u64,
+
+        pub fn iterator(self: SlotDeltas) SlotDeltaIterator {
+            return .{ .slot_deltas_remaining = self.len };
+        }
+    };
+
+    pub const SlotDeltaIterator = struct {
+        slot_deltas_remaining: u64,
+
+        pub const empty: SlotDeltaIterator = .{ .slot_deltas_remaining = 0 };
+
+        pub fn next(
+            self: *SlotDeltaIterator,
+            /// `std.Io.Reader` or equivalent interface.
+            r: anytype,
+        ) !?SlotDeltaHeader {
+            if (self.slot_deltas_remaining == 0) return null;
+            self.slot_deltas_remaining -= 1;
+
+            return .{
+                .slot = try r.takeInt(Slot, .little),
+                .is_root = try readBool(r),
+                .status_map = .{ .len = try r.takeInt(u64, .little) },
+            };
+        }
+    };
+
+    pub const SlotDeltaHeader = struct {
+        slot: Slot,
+        is_root: bool,
+        status_map: StatusMapHeader,
+
+        pub const StatusMapHeader = struct {
+            len: u64,
+
+            pub fn iterator(self: StatusMapHeader) StatusMapEntryIterator {
+                return .{ .status_map_entries_remaining = self.len };
+            }
+        };
+    };
+
+    pub const StatusMapEntryIterator = struct {
+        status_map_entries_remaining: u64,
+
+        pub const empty: StatusMapEntryIterator = .{ .status_map_entries_remaining = 0 };
+
+        pub fn next(
+            self: *StatusMapEntryIterator,
+            /// `std.Io.Reader` or equivalent interface.
+            r: anytype,
+        ) !?StatusMapEntryHeader {
+            if (self.status_map_entries_remaining == 0) return null;
+            self.status_map_entries_remaining -= 1;
+
+            var hash: lib.solana.Hash = .{ .data = undefined };
+            try r.readSliceAll(&hash.data);
+            return .{
+                .hash = hash,
+                .key_index = try r.takeInt(u64, .little),
+                .status_list = .{ .len = try r.takeInt(u64, .little) },
+            };
+        }
+    };
+
+    pub const StatusMapEntryHeader = struct {
+        hash: lib.solana.Hash,
+        key_index: u64,
+        status_list: StatusList,
+
+        pub const StatusList = struct {
+            len: u64,
+
+            pub fn iterator(self: StatusList) StatusIterator {
+                return .{ .status_entries_remaining = self.len };
+            }
+        };
+    };
+
+    pub const StatusIterator = struct {
+        status_entries_remaining: u64,
+
+        pub const empty: StatusIterator = .{ .status_entries_remaining = 0 };
+
+        pub fn next(
+            self: *StatusIterator,
+            /// `std.Io.Reader` or equivalent interface.
+            r: anytype,
+        ) !?Status {
+            return try self.nextImpl(r, .take);
+        }
+
+        pub fn skip(
+            self: *StatusIterator,
+            /// `std.Io.Reader` or equivalent interface.
+            r: anytype,
+        ) !bool {
+            try self.nextImpl(r, .skip) orelse return false;
+            return true;
+        }
+
+        fn nextImpl(
+            self: *StatusIterator,
+            /// `std.Io.Reader` or equivalent interface.
+            r: anytype,
+            comptime mode: enum { take, skip },
+        ) !?switch (mode) {
+            .take => Status,
+            .skip => void,
+        } {
+            if (self.status_entries_remaining == 0) return null;
+            self.status_entries_remaining -= 1;
+
+            const key_slice_len = 20;
+            var key_slice: switch (mode) {
+                .take => [key_slice_len]u8,
+                .skip => void,
+            } = undefined;
+            switch (mode) {
+                .take => try r.readSliceAll(&key_slice),
+                .skip => try r.discardAll(key_slice_len),
+            }
+
+            const ResultTag = Status.Result;
+            const result_tag = try r.takeEnum(ResultTag, .little);
+            switch (result_tag) {
+                .ok => {},
+                .err => try discardTransactionError(r),
+            }
+
+            return switch (mode) {
+                .take => .{
+                    .key_slice = key_slice,
+                    .result = result_tag,
+                },
+                .skip => {},
+            };
+        }
+    };
+
+    pub const Status = struct {
+        key_slice: [20]u8,
+        result: Result,
+
+        pub const Result = enum(u32) { ok, err };
+    };
+
+    /// Skip the entire status cache.
+    pub fn skip(
+        /// `std.Io.Reader` or equivalent interface.
+        r: anytype,
+    ) !void {
+        const status_cache: StatusCacheHeader = try .init(r);
+        try status_cache.discard(r);
+    }
+
+    /// Discard the entire status cache based on the observed header.
+    pub fn discard(
+        self: StatusCacheHeader,
+        /// `std.Io.Reader` or equivalent interface.
+        r: anytype,
+    ) !void {
+        var sd_iter = self.slot_deltas.iterator();
+        for (0..self.slot_deltas.len) |_| {
+            const slot_delta = try sd_iter.next(r) orelse unreachable;
+
+            var sme_iter = slot_delta.status_map.iterator();
+            for (0..slot_delta.status_map.len) |_| {
+                const status_map_entry = try sme_iter.next(r) orelse unreachable;
+
+                var st_iter = status_map_entry.status_list.iterator();
+                for (0..status_map_entry.status_list.len) |_| {
+                    const still_more = try st_iter.skip(r);
+                    if (!still_more) unreachable;
                 }
             }
         }
-
-        return .{};
     }
 
     /// Discards a TransactionError union. Most variants are void; some carry a u8 payload;
     /// InstructionError carries { index: u8, err: InstructionError }.
     fn discardTransactionError(r: anytype) !void {
-        switch (try readInt(u32, r)) {
+        switch (try r.takeInt(u32, .little)) {
             8 => { // InstructionError: { index: u8, err: InstructionError }
                 try r.discardAll(1); // index: u8
                 try discardInstructionError(r);
@@ -154,10 +380,10 @@ pub const StatusCache = extern struct {
     ///
     /// See SerdeInstructionError in agave's runtime/src/serde_snapshot/status_cache.rs
     fn discardInstructionError(r: anytype) !void {
-        switch (try readInt(u32, r)) {
+        switch (try r.takeInt(u32, .little)) {
             25 => try r.discardAll(4), // Custom: u32
             44 => { // BorshIoError: Vec(u8)
-                const len = try readInt(u64, r);
+                const len = try r.takeInt(u64, .little);
                 try r.discardAll(len);
             },
             else => {}, // all other variants are void
@@ -214,14 +440,14 @@ pub const BankFields = extern struct {
         }
 
         pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !BlockHashQueue {
-            const last_hash_index = try readInt(u64, r);
+            const last_hash_index = try r.takeInt(u64, .little);
             const maybe_last_hash: ?Hash = if (!(try readBool(r))) null else blk: {
                 var hash: Hash = undefined;
                 try r.readSliceAll(std.mem.asBytes(&hash));
                 break :blk hash;
             };
 
-            const n_hash_infos = try readInt(u64, r);
+            const n_hash_infos = try r.takeInt(u64, .little);
 
             const BlockhashEntry = extern struct {
                 hash: Hash,
@@ -234,7 +460,7 @@ pub const BankFields = extern struct {
             defer fba.allocator().free(entries); // its the last allocation, so makes sense
             try r.readSliceAll(std.mem.sliceAsBytes(entries));
 
-            const max_age = try readInt(u64, r);
+            const max_age = try r.takeInt(u64, .little);
 
             // sort entries by hash_index
             std.mem.sortUnstable(BlockhashEntry, entries, {}, struct {
@@ -271,7 +497,7 @@ pub const BankFields = extern struct {
         const blockhash_queue = try BlockHashQueue.read(fba, r);
 
         // _unused_ancestors: HashMap(Slot, u64)
-        const ancestors_len = try readInt(u64, r);
+        const ancestors_len = try r.takeInt(u64, .little);
         try r.discardAll(ancestors_len * (8 + // key: Slot
             8 // value: u64
         ));
@@ -280,7 +506,7 @@ pub const BankFields = extern struct {
         try r.discardAll(32 + 32 + 8);
 
         // hard_forks: Vec({ slot: Slot, count: u64 })
-        const hard_forks_len = try readInt(u64, r);
+        const hard_forks_len = try r.takeInt(u64, .little);
         try r.discardAll(hard_forks_len * (8 + // slot: Slot
             8 // count: u64
         ));
@@ -302,7 +528,7 @@ pub const BankFields = extern struct {
             8 + // slots_per_year: f64
             8 // accounts_data_len: u64
         );
-        const slot = try readInt(Slot, r);
+        const slot = try r.takeInt(Slot, .little);
         try r.discardAll(8 + // _unused_epoch: Epoch
             8 + // block_height: u64
             32 + // leader_id: Pubkey
@@ -340,7 +566,7 @@ pub const BankFields = extern struct {
         //     vote_accounts: HashMap(Pubkey, {stake, AccountData})
         //
         // NOTE: Only stores pubkeys, as we should verify their data against the accounts instead.
-        const vote_len = try readInt(u64, r);
+        const vote_len = try r.takeInt(u64, .little);
         const vote_accounts = try fba.allocator().alloc(Pubkey, vote_len);
         for (vote_accounts) |*vote_pubkey| {
             var header: extern struct {
@@ -364,7 +590,7 @@ pub const BankFields = extern struct {
         //     Delegation = { voter_pubkey, stake, activation_epoch, deactivation_epoch, warmup }
         //
         // NOTE: only read the pubkeys. The stake data should be fetched from the accounts instead.
-        const stake_del_len = try readInt(u64, r);
+        const stake_del_len = try r.takeInt(u64, .little);
         const stake_accounts = try fba.allocator().alloc(Pubkey, stake_del_len);
         {
             // read chunks of entries at a time to amortize costs of r.readSliceAll
@@ -393,13 +619,13 @@ pub const BankFields = extern struct {
             }
         }
 
-        _ = try readInt(u64, r); // stakes.unused: u64
-        const epoch = try readInt(Epoch, r); // stakes.epoch: Epoch
+        _ = try r.takeInt(u64, .little); // stakes.unused: u64
+        const epoch = try r.takeInt(Epoch, .little); // stakes.epoch: Epoch
 
         //  stake_history: Vec({ epoch: Epoch, effective: u64, activating: u64, deactivating: u64 })
         //
         // NOTE: ignored as it's better to parse from the StakeHistory account instead.
-        const stake_history_len = try readInt(u64, r);
+        const stake_history_len = try r.takeInt(u64, .little);
         try r.discardAll(stake_history_len * (8 + // epoch: Epoch
             8 + // effective: u64
             8 + // activating: u64
@@ -407,17 +633,17 @@ pub const BankFields = extern struct {
         ));
 
         // _unused_accounts.unused1: HashSet(Pubkey)
-        const unused1_len = try readInt(u64, r);
+        const unused1_len = try r.takeInt(u64, .little);
         try r.discardAll(unused1_len * 32);
         // _unused_accounts.unused2: HashSet(Pubkey)
-        const unused2_len = try readInt(u64, r);
+        const unused2_len = try r.takeInt(u64, .little);
         try r.discardAll(unused2_len * 32);
         // _unused_accounts.unused3: HashMap(Pubkey, u64)
-        const unused3_len = try readInt(u64, r);
+        const unused3_len = try r.takeInt(u64, .little);
         try r.discardAll(unused3_len * (32 + 8));
 
         // _unused_epoch_stakes: HashSet(Epoch)
-        const epoch_stakes_len = try readInt(u64, r);
+        const epoch_stakes_len = try r.takeInt(u64, .little);
         try r.discardAll(epoch_stakes_len * 8);
 
         // is_delta: bool
@@ -452,7 +678,7 @@ pub const AccountsDbFields = extern struct {
         // https://github.com/anza-xyz/agave/blob/v4.2/accounts-db/src/account_storage_reader.rs#L91
         // https://github.com/anza-xyz/agave/blob/v4.2/snapshots/src/archive.rs#L179-L188
         {
-            const len = try readInt(u64, r);
+            const len = try r.takeInt(u64, .little);
             try r.discardAll(len * (8 + // slot: u64
                 8 + // small_vec.len: u64 == 1
                 16 // small_vec.data[{id: u64, file_len: u64}]
@@ -460,7 +686,7 @@ pub const AccountsDbFields = extern struct {
         }
 
         try r.discardAll(8); // _unused_write_version: u64
-        const slot = try readInt(u64, r);
+        const slot = try r.takeInt(u64, .little);
 
         try r.discardAll(
             // bank_hash_info:
@@ -476,7 +702,7 @@ pub const AccountsDbFields = extern struct {
 
         // rooted_slots: NullOnEof(Vec(Slot))
         {
-            const len = readInt(u64, r) catch |err| switch (err) {
+            const len = r.takeInt(u64, .little) catch |err| switch (err) {
                 error.EndOfStream => 0,
                 else => |e| return e,
             };
@@ -485,7 +711,7 @@ pub const AccountsDbFields = extern struct {
 
         // rooted_slot_hashes: NullOnEof(Vec(SlotAndHash))
         {
-            const len = readInt(u64, r) catch |err| switch (err) {
+            const len = r.takeInt(u64, .little) catch |err| switch (err) {
                 error.EndOfStream => 0,
                 else => |e| return e,
             };
@@ -532,10 +758,10 @@ pub const ExtraFields = extern struct {
 
         pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !VersionedEpochStakes {
             // epoch: Epoch
-            const epoch = try readInt(Epoch, r);
+            const epoch = try r.takeInt(Epoch, .little);
 
             // union tag: u32 (enum(u32), always 'current')
-            const union_tag = try readInt(u32, r);
+            const union_tag = try r.takeInt(u32, .little);
             if (union_tag != 0) {
                 return error.InvalidVersionedEpochStakesUnion;
             }
@@ -545,7 +771,7 @@ pub const ExtraFields = extern struct {
             //
             // where AccountSharedData =
             // { lamports: u64, data: Vec(u8), owner: Pubkey, executable: bool, rent_epoch: Epoch }
-            const vote_len = try readInt(u64, r);
+            const vote_len = try r.takeInt(u64, .little);
             const vote_accounts = try fba.allocator().alloc(VoteAccountEntry, vote_len);
             for (vote_accounts) |*entry| {
                 var header: extern struct {
@@ -568,7 +794,7 @@ pub const ExtraFields = extern struct {
             //
             // NOTE: this is discarded instead of stored:
             // https://github.com/anza-xyz/agave/blob/v4.2/runtime/src/epoch_stakes.rs#L442-L443
-            const stake_del_len = try readInt(u64, r);
+            const stake_del_len = try r.takeInt(u64, .little);
             try r.discardAll(stake_del_len * (32 + // key: Pubkey
                 32 + // delegation.voter_pubkey: Pubkey
                 8 + // delegation.stake: u64
@@ -587,7 +813,7 @@ pub const ExtraFields = extern struct {
             // NOTE: this is empty on testnet snapshots and is fine to discard.
             // The one that actually matters is BankFields.stake_history,
             // and its better to parse it out of the StakeHistory sysvar account from db instead.
-            const stake_history_len = try readInt(u64, r);
+            const stake_history_len = try r.takeInt(u64, .little);
             try r.discardAll(stake_history_len * (8 + // epoch: Epoch
                 8 + // effective: u64
                 8 + // activating: u64
@@ -595,10 +821,10 @@ pub const ExtraFields = extern struct {
             ));
 
             // total_stake: u64
-            const total_stake = try readInt(u64, r);
+            const total_stake = try r.takeInt(u64, .little);
 
             // node_id_to_vote_accounts: HashMap(Pubkey, { voters:Vec(Pubkey), total_stake: u64 })
-            const node_len = try readInt(u64, r);
+            const node_len = try r.takeInt(u64, .little);
             const node_to_voters = try fba.allocator().alloc(NodeToVoterEntry, node_len);
             for (node_to_voters) |*entry| {
                 var header: extern struct { node_pubkey: Pubkey, voters_len: u64 } = undefined;
@@ -607,7 +833,7 @@ pub const ExtraFields = extern struct {
                 const node_voters = try fba.allocator().alloc(Pubkey, header.voters_len);
                 try r.readSliceAll(std.mem.sliceAsBytes(node_voters));
 
-                const node_stake = try readInt(u64, r);
+                const node_stake = try r.takeInt(u64, .little);
                 entry.* = .{
                     .node_pubkey = header.node_pubkey,
                     .vote_accounts = .fromSlice(fba.buffer.ptr, node_voters),
@@ -616,7 +842,7 @@ pub const ExtraFields = extern struct {
             }
 
             // epoch_authorized_voters: HashMap(Pubkey, Pubkey)
-            const auth_len = try readInt(u64, r);
+            const auth_len = try r.takeInt(u64, .little);
             const auth_to_voters = try fba.allocator().alloc(AuthToVoterEntry, auth_len);
             try r.readSliceAll(std.mem.sliceAsBytes(auth_to_voters));
 
@@ -672,7 +898,7 @@ pub const ExtraFields = extern struct {
         // versioned_epoch_stakes: NullOnEof(Vec({ epoch: u64, value: union(enum(u32)) { current: ... } }))
         var versioned_epoch_stakes: RelativeSlice(VersionedEpochStakes) = .{};
         {
-            const len = readInt(u64, r) catch |err| switch (err) {
+            const len = r.takeInt(u64, .little) catch |err| switch (err) {
                 error.EndOfStream => 0,
                 else => |e| return e,
             };
@@ -741,7 +967,7 @@ pub fn SnapshotIter(comptime BufReader: type) type {
                 if (!std.mem.eql(u8, tar_file.name, "version")) return error.MissingVersionFile;
                 const expected = "1.2.0";
                 var version: [expected.len]u8 = undefined;
-                try self.tar_iter.readSliceAll(&version);
+                try self.tar_iter.reader.readSliceAll(&version);
                 if (!std.mem.eql(u8, &version, expected)) return error.InvalidVersion;
             }
 
@@ -753,13 +979,13 @@ pub fn SnapshotIter(comptime BufReader: type) type {
 
                 const tar_file = (try self.tar_iter.next()) orelse return error.MissingMetadata;
                 if (std.mem.eql(u8, tar_file.name, "snapshots/status_cache")) {
-                    snapshot_metadata.status_cache = try StatusCache.read(&fba, &self.tar_iter);
+                    snapshot_metadata.status_cache = try StatusCache.read(&fba, &self.tar_iter.reader);
                     _ = (try self.tar_iter.next()) orelse return error.MissingMetadata;
-                    snapshot_metadata.manifest = try Manifest.read(&fba, &self.tar_iter);
+                    snapshot_metadata.manifest = try Manifest.read(&fba, &self.tar_iter.reader);
                 } else {
-                    snapshot_metadata.manifest = try Manifest.read(&fba, &self.tar_iter);
+                    snapshot_metadata.manifest = try Manifest.read(&fba, &self.tar_iter.reader);
                     _ = (try self.tar_iter.next()) orelse return error.MissingMetadata;
-                    snapshot_metadata.status_cache = try StatusCache.read(&fba, &self.tar_iter);
+                    snapshot_metadata.status_cache = try StatusCache.read(&fba, &self.tar_iter.reader);
                 }
             }
 
@@ -782,7 +1008,9 @@ pub fn SnapshotIter(comptime BufReader: type) type {
 
         pub fn next(self: *Self) !?Account {
             // Skip unread data & data padding of previous Accountentry
-            self.tar_iter.discardAll(self.account_data_len + self.account_data_padding) catch {};
+            self.tar_iter.reader.discardAll(
+                self.account_data_len + self.account_data_padding,
+            ) catch {};
 
             // read /accounts/{slot}/{id} (containing Accounts in AppendVecs)
             while (self.account_file_len == 0) {
@@ -815,7 +1043,7 @@ pub fn SnapshotIter(comptime BufReader: type) type {
                 hash: lib.solana.Hash,
             } = undefined;
             self.account_file_len -= @sizeOf(@TypeOf(header));
-            self.tar_iter.readSliceAll(std.mem.asBytes(&header)) catch
+            self.tar_iter.reader.readSliceAll(std.mem.asBytes(&header)) catch
                 return error.InvalidAccountHeader;
 
             // Header's hash is obsolete and always zero:
@@ -845,7 +1073,7 @@ pub fn SnapshotIter(comptime BufReader: type) type {
         pub fn readSliceAll(self: *Self, buf: []u8) !void {
             if (buf.len > self.account_data_len) return error.EndOfStream;
             self.account_data_len -= buf.len;
-            try self.tar_iter.readSliceAll(buf);
+            try self.tar_iter.reader.readSliceAll(buf);
         }
     };
 }
@@ -870,6 +1098,7 @@ pub fn TarZstIter(comptime BufReader: type) type {
         header: [512]u8 = undefined,
         file_size: usize = 0,
         file_padding: usize = 0,
+        reader: ReaderMixin = .{},
 
         const Self = @This();
 
@@ -910,19 +1139,53 @@ pub fn TarZstIter(comptime BufReader: type) type {
             }
         }
 
-        // std.Io.Reader-like API for Manifest/StatusCache.read()
+        /// Zero-sized std.Io.Reader-like mixin API for Manifest/StatusCache's `.read()`.
+        /// Should never be copied out of the iterator, its address is used to reference the
+        /// iterator.
+        pub const ReaderMixin = struct {
+            zst: void align(@alignOf(Self)) = {},
 
-        pub fn readSliceAll(self: *Self, buf: []u8) !void {
-            if (self.file_size < buf.len) return error.EndOfStream;
-            self.file_size -= buf.len;
-            if (self.read(buf.ptr, buf.len) != buf.len) return error.EndOfStream;
-        }
+            pub fn readSliceAll(mixin: *ReaderMixin, buf: []u8) error{EndOfStream}!void {
+                const iter: *Self = @fieldParentPtr("reader", mixin);
+                if (iter.file_size < buf.len) return error.EndOfStream;
+                iter.file_size -= buf.len;
+                if (iter.read(buf.ptr, buf.len) != buf.len) return error.EndOfStream;
+            }
 
-        pub fn discardAll(self: *Self, n: usize) !void {
-            if (self.file_size < n) return error.EndOfStream;
-            self.file_size -= n;
-            if (self.read(null, n) != n) return error.EndOfStream;
-        }
+            pub fn discardAll(mixin: *ReaderMixin, n: usize) error{EndOfStream}!void {
+                const iter: *Self = @fieldParentPtr("reader", mixin);
+                if (iter.file_size < n) return error.EndOfStream;
+                iter.file_size -= n;
+                if (iter.read(null, n) != n) return error.EndOfStream;
+            }
+
+            pub fn takeByte(mixin: *ReaderMixin) error{EndOfStream}!u8 {
+                var byte: u8 = undefined;
+                try mixin.readSliceAll((&byte)[0..1]);
+                return byte;
+            }
+
+            pub fn takeInt(
+                mixin: *ReaderMixin,
+                comptime T: type,
+                endian: std.builtin.Endian,
+            ) error{EndOfStream}!T {
+                const n = @divExact(@typeInfo(T).int.bits, 8);
+                var buf: [n]u8 = undefined;
+                try mixin.readSliceAll(&buf);
+                return std.mem.readInt(T, &buf, endian);
+            }
+
+            pub fn takeEnum(
+                mixin: *ReaderMixin,
+                comptime E: type,
+                endian: std.builtin.Endian,
+            ) error{ EndOfStream, InvalidEnumTag }!E {
+                const Int = @typeInfo(E).@"enum".tag_type;
+                const int = try mixin.takeInt(Int, endian);
+                return try std.meta.intToEnum(E, int);
+            }
+        };
 
         fn read(self: *Self, maybe_buf: ?[*]u8, len: usize) usize {
             var n: usize = 0;
@@ -1120,4 +1383,158 @@ test "deserialized snapshot matches generated snapshot json" {
 
 fn jsonU64(value: std.json.Value) u64 {
     return @intCast(value.integer);
+}
+
+test StatusCacheHeader {
+    const gpa = std.testing.allocator;
+
+    const SlotDelta = struct {
+        slot: Slot,
+        is_root: bool,
+        status_map: []const StatusMapEntry,
+
+        const StatusMapEntry = struct { lib.solana.Hash, Status };
+
+        const Status = struct {
+            key_index: u64,
+            entries: []const Entry,
+
+            const Entry = struct { [20]u8, StatusCacheHeader.Status.Result };
+        };
+    };
+
+    const status0: SlotDelta.Status = .{
+        .key_index = 11,
+        .entries = &.{
+            .{ "e`]\xb9\x8a\xb28\x9a\xa8\x00C\xd3\x1e\x9ac\xfd\x0f\xa0@\xa5".*, .ok },
+            .{ "\xf5\x1cc ,l\x8d\x8d\xec\x9cG\x1e\xc4\xe1u\xa6\n\xf9\xe1|".*, .ok },
+            .{ "\xda\xaa\xf42\xbb\x13\xc6\xe1I\xb3\xad5\xc9\xec\xd4\xfe\x00\x8c\x00\x00".*, .ok },
+            .{ "\xe3t\x06\xc7J\"\xa0\xa0\x1cb\xc2\xb9RH\xdb\xba3L\xb1\xf0".*, .ok },
+            .{ "}\xde\x90$\xc7\x8dU\xf1\x89T^_:\xe6\xa1\x1c{5\xc9\r".*, .ok },
+            .{ "\xbc\xd2f\xd6s \xe9\x9a~\x1f\x18\xcf\xc6\x0cP\xbah5\xb9\xf9".*, .ok },
+        },
+    };
+    const status1: SlotDelta.Status = .{
+        .key_index = 4,
+        .entries = &.{
+            .{ "a\xa3o\x8f\xbdTr\xd1\xed\x07o\xb9\xc7\xcf\xba\xdd\x0b4QN".*, .ok },
+            .{ "r\xb0\x90\xe3\xf2\xb1\x8f\xd1v7\xca{,/NQ\xf0y\xc9\xfc".*, .ok },
+            .{ "~D\xd2&\xfeob.\xe4\xd9\xfc#\x98\x9d\xf6t\x0e\xe0\xe0\xd9".*, .ok },
+            .{ "Ry1\xd2d\x88\x05_e\xbc\xdd_G\xe9\xb9xvmN\\".*, .ok },
+            .{ "\xb7\x8e=3{s\xce^\x11\x88ia\xfc+\xcf\xd2E\xba\xeb\xed".*, .ok },
+            .{ "\x11\x0c]%^s\xf7\xee\xd0\x9f\xbc\x96\x88\x05\xf0x\xa9\xf8D\x89".*, .ok },
+        },
+    };
+    const status_cache_decoded: []const SlotDelta = &.{
+        .{
+            .slot = 0,
+            .is_root = true,
+            .status_map = &.{.{ .parse("8e8HsAXGpV5fNBf1c3AancsRjt1F7GKFZGziNMhiQoBR"), status0 }},
+        },
+        .{
+            .slot = 1,
+            .is_root = true,
+            .status_map = &.{.{ .parse("5Jq6NhSQCWgh9GhMZJ3aJJhdZdALBoX2NWjqDUrh8VK5"), status1 }},
+        },
+    };
+    const status_cache_encoded: []const u8 = &.{
+        2,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   1,   1,
+        0,   0,   0,   0,   0,   0,   0,   113, 132, 138, 200, 177, 106, 168, 112, 72,  173, 246,
+        66,  23,  17,  65,  65,  110, 153, 85,  57,  104, 143, 113, 255, 188, 234, 8,   179, 227,
+        217, 89,  124, 11,  0,   0,   0,   0,   0,   0,   0,   6,   0,   0,   0,   0,   0,   0,
+        0,   101, 96,  93,  185, 138, 178, 56,  154, 168, 0,   67,  211, 30,  154, 99,  253, 15,
+        160, 64,  165, 0,   0,   0,   0,   245, 28,  99,  32,  44,  108, 141, 141, 236, 156, 71,
+        30,  196, 225, 117, 166, 10,  249, 225, 124, 0,   0,   0,   0,   218, 170, 244, 50,  187,
+        19,  198, 225, 73,  179, 173, 53,  201, 236, 212, 254, 0,   140, 0,   0,   0,   0,   0,
+        0,   227, 116, 6,   199, 74,  34,  160, 160, 28,  98,  194, 185, 82,  72,  219, 186, 51,
+        76,  177, 240, 0,   0,   0,   0,   125, 222, 144, 36,  199, 141, 85,  241, 137, 84,  94,
+        95,  58,  230, 161, 28,  123, 53,  201, 13,  0,   0,   0,   0,   188, 210, 102, 214, 115,
+        32,  233, 154, 126, 31,  24,  207, 198, 12,  80,  186, 104, 53,  185, 249, 0,   0,   0,
+        0,   1,   0,   0,   0,   0,   0,   0,   0,   1,   1,   0,   0,   0,   0,   0,   0,   0,
+        64,  0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+        0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   4,   0,   0,   0,
+        0,   0,   0,   0,   6,   0,   0,   0,   0,   0,   0,   0,   97,  163, 111, 143, 189, 84,
+        114, 209, 237, 7,   111, 185, 199, 207, 186, 221, 11,  52,  81,  78,  0,   0,   0,   0,
+        114, 176, 144, 227, 242, 177, 143, 209, 118, 55,  202, 123, 44,  47,  78,  81,  240, 121,
+        201, 252, 0,   0,   0,   0,   126, 68,  210, 38,  254, 111, 98,  46,  228, 217, 252, 35,
+        152, 157, 246, 116, 14,  224, 224, 217, 0,   0,   0,   0,   82,  121, 49,  210, 100, 136,
+        5,   95,  101, 188, 221, 95,  71,  233, 185, 120, 118, 109, 78,  92,  0,   0,   0,   0,
+        183, 142, 61,  51,  123, 115, 206, 94,  17,  136, 105, 97,  252, 43,  207, 210, 69,  186,
+        235, 237, 0,   0,   0,   0,   17,  12,  93,  37,  94,  115, 247, 238, 208, 159, 188, 150,
+        136, 5,   240, 120, 169, 248, 68,  137, 0,   0,   0,   0,
+    };
+
+    var fbr: std.Io.Reader = .fixed(status_cache_encoded);
+
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const status_cache: StatusCacheHeader = try .init(&fbr);
+
+    var actual_slot_deltas: std.ArrayList(SlotDelta) = .empty;
+    defer actual_slot_deltas.deinit(gpa);
+    try actual_slot_deltas.ensureUnusedCapacity(gpa, status_cache.slot_deltas.len);
+
+    var sc_iter = status_cache.slot_deltas.iterator();
+    while (try sc_iter.next(&fbr)) |slot_delta| {
+        var status_map_al: std.ArrayList(SlotDelta.StatusMapEntry) = .empty;
+        try status_map_al.ensureUnusedCapacity(arena, slot_delta.status_map.len);
+
+        var sme_iter = slot_delta.status_map.iterator();
+        while (try sme_iter.next(&fbr)) |status_map_entry| {
+            var status_entries: std.ArrayList(SlotDelta.Status.Entry) = .empty;
+            try status_entries.ensureUnusedCapacity(arena, status_map_entry.status_list.len);
+
+            var st_iter = status_map_entry.status_list.iterator();
+            while (try st_iter.next(&fbr)) |status| {
+                status_entries.appendAssumeCapacity(.{ status.key_slice, status.result });
+            }
+
+            status_map_al.appendAssumeCapacity(.{
+                status_map_entry.hash,
+                .{
+                    .key_index = status_map_entry.key_index,
+                    .entries = status_entries.items,
+                },
+            });
+        }
+
+        actual_slot_deltas.appendAssumeCapacity(.{
+            .slot = slot_delta.slot,
+            .is_root = slot_delta.is_root,
+            .status_map = status_map_al.items,
+        });
+    }
+
+    try std.testing.expectEqualDeep(
+        status_cache_decoded,
+        actual_slot_deltas.items,
+    );
+
+    var actual_encoded: std.Io.Writer.Allocating = .init(gpa);
+    defer actual_encoded.deinit();
+    const actual_encoded_w = &actual_encoded.writer;
+
+    try actual_encoded.writer.writeInt(u64, actual_slot_deltas.items.len, .little);
+    for (actual_slot_deltas.items) |slot_delta| {
+        try actual_encoded_w.writeInt(Slot, slot_delta.slot, .little);
+        try actual_encoded_w.writeByte(@intFromBool(slot_delta.is_root));
+
+        try actual_encoded_w.writeInt(u64, slot_delta.status_map.len, .little);
+        for (slot_delta.status_map) |status_kv| {
+            const hash, const status = status_kv;
+            try actual_encoded_w.writeAll(&hash.data);
+            try actual_encoded_w.writeInt(u64, status.key_index, .little);
+
+            try actual_encoded_w.writeInt(u64, status.entries.len, .little);
+            for (status.entries) |status_entry| {
+                const key_slice, const result = status_entry;
+                try actual_encoded_w.writeAll(&key_slice);
+                try lib.solana.bincode.write(actual_encoded_w, result);
+            }
+        }
+    }
+
+    try std.testing.expectEqualSlices(u8, status_cache_encoded, actual_encoded.written());
 }

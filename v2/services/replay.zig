@@ -135,11 +135,14 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     const blockhash_states: *BlockHashStates = try allocator.create(BlockHashStates);
     @memset(blockhash_states, null);
 
+    const exec_registry: *replay.ExecutionRegistry = try allocator.create(replay.ExecutionRegistry);
+    exec_registry.init();
+
     var deshredded_iter = rw.deshredded_in.get(.reader);
     var exec_request_sender = rw.exec_req_response.request_ring.get(.writer);
     var exec_response_receiver = rw.exec_req_response.response_ring.get(.reader);
 
-    try bootstrap(
+    const root_block = try bootstrap(
         logger,
         runner,
         rw.snapshot_metadata_in,
@@ -147,6 +150,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         rw.block_pool,
         exec_states,
         blockhash_states,
+        exec_registry,
     );
 
     // After the slot is supposedly populated, start shred recv (eventually Repair service) on it.
@@ -176,39 +180,64 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 
             zone.value(response.task_id);
 
-            std.debug.assert(response.request_kind == .txn_exec); // others unimplemented
-            const response_data = response.data.txn_exec;
+            switch (response.request_kind) {
+                .txn_exec => {
+                    const response_data = response.data.txn_exec;
+                    const block_ref = response_data.block_idx;
+                    defer rw.replay_transaction_pool.destroyId(response_data.tx_idx);
 
-            for (response_data.account_ref_buf[0..response_data.n_account_refs]) |account_ref| {
-                if (account_ref == .invalid) continue;
+                    for (response_data.account_ref_buf[0..response_data.n_account_refs]) |account_ref| {
+                        if (account_ref == .invalid) continue;
 
-                const account = rw.account_pool.getAccount(account_ref);
-                if (account.unref()) rw.account_pool.free(account_ref);
+                        const account = rw.account_pool.getAccount(account_ref);
+                        if (account.unref()) rw.account_pool.free(account_ref);
+                    }
+
+                    const exec_state: *BlockExecState = &(exec_states[block_ref.index()].?);
+
+                    // We previously used the transaction number within the block as our "task_id".
+                    // Asserting that we're receiving them back in order (we have single threaded exec).
+                    std.debug.assert(response.task_id == exec_state.n_transactions_completed);
+
+                    exec_state.n_transactions_completed += 1;
+
+                    const block_ref_slot = rw.block_pool.indexToPtr(block_ref).slot;
+                    if (exec_state.finished()) {
+                        logger.info()
+                            .field("slot", &block_ref_slot)
+                            .logf(
+                            "Slot (block_ref={}) complete! ({}/{})",
+                            .{
+                                block_ref,
+                                exec_state.n_transactions_requested,
+                                exec_state.n_transactions_completed,
+                            },
+                        );
+                    }
+
+                    const bhq_view: lib.replay.BlockhashQueueView = .{
+                        .latest_block = root_block,
+                        .hashes = blockhash_states,
+                        .pool = rw.block_pool,
+                    };
+                    const recent_block_ref_opt = bhq_view.getBlockRefIfValidForAge(
+                        &response_data.recent_blockhash,
+                        300,
+                    );
+                    if (recent_block_ref_opt.opt()) |recent_block_ref| {
+                        try exec_registry.insert(
+                            recent_block_ref,
+                            block_ref,
+                            response_data.result.tx_hash.data[0..20],
+                        );
+                    } else {
+                        logger.err()
+                            .field("slot", &block_ref_slot)
+                            .log("recent blockhash of transaction is not in the blockhash queue");
+                    }
+                },
+                .txn_sig_verify => |tag| std.debug.panic("TODO: {t} unimplemented", .{tag}),
             }
-
-            defer rw.replay_transaction_pool.destroyId(response_data.tx_idx);
-
-            const block_ref = response_data.block_idx;
-            const exec_state: *BlockExecState = &(exec_states[block_ref.index()].?);
-
-            // We previously used the transaction number within the block as our "task_id".
-            // Asserting that we're receiving them back in order (we have single threaded exec).
-            std.debug.assert(response.task_id == exec_state.n_transactions_completed);
-
-            exec_state.n_transactions_completed += 1;
-
-            if (exec_state.finished()) {
-                logger.info().logf(
-                    "Slot {f} ({}) complete! ({}/{})",
-                    .{
-                        rw.block_pool.indexToPtr(block_ref).slot,
-                        block_ref,
-                        exec_state.n_transactions_requested,
-                        exec_state.n_transactions_completed,
-                    },
-                );
-            }
-
             continue :task .idle;
         },
         .fec_set => {
@@ -289,6 +318,9 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 ///     - chained_merkle_root
 ///     - fec_set_idx
 ///     - payload_len
+///
+/// NOTE/TODO: returns the latest/root block, to be used as our latest block.
+/// This is a hack for until we have repair implemented properly.
 fn bootstrap(
     logger: tel.Logger("main"),
     runner: lib.runner.Connection,
@@ -297,14 +329,18 @@ fn bootstrap(
     block_pool: *lib.replay.BlockPool,
     exec_states: *BlockExecStates,
     blockhash_states: *BlockHashStates,
-) !void {
+    exec_registry: *replay.ExecutionRegistry,
+) !lib.replay.BlockRef {
     // Acquire barrier — pairs with accounts_db's `populateSlot` (Release). Once
     // this returns, `snapshot_metadata.manifest` / `.status_cache` / all their
     // trailing FBA data are fully published and safe to read from this process.
     const root_slot = try snapshot_metadata.getSlotBlocking(runner);
     logger.info().logf("got the root slot from the snapshot: {}", .{root_slot});
 
+    const snapshot_metadata_memory = snapshot_metadata.getMemory();
     const manifest = &snapshot_metadata.manifest;
+    const status_cache = &snapshot_metadata.status_cache;
+
     const bhq = &manifest.bank_fields.blockhash_queue;
     const hashes = bhq.hashes[0..bhq.hashes_count];
 
@@ -365,10 +401,44 @@ fn bootstrap(
     };
     std.debug.assert(exec_states[root_block.index()].?.finished());
 
-    logger.info().logf(
-        "finished bootstrapping replay at slot {} (block_id={f})",
-        .{ root_slot, block_id },
-    );
+    const bhq_view: lib.replay.BlockhashQueueView = .{
+        .latest_block = root_block,
+        .hashes = blockhash_states,
+        .pool = block_pool,
+    };
+
+    for (status_cache.slot_deltas.sliceConst(snapshot_metadata_memory.ptr)) |slot_delta| {
+        _ = slot_delta.is_root; // TODO: do we need to consider this information?
+
+        // find the block ref for the associated slot on which the transactions were executed
+        const block_ref = block_ref: {
+            var current_ref_opt: replay.BlockRef.Optional = .init(root_block);
+            while (current_ref_opt.opt()) |current_ref| {
+                const current = current_ref.constPtr(block_pool);
+                current_ref_opt = current.child;
+                if (current.slot.opt() == slot_delta.slot) break :block_ref current_ref;
+            }
+            logger.err()
+                .field("slot", &slot_delta.slot)
+                .log("Couldn't find a block ref for slot.");
+            return error.MissingBlockRef;
+        };
+
+        for (slot_delta.status_map.entries.sliceConst(snapshot_metadata_memory.ptr)) |sme| {
+            const recent_block_ref_opt = bhq_view.getBlockRefIfValidForAge(&sme.hash, 300);
+            const recent_block_ref = recent_block_ref_opt.opt() orelse return error.InvalidSnapshot;
+            for (sme.status_list.sliceConst(snapshot_metadata_memory.ptr)) |status| {
+                try exec_registry.insert(recent_block_ref, block_ref, &status.key_slice);
+            }
+        }
+    }
+
+    logger.info()
+        .field("slot", &root_slot)
+        .field("block_id", &block_id)
+        .log("finished bootstrapping replay");
+
+    return root_block;
 }
 
 /// Holds the accounts mutated for each tracked Block.
@@ -1070,6 +1140,7 @@ fn maybeContinueBlockExec(
                 .request_kind = .txn_exec,
                 .data = .{
                     .txn_exec = .{
+                        .recent_blockhash = transaction.message.recentBlockhash().*,
                         .block_idx = block_ref,
                         .tx_idx = tx_ref,
                         .n_account_refs = held_accounts,
@@ -1714,9 +1785,13 @@ test "bootstrap creates root block and chains blockhashes" {
     defer allocator.destroy(blockhash_states);
     @memset(blockhash_states, null);
 
+    const exec_reg = try allocator.create(replay.ExecutionRegistry);
+    defer allocator.destroy(exec_reg);
+    exec_reg.init();
+
     const logger = tel.Logger("main").noop;
 
-    try bootstrap(logger, runner, &metadata, &forest, pool, exec_states, blockhash_states);
+    _ = try bootstrap(logger, runner, &metadata, &forest, pool, exec_states, blockhash_states, exec_reg);
 
     // find root in pool
     var root_opt: ?lib.replay.BlockRef = null;
