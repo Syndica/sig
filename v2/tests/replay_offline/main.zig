@@ -26,6 +26,7 @@
 const std = @import("std");
 const lib = @import("lib");
 const services = @import("services");
+const shred_stream = @import("shred_stream");
 const tel = lib.telemetry;
 const topology = lib.topology;
 
@@ -106,20 +107,18 @@ pub fn main() !void {
 
     if (argv.len < 2) {
         std.debug.print(
-            "usage: replay-offline <config.zon>" ++
-                " [shred-streamer-args...]\n\n" ++
-                "  <config.zon>  Path to validator config file" ++
-                " (same format as main validator).\n" ++
-                "                A snapshot must already exist" ++
-                " in the configured snapshot folder.\n\n" ++
-                "  Remaining arguments are passed to the" ++
-                " shred_streamer service:\n" ++
-                "    --ledger <path>  Path to Agave ledger\n" ++
-                "    --start-slot <N> First slot to stream\n" ++
-                "    --end-slot <N>   Last slot to stream\n" ++
-                "    --rate-hz <F>    Rate limit in Hz\n",
-            .{},
-        );
+            \\usage: replay-offline <config.zon> [shred-streamer-args...]
+            \\
+            \\  <config.zon>  Path to validator config file (same format as main validator).
+            \\                A snapshot must already exist in the configured snapshot folder.
+            \\
+            \\  Remaining arguments are passed to the shred_streamer service:
+            \\    --ledger <path>  Path to Agave ledger
+            \\    --start-slot <N> First slot to stream
+            \\    --end-slot <N>   Last slot to stream
+            \\    --rate-hz <F>    Rate limit in Hz
+            \\
+        , .{});
         return error.ConfigPathMissing;
     }
 
@@ -139,8 +138,12 @@ pub fn main() !void {
         };
         defer cfg_file.close();
 
-        const cfg_str = try cfg_file.readToEndAllocOptions(allocator, 1024 * 1024, null, .@"1", 0);
+        var file_reader = cfg_file.reader(&.{});
+        const file_size = try file_reader.getSize();
+        if (file_size > 1024 * 1024) return error.ConfigFileTooLarge;
+        const cfg_str = try allocator.allocSentinel(u8, @intCast(file_size), 0);
         defer allocator.free(cfg_str);
+        try file_reader.interface.readSliceAll(cfg_str);
 
         var diag: std.zon.parse.Diagnostics = .{};
         defer diag.deinit(allocator);
@@ -163,15 +166,61 @@ pub fn main() !void {
     defer std.zon.parse.free(allocator, config);
 
     // -- Populate shred_streamer config from remaining CLI args -- //
+    //
+    // We parse the shred-streamer CLI args here in the topology launcher
+    // (using shred_stream.parseArgs) and pass strongly-typed fields via IPC
+    // shared memory. The service reads the typed fields directly and does
+    // not do any string parsing.
 
     var streamer_config: Region(lib.shred_streamer.Config) = try .simple();
-    streamer_config.ptr().populateFromArgs(argv[2..]) catch {
-        std.debug.print(
-            "error: shred_streamer CLI args too long (max {d} bytes)\n",
-            .{lib.shred_streamer.Config.max_path_len},
-        );
-        return error.ArgsTooLong;
-    };
+    {
+        var stderr_buf: [4096]u8 = undefined;
+        var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
+        defer stderr_writer.interface.flush() catch {};
+
+        const parse_result = shred_stream.parseArgs(
+            &stderr_writer.interface,
+            argv[2..],
+        ) catch |err| {
+            return err;
+        };
+
+        const stream_cfg: shred_stream.Config = switch (parse_result) {
+            .help => {
+                try shred_stream.printHelp(&stderr_writer.interface);
+                return;
+            },
+            .config => |c| c,
+        };
+
+        if (stream_cfg.dry_run) {
+            try stderr_writer.interface.print(
+                "--dry-run is not supported in offline replay\n",
+                .{},
+            );
+            return error.InvalidArguments;
+        }
+
+        streamer_config.ptr().populate(
+            stream_cfg.ledger,
+            stream_cfg.start_slot,
+            stream_cfg.end_slot,
+            stream_cfg.rate_hz,
+            @enumFromInt(@intFromEnum(stream_cfg.test_mode)),
+            stream_cfg.seed,
+            @intCast(stream_cfg.selected_count),
+            @enumFromInt(@intFromEnum(stream_cfg.shred_kind)),
+            @intCast(stream_cfg.plan_limit),
+            @intCast(stream_cfg.corrupt_bytes),
+            stream_cfg.dry_run,
+        ) catch |err| {
+            try stderr_writer.interface.print(
+                "error: shred_streamer ledger path too long (max {d} bytes)\n",
+                .{lib.shred_streamer.Config.max_path_len},
+            );
+            return err;
+        };
+    }
 
     // -- Create shared memory regions -- //
     // Mirrors v2/init/main.zig, minus gossip/net regions.
@@ -188,8 +237,19 @@ pub fn main() !void {
     shred_recv_config.ptr().shred_version = 0;
 
     var snapshot_config: Region(lib.snapshot.SnapshotConfig) = try .simple();
-    try populateSnapshotConfig(snapshot_config.ptr(), config.snapshot, config.cluster);
+    try snapshot_config.ptr().populate(
+        config.snapshot.folder,
+        config.snapshot.known_validators,
+        config.cluster,
+    );
 
+    if (config.accounts_db.file.len > std.fs.max_path_bytes) {
+        std.log.err(
+            "accounts_db file path too long: {d} bytes (max {d})",
+            .{ config.accounts_db.file.len, std.fs.max_path_bytes },
+        );
+        return error.PathTooLong;
+    }
     var accounts_db_config: Region(lib.accounts_db.RootedConfig) = try .sized(
         @sizeOf(lib.accounts_db.RootedConfig) + config.accounts_db.rooted.toBytes(),
     );
@@ -323,63 +383,13 @@ pub fn main() !void {
     // In offline replay the pipeline drains naturally:
     //   shred_streamer → shred_receiver → replay → exec
     // Once every service reports idle, cancel and clean up.
+    //
+    // We sleep briefly between checks to avoid burning CPU during long
+    // operations like snapshot loading (which can take minutes).
     while (children.isActive()) {
-        std.atomic.spinLoopHint();
+        std.Thread.sleep(10 * std.time.ns_per_ms);
     }
 
     children.cancel();
     try children.wait(5 * std.time.ns_per_s);
-}
-
-fn populateSnapshotConfig(
-    data: *lib.snapshot.SnapshotConfig,
-    cfg: Config.Snapshot,
-    cluster: lib.solana.Cluster,
-) !void {
-    if (cfg.known_validators.len == 0) {
-        std.log.err(
-            "known_validators must not be empty. Specify validator pubkeys, " ++
-                "or \"*\" to opt in to untrusted snapshot sources.",
-            .{},
-        );
-        return error.NoKnownValidators;
-    }
-    if (cfg.known_validators.len > lib.snapshot.SnapshotConfig.MAX_KNOWN_VALIDATORS) {
-        return error.TooManyKnownValidators;
-    }
-
-    @memcpy(data.folder_buffer[0..cfg.folder.len], cfg.folder);
-    data.folder_len = @intCast(cfg.folder.len);
-    data.cluster = cluster;
-
-    const has_wildcard = for (cfg.known_validators) |entry| {
-        if (std.mem.eql(u8, entry, "*")) break true;
-    } else false;
-
-    if (has_wildcard) {
-        if (cfg.known_validators.len > 1) {
-            std.log.warn(
-                "known_validators contains \"*\" alongside other entries; " ++
-                    "\"*\" takes precedence, ignoring the rest.",
-                .{},
-            );
-        }
-        data.known_validators_allow_all = true;
-        data.known_validators_len = 0;
-    } else {
-        data.known_validators_allow_all = false;
-        data.known_validators_len = @intCast(cfg.known_validators.len);
-        for (
-            cfg.known_validators,
-            data.known_validators_buffer[0..cfg.known_validators.len],
-        ) |pkstr, *pkptr| {
-            pkptr.* = lib.solana.Pubkey.parseRuntime(pkstr) catch |err| {
-                std.log.err(
-                    "invalid known_validator entry '{s}': {s}",
-                    .{ pkstr, @errorName(err) },
-                );
-                return err;
-            };
-        }
-    }
 }
