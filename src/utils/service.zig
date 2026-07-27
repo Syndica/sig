@@ -1,4 +1,6 @@
 const std = @import("std");
+const builtin = @import("builtin");
+
 const sig = @import("../sig.zig");
 
 const Allocator = std.mem.Allocator;
@@ -7,6 +9,8 @@ const ArrayListUnmanaged = std.ArrayListUnmanaged;
 const Atomic = std.atomic.Value;
 
 const Logger = sig.trace.Logger("service_manager");
+
+const is_darwin = builtin.os.tag.isDarwin();
 
 /// High level manager for long-running threads and the state
 /// shared by those threads.
@@ -133,8 +137,10 @@ pub fn spawnService(
         .{ logger, exit, name, config, function, args },
     );
 
-    thread.setName(name[0..@min(name.len, std.Thread.max_name_len)]) catch |e|
-        logger.err().logf("failed to set name for thread '{s}' - {}", .{ name, e });
+    if (!is_darwin) {
+        thread.setName(name[0..@min(name.len, std.Thread.max_name_len)]) catch |e|
+            logger.err().logf("failed to set name for thread '{s}' - {}", .{ name, e });
+    }
 
     return thread;
 }
@@ -152,6 +158,24 @@ pub fn runService(
     function: anytype,
     args: anytype,
 ) !void {
+    // on darwin a thread can only be named by itself, so it can't happen in spawnService
+    if (is_darwin) if (maybe_name) |name| {
+        var name_with_terminator: [std.Thread.max_name_len]u8 = undefined;
+        const n = @min(name.len, std.Thread.max_name_len - 1);
+        @memcpy(name_with_terminator[0..n], name[0..n]);
+        name_with_terminator[n] = 0;
+        const thread_name_ptr: [*:0]const u8 = @ptrCast(&name_with_terminator);
+
+        const err = std.c.pthread_setname_np(thread_name_ptr);
+        switch (@as(std.posix.E, @enumFromInt(err))) {
+            .SUCCESS => {},
+            else => |e| logger.err().logf(
+                "failed to set name for thread '{s}' - errno {}",
+                .{ name, e },
+            ),
+        }
+    };
+
     var buf: [16]u8 = undefined;
     const name = maybe_name orelse try std.fmt.bufPrint(
         &buf,
