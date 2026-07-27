@@ -19,6 +19,7 @@ const Metrics = @import("../Metrics.zig");
 const SocketMap = api.SocketMap;
 const testing = @import("testing.zig");
 
+/// Type just to track fields for a snapshot source reported by the GossipNode effects.
 const SnapshotSource = struct {
     from: Pubkey,
     rpc_addr: lib.net.Address,
