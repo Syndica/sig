@@ -1,5 +1,7 @@
 //! Roughly equivalent to std's start.zig, but for our services.
 //!
+//! Used only by service libs to run their startup in their forked process.
+//!
 //! This code is responsible for:
 //! - Exporting symbols
 //! - Setting a panic handler

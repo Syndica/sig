@@ -52,9 +52,9 @@ We also support kcov to give coverage information on what was and was not fuzzed
 - [https://github.com/SimonKagstrom/kcov](https://github.com/SimonKagstrom/kcov)
 
 Commands to run:
-- `bash scripts/kcov_fuzz_gossip_service.sh`
-- `bash scripts/kcov_fuzz_gossip_table.sh`
-- `bash scripts/kcov_fuzz_accountsdb.sh`
+- `bash v1/scripts/kcov_fuzz_gossip.sh`
+- `bash v1/scripts/kcov_fuzz_gossip_table.sh`
+- `bash v1/scripts/kcov_fuzz_accountsdb.sh`
 
 *Note:* View the scripts for helpful install instructions of kcov.
 

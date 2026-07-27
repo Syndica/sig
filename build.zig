@@ -1,838 +1,866 @@
+//! This defines the build process for v2.
+//! conformance/ and v1/ each have their own build.zig
+
 const std = @import("std");
+
 const Build = std.Build;
-const zig_zon = @import("build.zig.zon");
 
-const sig_version = std.SemanticVersion.parse(zig_zon.version) catch unreachable;
-
-const LedgerDB = enum {
-    rocksdb,
-    hashmap,
+const test_install_dir: Build.Step.InstallArtifact.Options.Dir = .{
+    .override = .{ .custom = "bin/tests" },
 };
 
-pub const Config = struct {
+pub fn build(b: *Build) !void {
+    // -- Inputs ----------------------------
+
+    const config: Config = .load(b);
+    const deps: Dependencies = .load(b, config);
+
+    // -- Artifacts -------------------------
+
+    var unit_tests: UnitTests = .init(b, config);
+    const sig: Sig = try .init(b, config, deps, &unit_tests);
+    const tools: Tools = .init(b, config, deps, &unit_tests, sig);
+
+    // -- CLI Commands (Top Level Steps) ----
+
+    // install (default step)
+    const install_step = b.getInstallStep();
+    install_step.dependOn(sig.exe.installStep());
+    install_step.dependOn(tools.shred_stream.installStep());
+    install_step.dependOn(tools.lint.installStep());
+    for (unit_tests.tests.items) |exe| install_step.dependOn(exe.installStep());
+    for (tools.black_box_tests) |exe| install_step.dependOn(exe.installStep());
+
+    // run
+    const run_step = b.step("run", "Run sig");
+    sig.exe.addToStep(run_step);
+
+    // sig
+    const sig_step = b.step("sig", "Build only the sig binary, without running it.");
+    sig_step.dependOn(sig.exe.installStep());
+
+    // unit-test
+    const unit_test_step = b.step("unit-test", "Run unit tests.");
+    for (unit_tests.tests.items) |exe| unit_test_step.dependOn(exe.installStep());
+    if (unit_tests.kcov) |kcov| {
+        if (config.exe.run) unit_test_step.dependOn(kcov.save_results_step);
+    } else for (unit_tests.tests.items) |unit_test| {
+        if (unit_test.run) |run| unit_test_step.dependOn(&run.step);
+    }
+
+    // bb-test
+    const bb_test_step = b.step("bb-test", "Run black box tests.");
+    for (tools.black_box_tests) |bbt| bbt.addToStep(bb_test_step);
+
+    // shred-stream
+    const shred_stream_step = b.step("shred-stream", "Stream shreds from an Agave ledger");
+    tools.shred_stream.addToStep(shred_stream_step);
+
+    // lint
+    const lint_step = b.step("lint", "Run lint checks");
+    tools.lint.addToStep(lint_step);
+
+    // test
+    const test_step = b.step("test", "Run all tests.");
+    test_step.dependOn(unit_test_step);
+    test_step.dependOn(bb_test_step);
+
+    // check
+    const check_step = b.step("check", "Check step.");
+    check_step.dependOn(install_step);
+
+    // ci
+    const ci_step = b.step("ci", "Run all checks used for CI");
+    ci_step.dependOn(test_step);
+    ci_step.dependOn(install_step);
+    ci_step.dependOn(lint_step);
+    ci_step.dependOn(&b.addFmt(.{
+        .check = true,
+        .paths = &.{ "build.zig", "build.zig.zon", "v2", "tools" },
+    }).step);
+
+    // docs
+    const docs_step = b.step("docs", "Emit docs");
+    docs_step.dependOn(&tools.docs.step);
+}
+
+const Config = struct {
     target: Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
-    filters: ?[]const []const u8,
-    enable_tsan: bool,
-    ledger_db: LedgerDB,
-    run: bool,
-    install: bool,
-    ssh_host: ?[]const u8,
-    ssh_install_dir: []const u8,
-    ssh_workdir: []const u8,
-    no_network_tests: bool,
-    has_side_effects: bool,
-    enable_tracy: bool,
-    tracy_on_demand: bool,
-    tracy_no_exit: bool,
+    use_kcov: bool,
     use_llvm: bool,
-    error_tracing: ?bool,
-    long_tests: bool,
+    exe: Executable.Options,
+    tracy_enable: bool,
+    tracy_no_exit: bool,
+    tracy_on_demand: bool,
+    filters: []const []const u8,
     allow_no_sha: bool,
     allow_no_avx512: bool,
-    version: std.SemanticVersion,
+    long_tests: bool,
+    debug_skip_shred_sig_verify: bool,
+    debug_skip_shred_version_check: bool,
 
-    pub fn fromBuild(b: *Build) !Config {
+    pub fn load(b: *Build) Config {
+        const optimize = b.standardOptimizeOption(.{});
+        const use_kcov = b.option(bool, "kcov", "Use kcov to run the tests.") orelse false;
+        const use_llvm = b.option(bool, "use-llvm", "Force usage of LLVM") orelse true;
+        if (use_kcov and !use_llvm) @panic("cannot use kcov without llvm");
         const filters = b.option(
             []const []const u8,
             "filter",
-            "List of filters, used for example to filter unit tests by name. " ++
-                "Specified as a series like `-Dfilter='filter1' -Dfilter='filter2'`.",
-        );
-
-        const zls_is_build_runner = b.option(
-            bool,
-            "zls-is-build-runner",
-            "Option passed by zls to indicate that it's the one running this build script " ++
-                "(configured in the local zls.build.json). This should not be specified on the " ++
-                "command line nor as a dependency argument.",
-        ) orelse false;
-
-        const optimize = b.standardOptimizeOption(.{});
-
-        var self: Config = .{
+            "List of unit test filters.",
+        ) orelse &.{};
+        return .{
             .target = b.standardTargetOptions(.{}),
             .optimize = optimize,
-            .filters = filters,
-            .enable_tsan = b.option(
+            .use_kcov = use_kcov,
+            .use_llvm = use_llvm,
+            .exe = .{
+                .install = !(b.option(
+                    bool,
+                    "no-bin",
+                    "Don't install artifacts implied by specified steps.",
+                ) orelse false),
+                .run = !(b.option(
+                    bool,
+                    "no-run",
+                    "Don't execute run steps implied by the specified steps.",
+                ) orelse false),
+            },
+            .tracy_enable = b.option(bool, "enable-tracy", "Enables tracy") orelse false,
+            .tracy_no_exit = b.option(
                 bool,
-                "enable-tsan",
-                "Enable TSan for the test suite",
-            ) orelse false,
-            .ledger_db = b.option(
-                LedgerDB,
-                "ledger",
-                "Ledger database backend",
-            ) orelse .rocksdb,
-            .run = !(b.option(
-                bool,
-                "no-run",
-                "Don't run any of the executables implied by the specified steps, only install " ++
-                    "them. Use in conjunction with 'no-bin' to avoid installation as well.",
-            ) orelse false or zls_is_build_runner),
-            .install = !(b.option(
-                bool,
-                "no-bin",
-                "Don't install any of the binaries implied by the specified steps, only run " ++
-                    "them. Use in conjunction with 'no-run' to avoid running as well.",
-            ) orelse false or zls_is_build_runner),
-            .ssh_host = b.option(
-                []const u8,
-                "ssh-host",
-                "Builds will target this remote host," ++
-                    " binaries will be installed there, and executables will run there.",
-            ),
-            .ssh_install_dir = b.option(
-                []const u8,
-                "ssh-installdir",
-                "When using ssh-host, this" ++
-                    " configures the directory to install binaries (relative to ssh-workdir)" ++
-                    " (default: zig-out/bin).",
-            ) orelse "zig-out/bin/",
-            .ssh_workdir = b.option(
-                []const u8,
-                "ssh-workdir",
-                "When using ssh-host, this configures the working " ++
-                    "directory where executables will run (default: sig).",
-            ) orelse "sig",
-            .no_network_tests = b.option(
-                bool,
-                "no-network-tests",
-                "Do not run any tests that depend on the network.",
-            ) orelse false,
-            .has_side_effects = b.option(
-                bool,
-                "side-effects",
-                "Disables caching of the run step",
-            ) orelse false,
-            .enable_tracy = b.option(
-                bool,
-                "enable-tracy",
-                "Enables tracy",
+                "tracy-no-exit",
+                "Delays process exit until Tracy has received data. Only has an effect if " ++
+                    "tracy is enabled via enable-tracy.",
             ) orelse false,
             .tracy_on_demand = b.option(
                 bool,
                 "tracy-on-demand",
-                "Enables tracy on-demand mode (allows reconnecting). Only has an effect if tracy is enabled via enable-tracy.",
+                "Start capturing profiler data when tracy starts",
             ) orelse false,
-            .tracy_no_exit = b.option(
-                bool,
-                "tracy-no-exit",
-                "Delays process exit until Tracy has received data. Only has an effect if tracy is enabled via enable-tracy.",
-            ) orelse false,
-            .use_llvm = b.option(
-                bool,
-                "use-llvm",
-                "If disabled, uses experimental self-hosted backend. Only works for x86_64-linux",
-            ) orelse true,
-            .error_tracing = b.option(
-                bool,
-                "error-tracing",
-                "Enable or disable error tracing. Default: Only for Debug builds.",
-            ),
-            .long_tests = b.option(
-                bool,
-                "long-tests",
-                "Run extra tests that take a long time, for more exhaustive coverage.",
-            ) orelse (filters != null),
+            .filters = filters,
             .allow_no_sha = b.option(
                 bool,
                 "allow-no-sha",
                 "Opt in to a slower software fallback when the target lacks the x86 SHA " ++
                     "extension. Without this flag, building for a target without SHA-NI is a " ++
-                    "compile-time error so the performance hit is not silently accepted.",
+                    "compile-time error, so the performance hit is not silently accepted.",
             ) orelse (optimize == .Debug),
             .allow_no_avx512 = b.option(
                 bool,
                 "allow-no-avx512",
                 "Opt in to a slower generic ed25519 path when the target lacks AVX-512 " ++
-                    "(avx512ifma + avx512vl). Without this flag, building for an x86_64 target " ++
-                    "without these features is a compile-time error so the performance hit is " ++
-                    "not silently accepted.",
+                    "(avx512ifma + avx512vl). Without this flag, building for an x86_64 " ++
+                    "target without these features is a compile-time error so the performance " ++
+                    "hit is not silently accepted.",
             ) orelse (optimize == .Debug),
-            .version = s: {
-                const maybe_version_string = b.option(
-                    []const u8,
-                    "version-string",
-                    "Override Sig's version string. The default is to find out through git.",
-                );
-                const version_slice = if (maybe_version_string) |version| version else v: {
-                    const version_string = b.fmt("{f}", .{sig_version});
-
-                    var code: u8 = undefined;
-                    const git_describe_untrimmed = b.runAllowFail(&.{
-                        "git",
-                        "-C", b.build_root.path orelse ".", // affects the --git-dir argument
-                        "--git-dir", ".git", // affected by the -C argument
-                        "describe", "--match", "*.*.*", //
-                        "--tags", "--abbrev=8", //  get the first 8 characters, or 4 bytes for the client version
-                    }, &code, .Ignore) catch break :v version_string;
-                    const git_describe = std.mem.trim(u8, git_describe_untrimmed, " \n\r");
-
-                    switch (std.mem.count(u8, git_describe, &.{'-'})) {
-                        0 => {
-                            // This is a tagged release version (e.g. 0.2.0)
-                            if (!std.mem.eql(u8, git_describe, version_string)) {
-                                // Something must be very wrong.
-                                std.debug.print("Sig's version '{s}' does not match Git tag '{s}'\n", .{ version_string, git_describe });
-                                std.process.exit(1);
-                            }
-                            break :v version_string;
-                        },
-                        2 => {
-                            // Untagged development build (e.g. 0.2.0-dev.1832+g5ef9eaf0b).
-                            var it = std.mem.splitScalar(u8, git_describe, '-');
-                            const tagged_ancestor = it.first();
-                            const commit_height = it.next().?;
-                            const commit_id = it.next().?;
-
-                            // Check that the version of Sig we're compiling is after the latest tag. Something
-                            // must have gone wrong for this not to be the case.
-                            // We follow SemVerTag, so our tagged releases are versioned with vX.Y.Z, so we cut
-                            // off the first character when parsing the SemVer.
-                            const ancestor_ver = try std.SemanticVersion.parse(tagged_ancestor[1..]);
-                            if (sig_version.order(ancestor_ver) != .gt) {
-                                std.debug.print(
-                                    "'{f}' must be greater than tagged ancestor '{f}'\n",
-                                    .{ sig_version, ancestor_ver },
-                                );
-                                std.process.exit(1);
-                            }
-
-                            // Check that the commit hash is prefixed with a 'g' (a Git convention).
-                            // e.g v0.1.0-1832-g5ef9eaf0b
-                            if (commit_id.len < 1 or commit_id[0] != 'g') {
-                                std.debug.print("Unexpected `git describe` output: {s}\n", .{git_describe});
-                                break :v version_string;
-                            }
-
-                            // The version is reformatted in accordance with the https://semver.org specification.
-                            break :v b.fmt("{s}-dev.{s}+{s}", .{ version_string, commit_height, commit_id[1..] });
-                        },
-                        else => {
-                            std.debug.print("Unexpected `git describe` output: {s}\n", .{git_describe});
-                            break :v version_string;
-                        },
-                    }
-                };
-
-                break :s try std.SemanticVersion.parse(version_slice);
-            },
+            .long_tests = b.option(
+                bool,
+                "long-tests",
+                "Run extra tests that take a long time, for more exhaustive coverage.",
+            ) orelse (filters.len != 0),
+            .debug_skip_shred_sig_verify = b.option(
+                bool,
+                "debug-skip-shred-sig-verify",
+                "Debug / harness use only. Skips leader lookup and ed25519 verify on " ++
+                    "incoming shreds. Required by the conformance shred-parse harness, which " ++
+                    "feeds shreds whose merkle roots are not signed by any known leader.",
+            ) orelse false,
+            .debug_skip_shred_version_check = b.option(
+                bool,
+                "debug-skip-shred-version-check",
+                "Debug use only. Disables the shred_version mismatch rejection in Receiver. " ++
+                    "Independent of -Ddebug-skip-shred-sig-verify so the harness can keep this " ++
+                    "check on for parity with the reference implementations.",
+            ) orelse false,
         };
-
-        if (self.ssh_host) |host| {
-            // Only use SSH to detect remote target if -Dtarget was not explicitly specified
-            if (!b.user_input_options.contains("target")) {
-                self.target = ssh.getHostTarget(b, host) catch |e| std.debug.panic("{}", .{e});
-            }
-        }
-
-        return self;
     }
 };
 
-pub fn build(b: *Build) !void {
-    const config = try Config.fromBuild(b);
-    defer if (!config.install and !config.run) disableEmitBin(b);
+const Dependencies = struct {
+    tracy: *Build.Module,
+    base58: *Build.Module,
+    zstd: *Build.Module,
+    rocksdb: *Build.Module,
+    rocksdb_c: *Build.Module,
+    poseidon: *Build.Module,
+    secp256k1: *Build.Module,
+    blst: *Build.Module,
+
+    pub fn load(b: *Build, config: Config) Dependencies {
+        const rocksdb_dep = b.dependency("rocksdb", .{
+            .target = config.target,
+            .optimize = config.optimize,
+            .enable_snappy = true,
+        });
+        rocksdb_dep.artifact("rocksdb").root_module.sanitize_c = .off;
+
+        // Options must match every `b.dependency("tracy", ...)` call anywhere
+        // in the workspace (in particular v1/build.zig). Any drift produces
+        // two `tracy` Module instances rooted at the same source file, which
+        // Zig 0.15 rejects when both sig and sig_v2 live in one compilation
+        // (e.g. under conformance/).
+        const tracy_mod = b.dependency("tracy", .{
+            .target = config.target,
+            .optimize = config.optimize,
+            .tracy_enable = config.tracy_enable,
+            .tracy_on_demand = config.tracy_on_demand,
+            .tracy_no_exit = config.tracy_no_exit,
+            .tracy_no_system_tracing = false,
+            .tracy_callstack = 6,
+        }).module("tracy");
+        tracy_mod.sanitize_c = .off;
+
+        return .{
+            .tracy = tracy_mod,
+            .base58 = b.dependency("base58", .{
+                .target = config.target,
+                .optimize = config.optimize,
+            }).module("base58"),
+            // Options must match v1/build.zig's zstd dep. See tracy comment above.
+            .zstd = b.dependency("zstd", .{
+                .target = config.target,
+                .optimize = config.optimize,
+            }).module("zstd"),
+            .rocksdb = rocksdb_dep.module("bindings"),
+            .rocksdb_c = rocksdb_dep.module("rocksdb"),
+            .poseidon = b.dependency("poseidon", .{
+                .target = config.target,
+                .optimize = config.optimize,
+            }).module("poseidon"),
+            .secp256k1 = b.dependency("secp256k1", .{
+                .target = config.target,
+                .optimize = config.optimize,
+            }).module("secp256k1"),
+            .blst = b.dependency("blst", .{
+                .target = config.target,
+                .optimize = config.optimize,
+            }).module("blst"),
+        };
+    }
+};
+
+/// All the modules, libraries, and executables that compose the main sig
+/// validator binary. Does not include any tests, developer tools, docs, etc.
+const Sig = struct {
+    lib: *Build.Module,
+    services_mod: *Build.Module,
+    start_service: *Build.Module,
+    service_libs: [services.len]Service,
+    main: *Build.Module,
+    exe: Executable,
+    topology: *Build.Module,
+    api_imports: []const Build.Module.Import,
+
+    const Service = struct {
+        name: []const u8,
+        module: *Build.Module,
+        lib: *Build.Step.Compile,
+    };
+
+    const services = @typeInfo(@import("v2/services.zig")).@"struct".decls;
+
+    pub fn init(b: *Build, config: Config, deps: Dependencies, unit_tests: *UnitTests) !Sig {
+        const build_options = b.addOptions();
+        build_options.addOption(bool, "allow_no_sha", config.allow_no_sha);
+        build_options.addOption(bool, "allow_no_avx512", config.allow_no_avx512);
+        build_options.addOption(
+            bool,
+            "debug_skip_shred_sig_verify",
+            config.debug_skip_shred_sig_verify,
+        );
+        build_options.addOption(
+            bool,
+            "debug_skip_shred_version_check",
+            config.debug_skip_shred_version_check,
+        );
+        const build_options_mod = build_options.createModule();
+
+        const solana_dir = "v2/lib/solana";
+        const feature_set_id = b.addModule("feature-set-id", .{
+            .root_source_file = b.addRunArtifact(b.addExecutable(.{
+                .name = "gen_feature_set_id",
+                .root_module = b.createModule(.{
+                    .target = b.graph.host,
+                    .optimize = .Debug,
+                    .root_source_file = b.path(solana_dir ++ "/gen_feature_set_id.zig"),
+                    .imports = &.{ .{
+                        .name = "base58",
+                        .module = b.dependency("base58", .{}).module("base58"),
+                    }, .{
+                        .name = "features",
+                        .module = b.createModule(.{
+                            .root_source_file = b.path(solana_dir ++ "/features.zon"),
+                        }),
+                    } },
+                }),
+                .use_llvm = config.use_llvm,
+            })).addOutputFileArg("feature-set-id.zig"),
+        });
+        const features_zon = b.addModule("features-zon", .{
+            .root_source_file = b.path(solana_dir ++ "/features.zon"),
+        });
+
+        const lib = b.addModule("lib", .{
+            .root_source_file = b.path("v2/lib/lib.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = &.{
+                .{ .name = "base58", .module = deps.base58 },
+                .{ .name = "tracy", .module = deps.tracy },
+                .{ .name = "build-options", .module = build_options_mod },
+                .{ .name = "zstd", .module = deps.zstd },
+                .{ .name = "features-zon", .module = features_zon },
+                .{ .name = "feature-set-id", .module = feature_set_id },
+            },
+        });
+        unit_tests.add("lib", lib);
+
+        // Components: one per subdir of v2/components/. Each gets lib, tracy, and build-options
+        var components: std.StringHashMapUnmanaged(Component) = .empty;
+        var api_import_list: std.ArrayList(Build.Module.Import) = .empty;
+        {
+            var dir = try b.build_root.handle.openDir(
+                "v2/components",
+                .{ .iterate = true },
+            );
+            defer dir.close();
+            var it = dir.iterate();
+            while (try it.next()) |entry| {
+                if (entry.kind != .directory) continue;
+                if (std.mem.eql(u8, entry.name, "runtime")) continue;
+                const name = b.dupe(entry.name);
+
+                const comp_dir = b.fmt("v2/components/{s}", .{name});
+                const imports: []const Build.Module.Import = &.{
+                    .{ .name = "lib", .module = lib },
+                    .{ .name = "tracy", .module = deps.tracy },
+                    .{ .name = "build-options", .module = build_options_mod },
+                };
+
+                const api_name = b.fmt("{s}_api", .{name});
+                const api = b.addModule(api_name, .{
+                    .root_source_file = b.path(b.fmt("{s}/api.zig", .{comp_dir})),
+                    .target = config.target,
+                    .optimize = config.optimize,
+                    .imports = imports,
+                });
+                unit_tests.add(api_name, api);
+
+                const component = b.addModule(name, .{
+                    .root_source_file = b.path(b.fmt("{s}/component.zig", .{comp_dir})),
+                    .target = config.target,
+                    .optimize = config.optimize,
+                    .imports = concatImports(b, &.{
+                        imports,
+                        &.{.{ .name = "api", .module = api }},
+                    }),
+                });
+                unit_tests.add(name, component);
+
+                try components.put(b.allocator, name, .{ .api = api, .component = component });
+                try api_import_list.append(b.allocator, .{ .name = api_name, .module = api });
+            }
+        }
+
+        // runtime is special cased because it needs codegen and a bunch of extra deps that
+        // no other component uses.
+        const runtime = addRuntime(b, config, deps, unit_tests, lib, features_zon, feature_set_id);
+        try components.put(b.allocator, "runtime", runtime);
+        try api_import_list.append(b.allocator, .{ .name = "runtime_api", .module = runtime.api });
+
+        const api_imports = try api_import_list.toOwnedSlice(b.allocator);
+
+        const topology = b.createModule(.{
+            .root_source_file = b.path("v2/init/topology.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = &.{
+                .{ .name = "lib", .module = lib },
+                .{ .name = "tracy", .module = deps.tracy },
+            },
+        });
+        unit_tests.add("topology", topology);
+
+        const start_service = b.createModule(.{
+            .root_source_file = b.path("v2/init/start_service.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .error_tracing = true,
+            .imports = &.{
+                .{ .name = "lib", .module = lib },
+                .{ .name = "tracy", .module = deps.tracy },
+            },
+        });
+        unit_tests.add("start_service", start_service);
+
+        const services_mod = b.createModule(.{
+            .root_source_file = b.path("v2/services.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = concatImports(b, &.{
+                &.{.{ .name = "lib", .module = lib }},
+                api_imports,
+            }),
+        });
+
+        const main = b.createModule(.{
+            .root_source_file = b.path("v2/main.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = concatImports(b, &.{
+                &.{
+                    .{ .name = "lib", .module = lib },
+                    .{ .name = "tracy", .module = deps.tracy },
+                    .{ .name = "services", .module = services_mod },
+                    .{ .name = "topology", .module = topology },
+                },
+                api_imports,
+            }),
+        });
+        unit_tests.add("main", main);
+
+        // Services opt in to specific component impls with
+        // `pub const components = &.{"foo","bar"}` in their `services.zig`
+        // entry (see the comment on that decl). Services with no
+        // `components` decl get no component modules.
+        const services_root = @import("v2/services.zig");
+        const base_service_imports: []const Build.Module.Import = &.{
+            .{ .name = "lib", .module = lib },
+            .{ .name = "start_service", .module = start_service },
+            .{ .name = "tracy", .module = deps.tracy },
+            .{ .name = "services", .module = services_mod },
+        };
+
+        var service_libs: [services.len]Service = undefined;
+        inline for (services, &service_libs) |service, *service_lib_entry| {
+            const service_def = @field(services_root, service.name);
+            const component_names: []const []const u8 = if (@hasDecl(service_def, "components"))
+                service_def.components
+            else
+                &.{};
+
+            const service_component_imports =
+                try b.allocator.alloc(Build.Module.Import, component_names.len);
+            for (component_names, service_component_imports) |cname, *import| {
+                import.* = .{ .name = cname, .module = components.get(cname).?.component };
+            }
+
+            const service_mod = b.createModule(.{
+                .root_source_file = b.path("v2/services").path(b, service.name ++ ".zig"),
+                .target = config.target,
+                .optimize = config.optimize,
+                .single_threaded = true,
+                .omit_frame_pointer = false,
+                .error_tracing = true,
+                .imports = concatImports(b, &.{
+                    base_service_imports,
+                    api_imports,
+                    service_component_imports,
+                }),
+            });
+            unit_tests.add(service.name ++ "-service", service_mod);
+
+            const service_lib = b.addLibrary(.{
+                .name = service.name,
+                .root_module = service_mod,
+                .use_llvm = config.use_llvm,
+            });
+            main.linkLibrary(service_lib);
+
+            service_lib_entry.* = .{
+                .name = service.name,
+                .module = service_mod,
+                .lib = service_lib,
+            };
+        }
+
+        return .{
+            .lib = lib,
+            .services_mod = services_mod,
+            .start_service = start_service,
+            .service_libs = service_libs,
+            .main = main,
+            .exe = .init(b, config.exe, .{
+                .name = "sig",
+                .root_module = main,
+                .use_llvm = config.use_llvm,
+            }, .{}),
+            .topology = topology,
+            .api_imports = api_imports,
+        };
+    }
+};
+
+const Component = struct {
+    api: *Build.Module,
+    component: *Build.Module,
+};
+
+pub fn addRuntime(
+    b: *Build,
+    config: Config,
+    deps: Dependencies,
+    unit_tests: *UnitTests,
+    lib: *Build.Module,
+    features_zon: *Build.Module,
+    feature_set_id: *Build.Module,
+) Component {
+    const runtime_dir = "v2/components/runtime";
 
     const build_options = b.addOptions();
-    build_options.addOption(LedgerDB, "ledger_db", config.ledger_db);
-    build_options.addOption(bool, "no_network_tests", config.no_network_tests);
     build_options.addOption(bool, "long_tests", config.long_tests);
     build_options.addOption(bool, "allow_no_sha", config.allow_no_sha);
     build_options.addOption(bool, "allow_no_avx512", config.allow_no_avx512);
-    build_options.addOption(std.SemanticVersion, "version", config.version);
 
-    const sig_step = b.step("sig", "Run the sig executable");
-    const test_step = b.step("test", "Run library tests");
-    const fuzz_step = b.step("fuzz", "Gossip fuzz testing");
-    const benchmark_step = b.step("benchmark", "Benchmark client");
-    const geyser_reader_step = b.step("geyser_reader", "Read data from geyser");
-    const vm_step = b.step("vm", "Run the VM client");
-    const test_send_transactions_step = b.step("test_send_transactions", "Attempt to land transactions on testnet using QUIC client");
-    const test_mock_transfers_step = b.step("test_mock_transfers", "Test MockTransferService in RPC submission mode");
-    const docs_step = b.step("docs", "Generate and install documentation for the Sig Library");
-
-    // Dependencies
-    const dep_opts = .{
-        .target = config.target,
-        .optimize = config.optimize,
-    };
-
-    const base58_mod = b.dependency("base58", dep_opts).module("base58");
-    const httpz_mod = b.dependency("httpz", dep_opts).module("httpz");
-    const xev_mod = b.dependency("xev", dep_opts).module("xev");
-    const pretty_table_mod = b.dependency("prettytable", dep_opts).module("prettytable");
-    const webzockets_mod = b.dependency("webzockets", dep_opts).module("webzockets");
-
-    const lsquic_dep = b.dependency("lsquic", .{
+    const std14_mod = b.addModule("std14", .{
+        .root_source_file = b.path(runtime_dir ++ "/std14.zig"),
         .target = config.target,
         .optimize = config.optimize,
     });
-    const lsquic_mod = lsquic_dep.module("lsquic");
 
-    const zstd_mod = b.dependency("zstd", .{
-        .target = config.target,
-        .optimize = config.optimize,
-    }).module("zstd");
-
-    const ssl_mod = lsquic_dep.builder.dependency("boringssl", .{
-        .target = config.target,
-        .optimize = config.optimize,
-    }).module("ssl");
-
-    const rocksdb_dep = b.dependency("rocksdb", .{
-        .target = config.target,
-        .optimize = config.optimize,
-        // ledgers from other clients sometimes use Snappy compression
-        .enable_snappy = true,
-    });
-    const rocksdb_mod = rocksdb_dep.module("bindings");
-    // TODO: UB might be fixed by future RocksDB version upgrade.
-    // reproducable via: zig build test -Dfilter="ledger"
-    rocksdb_dep.artifact("rocksdb").root_module.sanitize_c = .off;
-
-    // Options must match the `b.dependency("tracy", ...)` calls in
-    // shared/build.zig and v2/build.zig exactly. Any drift produces two
-    // `tracy` Module instances rooted at the same source file, which Zig 0.15
-    // rejects when both sig and sig_v2 live in one compilation.
-    const tracy_mod = b.dependency("tracy", .{
-        .target = config.target,
-        .optimize = config.optimize,
-        .tracy_enable = config.enable_tracy,
-        .tracy_on_demand = config.tracy_on_demand,
-        .tracy_no_exit = config.tracy_no_exit,
-        .tracy_no_system_tracing = false,
-        .tracy_callstack = 6,
-    }).module("tracy");
-    tracy_mod.sanitize_c = .off; // Workaround UB in Tracy.
-
-    const shared_dep = b.dependency("shared", .{
-        .target = config.target,
-        .optimize = config.optimize,
-        .@"long-tests" = config.long_tests,
-        .@"allow-no-sha" = config.allow_no_sha,
-        .@"allow-no-avx512" = config.allow_no_avx512,
-        .@"use-llvm" = config.use_llvm,
-        .@"enable-tracy" = config.enable_tracy,
-        .@"tracy-on-demand" = config.tracy_on_demand,
-        .@"tracy-no-exit" = config.tracy_no_exit,
-    });
-    const std14_mod = shared_dep.module("std14");
-
-    const cli_mod = b.createModule(.{
-        .root_source_file = b.path("src/cli.zig"),
+    const gh_table = b.createModule(.{
+        .root_source_file = blk: {
+            const gen = b.addExecutable(.{
+                .name = "generator_chain",
+                .root_module = b.createModule(.{
+                    .target = b.graph.host,
+                    .optimize = .Debug,
+                    .root_source_file = b.path(
+                        b.fmt("{s}/scripts/generator_chain.zig", .{runtime_dir}),
+                    ),
+                }),
+                .use_llvm = config.use_llvm,
+            });
+            const run = b.addRunArtifact(gen);
+            const generated = run.captureStdOut();
+            const wf = b.addWriteFiles();
+            const table_file = wf.addCopyFile(generated, "table.zig");
+            wf.step.dependOn(&run.step);
+            break :blk table_file;
+        },
         .target = config.target,
         .optimize = config.optimize,
     });
-    cli_mod.addImport("std14", std14_mod);
 
-    // Non-circulating supply pubkeys (pre-decoded at build time)
-    const non_circulating_supply = b.createModule(.{
-        .root_source_file = generateNonCirculatingSupply(b, config.use_llvm),
-    });
-
-    const sqlite_mod = genSqlite(b, config.target, config.optimize, config.use_llvm);
-    const bzip2_mod = genBzip2(b, config.target, config.optimize, config.use_llvm);
-
-    // zig fmt: off
-    const imports: []const Build.Module.Import = &.{
-        .{ .name = "base58",                 .module = base58_mod },
-        .{ .name = "build-options",          .module = build_options.createModule() },
-        .{ .name = "non-circulating-supply", .module = non_circulating_supply },
-        .{ .name = "bzip2",                  .module = bzip2_mod },
-        .{ .name = "httpz",                  .module = httpz_mod },
-        .{ .name = "lsquic",                 .module = lsquic_mod },
-        .{ .name = "prettytable",            .module = pretty_table_mod },
-        .{ .name = "sqlite",                 .module = sqlite_mod },
-        .{ .name = "ssl",                    .module = ssl_mod },
-        .{ .name = "tracy",                  .module = tracy_mod },
-        .{ .name = "webzockets",             .module = webzockets_mod },
-        .{ .name = "xev",                    .module = xev_mod },
-        .{ .name = "zstd",                   .module = zstd_mod },
-    };
-    // zig fmt: on
-
-    const shared_mod = shared_dep.module("shared");
-
-    const imports_with_shared = b.allocator.alloc(
-        Build.Module.Import,
-        imports.len + 1,
-    ) catch |err| std.debug.panic("{}", .{err});
-    @memcpy(imports_with_shared[0..imports.len], imports);
-    imports_with_shared[imports.len] = .{ .name = "shared", .module = shared_mod };
-
-    const memcpy = b.addObject(.{
-        .name = "memcpy",
-        .root_module = b.createModule(.{
-            .target = config.target,
-            .optimize = config.optimize,
-            .root_source_file = b.path("src/memcpy.zig"),
-            .pic = true,
-        }),
-        .use_llvm = config.use_llvm,
-    });
-
-    const sig_mod = b.addModule("sig", .{
-        .root_source_file = b.path("src/sig.zig"),
+    const api = b.createModule(.{
+        .root_source_file = b.path(runtime_dir ++ "/api.zig"),
         .target = config.target,
         .optimize = config.optimize,
-        .imports = imports_with_shared,
+        .imports = &.{},
     });
+    unit_tests.add("runtime_api", api);
 
-    sig_mod.addImport("std14", std14_mod);
-
-    switch (config.ledger_db) {
-        .rocksdb => sig_mod.addImport("rocksdb", rocksdb_mod),
-        .hashmap => {},
-    }
-
-    const sig_exe = b.addExecutable(.{
-        .name = "sig",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/cmd.zig"),
-            .target = config.target,
-            .optimize = config.optimize,
-            .imports = imports_with_shared,
-            .error_tracing = config.error_tracing,
-            .sanitize_thread = config.enable_tsan,
-            .link_libc = true,
-        }),
-        .use_llvm = config.use_llvm,
-    });
-    sig_exe.root_module.addObject(memcpy);
-    sig_exe.root_module.addImport("cli", cli_mod);
-    sig_exe.root_module.addImport("std14", std14_mod);
-
-    // make sure pyroscope's got enough info to profile
-    sig_exe.build_id = .fast;
-
-    switch (config.ledger_db) {
-        .rocksdb => sig_exe.root_module.addImport("rocksdb", rocksdb_mod),
-        .hashmap => {},
-    }
-    addInstallAndRun(b, sig_step, sig_exe, config);
-
-    const unit_tests_exe = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/tests.zig"),
-            .target = config.target,
-            .optimize = config.optimize,
-            .imports = imports_with_shared,
-            .error_tracing = config.error_tracing,
-            .sanitize_thread = config.enable_tsan,
-        }),
-        .filters = config.filters orelse &.{},
-        .use_llvm = config.use_llvm,
-    });
-    unit_tests_exe.root_module.addObject(memcpy);
-    unit_tests_exe.root_module.addImport("cli", cli_mod);
-    unit_tests_exe.root_module.addImport("std14", std14_mod);
-    switch (config.ledger_db) {
-        .rocksdb => unit_tests_exe.root_module.addImport("rocksdb", rocksdb_mod),
-        .hashmap => {},
-    }
-    addInstallAndRun(b, test_step, unit_tests_exe, config);
-
-    const fuzz_exe = b.addExecutable(.{
-        .name = "fuzz",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/fuzz.zig"),
-            .target = config.target,
-            .optimize = config.optimize,
-            .imports = imports_with_shared,
-            .error_tracing = config.error_tracing,
-            .sanitize_thread = config.enable_tsan,
-            .link_libc = true,
-        }),
-        .use_llvm = config.use_llvm,
-    });
-    fuzz_exe.root_module.addObject(memcpy);
-    fuzz_exe.root_module.addImport("cli", cli_mod);
-    fuzz_exe.root_module.addImport("std14", std14_mod);
-    switch (config.ledger_db) {
-        .rocksdb => fuzz_exe.root_module.addImport("rocksdb", rocksdb_mod),
-        .hashmap => {},
-    }
-    addInstallAndRun(b, fuzz_step, fuzz_exe, config);
-
-    const benchmark_exe = b.addExecutable(.{
-        .name = "benchmark",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/benchmarks.zig"),
-            .target = config.target,
-            .optimize = config.optimize,
-            .imports = imports_with_shared,
-            .error_tracing = config.error_tracing,
-            .sanitize_thread = config.enable_tsan,
-            .link_libc = true,
-        }),
-        .use_llvm = config.use_llvm,
-    });
-    benchmark_exe.root_module.addObject(memcpy);
-    benchmark_exe.root_module.addImport("cli", cli_mod);
-    benchmark_exe.root_module.addImport("std14", std14_mod);
-
-    // make sure pyroscope's got enough info to profile
-    benchmark_exe.build_id = .fast;
-
-    switch (config.ledger_db) {
-        .rocksdb => benchmark_exe.root_module.addImport("rocksdb", rocksdb_mod),
-        .hashmap => {},
-    }
-    addInstallAndRun(b, benchmark_step, benchmark_exe, config);
-
-    const geyser_reader_exe = b.addExecutable(.{
-        .name = "geyser",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/geyser/main.zig"),
-            .target = config.target,
-            .optimize = config.optimize,
-            .imports = imports_with_shared,
-            .error_tracing = config.error_tracing,
-            .sanitize_thread = config.enable_tsan,
-        }),
-        .use_llvm = config.use_llvm,
-    });
-    geyser_reader_exe.root_module.addObject(memcpy);
-    geyser_reader_exe.root_module.addImport("sig", sig_mod);
-    geyser_reader_exe.root_module.addImport("cli", cli_mod);
-    geyser_reader_exe.root_module.addImport("std14", std14_mod);
-    addInstallAndRun(b, geyser_reader_step, geyser_reader_exe, config);
-
-    const vm_exe = b.addExecutable(.{
-        .name = "vm",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/vm/main.zig"),
-            .target = config.target,
-            .optimize = config.optimize,
-            .imports = imports_with_shared,
-            .sanitize_thread = config.enable_tsan,
-            .error_tracing = config.error_tracing,
-        }),
-        .use_llvm = config.use_llvm,
-    });
-    vm_exe.root_module.addObject(memcpy);
-    vm_exe.root_module.addImport("sig", sig_mod);
-    vm_exe.root_module.addImport("cli", cli_mod);
-    vm_exe.root_module.addImport("std14", std14_mod);
-    addInstallAndRun(b, vm_step, vm_exe, config);
-
-    const test_send_transactions_exe = b.addExecutable(.{
-        .name = "test_send_transactions",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/transaction_sender/test_send_transactions.zig"),
-            .target = config.target,
-            .optimize = config.optimize,
-            .imports = imports_with_shared,
-            .sanitize_thread = config.enable_tsan,
-            .error_tracing = config.error_tracing,
-            .link_libc = true,
-        }),
-        .use_llvm = config.use_llvm,
-    });
-    test_send_transactions_exe.root_module.addObject(memcpy);
-    test_send_transactions_exe.root_module.addImport("sig", sig_mod);
-    addInstallAndRun(b, test_send_transactions_step, test_send_transactions_exe, config);
-
-    const test_mock_transfers_exe = b.addExecutable(.{
-        .name = "test_mock_transfers",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/transaction_sender/test_mock_transfers.zig"),
-            .target = config.target,
-            .optimize = config.optimize,
-            .imports = imports_with_shared,
-            .sanitize_thread = config.enable_tsan,
-            .error_tracing = config.error_tracing,
-            .link_libc = true,
-        }),
-        .use_llvm = config.use_llvm,
-    });
-    test_mock_transfers_exe.root_module.addObject(memcpy);
-    test_mock_transfers_exe.root_module.addImport("sig", sig_mod);
-    addInstallAndRun(b, test_mock_transfers_step, test_mock_transfers_exe, config);
-
-    // docs for the Sig library
-    const install_sig_docs = b.addInstallDirectory(.{
-        .source_dir = sig_exe.getEmittedDocs(),
-        .install_dir = .prefix,
-        .install_subdir = "docs",
-    });
-    docs_step.dependOn(&install_sig_docs.step);
-}
-
-/// the standard approach for installing and running the executables produced in
-/// this build script.
-fn addInstallAndRun(
-    b: *Build,
-    step: *Build.Step,
-    exe: *Build.Step.Compile,
-    config: Config,
-) void {
-    const install_step = b.getInstallStep();
-    var send_step: ?*Build.Step = null;
-
-    step.dependOn(&exe.step);
-    install_step.dependOn(&exe.step);
-
-    if (config.install or (config.ssh_host != null and config.run)) {
-        const install = b.addInstallArtifact(exe, .{});
-        step.dependOn(&install.step);
-        install_step.dependOn(&install.step);
-
-        if (config.ssh_host) |host| {
-            const install_dir = if (config.ssh_install_dir[0] == '/')
-                b.dupe(config.ssh_install_dir)
-            else
-                b.fmt("{s}/{s}", .{ config.ssh_workdir, config.ssh_install_dir });
-            const send = ssh.addSendArtifact(b, install, host, install_dir, config.use_llvm);
-            send.step.dependOn(&install.step);
-            step.dependOn(&send.step);
-            send_step = &send.step;
-        }
-    }
-
-    if (config.run) {
-        if (config.ssh_host) |host| {
-            const exe_path = b.fmt("{s}/{s}", .{ config.ssh_install_dir, exe.name });
-            const run = ssh.addRemoteCommand(b, host, config.ssh_workdir, exe_path);
-            run.step.dependOn(send_step.?);
-            step.dependOn(&run.step);
-        } else {
-            const run = b.addRunArtifact(exe);
-            run.addArgs(b.args orelse &.{});
-            run.has_side_effects = config.has_side_effects;
-            step.dependOn(&run.step);
-        }
-    }
-}
-
-fn generateNonCirculatingSupply(b: *Build, use_llvm: bool) Build.LazyPath {
-    const gen = b.addExecutable(.{
-        .name = "gen_non_circulating_supply",
-        .root_module = b.createModule(.{
-            .target = b.graph.host,
-            .optimize = .Debug,
-            .root_source_file = b.path("scripts/gen_non_circulating_supply.zig"),
-            .imports = &.{
-                .{
-                    .name = "base58",
-                    .module = b.dependency("base58", .{}).module("base58"),
-                },
-                .{
-                    .name = "non-circulating-supply-zon",
-                    .module = b.createModule(.{
-                        .root_source_file = b.path("src/rpc/non_circulating_supply.zon"),
-                    }),
-                },
-            },
-        }),
-        .use_llvm = use_llvm,
-    });
-    return b.addRunArtifact(gen).addOutputFileArg("non-circulating-supply.zig");
-}
-
-fn genSqlite(
-    b: *Build,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    use_llvm: bool,
-) *Build.Module {
-    const dep = b.dependency("sqlite", .{});
-
-    const lib = b.addLibrary(.{
-        .name = "sqlite",
-        .linkage = .static,
-        .root_module = b.createModule(.{
-            .target = target,
-            .optimize = optimize,
-        }),
-        .use_llvm = use_llvm,
-    });
-    lib.addCSourceFile(.{ .file = dep.path("sqlite3.c") });
-    lib.linkLibC();
-
-    const translate_c = b.addTranslateC(.{
-        .root_source_file = dep.path("sqlite3.h"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    const mod = translate_c.createModule();
-    mod.linkLibrary(lib);
-
-    return mod;
-}
-
-fn genBzip2(
-    b: *Build,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    use_llvm: bool,
-) *Build.Module {
-    const dep = b.dependency("bzip2", .{});
-
-    const lib = b.addLibrary(.{
-        .name = "bz",
-        .linkage = .static,
-        .root_module = b.createModule(.{
-            .target = target,
-            .optimize = optimize,
-        }),
-        .use_llvm = use_llvm,
-    });
-    lib.addCSourceFiles(.{
-        .root = dep.path("."),
-        .files = &.{
-            "bzlib.c",
-            "blocksort.c",
-            "compress.c",
-            "crctable.c",
-            "decompress.c",
-            "huffman.c",
-            "randtable.c",
+    const component = b.addModule("runtime", .{
+        .root_source_file = b.path(runtime_dir ++ "/component.zig"),
+        .target = config.target,
+        .optimize = config.optimize,
+        .imports = &.{
+            .{ .name = "base58", .module = deps.base58 },
+            .{ .name = "blst", .module = deps.blst },
+            .{ .name = "build-options", .module = build_options.createModule() },
+            .{ .name = "lib", .module = lib },
+            .{ .name = "feature-set-id", .module = feature_set_id },
+            .{ .name = "features-zon", .module = features_zon },
+            .{ .name = "poseidon", .module = deps.poseidon },
+            .{ .name = "secp256k1", .module = deps.secp256k1 },
+            .{ .name = "std14", .module = std14_mod },
+            .{ .name = "table", .module = gh_table },
+            .{ .name = "tracy", .module = deps.tracy },
         },
     });
-    lib.linkLibC();
 
-    const translate_c = b.addTranslateC(.{
-        .root_source_file = dep.path("bzlib.h"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    const mod = translate_c.createModule();
-    mod.linkLibrary(lib);
+    unit_tests.add("runtime", component);
 
-    return mod;
+    return .{
+        .api = api,
+        .component = component,
+    };
 }
 
-/// Reference/inspiration: https://kristoff.it/blog/improving-your-zls-experience/
-fn disableEmitBin(b: *Build) void {
-    for (b.install_tls.step.dependencies.items) |*install_step_dep| {
-        const install_artifact = install_step_dep.*.cast(Build.Step.InstallArtifact) orelse continue;
-        const artifact = install_artifact.artifact;
-        install_step_dep.* = &artifact.step;
-        // this will make it so `-fno-emit-bin` is passed, meaning
-        // that the compiler will only go as far as semantically
-        // analyzing the code, without sending it to any backend,
-        // namely the slow-to-compile LLVM.
-        artifact.generated_bin = null;
+fn concatImports(
+    b: *Build,
+    groups: []const []const Build.Module.Import,
+) []const Build.Module.Import {
+    var total: usize = 0;
+    for (groups) |g| total += g.len;
+    const out = b.allocator.alloc(Build.Module.Import, total) catch @panic("oom");
+    var i: usize = 0;
+    for (groups) |g| {
+        @memcpy(out[i..][0..g.len], g);
+        i += g.len;
     }
+    return out;
 }
 
-const ssh = struct {
-    /// SSH into the host and call `zig targets` to determine the compilation
-    /// target for that machine.
-    ///
-    /// This means the build script needs to spawn another process to run a
-    /// system installed SSH binary. This is a temporary hack to get a remote
-    /// target. This will stop working if build.zig is sandboxed.
-    /// > See more: https://github.com/ziglang/zig/issues/14286
-    ///
-    /// Do not depend on this function for any critical build processes. This
-    /// should only be used for optional ease-of-use features that are disabled
-    /// by default.
-    fn getHostTarget(b: *Build, remote_host: []const u8) !Build.ResolvedTarget {
-        const run_result = try std.process.Child.run(.{
-            .allocator = b.allocator,
-            .argv = &.{ "ssh", remote_host, "bash", "--login", "-c", "'zig targets'" },
-            .max_output_bytes = 2 << 20,
-        });
+/// Everything other than Sig itself: developer tools, ci scripts, docs,
+/// integration tests, etc.
+const Tools = struct {
+    shred_stream: Executable,
+    lint: Executable,
+    docs: *Build.Step.InstallDir,
+    black_box_tests: [black_box_test_descriptions.len]Executable,
 
-        if (run_result.term != .Exited or run_result.term.Exited != 0) {
-            std.debug.print(
-                \\command completed unexpectedly with: {any}
-                \\stdout: {s}
-                \\stderr: {s}
-            , .{ run_result.term, run_result.stdout, run_result.stderr });
-            return error.CommandFailed;
-        }
+    const black_box_test_descriptions = [_]struct {
+        name: []const u8,
+        root_source_file: []const u8,
+        services: []const []const u8,
+    }{
+        .{
+            .name = "gossip",
+            .root_source_file = "v2/tests/gossip/main.zig",
+            .services = &.{ "gossip", "telemetry" },
+        },
+        .{
+            .name = "replay",
+            .root_source_file = "v2/tests/replay/main.zig",
+            .services = &.{ "shred_receiver", "replay", "telemetry" },
+        },
+    };
 
-        const Targets = struct {
-            native: struct {
-                triple: []const u8,
-                cpu: struct { name: []const u8 },
-            },
-        };
-
-        const stdoutz = try b.allocator.dupeZ(u8, run_result.stdout);
-        defer b.allocator.free(stdoutz);
-        const targets = try std.zon.parse.fromSlice(
-            Targets,
-            b.allocator,
-            stdoutz,
-            null,
-            .{ .ignore_unknown_fields = true },
-        );
-        defer b.allocator.free(targets.native.triple);
-        defer b.allocator.free(targets.native.cpu.name);
-
-        const query = try Build.parseTargetQuery(.{
-            .arch_os_abi = targets.native.triple,
-            .cpu_features = targets.native.cpu.name,
-        });
-
-        return b.resolveTargetQuery(query);
-    }
-
-    /// add a build step to send the artifact to the remote host using send-file.zig
-    fn addSendArtifact(
+    pub fn init(
         b: *Build,
-        install: *Build.Step.InstallArtifact,
-        host: []const u8,
-        remote_dir: []const u8,
-        use_llvm: bool,
-    ) *Build.Step.Run {
-        const local_path = b.getInstallPath(install.dest_dir.?, install.dest_sub_path);
-        const remote_path = b.pathJoin(&.{ remote_dir, install.dest_sub_path });
-        const exe = sendFileExe(b, use_llvm);
-        const run = b.addRunArtifact(exe);
-        run.addArgs(&.{ local_path, host, remote_path });
-        return run;
-    }
-
-    /// Returns the executable for the `send-file` script, compiled
-    /// exactly once regardless of how many times this is called.
-    fn sendFileExe(b: *Build, use_llvm: bool) *Build.Step.Compile {
-        const static = struct {
-            var exe: ?*Build.Step.Compile = null;
-        };
-
-        if (static.exe == null) {
-            static.exe = b.addExecutable(.{
-                .name = "send-file",
-                .root_module = b.createModule(.{
-                    .root_source_file = b.path("scripts/send-file.zig"),
-                    .target = b.graph.host,
-                    .link_libc = true,
-                }),
-                .use_llvm = use_llvm,
+        config: Config,
+        deps: Dependencies,
+        unit_tests: *UnitTests,
+        sig: Sig,
+    ) Tools {
+        const shred_stream_exe = blk: {
+            const module = b.createModule(.{
+                .root_source_file = b.path("tools/shred_stream.zig"),
+                .target = config.target,
+                .optimize = config.optimize,
+                .imports = &.{
+                    .{ .name = "lib", .module = sig.lib },
+                    .{ .name = "rocksdb", .module = deps.rocksdb },
+                    .{ .name = "rocksdb-c", .module = deps.rocksdb_c },
+                },
             });
+            unit_tests.add("shred-stream", module);
+            const shred_stream_exe: Executable = .init(b, config.exe, .{
+                .name = "shred-stream",
+                .root_module = module,
+                .use_llvm = config.use_llvm,
+            }, .{});
+            break :blk shred_stream_exe;
+        };
+
+        const lint_exe: Executable = .init(b, config.exe, .{
+            .name = "sig-lint",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("tools/lint/main.zig"),
+                .target = b.graph.host,
+                .optimize = .ReleaseSafe,
+            }),
+        }, .{});
+        unit_tests.add("lint-tests", b.createModule(.{
+            .root_source_file = b.path("tools/lint/main.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        }));
+
+        // generates unified docs for all modules
+        // NOTE: have to specify `-Dno-bin` & `-Dno-run` in order to
+        // avoid needing to run codegen for the sig binaries.
+        const install_docs = blk: {
+            const gen_docs_run = b.addRunArtifact(
+                b.addExecutable(.{
+                    .name = "gen-docs-entry",
+                    .root_module = b.createModule(.{
+                        .target = b.graph.host,
+                        .optimize = .Debug,
+                        .root_source_file = b.path("tools/gen_docs_entry.zig"),
+                    }),
+                }),
+            );
+
+            const doc_modules: []const struct { name: []const u8, module: *Build.Module } = &.{
+                .{ .name = "start_service", .module = sig.start_service },
+                .{ .name = "sig_init", .module = sig.main },
+                .{ .name = "lib", .module = sig.lib },
+            };
+
+            inline for (&.{ sig.service_libs, doc_modules }) |module_list| {
+                var str_buf: [1024]u8 = undefined;
+                var services_str = std.io.Writer.fixed(&str_buf);
+
+                for (module_list, 0..) |svc_mod, i| {
+                    const end: []const u8 = if (i == module_list.len - 1) "" else ",";
+                    services_str.print("{s}{s}", .{ svc_mod.name, end }) catch unreachable;
+                }
+
+                gen_docs_run.addArg(str_buf[0..services_str.end]);
+            }
+
+            const docs_mod = b.createModule(.{
+                .target = config.target,
+                .optimize = .Debug,
+                .root_source_file = gen_docs_run.addOutputFileArg("docs.zig"),
+            });
+            for (doc_modules) |mod| docs_mod.addImport(mod.name, mod.module);
+            for (sig.service_libs) |mod| docs_mod.addImport(mod.name, mod.module);
+
+            const docs_obj = b.addTest(.{ .name = "docs", .root_module = docs_mod });
+
+            const install_docs = b.addInstallDirectory(.{
+                .source_dir = docs_obj.getEmittedDocs(),
+                .install_dir = .prefix,
+                .install_subdir = "docs",
+            });
+            break :blk install_docs;
+        };
+
+        var bbt_exes: [black_box_test_descriptions.len]Executable = undefined;
+        for (black_box_test_descriptions, &bbt_exes) |description, *exe| {
+            exe.* = .init(b, config.exe, .{
+                .name = b.fmt("bbt-{s}", .{description.name}),
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path(description.root_source_file),
+                    .target = config.target,
+                    .optimize = config.optimize,
+                    .imports = concatImports(b, &.{
+                        &.{
+                            .{ .name = "lib", .module = sig.lib },
+                            .{ .name = "tracy", .module = deps.tracy },
+                            .{ .name = "services", .module = sig.services_mod },
+                            .{ .name = "topology", .module = sig.topology },
+                        },
+                        // Black-box tests build shared-memory regions the same
+                        // way `main.zig` does, so they need every component's
+                        // public api. Component implementations are pulled in
+                        // via `linkLibrary(service_lib)` below rather than
+                        // module imports.
+                        sig.api_imports,
+                    }),
+                }),
+                .use_llvm = config.use_llvm,
+            }, .{ .dest_dir = test_install_dir });
+
+            for (description.services) |service_name| {
+                exe.compile.linkLibrary(for (sig.service_libs) |entry| {
+                    if (std.mem.eql(u8, entry.name, service_name)) break entry.lib;
+                } else std.debug.panic("unknown service '{s}'", .{service_name}));
+            }
         }
 
-        return static.exe.?;
+        return .{
+            .shred_stream = shred_stream_exe,
+            .lint = lint_exe,
+            .docs = install_docs,
+            .black_box_tests = bbt_exes,
+        };
+    }
+};
+
+/// Consolidated container for unit tests to make it easy to add them, and to
+/// ensure the same configuration is applied to all tests.
+const UnitTests = struct {
+    tests: std.ArrayList(Executable),
+    use_llvm: bool,
+    filters: []const []const u8,
+    build: *Build,
+    exe_config: Executable.Options,
+    kcov: ?struct {
+        save_results_step: *Build.Step,
+        merge_run: *Build.Step.Run,
+    },
+
+    pub fn init(b: *Build, config: Config) UnitTests {
+        return .{
+            .use_llvm = config.use_llvm,
+            .filters = config.filters,
+            .build = b,
+            .tests = .{},
+            .exe_config = config.exe,
+            .kcov = if (config.use_kcov) kcov: {
+                const merge_run = b.addSystemCommand(&.{ "kcov", "--merge" });
+                const cache_dir = merge_run.addOutputDirectoryArg("merged");
+                const save_results = b.addInstallDirectory(.{
+                    .source_dir = cache_dir,
+                    .install_dir = .prefix,
+                    .install_subdir = "kcov",
+                });
+                save_results.step.dependOn(&merge_run.step);
+                break :kcov .{
+                    .save_results_step = &save_results.step,
+                    .merge_run = merge_run,
+                };
+            } else null,
+        };
     }
 
-    /// add a build step to run a command on a remote host using ssh.
-    fn addRemoteCommand(
+    pub fn add(self: *UnitTests, name: []const u8, module: *Build.Module) void {
+        const unit_test = self.build.addTest(.{
+            .name = name,
+            .root_module = module,
+            .use_llvm = self.use_llvm,
+            .filters = self.filters,
+        });
+        self.tests.append(self.build.allocator, .{
+            .compile = unit_test,
+            .install = if (self.exe_config.install) self.build.addInstallArtifact(unit_test, .{
+                .dest_sub_path = name,
+                .dest_dir = test_install_dir,
+            }) else null,
+            .run = if (self.exe_config.run) self.build.addRunArtifact(unit_test) else null,
+        }) catch @panic("oom");
+        if (self.kcov) |kcov| {
+            const kcov_run = self.build.addSystemCommand(&.{
+                "kcov",
+                "--collect-only",
+                "--include-pattern=v2/",
+                "--exclude-pattern=.cache",
+            });
+            const output_dir = kcov_run.addOutputDirectoryArg("output");
+            kcov_run.addArtifactArg(unit_test);
+            kcov_run.has_side_effects = true;
+            kcov.merge_run.step.dependOn(&kcov_run.step);
+            kcov.merge_run.addDirectoryArg(output_dir);
+        }
+    }
+};
+
+/// All executables can be compiled, installed, and run. It keeps things simple
+/// to construct all the steps together and let callers decide when to use them.
+///
+/// Install and run are optional because we don't want to create them
+/// unconditionally. Doing so forces the associated compile step to enter
+/// codegen, even if those steps are not actually depended on by any other step.
+const Executable = struct {
+    compile: *Build.Step.Compile,
+    install: ?*Build.Step.InstallArtifact,
+    run: ?*Build.Step.Run,
+
+    const Options = struct { install: bool, run: bool };
+
+    pub fn init(
         b: *Build,
-        host: []const u8,
-        workdir: []const u8,
-        executable_path: []const u8,
-    ) *Build.Step.Run {
-        var ssh_cd_exe: std.ArrayListUnmanaged([]const u8) = .empty;
+        options: Options,
+        exe_options: Build.ExecutableOptions,
+        install_options: Build.Step.InstallArtifact.Options,
+    ) Executable {
+        const exe = b.addExecutable(exe_options);
+        return .{
+            .compile = exe,
+            .install = if (options.install) b.addInstallArtifact(exe, install_options) else null,
+            .run = if (options.run) blk: {
+                const run = b.addRunArtifact(exe);
+                run.addArgs(b.args orelse &.{});
+                break :blk run;
+            } else null,
+        };
+    }
 
-        ssh_cd_exe.appendSlice(
-            b.graph.arena,
-            &.{ "ssh", "-t", host, b.fmt("cd {s}; {s}", .{ workdir, executable_path }) },
-        ) catch |e| std.debug.panic("{}", .{e});
+    pub fn addToStep(self: *const Executable, step: *Build.Step) void {
+        step.dependOn(&self.compile.step);
+        if (self.run) |run| step.dependOn(&run.step);
+        if (self.install) |install| step.dependOn(&install.step);
+    }
 
-        if (b.args) |args| ssh_cd_exe.appendSlice(
-            b.graph.arena,
-            args,
-        ) catch |e| std.debug.panic("{}", .{e});
-
-        return b.addSystemCommand(ssh_cd_exe.items);
+    /// The step to depend on when you want this executable installed (or only
+    /// compiled, when using -Dno-bin), but not executed under any circumstances.
+    pub fn installStep(self: *const Executable) *Build.Step {
+        return if (self.install) |install| &install.step else &self.compile.step;
     }
 };

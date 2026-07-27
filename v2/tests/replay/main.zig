@@ -1,9 +1,13 @@
 const std = @import("std");
 const lib = @import("lib");
 const services = @import("services");
+const topology = @import("topology");
+
+const accounts_db = @import("accounts_db_api");
+const shred = @import("shred_api");
+const replay = @import("replay_api");
 
 const tel = lib.telemetry;
-const topology = lib.topology;
 const fixture_loader = @import("fixtures/load.zig");
 
 const Region = topology.Region;
@@ -28,11 +32,11 @@ pub fn main() !void {
 
     var selected_packets = fixture.packets;
 
-    const leader_kp: lib.gossip.KeyPair = .fromKeyPair(try .generateDeterministic(@splat(3)));
+    const leader_kp: lib.crypto.KeyPair = .fromKeyPair(try .generateDeterministic(@splat(3)));
     try resignPackets(&selected_packets, &leader_kp);
-    const first_shred = try lib.shred.Shred.fromPacketChecked(&selected_packets[0]);
+    const first_shred = try shred.Shred.fromPacketChecked(&selected_packets[0]);
 
-    var shred_recv_config: Region(lib.shred.RecvConfig) = try .simple();
+    var shred_recv_config: Region(shred.RecvConfig) = try .simple();
     shred_recv_config.ptr().leader_schedule.base_slot = fixture.manifest.slot;
     for (&shred_recv_config.ptr().leader_schedule.leaders) |*schedule_leader| {
         schedule_leader.* = leader_kp.pubkey;
@@ -43,20 +47,20 @@ pub fn main() !void {
     var net_to_shred: Region(lib.net.Pair) = try .sized(net_to_shred_params.size());
     net_to_shred_params.init(net_to_shred.ptr());
 
-    var shreds_to_replay: Region(lib.shred.DeshredRing) = try .simple();
+    var shreds_to_replay: Region(shred.DeshredRing) = try .simple();
     shreds_to_replay.ptr().init();
 
-    var transaction_pool: Region(lib.replay.TransactionPool) =
-        try .sized(lib.replay.TransactionPool.size());
+    var transaction_pool: Region(replay.TransactionPool) =
+        try .sized(replay.TransactionPool.size());
     transaction_pool.ptr().init();
 
-    var block_pool: Region(lib.replay.BlockPool) = try .sized(lib.replay.BlockPool.size());
+    var block_pool: Region(replay.BlockPool) = try .sized(replay.BlockPool.size());
     block_pool.ptr().init();
 
-    var exec_req_response_region: Region(lib.replay.ExecReqResponse) = try .simple();
+    var exec_req_response_region: Region(replay.ExecReqResponse) = try .simple();
     exec_req_response_region.ptr().init();
 
-    var snapshot_metadata: Region(lib.accounts_db.RuntimeMetadata) = try .simple();
+    var snapshot_metadata: Region(accounts_db.RuntimeMetadata) = try .simple();
     snapshot_metadata.ptr().init();
     snapshot_metadata.ptr().block_id = first_shred.chainedMerkleRoot().*;
     {
@@ -68,13 +72,13 @@ pub fn main() !void {
     }
     snapshot_metadata.ptr().populateSlot(fixture.manifest.shreds.parent_slot);
 
-    var replay_scratch: Region([lib.replay.scratch_buffer_size]u8) = try .simple();
+    var replay_scratch: Region([replay.scratch_buffer_size]u8) = try .simple();
 
-    var account_pool: Region(lib.accounts_db.AccountPool) =
-        try .sized(@sizeOf(lib.accounts_db.AccountPool) + account_pool_memory);
+    var account_pool: Region(lib.AccountPool) =
+        try .sized(@sizeOf(lib.AccountPool) + account_pool_memory);
     account_pool.ptr().init(account_pool_memory);
 
-    var account_lookups: Region(lib.accounts_db.AccountLookups) = try .simple();
+    var account_lookups: Region(accounts_db.AccountLookups) = try .simple();
     account_lookups.ptr().init();
 
     const telemetry_params: tel.Region.InitParams = .{
@@ -96,14 +100,14 @@ pub fn main() !void {
 
     const exec_req_response = try exec_req_response_region.finish().memfd.mmapStaticSize(
         .rw,
-        lib.replay.ExecReqResponse,
+        replay.ExecReqResponse,
         .{},
     );
     defer std.posix.munmap(@ptrCast(exec_req_response));
 
     const account_lookup_pair = try account_lookups.finish().memfd.mmapStaticSize(
         .rw,
-        lib.accounts_db.AccountLookups,
+        accounts_db.AccountLookups,
         .{},
     );
     defer std.posix.munmap(@ptrCast(account_lookup_pair));
@@ -111,7 +115,7 @@ pub fn main() !void {
     const account_pool_init = account_pool.finish();
     const account_pool_buf = try account_pool_init.memfd.mmapRaw(.rw, .{});
     defer std.posix.munmap(account_pool_buf);
-    const account_pool_ptr: *lib.accounts_db.AccountPool = @ptrCast(account_pool_buf.ptr);
+    const account_pool_ptr: *lib.AccountPool = @ptrCast(account_pool_buf.ptr);
 
     var spawned: topology.Children(Topology) = undefined;
     try spawned.spawn(.sandboxed, .{
@@ -173,23 +177,23 @@ pub fn main() !void {
 
 fn resignPackets(
     packets: *[fixture_loader.FEC_SHRED_COUNT]lib.net.Packet,
-    keypair: *const lib.gossip.KeyPair,
+    keypair: *const lib.crypto.KeyPair,
 ) !void {
     for (packets) |*packet| {
-        const shred = try lib.shred.Shred.fromPacketChecked(packet);
+        const a_shred = try shred.Shred.fromPacketChecked(packet);
         var merkle_root: lib.solana.Hash = undefined;
-        try shred.merkleRoot(&merkle_root);
+        try a_shred.merkleRoot(&merkle_root);
 
-        const mutable_shred = lib.shred.Shred.fromBufferUncheckedMut(&packet.data);
+        const mutable_shred = shred.Shred.fromBufferUncheckedMut(&packet.data);
         mutable_shred.signature = try keypair.sign(&merkle_root.data);
     }
 }
 
 fn waitForReplayOutput(
     spawned: *topology.Children(Topology),
-    exec_req_response: *lib.replay.ExecReqResponse,
-    account_lookups: *lib.accounts_db.AccountLookups,
-    account_pool: *lib.accounts_db.AccountPool,
+    exec_req_response: *replay.ExecReqResponse,
+    account_lookups: *accounts_db.AccountLookups,
+    account_pool: *lib.AccountPool,
     expected_transaction_count: u32,
     output_timeout_ns: u64,
     idle_timeout_ns: u64,
@@ -229,9 +233,9 @@ fn waitForReplayOutput(
 }
 
 fn serviceAccountLookups(
-    account_pool: *lib.accounts_db.AccountPool,
-    lookup_reader: *@FieldType(lib.accounts_db.AccountLookups, "in").Iterator(.reader),
-    lookup_writer: *@FieldType(lib.accounts_db.AccountLookups, "out").Iterator(.writer),
+    account_pool: *lib.AccountPool,
+    lookup_reader: *@FieldType(accounts_db.AccountLookups, "in").Iterator(.reader),
+    lookup_writer: *@FieldType(accounts_db.AccountLookups, "out").Iterator(.writer),
 ) !void {
     var handled_lookup = false;
     while (lookup_reader.next()) |request| {
@@ -249,9 +253,9 @@ fn serviceAccountLookups(
 }
 
 fn createMockAccount(
-    account_pool: *lib.accounts_db.AccountPool,
+    account_pool: *lib.AccountPool,
     pubkey: *const lib.solana.Pubkey,
-) !lib.accounts_db.AccountPool.AccountRef {
+) !lib.AccountPool.AccountRef {
     const account_ref = try account_pool.alloc(0);
     const account = account_pool.getAccount(account_ref);
     account.* = .{
@@ -266,7 +270,7 @@ fn createMockAccount(
 }
 
 fn drainReplayRequests(
-    request_reader: *lib.replay.ExecReqResponse.RequestRing.Iterator(.reader),
+    request_reader: *replay.ExecReqResponse.RequestRing.Iterator(.reader),
     count: *u32,
     expected_transaction_count: u32,
 ) !void {
