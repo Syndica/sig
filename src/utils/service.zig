@@ -176,6 +176,7 @@ pub fn runService(
         }
     };
 
+    // adding 7 for the "thread " prefix
     var buf: [7 + std.Thread.max_name_len]u8 = undefined;
     const name = maybe_name orelse try std.fmt.bufPrint(
         &buf,
