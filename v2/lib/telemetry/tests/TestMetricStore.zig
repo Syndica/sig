@@ -31,7 +31,7 @@ pub fn init(allocator: std.mem.Allocator, options: Options) !TestMetricStore {
     );
     @memset(memory, 0);
 
-    const region_ptr: *tel.Region = @ptrCast(memory);
+    const region_ptr: *tel.Region = @ptrCast(memory.ptr);
     region_ptr.init(params);
     return .{
         .allocator = allocator,
@@ -44,13 +44,13 @@ pub fn appendMetrics(
     comptime Metrics: type,
     comptime fields_config: tel.metric.FieldsConfig(Metrics),
 ) Metrics {
-    const region: *tel.Region = @ptrCast(self.memory);
+    const region: *tel.Region = @ptrCast(self.memory.ptr);
     return region.metricAppender().appendFields(Metrics, fields_config);
 }
 
 /// Clears all registrations and invalidates previously returned metric handles.
 pub fn reset(self: *TestMetricStore) void {
-    const region: *tel.Region = @ptrCast(self.memory);
+    const region: *tel.Region = @ptrCast(self.memory.ptr);
     const info = region.info;
     @memset(self.memory, 0);
     region.init(.{
