@@ -139,7 +139,7 @@ pub fn produceOrderedLedgerPackets(
         if (isCanceled(connection)) break;
 
         const slot = parseSlotKey(entry[0].data) catch |err| {
-            std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
+            std.log.err("invalid {s} key length: {d}", .{ agave_cf_meta, entry[0].data.len });
             return err;
         };
         if (cfg.pastSlotRange(slot, direction)) break;
@@ -244,7 +244,7 @@ pub fn produceSlotShuffledPackets(
         if (isCanceled(connection)) break;
 
         const slot = parseSlotKey(entry[0].data) catch |err| {
-            std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
+            std.log.err("invalid {s} key length: {d}", .{ agave_cf_meta, entry[0].data.len });
             return err;
         };
         if (cfg.pastEndSlot(slot)) break;
@@ -456,8 +456,8 @@ pub fn produceSlotShreds(
         if (isCanceled(connection)) break;
 
         const key = parseShredKey(entry[0].data) catch |err| {
-            std.debug.print(
-                "invalid {s} key length: {d}\n",
+            std.log.err(
+                "invalid {s} key length: {d}",
                 .{ kind.columnFamilyName(), entry[0].data.len },
             );
             return err;
