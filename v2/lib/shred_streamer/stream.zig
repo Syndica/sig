@@ -5,6 +5,7 @@
 //! tool (StreamPacket ring via UDP).
 
 const std = @import("std");
+const lib = @import("lib");
 const rocks = @import("rocksdb");
 const config = @import("config.zig");
 const blockstore_mod = @import("agave_blockstore.zig");
@@ -19,6 +20,7 @@ const RefSchedule = config.RefSchedule;
 const SelectedShredPlan = config.SelectedShredPlan;
 const SelectedShredAction = config.SelectedShredAction;
 const ProducerStats = config.ProducerStats;
+const Connection = lib.runner.Connection;
 
 const AgaveBlockstore = blockstore_mod.AgaveBlockstore;
 
@@ -37,6 +39,13 @@ pub const buildSelectedShredPlan = plan_mod.buildSelectedShredPlan;
 pub const buildOrderedRefSchedule = plan_mod.buildOrderedRefSchedule;
 pub const collectSlotShredRefs = plan_mod.collectSlotShredRefs;
 
+/// Non-throwing cancellation check used in loop conditions and post-loop
+/// flush guards. Returns true if the runner has signalled cancellation.
+inline fn isCanceled(connection: Connection) bool {
+    connection.activity.checkCanceled() catch return true;
+    return false;
+}
+
 pub fn produceLedgerPackets(
     allocator: Allocator,
     blockstore: *const AgaveBlockstore,
@@ -44,7 +53,7 @@ pub fn produceLedgerPackets(
     selected_shreds: ?*const SelectedShredPlan,
     writer: anytype,
     packet_ctx: anytype,
-    cancel: anytype,
+    connection: Connection,
 ) !ProducerStats {
     return switch (cfg.test_mode) {
         .linear => produceOrderedLedgerPackets(
@@ -53,7 +62,7 @@ pub fn produceLedgerPackets(
             .forward,
             writer,
             packet_ctx,
-            cancel,
+            connection,
         ),
         .reverse => produceOrderedLedgerPackets(
             blockstore,
@@ -61,7 +70,7 @@ pub fn produceLedgerPackets(
             .reverse,
             writer,
             packet_ctx,
-            cancel,
+            connection,
         ),
         .shuffle_global => produceGlobalShuffledRefSchedule(
             allocator,
@@ -69,7 +78,7 @@ pub fn produceLedgerPackets(
             cfg,
             writer,
             packet_ctx,
-            cancel,
+            connection,
         ),
         .shuffle_slot => produceSlotShuffledPackets(
             allocator,
@@ -77,7 +86,7 @@ pub fn produceLedgerPackets(
             cfg,
             writer,
             packet_ctx,
-            cancel,
+            connection,
         ),
         .drop, .late, .duplicate, .corrupt => produceSelectedShredSchedule(
             blockstore,
@@ -85,7 +94,7 @@ pub fn produceLedgerPackets(
             cfg,
             writer,
             packet_ctx,
-            cancel,
+            connection,
         ),
     };
 }
@@ -96,7 +105,7 @@ pub fn produceOrderedLedgerPackets(
     comptime direction: config.Direction,
     writer: anytype,
     packet_ctx: anytype,
-    cancel: anytype,
+    connection: Connection,
 ) !ProducerStats {
     var stats: ProducerStats = .{};
     var unpublished_packets: usize = 0;
@@ -127,7 +136,7 @@ pub fn produceOrderedLedgerPackets(
     defer if (err_data) |err| err.deinit();
 
     while (try slot_iter.next(&err_data)) |entry| {
-        if (cancel.isCanceled()) break;
+        if (isCanceled(connection)) break;
 
         const slot = parseSlotKey(entry[0].data) catch |err| {
             std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
@@ -145,7 +154,7 @@ pub fn produceOrderedLedgerPackets(
                 rocks_direction,
                 writer,
                 packet_ctx,
-                cancel,
+                connection,
                 &unpublished_packets,
                 &stats,
             );
@@ -157,7 +166,7 @@ pub fn produceOrderedLedgerPackets(
             rocks_direction,
             writer,
             packet_ctx,
-            cancel,
+            connection,
             &unpublished_packets,
             &stats,
         );
@@ -169,14 +178,14 @@ pub fn produceOrderedLedgerPackets(
                 rocks_direction,
                 writer,
                 packet_ctx,
-                cancel,
+                connection,
                 &unpublished_packets,
                 &stats,
             );
         }
     }
 
-    if (unpublished_packets != 0 and !cancel.isCanceled()) {
+    if (unpublished_packets != 0 and !isCanceled(connection)) {
         writer.markUsed();
     }
 
@@ -189,15 +198,15 @@ pub fn produceGlobalShuffledRefSchedule(
     cfg: Config,
     writer: anytype,
     packet_ctx: anytype,
-    cancel: anytype,
+    connection: Connection,
 ) !ProducerStats {
-    var schedule = try buildOrderedRefSchedule(allocator, blockstore, cfg, cancel);
+    var schedule = try buildOrderedRefSchedule(allocator, blockstore, cfg, connection);
     defer schedule.deinit(allocator);
 
     var prng = std.Random.DefaultPrng.init(cfg.seed.?);
     prng.random().shuffleWithIndex(ShredRef, schedule.refs.items, u64);
 
-    return produceRefSchedule(blockstore, &schedule, &.{}, writer, packet_ctx, cancel);
+    return produceRefSchedule(blockstore, &schedule, &.{}, writer, packet_ctx, connection);
 }
 
 pub fn produceSlotShuffledPackets(
@@ -206,7 +215,7 @@ pub fn produceSlotShuffledPackets(
     cfg: Config,
     writer: anytype,
     packet_ctx: anytype,
-    cancel: anytype,
+    connection: Connection,
 ) !ProducerStats {
     var stats: ProducerStats = .{};
     var unpublished_packets: usize = 0;
@@ -232,7 +241,7 @@ pub fn produceSlotShuffledPackets(
     defer refs.deinit(allocator);
 
     while (try slot_iter.next(&err_data)) |entry| {
-        if (cancel.isCanceled()) break;
+        if (isCanceled(connection)) break;
 
         const slot = parseSlotKey(entry[0].data) catch |err| {
             std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
@@ -242,9 +251,9 @@ pub fn produceSlotShuffledPackets(
         if (!cfg.slotSelected(slot)) continue;
 
         refs.clearRetainingCapacity();
-        try collectSlotShredRefs(allocator, blockstore, slot, .data, &refs, cancel);
+        try collectSlotShredRefs(allocator, blockstore, slot, .data, &refs, connection);
         if (blockstore.has_code_shred) {
-            try collectSlotShredRefs(allocator, blockstore, slot, .code, &refs, cancel);
+            try collectSlotShredRefs(allocator, blockstore, slot, .code, &refs, connection);
         }
 
         prng.random().shuffleWithIndex(ShredRef, refs.items, u64);
@@ -252,20 +261,20 @@ pub fn produceSlotShuffledPackets(
         stats.recordSlot();
 
         for (refs.items) |shred_ref| {
-            if (cancel.isCanceled()) break;
+            if (isCanceled(connection)) break;
             try produceShredByRef(
                 blockstore,
                 shred_ref,
                 writer,
                 packet_ctx,
-                cancel,
+                connection,
                 &unpublished_packets,
                 &stats,
             );
         }
     }
 
-    if (unpublished_packets != 0 and !cancel.isCanceled()) {
+    if (unpublished_packets != 0 and !isCanceled(connection)) {
         writer.markUsed();
     }
 
@@ -278,7 +287,7 @@ pub fn produceSelectedShredSchedule(
     cfg: Config,
     writer: anytype,
     packet_ctx: anytype,
-    cancel: anytype,
+    connection: Connection,
 ) !ProducerStats {
     const refs = selected_shreds.schedule.refs.items;
     const selected_ref_indices = selected_shreds.selected_ref_indices.items;
@@ -290,7 +299,7 @@ pub fn produceSelectedShredSchedule(
     var selected_cursor: usize = 0;
 
     for (refs, 0..) |shred_ref, ref_index| {
-        if (cancel.isCanceled()) break;
+        if (isCanceled(connection)) break;
 
         const is_selected = consumeSelectedRefIndex(
             selected_ref_indices,
@@ -305,7 +314,7 @@ pub fn produceSelectedShredSchedule(
                 shred_ref,
                 writer,
                 packet_ctx,
-                cancel,
+                connection,
                 &unpublished_packets,
                 &stats,
             );
@@ -320,7 +329,7 @@ pub fn produceSelectedShredSchedule(
                     shred_ref,
                     writer,
                     packet_ctx,
-                    cancel,
+                    connection,
                     &unpublished_packets,
                     &stats,
                 );
@@ -329,7 +338,7 @@ pub fn produceSelectedShredSchedule(
                     shred_ref,
                     writer,
                     packet_ctx,
-                    cancel,
+                    connection,
                     &unpublished_packets,
                     &stats,
                 );
@@ -341,34 +350,34 @@ pub fn produceSelectedShredSchedule(
                 prng.random(),
                 writer,
                 packet_ctx,
-                cancel,
+                connection,
                 &unpublished_packets,
                 &stats,
             ),
         }
     }
 
-    if (unpublished_packets != 0 and !cancel.isCanceled()) {
+    if (unpublished_packets != 0 and !isCanceled(connection)) {
         writer.markUsed();
         unpublished_packets = 0;
     }
 
     if (cfg.test_mode == .late) {
         for (selected_ref_indices) |index| {
-            if (cancel.isCanceled()) break;
+            if (isCanceled(connection)) break;
             const shred_ref = refs[index];
             try produceShredByRef(
                 blockstore,
                 shred_ref,
                 writer,
                 packet_ctx,
-                cancel,
+                connection,
                 &unpublished_packets,
                 &stats,
             );
         }
 
-        if (unpublished_packets != 0 and !cancel.isCanceled()) {
+        if (unpublished_packets != 0 and !isCanceled(connection)) {
             writer.markUsed();
         }
     }
@@ -382,14 +391,14 @@ pub fn produceRefSchedule(
     skip_indices: []const usize,
     writer: anytype,
     packet_ctx: anytype,
-    cancel: anytype,
+    connection: Connection,
 ) !ProducerStats {
     var stats: ProducerStats = .{ .slots = schedule.selected_slots };
     var unpublished_packets: usize = 0;
     var skip_cursor: usize = 0;
 
     for (schedule.refs.items, 0..) |shred_ref, index| {
-        if (cancel.isCanceled()) break;
+        if (isCanceled(connection)) break;
         if (skip_cursor < skip_indices.len and skip_indices[skip_cursor] == index) {
             skip_cursor += 1;
             continue;
@@ -400,13 +409,13 @@ pub fn produceRefSchedule(
             shred_ref,
             writer,
             packet_ctx,
-            cancel,
+            connection,
             &unpublished_packets,
             &stats,
         );
     }
 
-    if (unpublished_packets != 0 and !cancel.isCanceled()) {
+    if (unpublished_packets != 0 and !isCanceled(connection)) {
         writer.markUsed();
     }
 
@@ -420,7 +429,7 @@ pub fn produceSlotShreds(
     comptime direction: rocks.IteratorDirection,
     writer: anytype,
     packet_ctx: anytype,
-    cancel: anytype,
+    connection: Connection,
     unpublished_packets: *usize,
     stats: *ProducerStats,
 ) !void {
@@ -444,7 +453,7 @@ pub fn produceSlotShreds(
     defer if (err_data) |err| err.deinit();
 
     while (try shred_iter.next(&err_data)) |entry| {
-        if (cancel.isCanceled()) break;
+        if (isCanceled(connection)) break;
 
         const key = parseShredKey(entry[0].data) catch |err| {
             std.debug.print(
@@ -459,7 +468,7 @@ pub fn produceSlotShreds(
             kind,
             writer,
             packet_ctx,
-            cancel,
+            connection,
             unpublished_packets,
             stats,
         );
@@ -471,7 +480,7 @@ pub fn produceShredByRef(
     shred_ref: ShredRef,
     writer: anytype,
     packet_ctx: anytype,
-    cancel: anytype,
+    connection: Connection,
     unpublished_packets: *usize,
     stats: *ProducerStats,
 ) !void {
@@ -494,7 +503,7 @@ pub fn produceShredByRef(
         shred_ref.kind,
         writer,
         packet_ctx,
-        cancel,
+        connection,
         unpublished_packets,
         stats,
     );
@@ -507,7 +516,7 @@ pub fn produceCorruptShredByRef(
     random: std.Random,
     writer: anytype,
     packet_ctx: anytype,
-    cancel: anytype,
+    connection: Connection,
     unpublished_packets: *usize,
     stats: *ProducerStats,
 ) !void {
@@ -537,7 +546,7 @@ pub fn produceCorruptShredByRef(
         shred_ref.kind,
         writer,
         packet_ctx,
-        cancel,
+        connection,
         unpublished_packets,
         stats,
     );
@@ -546,22 +555,23 @@ pub fn produceCorruptShredByRef(
 /// Core packet publishing function — generic over the ring writer type.
 ///
 /// `writer` must support `.peek()`, `.next()`, `.markUsed()`.
-/// `packet_ctx` must support `.waitForSlot(writer, unpublished_packets)` which
-/// returns a pointer to the ring element, and `.fillPacket(element, data)`.
-/// `cancel` must support `.isCanceled()`.
+/// `packet_ctx` must support `.acquirePacketSlot(writer, unpublished_packets)`
+/// which returns a pointer to the ring element, and `.fillPacket(element, data)`.
+/// The `connection` parameter is accepted for signature symmetry but is not
+/// used here — `acquirePacketSlot` is responsible for cooperative cancellation.
 pub fn publishPacket(
     packet_data: []const u8,
     kind: ShredKind,
     writer: anytype,
     packet_ctx: anytype,
-    _: anytype, // cancel — not needed here; waitForSlot handles cancellation
+    _: Connection,
     unpublished_packets: *usize,
     stats: *ProducerStats,
 ) !void {
     if (packet_data.len > max_shred_packet_bytes) return error.ShredPacketTooLarge;
 
     const Ctx = @TypeOf(packet_ctx.*);
-    const out = try Ctx.waitForSlot(
+    const out = try Ctx.acquirePacketSlot(
         packet_ctx,
         writer,
         unpublished_packets,

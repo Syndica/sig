@@ -9,8 +9,6 @@ const rocks_c = @import("rocksdb-c");
 const config = @import("config.zig");
 
 const Allocator = std.mem.Allocator;
-const Slot = config.Slot;
-const ShredKind = config.ShredKind;
 
 const agave_cf_default = config.agave_cf_default;
 const agave_cf_meta = config.agave_cf_meta;
@@ -23,9 +21,12 @@ pub const AgaveBlockstore = struct {
     column_families: []const rocks.ColumnFamily,
     has_code_shred: bool,
 
-    pub fn open(allocator: Allocator, ledger_path: []const u8) !AgaveBlockstore {
-        const rocksdb_path = try resolveRocksDbPath(allocator, ledger_path);
-        errdefer allocator.free(rocksdb_path);
+    /// Opens a RocksDB blockstore at `rocksdb_path`. The caller is responsible
+    /// for resolving the path (e.g. via `resolveRocksDbPath`) — `rocksdb_path`
+    /// must already point at the actual RocksDB directory.
+    pub fn open(allocator: Allocator, rocksdb_path: []const u8) !AgaveBlockstore {
+        const owned_path = try allocator.dupe(u8, rocksdb_path);
+        errdefer allocator.free(owned_path);
 
         var available_cfs = try listColumnFamilies(allocator, rocksdb_path);
         defer available_cfs.deinit(allocator);
@@ -35,8 +36,18 @@ pub const AgaveBlockstore = struct {
         try requireColumnFamily(&available_cfs, agave_cf_data_shred);
 
         const has_code_shred = available_cfs.contains(agave_cf_code_shred);
-        const cfs = try columnFamilyDescriptions(allocator, has_code_shred);
-        defer allocator.free(cfs);
+
+        // Stack-allocated column family descriptions — no heap allocation needed.
+        var cfs_buf: [4]rocks.ColumnFamilyDescription = undefined;
+        const cfs = cfs: {
+            const count: usize = if (has_code_shred) 4 else 3;
+            const slice = cfs_buf[0..count];
+            slice[0] = .{ .name = agave_cf_default };
+            slice[1] = .{ .name = agave_cf_meta };
+            slice[2] = .{ .name = agave_cf_data_shred };
+            if (has_code_shred) slice[3] = .{ .name = agave_cf_code_shred };
+            break :cfs slice;
+        };
 
         const rocksdb_path_z = try allocator.dupeZ(u8, rocksdb_path);
         defer allocator.free(rocksdb_path_z);
@@ -44,25 +55,17 @@ pub const AgaveBlockstore = struct {
         var err_data: ?rocks.Data = null;
         defer if (err_data) |err| err.deinit();
 
-        const db, const opened_cfs = rocks.DB.open(
+        const db, const opened_cfs = try rocks.DB.open(
             allocator,
             rocksdb_path_z,
             .{},
             cfs,
             true,
             &err_data,
-        ) catch |err| {
-            if (err_data) |rocks_err| {
-                std.debug.print(
-                    "failed to open RocksDB at {s}: {s}\n",
-                    .{ rocksdb_path, rocks_err.data },
-                );
-            }
-            return err;
-        };
+        );
 
         return .{
-            .rocksdb_path = rocksdb_path,
+            .rocksdb_path = owned_path,
             .db = db,
             .column_families = opened_cfs,
             .has_code_shred = has_code_shred,
@@ -74,7 +77,10 @@ pub const AgaveBlockstore = struct {
         allocator.free(self.rocksdb_path);
     }
 
-    pub fn columnFamily(self: *const AgaveBlockstore, cf_name: []const u8) !rocks.ColumnFamilyHandle {
+    pub fn columnFamily(
+        self: *const AgaveBlockstore,
+        cf_name: []const u8,
+    ) !rocks.ColumnFamilyHandle {
         for (self.column_families) |cf| {
             if (std.mem.eql(u8, cf.name, cf_name)) return cf.handle;
         }
@@ -86,6 +92,14 @@ pub const AgaveBlockstore = struct {
 // RocksDB helpers
 // ---------------------------------------------------------------------------
 
+/// Resolves a ledger path to the actual RocksDB directory.
+///
+/// Agave ledger layouts have RocksDB either at `<ledger>/rocksdb` (nested) or
+/// directly at `<ledger>`. This tries the nested path first, then falls back
+/// to the direct path. Returns an owned string that must be freed by the
+/// caller.
+///
+/// Callers should invoke this before calling `AgaveBlockstore.open`.
 pub fn resolveRocksDbPath(allocator: Allocator, ledger_path: []const u8) ![]const u8 {
     const nested_rocksdb_path = try std.fs.path.join(allocator, &.{ ledger_path, "rocksdb" });
 
@@ -98,21 +112,20 @@ pub fn resolveRocksDbPath(allocator: Allocator, ledger_path: []const u8) ![]cons
         if (stat.kind == .directory) return try allocator.dupe(u8, ledger_path);
     } else |_| {}
 
-    std.debug.print("ledger path does not exist or is not a directory: {s}\n", .{ledger_path});
     return error.InvalidLedgerPath;
 }
 
 const ColumnFamilyNames = struct {
-    names: []const []const u8,
+    names: []const [*:0]const u8,
 
     fn deinit(self: *ColumnFamilyNames, allocator: Allocator) void {
-        for (self.names) |cf_name| allocator.free(cf_name);
+        for (self.names) |cf_name| allocator.free(std.mem.span(cf_name));
         allocator.free(self.names);
     }
 
     fn contains(self: *const ColumnFamilyNames, cf_name: []const u8) bool {
         for (self.names) |candidate| {
-            if (std.mem.eql(u8, candidate, cf_name)) return true;
+            if (std.mem.eql(u8, std.mem.span(candidate), cf_name)) return true;
         }
         return false;
     }
@@ -135,24 +148,21 @@ fn listColumnFamilies(allocator: Allocator, rocksdb_path: []const u8) !ColumnFam
     );
     if (err_ptr) |err_z| {
         defer rocks_c.rocksdb_free(err_z);
-        std.debug.print(
-            "failed to list RocksDB column families at {s}: {s}\n",
-            .{ rocksdb_path, std.mem.span(err_z) },
-        );
         return error.RocksDBListColumnFamilies;
     }
     if (raw_names == null) return error.RocksDBListColumnFamilies;
     defer rocks_c.rocksdb_list_column_families_destroy(raw_names, count);
 
-    const names = try allocator.alloc([]const u8, count);
+    const names = try allocator.alloc([*:0]const u8, count);
     var names_len: usize = 0;
     errdefer {
-        for (names[0..names_len]) |n| allocator.free(n);
+        for (names[0..names_len]) |n| allocator.free(std.mem.span(n));
         allocator.free(names);
     }
 
     for (names, raw_names[0..count]) |*n, raw_name| {
-        n.* = try allocator.dupe(u8, std.mem.span(raw_name));
+        const duped = try allocator.dupeZ(u8, std.mem.span(raw_name));
+        n.* = duped.ptr;
         names_len += 1;
     }
 
@@ -161,21 +171,7 @@ fn listColumnFamilies(allocator: Allocator, rocksdb_path: []const u8) !ColumnFam
 
 fn requireColumnFamily(available_cfs: *const ColumnFamilyNames, cf_name: []const u8) !void {
     if (available_cfs.contains(cf_name)) return;
-    std.debug.print("missing required column family: {s}\n", .{cf_name});
     return error.MissingRequiredColumnFamily;
-}
-
-fn columnFamilyDescriptions(
-    allocator: Allocator,
-    has_code_shred: bool,
-) Allocator.Error![]const rocks.ColumnFamilyDescription {
-    const count: usize = if (has_code_shred) 4 else 3;
-    const cfs = try allocator.alloc(rocks.ColumnFamilyDescription, count);
-    cfs[0] = .{ .name = agave_cf_default };
-    cfs[1] = .{ .name = agave_cf_meta };
-    cfs[2] = .{ .name = agave_cf_data_shred };
-    if (has_code_shred) cfs[3] = .{ .name = agave_cf_code_shred };
-    return cfs;
 }
 
 // ---------------------------------------------------------------------------

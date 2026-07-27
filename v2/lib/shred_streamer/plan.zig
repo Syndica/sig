@@ -1,6 +1,7 @@
 //! Plan builders for selected-shred test modes (drop, late, duplicate, corrupt).
 
 const std = @import("std");
+const lib = @import("lib");
 const rocks = @import("rocksdb");
 const config = @import("config.zig");
 const blockstore_mod = @import("agave_blockstore.zig");
@@ -12,6 +13,7 @@ const ShredRef = config.ShredRef;
 const RefSchedule = config.RefSchedule;
 const SelectedShredPlan = config.SelectedShredPlan;
 const Config = config.Config;
+const Connection = lib.runner.Connection;
 
 const AgaveBlockstore = blockstore_mod.AgaveBlockstore;
 
@@ -25,20 +27,20 @@ const chooseSelectedRefIndices = config.chooseSelectedRefIndices;
 
 pub fn buildSelectedShredPlan(
     allocator: Allocator,
-    stdout: *std.Io.Writer,
+    err_writer: *std.Io.Writer,
     blockstore: *const AgaveBlockstore,
     cfg: Config,
-    cancel: anytype,
+    connection: Connection,
 ) !SelectedShredPlan {
     var plan: SelectedShredPlan = .{
-        .schedule = try buildOrderedRefSchedule(allocator, blockstore, cfg, cancel),
+        .schedule = try buildOrderedRefSchedule(allocator, blockstore, cfg, connection),
     };
     errdefer plan.deinit(allocator);
 
     plan.eligible_shreds = countEligibleShreds(plan.schedule.refs.items, cfg.shred_kind);
     plan.selected_ref_indices = try chooseSelectedRefIndices(
         allocator,
-        stdout,
+        err_writer,
         plan.schedule.refs.items,
         cfg.shred_kind,
         cfg.selected_count,
@@ -51,7 +53,7 @@ pub fn buildOrderedRefSchedule(
     allocator: Allocator,
     blockstore: *const AgaveBlockstore,
     cfg: Config,
-    cancel: anytype,
+    connection: Connection,
 ) !RefSchedule {
     var schedule: RefSchedule = .{};
     errdefer schedule.deinit(allocator);
@@ -73,19 +75,23 @@ pub fn buildOrderedRefSchedule(
     defer if (err_data) |err| err.deinit();
 
     while (try slot_iter.next(&err_data)) |entry| {
-        if (cancel.isCanceled()) break;
+        connection.activity.checkCanceled() catch break;
 
-        const slot = parseSlotKey(entry[0].data) catch |err| {
-            std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
-            return err;
-        };
+        const slot = try parseSlotKey(entry[0].data);
         if (cfg.pastEndSlot(slot)) break;
         if (!cfg.slotSelected(slot)) continue;
 
         schedule.selected_slots += 1;
-        try collectSlotShredRefs(allocator, blockstore, slot, .data, &schedule.refs, cancel);
+        try collectSlotShredRefs(allocator, blockstore, slot, .data, &schedule.refs, connection);
         if (blockstore.has_code_shred) {
-            try collectSlotShredRefs(allocator, blockstore, slot, .code, &schedule.refs, cancel);
+            try collectSlotShredRefs(
+                allocator,
+                blockstore,
+                slot,
+                .code,
+                &schedule.refs,
+                connection,
+            );
         }
     }
 
@@ -98,7 +104,7 @@ pub fn collectSlotShredRefs(
     slot: Slot,
     kind: ShredKind,
     refs: *std.ArrayList(ShredRef),
-    cancel: anytype,
+    connection: Connection,
 ) !void {
     var start_key_buf: [16]u8 = undefined;
     writeShredKey(&start_key_buf, .{ .slot = slot, .index = 0 });
@@ -114,15 +120,9 @@ pub fn collectSlotShredRefs(
     defer if (err_data) |err| err.deinit();
 
     while (try shred_iter.next(&err_data)) |entry| {
-        if (cancel.isCanceled()) break;
+        connection.activity.checkCanceled() catch break;
 
-        const key = parseShredKey(entry[0].data) catch |err| {
-            std.debug.print(
-                "invalid {s} key length: {d}\n",
-                .{ kind.columnFamilyName(), entry[0].data.len },
-            );
-            return err;
-        };
+        const key = try parseShredKey(entry[0].data);
         if (key.slot != slot) break;
         try refs.append(
             allocator,

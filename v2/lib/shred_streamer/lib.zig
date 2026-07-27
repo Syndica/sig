@@ -9,6 +9,7 @@ pub const stream = @import("stream.zig");
 
 // Convenience re-exports
 pub const AgaveBlockstore = agave_blockstore.AgaveBlockstore;
+pub const resolveRocksDbPath = agave_blockstore.resolveRocksDbPath;
 pub const Config = config.Config;
 pub const TestMode = config.TestMode;
 pub const ProducerStats = config.ProducerStats;
