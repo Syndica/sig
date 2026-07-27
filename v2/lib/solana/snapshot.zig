@@ -89,21 +89,83 @@ fn readBool(r: anytype) !bool {
 }
 
 pub const StatusCache = extern struct {
-    /// Placeholder — the deserialized contents are currently discarded. Kept as an
-    /// extern struct so it can live inline in `SnapshotMetadata` and be persisted
-    /// alongside the `Manifest` in the rooted DB blob.
-    _reserved: u8 = 0,
+    slot_deltas: RelativeSlice(SlotDelta),
 
-    pub fn read(fba: *std.heap.FixedBufferAllocator, r: anytype) !StatusCache {
+    pub fn read(fba_state: *std.heap.FixedBufferAllocator, r: anytype) !StatusCache {
         const zone = tracy.Zone.init(@src(), .{ .name = "StatusCache.read" });
         defer zone.deinit();
 
-        _ = fba;
+        const fba = fba_state.allocator();
 
-        try StatusCacheHeader.skip(r);
+        const sc_header: StatusCacheHeader = try .init(r);
+        var sd_iter = sc_header.slot_deltas.iterator();
 
-        return .{};
+        const slot_deltas = try fba.alloc(
+            SlotDelta,
+            sd_iter.slot_deltas_remaining,
+        );
+        for (slot_deltas) |*slot_delta| {
+            const sd_header = try sd_iter.next(r) orelse unreachable;
+            var sme_iter = sd_header.status_map.iterator();
+
+            const status_map_entries = try fba.alloc(
+                StatusMap.Entry,
+                sme_iter.status_map_entries_remaining,
+            );
+            for (status_map_entries) |*sme| {
+                const sm_header = try sme_iter.next(r) orelse unreachable;
+                var sle_iter = sm_header.status_list.iterator();
+
+                const status_entries = try fba.alloc(
+                    StatusCacheHeader.Status,
+                    sle_iter.status_entries_remaining,
+                );
+                for (status_entries) |*status_entry| {
+                    status_entry.* = try sle_iter.next(r) orelse unreachable;
+                }
+                if (try sle_iter.next(r) != null) unreachable;
+
+                if (sm_header.key_index != 0) return error.InvalidKeyIndex;
+                const key_index: u0 = @intCast(sm_header.key_index);
+
+                sme.* = .{
+                    .hash = sm_header.hash,
+                    .key_index = key_index,
+                    .status_list = .fromSlice(fba_state.buffer.ptr, status_entries),
+                };
+            }
+            if (try sme_iter.next(r) != null) unreachable;
+
+            slot_delta.* = .{
+                .slot = sd_header.slot,
+                .is_root = sd_header.is_root,
+                .status_map = .{
+                    .entries = .fromSlice(fba_state.buffer.ptr, status_map_entries),
+                },
+            };
+        }
+        if (try sd_iter.next(r) != null) unreachable;
+
+        return .{
+            .slot_deltas = .fromSlice(fba_state.buffer.ptr, slot_deltas),
+        };
     }
+
+    pub const SlotDelta = extern struct {
+        slot: Slot,
+        is_root: bool,
+        status_map: StatusMap,
+    };
+
+    pub const StatusMap = extern struct {
+        entries: RelativeSlice(Entry),
+
+        pub const Entry = extern struct {
+            hash: lib.solana.Hash,
+            key_index: u0,
+            status_list: RelativeSlice(StatusCacheHeader.Status),
+        };
+    };
 };
 
 pub const StatusCacheHeader = struct {
