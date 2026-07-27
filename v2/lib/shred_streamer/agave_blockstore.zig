@@ -74,6 +74,7 @@ pub const AgaveBlockstore = struct {
 
     pub fn deinit(self: *AgaveBlockstore, allocator: Allocator) void {
         self.db.deinit();
+        allocator.free(self.column_families);
         allocator.free(self.rocksdb_path);
     }
 
