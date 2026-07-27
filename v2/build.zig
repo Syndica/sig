@@ -297,6 +297,7 @@ const Sig = struct {
             .target = config.target,
             .optimize = config.optimize,
             .imports = &.{
+                .{ .name = "lib", .module = lib },
                 .{ .name = "rocksdb", .module = deps.rocksdb },
                 .{ .name = "rocksdb-c", .module = deps.rocksdb_c },
             },
@@ -487,6 +488,12 @@ const Tools = struct {
                 exe.compile.linkLibrary(for (sig.service_libs) |entry| {
                     if (std.mem.eql(u8, entry.name, service_name)) break entry.lib;
                 } else std.debug.panic("unknown service '{s}'", .{service_name}));
+            }
+
+            // replay-offline needs to parse shred-streamer CLI args in the
+            // topology launcher, so it needs access to the shred_stream module.
+            if (std.mem.eql(u8, desc.name, "replay-offline")) {
+                exe.compile.root_module.addImport("shred_stream", sig.shred_stream);
             }
         }
 
