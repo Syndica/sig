@@ -5,12 +5,39 @@ const ipc = @import("ipc.zig");
 const util = @import("util.zig");
 const accounts_db = @import("accounts_db.zig");
 
+const VersionedTransaction = solana.transaction.VersionedTransaction;
+
 // This is a bit large currently because of the unrooted store
 pub const scratch_buffer_size = 3 * 1024 * 1024 * 1024;
 
-pub const TransactionPool = collections.SharedPool([1232]u8, 10_000);
+pub const TransactionPool = collections.SharedPool(TransactionRecord, 10_000);
 
 pub const BlockPool = collections.SharedPool(Node, 1024);
+
+/// Transaction bytes plus their validated wire layout.
+///
+/// This struct itself is safe to share between processes. Consumers can construct transient
+/// `VersionedTransaction.View`s locally, avoiding a re-parse of the transaction bytes.
+///
+/// The `Layout` struct is a collection of offsets and lengths into the `payload` array.
+/// The `payload` array is a copy of the transaction bytes in wire format.
+pub const TransactionRecord = extern struct {
+    layout: VersionedTransaction.Layout,
+    payload: [VersionedTransaction.MAX_BYTES]u8,
+
+    pub fn bytes(self: *const TransactionRecord) []const u8 {
+        const payload_len: usize = self.layout.payload_len;
+        std.debug.assert(payload_len <= self.payload.len);
+        return self.payload[0..payload_len];
+    }
+
+    pub fn view(self: *const TransactionRecord) VersionedTransaction.View {
+        return .{
+            .layout = &self.layout,
+            .payload = self.bytes(),
+        };
+    }
+};
 
 /// NOTE: this is what we use for referencing blocks. This is equivalent to the block's index
 /// our block mem pool. If you want what Agave calls the "Block ID", this is the merkle root of
