@@ -251,7 +251,13 @@ test "periodic push follows simulated wallclock" {
     const allocator = std.testing.allocator;
     const start_ms = 1_000_000;
 
-    var test_node = try TestNode.init(allocator, start_ms, @splat(1), local_address, &.{entrypoint});
+    var test_node = try TestNode.init(
+        allocator,
+        start_ms,
+        @splat(1),
+        local_address,
+        &.{entrypoint},
+    );
     defer test_node.deinit();
 
     // Establish the initial deadlines and discard bootstrap output.
