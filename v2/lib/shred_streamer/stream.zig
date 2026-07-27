@@ -15,6 +15,7 @@ const Allocator = std.mem.Allocator;
 const Slot = config.Slot;
 const Config = config.Config;
 const ShredKind = config.ShredKind;
+const ShredKey = config.ShredKey;
 const ShredRef = config.ShredRef;
 const RefSchedule = config.RefSchedule;
 const SelectedShredPlan = config.SelectedShredPlan;
@@ -466,6 +467,7 @@ pub fn produceSlotShreds(
         try publishPacket(
             entry[1].data,
             kind,
+            key,
             writer,
             packet_ctx,
             connection,
@@ -501,6 +503,7 @@ pub fn produceShredByRef(
     try publishPacket(
         packet.data,
         shred_ref.kind,
+        shred_ref.key(),
         writer,
         packet_ctx,
         connection,
@@ -544,6 +547,7 @@ pub fn produceCorruptShredByRef(
     try publishPacket(
         corrupt_data,
         shred_ref.kind,
+        shred_ref.key(),
         writer,
         packet_ctx,
         connection,
@@ -555,13 +559,19 @@ pub fn produceCorruptShredByRef(
 /// Core packet publishing function — generic over the ring writer type.
 ///
 /// `writer` must support `.peek()`, `.next()`, `.markUsed()`.
-/// `packet_ctx` must support `.acquirePacketSlot(writer, unpublished_packets)`
-/// which returns a pointer to the ring element, and `.fillPacket(element, data)`.
+/// `packet_ctx` must support:
+///   - `.acquirePacketSlot(writer, unpublished_packets)` returning a pointer
+///     to the ring element.
+///   - `.fillPacket(element, data, kind, key)` to populate the element with
+///     the packet bytes and any transport-specific metadata (kind/key are
+///     provided so CLI-style consumers can attach shred metadata; contexts
+///     that don't need them can ignore).
 /// The `connection` parameter is accepted for signature symmetry but is not
 /// used here — `acquirePacketSlot` is responsible for cooperative cancellation.
 pub fn publishPacket(
     packet_data: []const u8,
     kind: ShredKind,
+    key: ShredKey,
     writer: anytype,
     packet_ctx: anytype,
     _: Connection,
@@ -577,7 +587,7 @@ pub fn publishPacket(
         unpublished_packets,
     );
 
-    Ctx.fillPacket(out, packet_data);
+    Ctx.fillPacket(packet_ctx, out, packet_data, kind, key);
 
     _ = writer.next();
     stats.recordPacket(kind, packet_data.len);

@@ -78,21 +78,11 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
         .dry_run = ipc.dry_run,
     };
 
-    // Reject modes and flags that don't make sense in the in-topology service.
+    // --dry-run is meaningful for the standalone CLI (which prints stats to
+    // stdout); it has no analogue in the in-topology service.
     if (config.dry_run) {
         logger.err().logf("--dry-run is not supported in the in-topology service", .{});
         return error.InvalidArguments;
-    }
-    switch (config.test_mode) {
-        .linear => {},
-        else => {
-            logger.err().logf(
-                "test mode '{s}' is not supported in the in-topology service " ++
-                    "(only 'linear' is supported)",
-                .{config.test_mode.modeName()},
-            );
-            return error.UnsupportedTestMode;
-        },
     }
 
     logger.info().logf("streaming from ledger: {s}", .{config.ledger});
@@ -105,6 +95,24 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
         return err;
     };
     defer blockstore.deinit(gpa);
+
+    // Build a selected-shred plan for modes that need one (drop/late/duplicate/corrupt).
+    // Linear/reverse/shuffle-* don't touch this plan and receive null.
+    var selected_shreds: ?shred_stream.config.SelectedShredPlan = null;
+    defer if (selected_shreds) |*plan| plan.deinit(gpa);
+    if (config.test_mode.usesSelectedShreds()) {
+        var discard: std.Io.Writer.Discarding = .init(&.{});
+        selected_shreds = shred_stream.buildSelectedShredPlan(
+            gpa,
+            &discard.writer,
+            &blockstore,
+            config,
+            runner,
+        ) catch |err| {
+            logger.err().logf("failed to build selected-shred plan: {}", .{err});
+            return err;
+        };
+    }
 
     // Stream shreds to ring using generic producers.
     var writer = rw.shred_pair.recv.get(.writer);
@@ -122,7 +130,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
         gpa,
         &blockstore,
         config,
-        null, // no selected shreds — .linear mode doesn't need them
+        if (selected_shreds) |*plan| plan else null,
         &writer,
         &ctx,
         runner,
@@ -161,7 +169,13 @@ const ServicePacketContext = struct {
     base_instant: ?std.time.Instant = null,
     next_send_offset_ns: u64 = 0,
 
-    pub fn fillPacket(out: *lib.net.Packet, packet_data: []const u8) void {
+    pub fn fillPacket(
+        _: *ServicePacketContext,
+        out: *lib.net.Packet,
+        packet_data: []const u8,
+        _: shred_stream.config.ShredKind,
+        _: shred_stream.config.ShredKey,
+    ) void {
         out.len = @intCast(packet_data.len);
         @memcpy(out.data[0..packet_data.len], packet_data);
         out.addr = .initIp4(.{ 0, 0, 0, 0 }, 0);
