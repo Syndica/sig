@@ -178,18 +178,19 @@ pub const G2 = struct {
         };
     }
 
-    fn isWellFormed(p: G2) !void {
-        // zero-point always well formed, no matter what X and Y are
-        if (p.isZero()) return;
+    const Validate = enum { curve_only, curve_and_subgroup };
 
-        // Check that y^2 = x^3 + b
+    // y^2 == x^3 + b. Callers guard the point at infinity before this.
+    fn isOnCurve(p: G2) bool {
         const y2 = p.y.sq();
         const x3b = p.x.sq().mul(p.x).add(Fp2.constants.twist_b_mont);
-        if (!y2.eql(x3b)) return error.NotWellFormed;
+        return y2.eql(x3b);
+    }
 
-        // G2 does *not* have prime order, so we need to perform a secondary subgroup membership check.
-        // https://eprint.iacr.org/2022/348, Sec 3.1.
-        // [r]P == 0 <==> [x+1]P + ψ([x]P) + ψ²([x]P) = ψ³([2x]P)
+    // G2 has a large cofactor, so an on-curve point need not lie in the prime-order
+    // (order-r) subgroup. https://eprint.iacr.org/2022/348, Sec 3.1.
+    // [r]P == 0 <==> [x+1]P + ψ([x]P) + ψ²([x]P) = ψ³([2x]P)
+    fn isInSubgroup(p: G2) bool {
         const xp: G2 = shared.mulScalar(p, Fp.constants.x);
 
         const psi = xp.frob();
@@ -198,10 +199,10 @@ pub const G2 = struct {
         const l = shared.addMixed(xp, p).add(psi).add(psi2);
         const r = shared.dbl(psi2.frob());
 
-        if (!l.eql(r)) return error.NotWellFormed;
+        return l.eql(r);
     }
 
-    fn fromBytes(input: *const [128]u8, endian: std.builtin.Endian) !G2 {
+    fn fromBytes(input: *const [128]u8, endian: std.builtin.Endian, validate: Validate) !G2 {
         var g2: G2 = try .fromBytesInternal(input, endian);
         if (g2.isZero()) return g2;
 
@@ -209,7 +210,15 @@ pub const G2 = struct {
         g2.y.toMont();
         g2.z = .one;
 
-        try g2.isWellFormed();
+        if (!g2.isOnCurve()) return error.NotWellFormed;
+
+        // V0 G2 addition is curve-only (SIMD-0302); mul and pairing require subgroup
+        // membership. Agave gates the same way (into_affine_unchecked vs TryFrom<PodG2>),
+        // as does Firedancer (g2_frombytes_check_eq_only vs _check_subgroup).
+        // https://github.com/anza-xyz/solana-sdk/blob/e7db3b9d9f61efcb8fa2547f7371a4be2b6942d7/bn254/src/lib.rs#L241-L261
+        if (validate == .curve_and_subgroup and !g2.isInSubgroup()) {
+            return error.NotWellFormed;
+        }
 
         return g2;
     }
@@ -370,14 +379,14 @@ pub const G2 = struct {
     }
 
     pub fn addSyscall(out: *[128]u8, input: *const [256]u8, endian: std.builtin.Endian) !void {
-        const x: G2 = try .fromBytes(input[0..128], endian);
-        const y: G2 = try .fromBytes(input[128..256], endian);
+        const x: G2 = try .fromBytes(input[0..128], endian, .curve_only);
+        const y: G2 = try .fromBytes(input[128..256], endian, .curve_only);
         const result = shared.affineAdd(x, y);
         result.toBytes(out, endian);
     }
 
     pub fn mulSyscall(out: *[128]u8, input: *const [160]u8, endian: std.builtin.Endian) !void {
-        const a: G2 = try .fromBytes(input[0..128], endian);
+        const a: G2 = try .fromBytes(input[0..128], endian, .curve_and_subgroup);
         const scalar = input[128..][0..32].*;
         const b: u256 = @bitCast(switch (endian) {
             .big => Fp.byteSwap(scalar),
@@ -551,7 +560,7 @@ pub fn pairingSyscall(out: *[32]u8, input: []const u8, endian: std.builtin.Endia
     var r: Fp12 = .one;
     for (0..num_elements) |i| {
         const a: G1 = try .fromBytes(input[i * 192 ..][0..64], endian);
-        const b: G2 = try .fromBytes(input[i * 192 ..][64..][0..128], endian);
+        const b: G2 = try .fromBytes(input[i * 192 ..][64..][0..128], endian, .curve_and_subgroup);
 
         // Skip any pair where either A or B are points at infinity.
         if (a.isZero() or b.isZero()) continue;

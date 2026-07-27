@@ -579,6 +579,39 @@ test "edge cases" {
     }
 }
 
+// Regression for #1713: ALT_BN128_G2_ADD must accept any on-curve G2 point. G2 has a
+// large cofactor, so add decodes curve-only (Agave into_affine_unchecked, Firedancer
+// g2_frombytes_check_eq_only); only mul and pairing check subgroup membership. P below is
+// on curve but outside the order-r subgroup (the same point test "edge cases" rejects).
+test "G2 addition accepts on-curve non-subgroup point" {
+    const point_hex =
+        "0000000000000000000000000000000000000000000000000000000000000001" ++
+        "0000000000000000000000000000000000000000000000000000000000000000" ++
+        "28a7a81c6bf2a75dc9f0125bb581747e9e6b33fc3b2710a2309cef97a3163c65" ++
+        "23712136978ed49faf2120ca4f7f71cfd4e7b46ffa0ea89edbc94ddc59238e9f";
+
+    var point: [128]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&point, point_hex);
+
+    // Control: multiplication requires subgroup membership and rejects P.
+    // The scalar is 1, encoded big-endian.
+    var mul_input: [160]u8 = @splat(0);
+    @memcpy(mul_input[0..128], &point);
+    mul_input[159] = 1;
+    var mul_output: [128]u8 = undefined;
+    try std.testing.expectError(
+        error.NotWellFormed,
+        G2.mulSyscall(&mul_output, &mul_input, .big),
+    );
+
+    // V0 addition only requires P to be on curve. P + infinity must return P.
+    var add_input: [256]u8 = @splat(0);
+    @memcpy(add_input[0..128], &point);
+    var add_output: [128]u8 = undefined;
+    try G2.addSyscall(&add_output, &add_input, .big);
+    try std.testing.expectEqualSlices(u8, &point, &add_output);
+}
+
 fn bswapG1(bytes: *[64]u8) void {
     const c0: u256 = @bitCast(bytes[0..32].*);
     const c1: u256 = @bitCast(bytes[32..64].*);
