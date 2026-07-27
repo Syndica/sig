@@ -157,6 +157,11 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         }
 
         if (!did_work) {
+            // TODO: `pollRead()` can return `null` while io_uring reads are
+            // still in flight (making progress under the hood). Rooted does
+            // not currently expose an in-flight counter, so we may signal
+            // idle prematurely. Fixing this requires exposing io_inflight
+            // (or an equivalent) from Rooted's public API.
             try runner.activity.signalIdleSpinning();
         }
     }
