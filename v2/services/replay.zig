@@ -150,6 +150,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         rw.block_pool,
         exec_states,
         blockhash_states,
+        exec_registry,
     );
 
     // After the slot is supposedly populated, start shred recv (eventually Repair service) on it.
@@ -328,6 +329,7 @@ fn bootstrap(
     block_pool: *lib.replay.BlockPool,
     exec_states: *BlockExecStates,
     blockhash_states: *BlockHashStates,
+    exec_registry: *replay.ExecutionRegistry,
 ) !lib.replay.BlockRef {
     // Acquire barrier — pairs with accounts_db's `populateSlot` (Release). Once
     // this returns, `snapshot_metadata.manifest` / `.status_cache` / all their
@@ -335,7 +337,10 @@ fn bootstrap(
     const root_slot = try snapshot_metadata.getSlotBlocking(runner);
     logger.info().logf("got the root slot from the snapshot: {}", .{root_slot});
 
+    const snapshot_metadata_memory = snapshot_metadata.getMemory();
     const manifest = &snapshot_metadata.manifest;
+    const status_cache = &snapshot_metadata.status_cache;
+
     const bhq = &manifest.bank_fields.blockhash_queue;
     const hashes = bhq.hashes[0..bhq.hashes_count];
 
@@ -396,10 +401,42 @@ fn bootstrap(
     };
     std.debug.assert(exec_states[root_block.index()].?.finished());
 
-    logger.info().logf(
-        "finished bootstrapping replay at slot {} (block_id={f})",
-        .{ root_slot, block_id },
-    );
+    const bhq_view: lib.replay.BlockhashQueueView = .{
+        .latest_block = root_block,
+        .hashes = blockhash_states,
+        .pool = block_pool,
+    };
+
+    for (status_cache.slot_deltas.sliceConst(snapshot_metadata_memory.ptr)) |slot_delta| {
+        _ = slot_delta.is_root; // TODO: do we need to consider this information?
+
+        // find the block ref for the associated slot on which the transactions were executed
+        const block_ref = block_ref: {
+            var current_ref_opt: replay.BlockRef.Optional = .init(root_block);
+            while (current_ref_opt.opt()) |current_ref| {
+                const current = current_ref.constPtr(block_pool);
+                current_ref_opt = current.child;
+                if (current.slot.opt() == slot_delta.slot) break :block_ref current_ref;
+            }
+            logger.err()
+                .field("slot", &slot_delta.slot)
+                .log("Couldn't find a block ref for slot.");
+            return error.MissingBlockRef;
+        };
+
+        for (slot_delta.status_map.entries.sliceConst(snapshot_metadata_memory.ptr)) |sme| {
+            const recent_block_ref_opt = bhq_view.getBlockRefIfValidForAge(&sme.hash, 300);
+            const recent_block_ref = recent_block_ref_opt.opt() orelse return error.InvalidSnapshot;
+            for (sme.status_list.sliceConst(snapshot_metadata_memory.ptr)) |status| {
+                try exec_registry.insert(recent_block_ref, block_ref, &status.key_slice);
+            }
+        }
+    }
+
+    logger.info()
+        .field("slot", &root_slot)
+        .field("block_id", &block_id)
+        .log("finished bootstrapping replay");
 
     return root_block;
 }
@@ -1748,9 +1785,13 @@ test "bootstrap creates root block and chains blockhashes" {
     defer allocator.destroy(blockhash_states);
     @memset(blockhash_states, null);
 
+    const exec_reg = try allocator.create(replay.ExecutionRegistry);
+    defer allocator.destroy(exec_reg);
+    exec_reg.init();
+
     const logger = tel.Logger("main").noop;
 
-    _ = try bootstrap(logger, runner, &metadata, &forest, pool, exec_states, blockhash_states);
+    _ = try bootstrap(logger, runner, &metadata, &forest, pool, exec_states, blockhash_states, exec_reg);
 
     // find root in pool
     var root_opt: ?lib.replay.BlockRef = null;
