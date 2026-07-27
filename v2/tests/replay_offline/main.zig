@@ -201,8 +201,19 @@ pub fn main() !void {
             return error.InvalidArguments;
         }
 
+        // Resolve `--ledger` to the actual rocksdb directory before writing it
+        // into IPC. The service just opens whatever path we give it.
+        const rocksdb_path = resolveRocksDbPath(allocator, stream_cfg.ledger) catch |err| {
+            try stderr_writer.interface.print(
+                "error: invalid ledger path '{s}': {s}\n",
+                .{ stream_cfg.ledger, @errorName(err) },
+            );
+            return err;
+        };
+        defer allocator.free(rocksdb_path);
+
         streamer_config.ptr().populate(
-            stream_cfg.ledger,
+            rocksdb_path,
             stream_cfg.start_slot,
             stream_cfg.end_slot,
             stream_cfg.rate_hz,
@@ -392,4 +403,25 @@ pub fn main() !void {
 
     children.cancel();
     try children.wait(5 * std.time.ns_per_s);
+}
+
+/// Resolves a ledger path to the actual RocksDB directory.
+///
+/// Agave ledger layouts have RocksDB either at `<ledger>/rocksdb` (nested) or
+/// directly at `<ledger>`. This tries the nested path first, then falls back
+/// to the direct path. Returns an owned string that must be freed by the
+/// caller.
+fn resolveRocksDbPath(allocator: std.mem.Allocator, ledger_path: []const u8) ![]const u8 {
+    const nested_rocksdb_path = try std.fs.path.join(allocator, &.{ ledger_path, "rocksdb" });
+
+    if (std.fs.cwd().statFile(nested_rocksdb_path)) |stat| {
+        if (stat.kind == .directory) return nested_rocksdb_path;
+    } else |_| {}
+    allocator.free(nested_rocksdb_path);
+
+    if (std.fs.cwd().statFile(ledger_path)) |stat| {
+        if (stat.kind == .directory) return try allocator.dupe(u8, ledger_path);
+    } else |_| {}
+
+    return error.InvalidLedgerPath;
 }

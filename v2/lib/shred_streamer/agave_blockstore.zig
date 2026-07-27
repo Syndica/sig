@@ -22,8 +22,8 @@ pub const AgaveBlockstore = struct {
     has_code_shred: bool,
 
     /// Opens a RocksDB blockstore at `rocksdb_path`. The caller is responsible
-    /// for resolving the path (e.g. via `resolveRocksDbPath`) — `rocksdb_path`
-    /// must already point at the actual RocksDB directory.
+    /// for resolving the path so that `rocksdb_path` points directly at the
+    /// actual RocksDB directory (not the enclosing Agave ledger directory).
     pub fn open(allocator: Allocator, rocksdb_path: []const u8) !AgaveBlockstore {
         const owned_path = try allocator.dupe(u8, rocksdb_path);
         errdefer allocator.free(owned_path);
@@ -92,29 +92,6 @@ pub const AgaveBlockstore = struct {
 // RocksDB helpers
 // ---------------------------------------------------------------------------
 
-/// Resolves a ledger path to the actual RocksDB directory.
-///
-/// Agave ledger layouts have RocksDB either at `<ledger>/rocksdb` (nested) or
-/// directly at `<ledger>`. This tries the nested path first, then falls back
-/// to the direct path. Returns an owned string that must be freed by the
-/// caller.
-///
-/// Callers should invoke this before calling `AgaveBlockstore.open`.
-pub fn resolveRocksDbPath(allocator: Allocator, ledger_path: []const u8) ![]const u8 {
-    const nested_rocksdb_path = try std.fs.path.join(allocator, &.{ ledger_path, "rocksdb" });
-
-    if (std.fs.cwd().statFile(nested_rocksdb_path)) |stat| {
-        if (stat.kind == .directory) return nested_rocksdb_path;
-    } else |_| {}
-    allocator.free(nested_rocksdb_path);
-
-    if (std.fs.cwd().statFile(ledger_path)) |stat| {
-        if (stat.kind == .directory) return try allocator.dupe(u8, ledger_path);
-    } else |_| {}
-
-    return error.InvalidLedgerPath;
-}
-
 const ColumnFamilyNames = struct {
     names: []const [*:0]const u8,
 
@@ -172,33 +149,4 @@ fn listColumnFamilies(allocator: Allocator, rocksdb_path: []const u8) !ColumnFam
 fn requireColumnFamily(available_cfs: *const ColumnFamilyNames, cf_name: []const u8) !void {
     if (available_cfs.contains(cf_name)) return;
     return error.MissingRequiredColumnFamily;
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-test "resolve rocksdb path" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.makePath("ledger/rocksdb");
-
-    const ledger_path = try tmp.dir.realpathAlloc(std.testing.allocator, "ledger");
-    defer std.testing.allocator.free(ledger_path);
-
-    const rocksdb_path = try resolveRocksDbPath(std.testing.allocator, ledger_path);
-    defer std.testing.allocator.free(rocksdb_path);
-
-    const expected = try tmp.dir.realpathAlloc(std.testing.allocator, "ledger/rocksdb");
-    defer std.testing.allocator.free(expected);
-
-    try std.testing.expectEqualStrings(expected, rocksdb_path);
-
-    const direct_path = try tmp.dir.realpathAlloc(std.testing.allocator, "ledger/rocksdb");
-    defer std.testing.allocator.free(direct_path);
-
-    const direct_rocksdb_path = try resolveRocksDbPath(std.testing.allocator, direct_path);
-    defer std.testing.allocator.free(direct_rocksdb_path);
-
-    try std.testing.expectEqualStrings(direct_path, direct_rocksdb_path);
 }

@@ -98,15 +98,10 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     logger.info().logf("streaming from ledger: {s}", .{config.ledger});
     logger.info().logf("test mode: {s}", .{config.test_mode.modeName()});
 
-    // Open blockstore
-    const rocksdb_path = shred_stream.resolveRocksDbPath(gpa, config.ledger) catch |err| {
-        logger.err().logf("invalid ledger path {s}: {}", .{ config.ledger, err });
-        return err;
-    };
-    defer gpa.free(rocksdb_path);
-
-    var blockstore = shred_stream.AgaveBlockstore.open(gpa, rocksdb_path) catch |err| {
-        logger.err().logf("failed to open blockstore at {s}: {}", .{ rocksdb_path, err });
+    // Open blockstore. The launcher is responsible for resolving `config.ledger`
+    // to the actual rocksdb directory before writing it into the IPC config.
+    var blockstore = shred_stream.AgaveBlockstore.open(gpa, config.ledger) catch |err| {
+        logger.err().logf("failed to open blockstore at {s}: {}", .{ config.ledger, err });
         return err;
     };
     defer blockstore.deinit(gpa);
