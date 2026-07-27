@@ -4,11 +4,9 @@
 //! as net.Packet structs into the net.Pair.recv ring — the same interface that
 //! the net service uses. The shred_receiver reads from this ring unchanged.
 //!
-//! All 8 test modes are supported: linear, reverse, shuffle-global, shuffle-slot,
-//! drop, late, duplicate, and corrupt.
-//!
-//! Configuration is passed via shared memory as a CLI args string (see
-//! lib.shred_streamer.Config). The service parses the args on startup.
+//! Configuration is passed via shared memory as a strongly-typed struct
+//! (see lib.shred_streamer.Config). The topology launcher parses CLI args
+//! and populates the IPC config; the service just reads typed fields.
 
 const std = @import("std");
 const start = @import("start_service");
@@ -19,6 +17,19 @@ const shred_stream = @import("shred_stream");
 
 comptime {
     _ = start;
+    // Ensure IPC config enum ordinals match the shred_stream module's enum
+    // ordinals. Both are ordered: linear, reverse, shuffle_global,
+    // shuffle_slot, drop, late, duplicate, corrupt.
+    const IpcMode = lib.shred_streamer.Config.TestMode;
+    const StreamMode = shred_stream.config.TestMode;
+    for (@typeInfo(IpcMode).@"enum".fields) |f| {
+        std.debug.assert(@intFromEnum(@field(StreamMode, f.name)) == f.value);
+    }
+    const IpcKind = lib.shred_streamer.Config.ShredKindFilter;
+    const StreamKind = shred_stream.config.ShredKindFilter;
+    for (@typeInfo(IpcKind).@"enum".fields) |f| {
+        std.debug.assert(@intFromEnum(@field(StreamKind, f.name)) == f.value);
+    }
 }
 
 pub const name = .shred_streamer;
@@ -34,14 +45,13 @@ const Config = shred_stream.Config;
 // Service entry point
 // ---------------------------------------------------------------------------
 
-/// Service entry point — supports all 8 test modes.
+/// Service entry point — reads typed config from IPC and streams shreds to the
+/// IPC ring consumed by shred_receiver.
 ///
-/// Changes from the standalone CLI tool:
-/// - Reads CLI args from shared memory (ro.config) instead of std.process.argsAlloc
-/// - Writes net.Packet to the IPC ring (rw.shred_pair.recv) instead of UDP sendto
-/// - Single-threaded: no net thread or monitor thread (rate limiting is inline)
-/// - Uses cooperative scheduling (signalIdleSpinning) for back-pressure and shutdown
-/// - --dry-run is rejected (not meaningful for in-topology streaming)
+/// Only the `.linear` test mode is supported in the in-topology setup at this
+/// time. Other modes (drop/late/duplicate/corrupt/shuffle/reverse) are useful
+/// for the standalone CLI tool but not for offline replay; they are rejected
+/// with a clear error.
 pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
     const zone = tracy.Zone.init(@src(), .{ .name = @tagName(name) });
     defer zone.deinit();
@@ -53,85 +63,53 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     rw.tel.signalReady();
 
-    var discard_writer: std.Io.Writer.Discarding = .init(&.{});
-
-    const config: Config = cfg: {
-        if (ro.config.getRawArgs()) |args_str| {
-            // Fallback: raw CLI args string — parse them.
-            var arg_ptrs: [64][]const u8 = undefined;
-            var arg_count: usize = 0;
-            var iter = std.mem.splitScalar(u8, args_str, ' ');
-            while (iter.next()) |arg| {
-                if (arg.len == 0) continue;
-                if (arg_count >= arg_ptrs.len) {
-                    logger.err().logf("too many CLI args (max {d})", .{arg_ptrs.len});
-                    return error.InvalidArguments;
-                }
-                arg_ptrs[arg_count] = arg;
-                arg_count += 1;
-            }
-
-            const parse_result = shred_stream.parseArgs(&discard_writer.writer, arg_ptrs[0..arg_count]) catch |err| {
-                logger.err().logf("failed to parse args: {}", .{err});
-                return err;
-            };
-
-            break :cfg switch (parse_result) {
-                .help => {
-                    logger.info().logf("help requested, going idle", .{});
-                    while (true) try runner.activity.signalIdleSpinning();
-                },
-                .config => |c| c,
-            };
-        } else {
-            const ipc = ro.config;
-            break :cfg .{
-                .ledger = ipc.getLedger(),
-                .start_slot = if (ipc.has_start_slot) ipc.start_slot else null,
-                .end_slot = if (ipc.has_end_slot) ipc.end_slot else null,
-                .rate_hz = if (ipc.has_rate_hz) ipc.rate_hz else null,
-                .test_mode = @enumFromInt(@intFromEnum(ipc.test_mode)),
-                .seed = if (ipc.has_seed) ipc.seed else null,
-                .selected_count = ipc.selected_count,
-                .shred_kind = @enumFromInt(@intFromEnum(ipc.shred_kind)),
-                .plan_limit = ipc.plan_limit,
-                .corrupt_bytes = ipc.corrupt_bytes,
-                .dry_run = ipc.dry_run,
-            };
-        }
+    const ipc = ro.config;
+    const config: Config = .{
+        .ledger = ipc.getLedger(),
+        .start_slot = if (ipc.has_start_slot) ipc.start_slot else null,
+        .end_slot = if (ipc.has_end_slot) ipc.end_slot else null,
+        .rate_hz = if (ipc.has_rate_hz) ipc.rate_hz else null,
+        .test_mode = @enumFromInt(@intFromEnum(ipc.test_mode)),
+        .seed = if (ipc.has_seed) ipc.seed else null,
+        .selected_count = ipc.selected_count,
+        .shred_kind = @enumFromInt(@intFromEnum(ipc.shred_kind)),
+        .plan_limit = ipc.plan_limit,
+        .corrupt_bytes = ipc.corrupt_bytes,
+        .dry_run = ipc.dry_run,
     };
 
-    // Reject --dry-run: doesn't make sense for in-topology streaming.
+    // Reject modes and flags that don't make sense in the in-topology service.
     if (config.dry_run) {
         logger.err().logf("--dry-run is not supported in the in-topology service", .{});
         return error.InvalidArguments;
+    }
+    switch (config.test_mode) {
+        .linear => {},
+        else => {
+            logger.err().logf(
+                "test mode '{s}' is not supported in the in-topology service " ++
+                    "(only 'linear' is supported)",
+                .{config.test_mode.modeName()},
+            );
+            return error.UnsupportedTestMode;
+        },
     }
 
     logger.info().logf("streaming from ledger: {s}", .{config.ledger});
     logger.info().logf("test mode: {s}", .{config.test_mode.modeName()});
 
     // Open blockstore
-    var blockstore = shred_stream.AgaveBlockstore.open(gpa, config.ledger) catch |err| {
-        logger.err().logf("failed to open blockstore: {}", .{err});
+    const rocksdb_path = shred_stream.resolveRocksDbPath(gpa, config.ledger) catch |err| {
+        logger.err().logf("invalid ledger path {s}: {}", .{ config.ledger, err });
+        return err;
+    };
+    defer gpa.free(rocksdb_path);
+
+    var blockstore = shred_stream.AgaveBlockstore.open(gpa, rocksdb_path) catch |err| {
+        logger.err().logf("failed to open blockstore at {s}: {}", .{ rocksdb_path, err });
         return err;
     };
     defer blockstore.deinit(gpa);
-
-    // Build selected-shred plan if needed (drop/late/duplicate/corrupt modes).
-    var selected_shreds: ?shred_stream.SelectedShredPlan = null;
-    defer if (selected_shreds) |*plan| plan.deinit(gpa);
-    if (config.test_mode.usesSelectedShreds()) {
-        selected_shreds = shred_stream.buildSelectedShredPlan(
-            gpa,
-            &discard_writer.writer,
-            &blockstore,
-            config,
-            &ServiceCancelAdapter{ .runner = runner },
-        ) catch |err| {
-            logger.err().logf("failed to build selected shred plan: {}", .{err});
-            return err;
-        };
-    }
 
     // Stream shreds to ring using generic producers.
     var writer = rw.shred_pair.recv.get(.writer);
@@ -149,10 +127,10 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
         gpa,
         &blockstore,
         config,
-        if (selected_shreds) |*plan| plan else null,
+        null, // no selected shreds — .linear mode doesn't need them
         &writer,
         &ctx,
-        &ServiceCancelAdapter{ .runner = runner },
+        runner,
     ) catch |err| {
         logger.err().logf("producer error: {}", .{err});
         return err;
@@ -177,6 +155,9 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
 
 /// Context for writing net.Packet to the IPC ring (service mode).
 /// Handles back-pressure via cooperative scheduling and inline rate limiting.
+///
+/// Rate limiting is applied per-packet in `acquirePacketSlot`, mirroring the
+/// original standalone script's per-packet rate limiting from its net thread.
 const ServicePacketContext = struct {
     runner: lib.runner.Connection,
     rate_hz: ?f64,
@@ -188,15 +169,21 @@ const ServicePacketContext = struct {
     pub fn fillPacket(out: *lib.net.Packet, packet_data: []const u8) void {
         out.len = @intCast(packet_data.len);
         @memcpy(out.data[0..packet_data.len], packet_data);
-        out.addr = std.mem.zeroes(std.net.Address);
+        out.addr = .initIp4(.{ 0, 0, 0, 0 }, 0);
     }
 
-    pub fn waitForSlot(
+    /// Acquires the next writable slot in the IPC ring, with optional rate
+    /// limiting. Called once per packet (not per Solana slot). The "slot"
+    /// refers to a ring buffer position.
+    ///
+    /// This mirrors the original script's per-packet rate limiting that ran
+    /// on the net thread's send loop.
+    pub fn acquirePacketSlot(
         self: *ServicePacketContext,
         writer: *lib.net.Pair.PacketRing.Iterator(.writer),
         unpublished_packets: *usize,
     ) !*lib.net.Packet {
-        // Rate limiting
+        // Rate limiting (per-packet)
         if (self.rate_hz) |rate| {
             const interval_ns: u64 = @max(1, @as(u64, @intFromFloat(
                 @ceil(@as(f64, @floatFromInt(std.time.ns_per_s)) / rate),
@@ -215,7 +202,6 @@ const ServicePacketContext = struct {
         }
 
         // Wait for a writable slot in the ring
-        var was_idle = false;
         const result = while (true) {
             if (writer.peek()) |p| break p;
             // Ring full — flush pending writes so reader can drain
@@ -224,21 +210,9 @@ const ServicePacketContext = struct {
                 unpublished_packets.* = 0;
                 continue;
             }
-            was_idle = true;
             try self.runner.activity.signalIdleSpinning();
         };
-        // Re-signal active after recovering from back-pressure idle.
-        if (was_idle) try self.runner.activity.signalActive();
+        try self.runner.activity.signalActive();
         return result;
-    }
-};
-
-/// Adapter for cancellation checks — used by producers and plan builders.
-const ServiceCancelAdapter = struct {
-    runner: lib.runner.Connection,
-
-    pub fn isCanceled(self: *const ServiceCancelAdapter) bool {
-        self.runner.activity.checkCanceled() catch return true;
-        return false;
     }
 };
