@@ -135,6 +135,11 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     const blockhash_states: *BlockHashStates = try allocator.create(BlockHashStates);
     @memset(blockhash_states, null);
 
+    const replay_stakes: *lib.replay.stakes.ReplayStakes = try allocator.create(
+        lib.replay.stakes.ReplayStakes,
+    );
+    replay_stakes.init();
+
     var deshredded_iter = rw.deshredded_in.get(.reader);
     var exec_request_sender = rw.exec_req_response.request_ring.get(.writer);
     var exec_response_receiver = rw.exec_req_response.response_ring.get(.reader);
@@ -147,6 +152,23 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         rw.block_pool,
         exec_states,
         blockhash_states,
+    );
+
+    // `bootstrap` has already crossed the accounts_db release barrier, so a
+    // second read of `snapshot_metadata.slot` is non-blocking.
+    const root_slot = try rw.snapshot_metadata_in.getSlotBlocking(runner);
+    try replay_stakes.loadFromSnapshot(
+        root_slot,
+        &rw.snapshot_metadata_in.manifest,
+        rw.snapshot_metadata_in.getMemory(),
+    );
+    logger.info().logf(
+        "loaded epoch {} stakes: {} voters, total_stake={}",
+        .{
+            replay_stakes.boot_epoch,
+            replay_stakes.epoch_voters.len,
+            replay_stakes.epoch_voters.total_stake,
+        },
     );
 
     // After the slot is supposedly populated, start shred recv (eventually Repair service) on it.

@@ -68,6 +68,26 @@ pub fn main() !void {
         bhq.hashes_count = 1;
         bhq.last_hash = .ZEROES;
     }
+    {
+        // Minimal VersionedEpochStakes so replay's stakes boot loader
+        // finds an entry for the derived boot epoch. `epoch_schedule` is
+        // zero-initialized above, which pins the derived epoch to 0
+        // regardless of the fixture slot; a zero-vote-accounts entry is
+        // enough to satisfy the loader while downstream reads stay
+        // no-ops until fixtures grow real stakes data.
+        const VES = lib.solana.snapshot.ExtraFields.VersionedEpochStakes;
+        const memory = snapshot_metadata.ptr().getMemory();
+        const ves_ptr: *VES = @ptrCast(@alignCast(memory.ptr));
+        ves_ptr.* = .{
+            .epoch = 0,
+            .total_stake = 0,
+            .vote_accounts = .{},
+            .node_to_vote_accounts = .{},
+            .epoch_authorized_voters = .{},
+        };
+        snapshot_metadata.ptr().manifest.extra_fields.versioned_epoch_stakes =
+            .{ .offset = 0, .len = 1 };
+    }
     snapshot_metadata.ptr().populateSlot(fixture.manifest.shreds.parent_slot);
 
     var replay_scratch: Region([lib.replay.scratch_buffer_size]u8) = try .simple();
