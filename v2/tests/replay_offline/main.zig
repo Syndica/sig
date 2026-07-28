@@ -208,7 +208,10 @@ pub fn main() !void {
 
         // Resolve `--ledger` to the actual rocksdb directory before writing it
         // into IPC. The service just opens whatever path we give it.
-        const rocksdb_path = shred_stream.resolveRocksDbPath(allocator, stream_cfg.ledger) catch |err| {
+        const rocksdb_path = shred_stream.resolveRocksDbPath(
+            allocator,
+            stream_cfg.ledger,
+        ) catch |err| {
             try stderr_writer.interface.print(
                 "error: invalid ledger path '{s}': {s}\n",
                 .{ stream_cfg.ledger, @errorName(err) },
@@ -225,16 +228,25 @@ pub fn main() !void {
             @enumFromInt(@intFromEnum(stream_cfg.test_mode)),
             stream_cfg.seed,
             std.math.cast(u32, stream_cfg.selected_count) orelse {
-                try stderr_writer.interface.print("error: --count value too large (max {d})\n", .{std.math.maxInt(u32)});
+                try stderr_writer.interface.print(
+                    "error: --count value too large (max {d})\n",
+                    .{std.math.maxInt(u32)},
+                );
                 return error.InvalidArguments;
             },
             @enumFromInt(@intFromEnum(stream_cfg.shred_kind)),
             std.math.cast(u32, stream_cfg.plan_limit) orelse {
-                try stderr_writer.interface.print("error: --plan-limit value too large (max {d})\n", .{std.math.maxInt(u32)});
+                try stderr_writer.interface.print(
+                    "error: --plan-limit value too large (max {d})\n",
+                    .{std.math.maxInt(u32)},
+                );
                 return error.InvalidArguments;
             },
             std.math.cast(u32, stream_cfg.corrupt_bytes) orelse {
-                try stderr_writer.interface.print("error: --corrupt-bytes value too large (max {d})\n", .{std.math.maxInt(u32)});
+                try stderr_writer.interface.print(
+                    "error: --corrupt-bytes value too large (max {d})\n",
+                    .{std.math.maxInt(u32)},
+                );
                 return error.InvalidArguments;
             },
             stream_cfg.dry_run,
@@ -262,7 +274,11 @@ pub fn main() !void {
     shred_recv_config.ptr().shred_version = 0;
 
     var snapshot_config: Region(snapshot.SnapshotConfig) = try .simple();
-    try snapshot_config.ptr().populate(config.snapshot.folder, config.snapshot.known_validators, config.cluster);
+    try snapshot_config.ptr().populate(
+        config.snapshot.folder,
+        config.snapshot.known_validators,
+        config.cluster,
+    );
 
     if (config.accounts_db.file.len > std.fs.max_path_bytes) {
         std.log.err(

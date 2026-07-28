@@ -881,7 +881,11 @@ const UnitTests = struct {
                 .dest_sub_path = name,
                 .dest_dir = test_install_dir,
             }) else null,
-            .run = if (self.exe_config.run) self.build.addRunArtifact(unit_test) else null,
+            .run = if (self.exe_config.run) blk: {
+                const run = self.build.addRunArtifact(unit_test);
+                run.setCwd(self.build.path("."));
+                break :blk run;
+            } else null,
         }) catch @panic("oom");
         if (self.kcov) |kcov| {
             const kcov_run = self.build.addSystemCommand(&.{
@@ -893,6 +897,7 @@ const UnitTests = struct {
             const output_dir = kcov_run.addOutputDirectoryArg("output");
             kcov_run.addArtifactArg(unit_test);
             kcov_run.has_side_effects = true;
+            kcov_run.setCwd(self.build.path("."));
             kcov.merge_run.step.dependOn(&kcov_run.step);
             kcov.merge_run.addDirectoryArg(output_dir);
         }
@@ -922,8 +927,12 @@ const Executable = struct {
         return .{
             .compile = exe,
             .install = if (options.install) b.addInstallArtifact(exe, install_options) else null,
+            // Executables (sig, sig-lint, black-box tests, ...) reference
+            // on-disk paths relative to the repo root. Pin cwd so `zig build`
+            // works from any subdirectory (e.g. `cd v2 && zig build ci`).
             .run = if (options.run) blk: {
                 const run = b.addRunArtifact(exe);
+                run.setCwd(b.path("."));
                 run.addArgs(b.args orelse &.{});
                 break :blk run;
             } else null,

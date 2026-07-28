@@ -241,7 +241,11 @@ pub fn main() !void {
     shred_recv_data.shred_version = gossip_cluster_info.shred_version;
 
     var snapshot_config: Region(snapshot.SnapshotConfig) = try .simple();
-    try snapshot_config.ptr().populate(config.snapshot.folder, config.snapshot.known_validators, config.cluster);
+    try snapshot_config.ptr().populate(
+        config.snapshot.folder,
+        config.snapshot.known_validators,
+        config.cluster,
+    );
 
     var accounts_db_config: Region(accounts_db.RootedConfig) = try .sized(
         @sizeOf(accounts_db.RootedConfig) + config.accounts_db.rooted.toBytes(),

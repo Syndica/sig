@@ -47,11 +47,6 @@ const Config = shred_stream.Config;
 
 /// Service entry point — reads typed config from IPC and streams shreds to the
 /// IPC ring consumed by shred_receiver.
-///
-/// Only the `.linear` test mode is supported in the in-topology setup at this
-/// time. Other modes (drop/late/duplicate/corrupt/shuffle/reverse) are useful
-/// for the standalone CLI tool but not for offline replay; they are rejected
-/// with a clear error.
 pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
     const zone = tracy.Zone.init(@src(), .{ .name = @tagName(name) });
     defer zone.deinit();
