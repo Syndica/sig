@@ -286,6 +286,39 @@ fn clampDrift(
     return estimate;
 }
 
+/// Fold a landed vote into the fork's `LiveVoters`. Overwrites the
+/// admitted voter's row with the new `.update` state; no-op if the
+/// vote account isn't in the admitted set (miss on `by_vote_pk`).
+///
+/// Miss semantics: post-Alpenglow (SIMD-0357) only the top-2000
+/// admitted voters have positional slots. A vote tx from a non-
+/// admitted vote account lands successfully at the tx level but
+/// contributes nothing to the timestamp aggregate. Pre-Alpenglow
+/// every vote account is admitted, so misses shouldn't happen in
+/// practice.
+///
+/// Not yet reachable at runtime — v2 has no vote-program execution.
+/// When the exec tile grows one, the committer path decodes each
+/// landed vote ix and calls this with the extracted
+/// `(vote_pk, last_vote_slot, last_vote_timestamp)`.
+///
+/// Vote-account deletion (the `.invalidate` transition) is not
+/// modelled.
+pub fn foldLandedVote(
+    epoch_voters: *const EpochVoters,
+    live_voters: *LiveVoters,
+    vote_pk: Pubkey,
+    last_vote_slot: Slot,
+    last_vote_timestamp: i64,
+) void {
+    const idx_ptr = epoch_voters.by_vote_pk.getPtrConst(vote_pk) orelse return;
+    live_voters.entries[idx_ptr.*] = .{
+        .last_vote_slot = last_vote_slot,
+        .last_vote_timestamp = last_vote_timestamp,
+        .kind = .update,
+    };
+}
+
 /// Per-block live vote-account state row. One per position in
 /// `EpochVoters.entries`. `.unpopulated` means "no vote landed on
 /// this fork yet"; `.update` carries the latest vote slot +
@@ -684,4 +717,51 @@ test "stakeWeightedTimestamp clamps against epoch-start drift" {
         @as(?i64, 2000),
         stakeWeightedTimestamp(ev, lv, 1100, 400 * std.time.ns_per_ms, epoch_start, .DEFAULT),
     );
+}
+
+test "foldLandedVote overwrites admitted voter's row with .update" {
+    const ev = try std.testing.allocator.create(EpochVoters);
+    defer std.testing.allocator.destroy(ev);
+    ev.init();
+    const lv = try std.testing.allocator.create(LiveVoters);
+    defer std.testing.allocator.destroy(lv);
+    lv.reset();
+
+    var pk_admit: Pubkey = .{ .data = .{0} ** 32 };
+    pk_admit.data[0] = 0xAA;
+    ev.entries[0] = .{ .vote_pk = pk_admit, .stake = 100, .commission_bps = 0 };
+    ev.len = 1;
+    ev.total_stake = 100;
+    try ev.by_vote_pk.insert(pk_admit, 0);
+
+    // Fresh row: .unpopulated.
+    try std.testing.expectEqual(LiveVoter.Kind.unpopulated, lv.entries[0].kind);
+
+    foldLandedVote(ev, lv, pk_admit, 500, 1_700_000_000);
+    try std.testing.expectEqual(LiveVoter.Kind.update, lv.entries[0].kind);
+    try std.testing.expectEqual(@as(Slot, 500), lv.entries[0].last_vote_slot);
+    try std.testing.expectEqual(@as(i64, 1_700_000_000), lv.entries[0].last_vote_timestamp);
+
+    // Subsequent fold overwrites in place.
+    foldLandedVote(ev, lv, pk_admit, 501, 1_700_000_001);
+    try std.testing.expectEqual(@as(Slot, 501), lv.entries[0].last_vote_slot);
+    try std.testing.expectEqual(@as(i64, 1_700_000_001), lv.entries[0].last_vote_timestamp);
+}
+
+test "foldLandedVote is a no-op for non-admitted voters" {
+    const ev = try std.testing.allocator.create(EpochVoters);
+    defer std.testing.allocator.destroy(ev);
+    ev.init();
+    const lv = try std.testing.allocator.create(LiveVoters);
+    defer std.testing.allocator.destroy(lv);
+    lv.reset();
+
+    var pk_stranger: Pubkey = .{ .data = .{0} ** 32 };
+    pk_stranger.data[0] = 0xCC;
+
+    // Nothing admitted. Fold must not touch any live row.
+    foldLandedVote(ev, lv, pk_stranger, 999, 1_700_000_042);
+    for (lv.entries) |row| {
+        try std.testing.expectEqual(LiveVoter.Kind.unpopulated, row.kind);
+    }
 }
