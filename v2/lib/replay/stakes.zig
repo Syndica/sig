@@ -180,20 +180,31 @@ pub const TimestampDrift = extern struct {
 
 /// Anchor for the epoch-start drift bound: (slot, timestamp) of the
 /// clock sysvar at the first slot of the current epoch.
+///
+/// Consumed only by the pre-Alpenglow Clock derivation
+/// (`stakeWeightedTimestamp`). Under Alpenglow `Clock.unix_timestamp`
+/// is written from the block footer and this anchor is unused.
 pub const EpochStartTimestamp = extern struct {
     slot: Slot,
     timestamp: i64,
 };
 
-/// Pure stake-weighted median timestamp computed over `EpochVoters`
-/// (stake weights) and one fork's `LiveVoters` (live vote
-/// timestamps). Matches agave's `calculate_stake_weighted_timestamp`
-/// semantic and is the value the per-slot clock sysvar update writes
-/// into `Clock.unix_timestamp`.
+/// Pre-Alpenglow stake-weighted median timestamp computed over
+/// `EpochVoters` (stake weights) and one fork's `LiveVoters` (live
+/// vote timestamps). Matches agave's `calculate_stake_weighted_timestamp`
+/// and is the value the per-slot clock sysvar update writes into
+/// `Clock.unix_timestamp` under TowerBFT.
+///
+/// Under Alpenglow, `Clock.unix_timestamp` is instead set from the
+/// block footer's `block_producer_time_nanos` (SIMD-0363; agave
+/// `Bank::update_clock_from_footer` in
+/// `agave/runtime/src/bank.rs`). This function is unreachable in
+/// the Alpenglow path and retires when the feature is cluster-wide.
 ///
 /// Not yet reachable at runtime — v2 has no per-slot sysvar update
-/// path. Once one exists it calls this function once per slot with
-/// the current fork's `LiveVoters` and the epoch's `EpochVoters`.
+/// path. Once one exists it calls this function once per pre-Alpenglow
+/// slot with the current fork's `LiveVoters` and the epoch's
+/// `EpochVoters`.
 ///
 /// Algorithm (per SIMD / agave):
 /// 1. For each voter whose live row is `.update`, project the vote
@@ -294,9 +305,10 @@ fn clampDrift(
     return estimate;
 }
 
-/// Fold a landed vote into the fork's `LiveVoters`. Overwrites the
-/// admitted voter's row with the new `.update` state; no-op if the
-/// vote account isn't in the admitted set (miss on `by_vote_pk`).
+/// Fold a pre-Alpenglow landed vote into the fork's `LiveVoters`.
+/// Overwrites the admitted voter's row with the new `.update` state;
+/// no-op if the vote account isn't in the admitted set (miss on
+/// `by_vote_pk`).
 ///
 /// Miss semantics: post-Alpenglow (SIMD-0357) only the top-2000
 /// admitted voters have positional slots. A vote tx from a non-
@@ -305,10 +317,17 @@ fn clampDrift(
 /// every vote account is admitted, so misses shouldn't happen in
 /// practice.
 ///
+/// Under Alpenglow, individual vote messages leave the block and
+/// travel over the votor/consensus lane; replay cannot observe them
+/// during block execution and this fold path is never invoked.
+/// `Clock.unix_timestamp` is written from the block footer instead
+/// (see `stakeWeightedTimestamp` doc for the SIMD-0363 reference).
+///
 /// Not yet reachable at runtime — v2 has no vote-program execution.
 /// When the exec tile grows one, the committer path decodes each
 /// landed vote ix and calls this with the extracted
-/// `(vote_pk, last_vote_slot, last_vote_timestamp)`.
+/// `(vote_pk, last_vote_slot, last_vote_timestamp)`. This fold path
+/// retires with the pre-Alpenglow Clock derivation.
 ///
 /// Vote-account deletion (the `.invalidate` transition) is not
 /// modelled.
@@ -327,11 +346,16 @@ pub fn foldLandedVote(
     };
 }
 
-/// Per-block live vote-account state row. One per position in
-/// `EpochVoters.entries`. `.unpopulated` means "no vote landed on
-/// this fork yet"; `.update` carries the latest vote slot +
-/// timestamp; `.invalidate` marks the voter as retired on this fork
-/// (vote account closed).
+/// Pre-Alpenglow per-block live vote-account state row. One per
+/// position in `EpochVoters.entries`. `.unpopulated` means "no vote
+/// landed on this fork yet"; `.update` carries the latest vote slot
+/// + timestamp; `.invalidate` marks the voter as retired on this
+/// fork (vote account closed).
+///
+/// Populated by `foldLandedVote` from vote-tx execution; consumed by
+/// `stakeWeightedTimestamp` for the pre-Alpenglow Clock derivation.
+/// Both paths retire under Alpenglow (Clock is written from the
+/// block footer instead — see `stakeWeightedTimestamp`).
 pub const LiveVoter = extern struct {
     last_vote_slot: Slot, //          8
     last_vote_timestamp: i64, //      8
@@ -355,9 +379,14 @@ pub const LiveVoter = extern struct {
     }
 };
 
-/// Dense per-block array indexed by position in `EpochVoters.entries`.
-/// Not tagged with a length: `EpochVoters.len` bounds the readable
-/// prefix; rows at higher indices are `.unpopulated` and inert.
+/// Dense per-block array of pre-Alpenglow `LiveVoter` rows indexed
+/// by position in `EpochVoters.entries`. Not tagged with a length:
+/// `EpochVoters.len` bounds the readable prefix; rows at higher
+/// indices are `.unpopulated` and inert.
+///
+/// Cloned from the parent block's slot at `onBlockCreate` so each
+/// fork accumulates its own vote timestamps independently. Unused
+/// under Alpenglow (see `LiveVoter` and `stakeWeightedTimestamp`).
 pub const LiveVoters = extern struct {
     entries: [MAX_ALPENGLOW_VOTE_ACCOUNTS]LiveVoter,
 
