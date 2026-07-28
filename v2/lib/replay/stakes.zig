@@ -248,6 +248,30 @@ pub const ReplayStakes = struct {
 
         try self.epoch_voters.loadFromVersionedEpochStakes(entry, memory_base);
     }
+
+    /// Called by replay whenever a fresh `BlockRef` is allocated
+    /// from the `BlockPool` for a genuine new-block event (either a
+    /// slot boundary or a fork within a slot). Byte-copies the
+    /// parent block's `LiveVoters` row into the child slot so the
+    /// child starts from an exact snapshot of the parent's fork
+    /// state.
+    ///
+    /// Not called for same-slot canonical extensions — those reuse
+    /// the parent's `BlockRef` unchanged (see
+    /// `replay.setChildBlockRef`).
+    pub fn onBlockCreate(
+        self: *ReplayStakes,
+        parent: replay.BlockRef,
+        child: replay.BlockRef,
+    ) void {
+        // Explicit @memcpy on the byte view. Struct-assignment on a
+        // ~48 KB value can pass through a stack temporary in Debug
+        // mode; the byte-level memcpy stays in-place.
+        @memcpy(
+            std.mem.asBytes(&self.live_voters[child.index()]),
+            std.mem.asBytes(&self.live_voters[parent.index()]),
+        );
+    }
 };
 
 test "EpochVoters init empties the map and clears len" {
@@ -364,4 +388,37 @@ test "EpochVoters.loadFromVersionedEpochStakes rejects over-cap input" {
         error.TooManyVoters,
         ev.loadFromVersionedEpochStakes(&entry, &empty_base),
     );
+}
+
+test "ReplayStakes.onBlockCreate byte-copies parent live_voters into child" {
+    const stakes = try std.heap.page_allocator.create(ReplayStakes);
+    defer std.heap.page_allocator.destroy(stakes);
+    stakes.init();
+
+    const parent_idx: usize = 3;
+    const child_idx: usize = 7;
+
+    stakes.live_voters[parent_idx].entries[0] = .{
+        .last_vote_slot = 100,
+        .last_vote_timestamp = 1_700_000_000,
+        .kind = .update,
+    };
+    stakes.live_voters[parent_idx].entries[1] = .{
+        .last_vote_slot = 101,
+        .last_vote_timestamp = 1_700_000_001,
+        .kind = .invalidate,
+    };
+
+    const parent_ref: replay.BlockRef = @enumFromInt(parent_idx);
+    const child_ref: replay.BlockRef = @enumFromInt(child_idx);
+    stakes.onBlockCreate(parent_ref, child_ref);
+
+    try std.testing.expectEqual(@as(Slot, 100), stakes.live_voters[child_idx].entries[0].last_vote_slot);
+    try std.testing.expectEqual(LiveVoter.Kind.update, stakes.live_voters[child_idx].entries[0].kind);
+    try std.testing.expectEqual(LiveVoter.Kind.invalidate, stakes.live_voters[child_idx].entries[1].kind);
+    try std.testing.expectEqual(LiveVoter.Kind.unpopulated, stakes.live_voters[child_idx].entries[2].kind);
+
+    // Post-clone, mutating the child must not touch the parent.
+    stakes.live_voters[child_idx].entries[0].last_vote_slot = 999;
+    try std.testing.expectEqual(@as(Slot, 100), stakes.live_voters[parent_idx].entries[0].last_vote_slot);
 }
