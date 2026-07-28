@@ -325,7 +325,7 @@ pub const Appender = struct {
                             "LatencyHistogram metric '{s}' requires a `.layout`, e.g. " ++
                                 "`.{{ .min_upper_bound_ns = 1_024, " ++
                                 ".max_upper_bound_ns = 65_536, " ++
-                                ".bounds_per_doubling = 8 }}`.\n",
+                                ".bounds_per_doubling = 4 }}`.\n",
                             .{s_field.name},
                         ),
                     ),
@@ -346,7 +346,7 @@ pub const Appender = struct {
                                         "VariantHistogram metric '{s}' requires a `.layout`, " ++
                                             "e.g. `.{{ .min_upper_bound_ns = 1_024, " ++
                                             ".max_upper_bound_ns = 65_536, " ++
-                                            ".bounds_per_doubling = 8 }}`.\n",
+                                            ".bounds_per_doubling = 4 }}`.\n",
                                         .{s_field.name},
                                     )),
                             },

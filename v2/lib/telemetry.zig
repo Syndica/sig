@@ -625,8 +625,7 @@ pub const Histogram = struct {
 
     /// Starts a span timer that records its elapsed nanoseconds into this histogram. Call
     /// `.observe()` on the result at the end of the span, usually with `defer`. `upper_bounds` must
-    /// then be in nanoseconds; see the unit contract on `LatencyObserver`, and `IO_LATENCY_BOUNDS`
-    /// in `snapshot/download.zig` for an example.
+    /// then be in nanoseconds; see the unit contract on `LatencyObserver`.
     pub fn observer(self: *const Histogram) LatencyObserver(.standard, null) {
         return .init(self);
     }
@@ -872,6 +871,29 @@ fn nativeBucketIndex(schema: u4, ns: u64) i64 {
     return (@as(i64, r.exponent) - 1) * per_octave + s;
 }
 
+/// The inclusive upper bound of global native bucket `index` at `schema`: `2^(index / 2^schema)`.
+/// Built by splitting `index` into an octave and a sub-octave remainder and reading the same table
+/// `nativeBucketIndex` bins against, rather than by `exp2`-ing the quotient, which makes the two
+/// exact inverses: `nativeBucketIndex(schema, nativeBound(schema, i)) == i`. A bound derived any
+/// other way can land a ulp off and rounding it would name a value in the neighbouring bucket.
+fn nativeBound(schema: u4, index: i64) f64 {
+    const per_octave: i64 = @as(i64, 1) << @as(u6, schema);
+    // Floor division, so a negative `index` (a bound below 1ns) splits the same way as a positive
+    // one; `rem` is then always in `0..per_octave`.
+    const octave = @divFloor(index, per_octave);
+    const rem: usize = @intCast(index - octave * per_octave);
+    const frac: f64 = switch (schema) {
+        inline 0...8 => |sc| blk: {
+            const table = comptime nativeBoundsTable(sc);
+            break :blk table[rem];
+        },
+        else => unreachable,
+    };
+    // `table` holds `0.5 * 2^(rem / 2^schema)`, i.e. the bound already halved into `frexp`'s
+    // `[0.5, 1)`, hence the `+ 1` on the exponent.
+    return std.math.ldexp(frac, @intCast(octave + 1));
+}
+
 pub const LatencyHistogram = struct {
     layout: Layout,
     /// Used to ensure reads and writes occur on separate shards.
@@ -880,33 +902,63 @@ pub const LatencyHistogram = struct {
     /// One hot shard for writing, one cold shard for reading.
     shards: [2]Shard,
 
-    /// A windowed Prometheus native histogram: geometric (log-exponential) buckets aligned 1:1 with a
-    /// native-histogram `schema`. Bucket `i`'s upper bound is
-    /// `2^((base_index + i) / bounds_per_doubling)` ns, where `base_index = baseIndex()`.
+    /// A windowed histogram with geometric (log-exponential) bucket bounds. Bucket `i`'s upper
+    /// bound is `2^((base_index + i) / bounds_per_doubling)` ns, where `base_index = baseIndex()`.
     ///
-    /// Native histograms are unbounded and sparse, but the IPC region is dense and fixed, so the
-    /// window has to be pinned: observations below bucket 0's bound clamp into it, and those above
-    /// the final bucket's bound land in the implicit `+Inf` bucket (counted in `sum`/`count`, but in
-    /// no explicit bucket).
+    /// Two expositions render the same storage, and the bounds being geometric is what lets one
+    /// layout serve both:
     ///
-    /// Both endpoints are inclusive, so a `[512, 2048]` window at 4 bounds per doubling holds
-    /// `2 * 4 + 1` = 9 buckets:
+    /// * **Protobuf** — a standard exponential *native* histogram. The bounds sit on a native
+    ///   schema ladder by construction, so `schema()` names the ladder and each bucket crosses as
+    ///   a span offset off `baseIndex()` rather than as a bound. This is what production reads:
+    ///   a Prometheus server with `scrape_native_histograms` negotiates protobuf, and ours is
+    ///   configured for it. See `telemetry/prometheus_proto.zig`.
+    /// * **Text** — a classic histogram, one `le` line per resolved bound plus `+Inf`, for humans
+    ///   `curl`ing the endpoint and for scrapers that do not negotiate protobuf. See
+    ///   `telemetry/prometheus.zig`.
     ///
-    ///     512, 609, 724, 861, 1024, 1218, 1448, 1722, 2048
+    /// The window is fixed, so something has to hold the tail above it. Classic has `le="+Inf"`
+    /// for that, which Prometheus derives from `sample_count`; an exponential schema has no
+    /// equivalent, because it derives every bound from a bucket index and so defines no open-ended
+    /// bucket short of `MaxFloat64`. Rather than depend on a form only one encoding offers, the
+    /// tail is held by a real bucket: `bucketCount` allocates one rung above `max_upper_bound_ns`
+    /// and `observe` saturates into it. `count == Σ buckets` then holds by construction, which is
+    /// the invariant a native scrape is rejected for breaking, and the tail is capped rather than
+    /// dropped — see `max_upper_bound_ns` for what that costs.
+    ///
+    /// That cap is the native path's price, not a property of the data. The text path skips the
+    /// saturating bucket and lets its own `+Inf` carry the tail uncapped — see
+    /// `prometheus.writeLatencyHistogramBody`.
+    ///
+    /// One consequence worth respecting on the text path: Prometheus reads classic buckets by
+    /// their `le` labels, so a bound that appeared only in the scrapes where something landed in
+    /// it would look like a bucket layout that keeps changing. Every resolved bound is rendered
+    /// every time, empty or not — see `prometheus.writeHistogramSnapshot`.
+    ///
+    /// Both endpoints are inclusive, so a `[512, 2048]` window at 4 bounds per doubling resolves
+    /// `2 * 4 + 1` = 9 bounds, and stores a tenth to saturate into:
+    ///
+    ///     512, 608, 724, 861, 1024, 1217, 1448, 1722, 2048 | 2435
     pub const Layout = struct {
         /// The smallest upper bound in the histogram: bucket 0's. Every observation at or below it
-        /// lands in bucket 0 — counted, but not resolved. Rounds up to the nearest representable
-        /// bound when it is not a power of two, taking `max_upper_bound_ns` up with it by the same
-        /// factor; prefer a power of two so no rounding happens.
+        /// lands in bucket 0 — counted, but not resolved. That is exact rather than a clamp, and
+        /// both expositions say so: a classic histogram's first bucket is `(-Inf, le]`, and on the
+        /// native path bucket 0 crosses as the *zero bucket* `[-t, +t]` rather than as a ladder
+        /// bucket with a lower edge (see `zeroThreshold`). A 1ns observation genuinely belongs to
+        /// it either way. Rounds up to the nearest representable bound when it is not a power of
+        /// two, taking `max_upper_bound_ns` up with it by the same factor; prefer a power of two
+        /// so no rounding happens.
         min_upper_bound_ns: u64,
-        /// The largest upper bound in the histogram: the final bucket's. Must be
-        /// `min_upper_bound_ns` times a power of two. Observations above it land in the implicit
-        /// `+Inf` bucket.
+        /// The largest bound a value is resolved against. Must be `min_upper_bound_ns` times a
+        /// power of two. Not a ceiling on what may be observed: larger values saturate into the
+        /// bucket one rung above it, staying exact in `sum`/`count` but resolved no further than
+        /// "above this". Set it where magnitude stops being worth knowing — every quantile past
+        /// it reports the saturating bucket's bound, so crossing it is a signal, not a reading.
         max_upper_bound_ns: u64,
         /// How many upper bounds fall in each doubling — each `x` to `2x` range. Power of two in
         /// 1..256. Each bound is `2^(1 / bounds_per_doubling)` times the one below it: 4 leaves them
         /// 18.9% apart, 8 -> 9.1%, 16 -> 4.4%.
-        bounds_per_doubling: u16 = 8,
+        bounds_per_doubling: u16 = 4,
 
         /// Backstop on the share of the fixed histogram region a single metric may claim. Not a
         /// budget — a layout anywhere near this is a typo, not a decision. At the ceiling one metric
@@ -914,6 +966,11 @@ pub const LatencyHistogram = struct {
         /// `bounds_per_doubling` against window width: the two trade directly, so at 256 bounds per
         /// doubling one doubling fits (257 buckets) and two do not (513).
         pub const max_bucket_count: u64 = 512;
+
+        /// Hard ceiling on `max_upper_bound_ns`, and what keeps `upperBoundNs`'s `exp2` -> `u64`
+        /// conversion in range, rounding included. 2^62 ns is ~146 years, so the limit binds on
+        /// the arithmetic rather than on anything a latency metric could observe.
+        const max_upper_bound_limit: u64 = 1 << 62;
 
         /// Number of leading `u64` words (at `Detail.index`) encoding `layout` —
         /// `[bounds_per_doubling, min_upper_bound_ns, max_upper_bound_ns]` — before the `Raw` shard
@@ -938,6 +995,7 @@ pub const LatencyHistogram = struct {
                 std.math.isPowerOfTwo(layout.bounds_per_doubling));
             std.debug.assert(layout.min_upper_bound_ns != 0);
             std.debug.assert(layout.max_upper_bound_ns > layout.min_upper_bound_ns);
+            std.debug.assert(layout.max_upper_bound_ns <= max_upper_bound_limit);
             const ratio = layout.max_upper_bound_ns / layout.min_upper_bound_ns;
             std.debug.assert(ratio * layout.min_upper_bound_ns == layout.max_upper_bound_ns);
             std.debug.assert(std.math.isPowerOfTwo(ratio));
@@ -969,9 +1027,11 @@ pub const LatencyHistogram = struct {
                     "Layout max_upper_bound_ns ({d}) must exceed min_upper_bound_ns ({d}).",
                     .{ self.max_upper_bound_ns, self.min_upper_bound_ns },
                 ));
-            // Keeps `upperBoundNs`'s `exp2` -> u64 conversion in range, rounding included.
-            if (self.max_upper_bound_ns > 1 << 62)
-                @compileError("Layout max_upper_bound_ns must be <= 2^62");
+            if (self.max_upper_bound_ns > max_upper_bound_limit)
+                @compileError(std.fmt.comptimePrint(
+                    "Layout max_upper_bound_ns ({d}) must be <= {d}; see `max_upper_bound_limit`.",
+                    .{ self.max_upper_bound_ns, max_upper_bound_limit },
+                ));
 
             // A power-of-two ratio is what keeps every derived quantity in integer arithmetic, and
             // what makes it impossible to name a bound sitting a hair off a representable one.
@@ -999,23 +1059,54 @@ pub const LatencyHistogram = struct {
                 // knobs, and which one to turn is the whole question the error has to answer.
                 const spans = comptime self.doublings();
                 // Widest ladder that still fits at this window width. `spans` is at most 62 and
-                // the branch needs `spans * bounds_per_doubling >= 512`, so this never floors to 0.
+                // the branch needs `spans * bounds_per_doubling >= 511`, so this never floors to 0.
                 const fits = comptime std.math.floorPowerOfTwo(
                     u64,
-                    (max_bucket_count - 1) / spans,
+                    (max_bucket_count - 2) / spans,
                 );
                 @compileError(std.fmt.comptimePrint(
-                    "Layout resolves to {d} doublings x {d} bounds + 1 = {d} buckets " ++
-                        "({d} u64 words), over the {d}-bucket ceiling. Lower " ++
-                        "bounds_per_doubling to {d}, or narrow the window.",
+                    "Layout resolves to {d} doublings x {d} bounds + 1, plus the saturating " ++
+                        "bucket = {d} buckets ({d} u64 words), over the {d}-bucket ceiling. " ++
+                        "Lower bounds_per_doubling to {d}, or narrow the window.",
                     .{ spans, self.bounds_per_doubling, count, words, max_bucket_count, fits },
+                ));
+            }
+
+            // `upperBoundNs` rounds to an integer, so a ladder fine enough relative to its floor
+            // rounds two adjacent bounds onto the same `le` — at `min = 1, bpd = 16` the first two
+            // are 1 and 1.04, both emitted as `le="1"`. That would put two `_bucket` series with
+            // the same `le` in one text-exposition histogram, which no consumer can read back as
+            // two distinct buckets. Bounds are geometric so the gap only widens: checking the
+            // first pair settles every pair.
+            if (comptime self.upperBoundNs(1) <= self.upperBoundNs(0)) {
+                // Smallest floor whose first gap survives rounding, at this resolution.
+                const fits_min = comptime blk: {
+                    var candidate: u64 = self.min_upper_bound_ns;
+                    while (true) : (candidate *= 2) {
+                        const probe: Layout = .{
+                            .min_upper_bound_ns = candidate,
+                            .max_upper_bound_ns = candidate * 2,
+                            .bounds_per_doubling = self.bounds_per_doubling,
+                        };
+                        if (probe.upperBoundNs(1) > probe.upperBoundNs(0)) break :blk candidate;
+                    }
+                };
+                @compileError(std.fmt.comptimePrint(
+                    "Layout's first two bounds both round to {d}ns: {d} bounds per doubling is " ++
+                        "finer than 1ns at a floor of {d}ns, so the `le` labels would collide. " ++
+                        "Raise min_upper_bound_ns to {d}, or lower bounds_per_doubling.",
+                    .{
+                        self.upperBoundNs(0),    self.bounds_per_doubling,
+                        self.min_upper_bound_ns, fits_min,
+                    },
                 ));
             }
         }
 
-        /// The Prometheus native-histogram `schema` this layout renders as: `log2` of
-        /// `bounds_per_doubling`. Prometheus calls a doubling an octave and encodes the exponent;
-        /// callers think in bounds, so the field carries the count and the wire gets this.
+        /// The Prometheus native-histogram `schema` whose bucket ladder this layout's bounds sit
+        /// on: `log2` of `bounds_per_doubling`. The protobuf exposition puts it on the wire as
+        /// `Histogram.schema`; keeping the bounds schema-aligned is also what lets `bucketIndex`
+        /// reuse `nativeBucketIndex`'s exact `frexp` binning instead of a `log2` that rounds badly.
         pub fn schema(self: Layout) u4 {
             return @intCast(@ctz(self.bounds_per_doubling));
         }
@@ -1026,9 +1117,17 @@ pub const LatencyHistogram = struct {
             return @intCast(@ctz(self.max_upper_bound_ns / self.min_upper_bound_ns));
         }
 
-        /// Both endpoints are inclusive, hence the `+ 1`.
-        pub fn bucketCount(self: Layout) u64 {
+        /// Buckets that resolve a value, one per bound from `min_upper_bound_ns` to
+        /// `max_upper_bound_ns`. Both endpoints are inclusive, hence the `+ 1`.
+        pub fn resolvedBucketCount(self: Layout) u64 {
             return @as(u64, self.doublings()) * self.bounds_per_doubling + 1;
+        }
+
+        /// Every bucket in storage: the resolved ones plus the saturating bucket a rung above
+        /// `max_upper_bound_ns`, which `observe` clamps larger values into. This is what sizes a
+        /// shard, so it is also what `upperBoundNs` and the snapshot readers iterate over.
+        pub fn bucketCount(self: Layout) u64 {
+            return self.resolvedBucketCount() + 1;
         }
 
         pub fn elementsFromBucketCount(self: Layout) u32 {
@@ -1036,19 +1135,45 @@ pub const LatencyHistogram = struct {
         }
 
         /// Global native bucket index of storage bucket 0; storage bucket `i` has global index
-        /// `baseIndex() + i`. This is the `sint32` `positive_span` offset in the native histogram.
+        /// `baseIndex() + i`. Anchors both `bucketIndex` and `upperBoundNs` onto the `schema()`
+        /// ladder, so a bound and the bin that value falls into are computed from the same table.
         pub fn baseIndex(self: Layout) i64 {
             return nativeBucketIndex(self.schema(), self.min_upper_bound_ns);
         }
 
+        /// The native exposition's zero-bucket threshold: bucket 0's exact upper bound on the
+        /// ladder, which is what makes the zero bucket `[-t, +t]` and the first positive bucket
+        /// `(t, next]` tile with no gap or overlap.
+        ///
+        /// Neither of the two nearby values works here. `min_upper_bound_ns` is what the caller
+        /// asked for, which `baseIndex` rounds *up* onto the ladder — a `min` of 1000 bins against
+        /// 1024, so a threshold of 1000 would leave `(1000, 1024]` claimed by no bucket on the wire
+        /// while `zero_count` holds those observations anyway. `upperBoundNs(0)` is that same bound
+        /// floored to an integer `le` label, which leaves the sub-1ns remainder `(floor(b), b]`
+        /// in the same position. The threshold is a `double` on the wire, so it can carry the
+        /// boundary `bucketIndex` actually bins against, exactly.
+        pub fn zeroThreshold(self: Layout) f64 {
+            return nativeBound(self.schema(), self.baseIndex());
+        }
+
         /// The inclusive `le` upper bound (in ns) for bucket `index`, rounded to an integer:
-        /// `2^((base_index + index) / bounds_per_doubling)`. Used only by the classic (text) render
-        /// path; the native protobuf path uses bucket indices directly via `baseIndex`.
+        /// `2^((base_index + index) / bounds_per_doubling)`. This is what the text exposition
+        /// emits; the native path carries no bounds at all, deriving them from `schema` and the
+        /// span offsets off `baseIndex`.
+        ///
+        /// `nativeBound` rather than `exp2(gi / bpd)` so the bound is the exact inverse of the
+        /// `nativeBucketIndex` call in `bucketIndex`: a value landing on a boundary is binned into
+        /// the bucket that names it, with no ulp-width disagreement between the two.
+        ///
+        /// Floored, not rounded, and that is load-bearing. Observations are whole nanoseconds, so
+        /// for integer `v` and a real boundary `b`, `v <= b` exactly when `v <= floor(b)` — the
+        /// floored bound is a faithful `le` label. Rounding up would put the label above the
+        /// boundary it names, and an observation of exactly that value would bin one bucket higher
+        /// than the label it was just promised. Both endpoints are powers of two, so they are
+        /// exact either way; only interior bounds move (`2^(37/4)` is 608.87, so `le="608"`).
         fn upperBoundNs(self: Layout, index: usize) u64 {
             const gi = self.baseIndex() + @as(i64, @intCast(index));
-            const per_doubling: f64 = @floatFromInt(self.bounds_per_doubling);
-            const bound = std.math.exp2(@as(f64, @floatFromInt(gi)) / per_doubling);
-            return @intFromFloat(@round(bound));
+            return @intFromFloat(@floor(nativeBound(self.schema(), gi)));
         }
     };
 
@@ -1108,17 +1233,22 @@ pub const LatencyHistogram = struct {
     };
 
     pub fn fromRaw(layout: Layout, raw: Raw) LatencyHistogram {
+        const shards = raw.shards();
+        // `bucketIndex` bounds observations against `layout`, not against the slice, so a `raw`
+        // sized from a different layout would index out of the buckets it was handed.
+        std.debug.assert(shards[0].buckets.len == layout.bucketCount());
         return .{
             .layout = layout,
             .shard_sync = raw.shardSync(),
-            .shards = raw.shards(),
+            .shards = shards,
         };
     }
 
     fn bucketIndex(self: *const LatencyHistogram, ns: u64) usize {
-        // Global native index minus the window base; values below the window floor into bucket 0,
-        // values above the top land in the implicit `+Inf` bucket via `observe`'s `index <
-        // buckets.len` guard.
+        // Global native index minus the window base. Values below the window land in bucket 0,
+        // which is correct rather than a clamp — bucket 0 runs from `-Inf` under both expositions
+        // (see `Layout.min_upper_bound_ns`). Values above the window return an index past the last
+        // bucket, which `observe` clamps into the saturating one.
         if (ns == 0) return 0;
         const local = nativeBucketIndex(self.layout.schema(), ns) - self.layout.baseIndex();
         return if (local < 0) 0 else @intCast(local);
@@ -1128,12 +1258,13 @@ pub const LatencyHistogram = struct {
     pub fn observe(self: *const LatencyHistogram, ns: u64) void {
         const shard_sync: ShardSync = @bitCast(self.shard_sync.fetchAdd(1, .acquire)); // acquires lock; must be first
         const shard = &self.shards[shard_sync.shard];
-        const index = self.bucketIndex(ns);
-        // A value above every bucket bound lands in the implicit `+Inf` bucket: it still
-        // contributes to `sum`/`count` but to no explicit bucket (matches `Histogram.observe`).
-        if (index < shard.buckets.len) {
-            _ = shard.buckets[index].fetchAdd(1, .monotonic);
-        }
+        // Values past `max_upper_bound_ns` saturate into the final bucket rather than being
+        // dropped, which is what keeps `count` equal to the sum of the buckets — the invariant a
+        // native encoding is rejected for breaking. The bound they are filed under is one rung
+        // too low for them, but its lower edge still holds: the value really did exceed
+        // `max_upper_bound_ns`. See `Layout.bucketCount`.
+        const index = @min(self.bucketIndex(ns), shard.buckets.len - 1);
+        _ = shard.buckets[index].fetchAdd(1, .monotonic);
         _ = shard.sum.fetchAdd(ns, .monotonic);
         _ = shard.count.fetchAdd(1, .release); // releases lock; must be last
     }
@@ -1560,9 +1691,12 @@ test "latency histogram: both window endpoints are inclusive" {
         .bounds_per_doubling = 8,
     };
     try std.testing.expectEqual(@as(u6, 6), layout.doublings());
-    try std.testing.expectEqual(@as(u64, 49), layout.bucketCount());
+    try std.testing.expectEqual(@as(u64, 49), layout.resolvedBucketCount());
+    try std.testing.expectEqual(@as(u64, 50), layout.bucketCount());
     try std.testing.expectEqual(@as(u64, 1_024), layout.upperBoundNs(0));
     try std.testing.expectEqual(@as(u64, 65_536), layout.upperBoundNs(48));
+    // The saturating bucket, one rung past `max_upper_bound_ns`.
+    try std.testing.expectEqual(@as(u64, 71_467), layout.upperBoundNs(49));
 }
 
 test "latency histogram: bounds that are not powers of two round up together" {
@@ -1574,14 +1708,58 @@ test "latency histogram: bounds that are not powers of two round up together" {
         .max_upper_bound_ns = 16_000,
         .bounds_per_doubling = 8,
     };
-    // Rounding shifts the window without changing its span: still 4 doublings, 33 buckets.
+    // Rounding shifts the window without changing its span: still 4 doublings, 33 resolved.
     try std.testing.expectEqual(@as(u6, 4), layout.doublings());
-    try std.testing.expectEqual(@as(u64, 33), layout.bucketCount());
+    try std.testing.expectEqual(@as(u64, 33), layout.resolvedBucketCount());
+    try std.testing.expectEqual(@as(u64, 34), layout.bucketCount());
     try std.testing.expectEqual(@as(u64, 1_024), layout.upperBoundNs(0));
     try std.testing.expectEqual(@as(u64, 16_384), layout.upperBoundNs(32));
     // The fields keep what the caller wrote.
     try std.testing.expectEqual(@as(u64, 1_000), layout.min_upper_bound_ns);
     try std.testing.expectEqual(@as(u64, 16_000), layout.max_upper_bound_ns);
+}
+
+test "latency histogram: the zero threshold is bucket 0's real bound, not the raw field" {
+    const gpa = std.testing.allocator;
+    const Layout = LatencyHistogram.Layout;
+
+    // Powers of two are the uninteresting case: field, effective bound and threshold all agree.
+    const aligned: Layout = .{
+        .min_upper_bound_ns = 512,
+        .max_upper_bound_ns = 2_048,
+        .bounds_per_doubling = 4,
+    };
+    try std.testing.expectEqual(@as(f64, 512), aligned.zeroThreshold());
+
+    // A floor that is not a power of two rounds up onto the ladder. Emitting the raw 1000 as the
+    // native zero threshold would leave `(1000, 1024]` in no bucket on the wire, while bucket 0
+    // holds those observations regardless.
+    const rounded: Layout = .{
+        .min_upper_bound_ns = 1_000,
+        .max_upper_bound_ns = 16_000,
+        .bounds_per_doubling = 8,
+    };
+    try std.testing.expectEqual(@as(f64, 1_024), rounded.zeroThreshold());
+
+    // The threshold is the boundary `bucketIndex` bins against, so everything up to it is bucket 0
+    // and the next integer starts the first positive bucket.
+    const hist: LatencyHistogram = try .initForTest(gpa, rounded);
+    defer hist.deinitForTest(gpa);
+    try std.testing.expectEqual(@as(usize, 0), hist.bucketIndex(1_000));
+    try std.testing.expectEqual(@as(usize, 0), hist.bucketIndex(1_024));
+    try std.testing.expect(hist.bucketIndex(1_025) > 0);
+
+    // A floor that rounds onto an interior rung lands on a bound that is not an integer, and the
+    // threshold carries the exact one rather than the floored `le` label: `upperBoundNs(0)` would
+    // drop the `(1116, 1116.68]` sliver that bucket 0 still bins.
+    const interior: Layout = .{
+        .min_upper_bound_ns = 1_050,
+        .max_upper_bound_ns = 16_800,
+        .bounds_per_doubling = 8,
+    };
+    try std.testing.expectEqual(@as(u64, 1_116), interior.upperBoundNs(0));
+    try std.testing.expect(interior.zeroThreshold() > 1_116);
+    try std.testing.expect(interior.zeroThreshold() < 1_117);
 }
 
 test "latency histogram: bounds_per_doubling maps onto the native schema" {
@@ -1610,10 +1788,11 @@ test "latency histogram: the pre-rename layout keeps its bounds" {
         .bounds_per_doubling = 4,
     };
     try std.testing.expectEqual(@as(i64, 36), layout.baseIndex());
-    try std.testing.expectEqual(@as(u64, 49), layout.bucketCount());
-    const head = [_]u64{ 512, 609, 724, 861, 1024, 1218, 1448, 1722, 2048 };
+    try std.testing.expectEqual(@as(u64, 49), layout.resolvedBucketCount());
+    try std.testing.expectEqual(@as(u64, 50), layout.bucketCount());
+    const head = [_]u64{ 512, 608, 724, 861, 1024, 1217, 1448, 1722, 2048 };
     for (head, 0..) |bound, i| try std.testing.expectEqual(bound, layout.upperBoundNs(i));
-    try std.testing.expectEqual(@as(u64, 1_763_488), layout.upperBoundNs(47));
+    try std.testing.expectEqual(@as(u64, 1_763_487), layout.upperBoundNs(47));
     try std.testing.expectEqual(@as(u64, 2_097_152), layout.upperBoundNs(48));
 }
 
@@ -1660,7 +1839,7 @@ test "latency histogram: geometric bounds and base index" {
         .max_upper_bound_ns = 2048,
         .bounds_per_doubling = 4,
     };
-    const want = [_]u64{ 512, 609, 724, 861, 1024, 1218, 1448, 1722, 2048 };
+    const want = [_]u64{ 512, 608, 724, 861, 1024, 1217, 1448, 1722, 2048 };
     for (want, 0..) |bound, i| try std.testing.expectEqual(bound, layout.upperBoundNs(i));
 
     // Storage bucket 0 is native index 36 (== bounds_per_doubling * log2(512), exact since 512 is a
@@ -1669,7 +1848,9 @@ test "latency histogram: geometric bounds and base index" {
     try std.testing.expectEqual(@as(u64, 2), layout.doublings());
     try std.testing.expectEqual(@as(u4, 2), layout.schema());
     // Two doublings at 4 bounds each, plus the closing bound.
-    try std.testing.expectEqual(@as(u64, 9), layout.bucketCount());
+    try std.testing.expectEqual(@as(u64, 9), layout.resolvedBucketCount());
+    // Plus the saturating bucket.
+    try std.testing.expectEqual(@as(u64, 10), layout.bucketCount());
 }
 
 test "latency histogram: bins geometrically" {
@@ -1678,8 +1859,8 @@ test "latency histogram: bins geometrically" {
 
     // [512, 1024] at 4 bounds per doubling -> 5 buckets. Both endpoints are doubling boundaries and
     // both are observed, exercising the fp-safe `frexp` binning; 513/700 are mid-doubling; 861 stays
-    // empty, so an interior bucket holds the running cumulative; 2000 is above the window and lands
-    // in the implicit `+Inf`.
+    // empty, so an interior bucket holds the running cumulative; 2000 is above the window and
+    // saturates into the final bucket (le=1217, a rung past the 1024 top).
     const layout: Layout = .{
         .min_upper_bound_ns = 512,
         .max_upper_bound_ns = 1024,
@@ -1689,18 +1870,91 @@ test "latency histogram: bins geometrically" {
     defer hist.deinitForTest(gpa);
 
     hist.observe(512); // bucket 0 (le=512, inclusive doubling boundary)
-    hist.observe(513); // bucket 1 (le=609)
+    hist.observe(513); // bucket 1 (le=608)
     hist.observe(700); // bucket 2 (le=724)
     hist.observe(1024); // bucket 4 (le=1024, inclusive doubling boundary)
-    hist.observe(2000); // +Inf
+    hist.observe(2000); // saturates into bucket 5 (le=1217)
 
     try hist.testExpectBuckets(5, &.{
         .{ .upper_bound = 512, .cumulative_count = 1 },
-        .{ .upper_bound = 609, .cumulative_count = 2 },
+        .{ .upper_bound = 608, .cumulative_count = 2 },
         .{ .upper_bound = 724, .cumulative_count = 3 },
         .{ .upper_bound = 861, .cumulative_count = 3 },
         .{ .upper_bound = 1024, .cumulative_count = 4 },
+        .{ .upper_bound = 1217, .cumulative_count = 5 },
     });
+}
+
+test "latency histogram: every bound is emitted on every snapshot" {
+    const gpa = std.testing.allocator;
+    const Layout = LatencyHistogram.Layout;
+
+    // The text exposition identifies a classic bucket by its `le` label, so a bound that showed up
+    // only in the scrapes where something landed in it would read as a bucket layout that keeps
+    // changing — every range query spanning the change sees a series appear from nothing. The set
+    // has to be the layout's, never the observed subset, including a snapshot where nothing was
+    // observed at all.
+    const layout: Layout = .{
+        .min_upper_bound_ns = 512,
+        .max_upper_bound_ns = 1024,
+        .bounds_per_doubling = 4,
+    };
+    const hist: LatencyHistogram = try .initForTest(gpa, layout);
+    defer hist.deinitForTest(gpa);
+
+    // Asserted at the reader, which yields the saturating bucket like any other — the text
+    // renderer is what stops short of it (`resolvedBucketCount`), and the native path needs it
+    // present to keep `count == zero_count + Σ buckets`.
+    const bounds = [_]u64{ 512, 608, 724, 861, 1024, 1217 };
+    for ([_]?u64{ null, 700, null }) |maybe_ns| {
+        if (maybe_ns) |ns| hist.observe(ns);
+
+        var snap = hist.swapOutSnapshot();
+        defer snap.release();
+
+        var seen: usize = 0;
+        while (snap.nextBucket()) |bucket| : (seen += 1) {
+            try std.testing.expectEqual(bounds[seen], bucket.upper_bound);
+        }
+        try std.testing.expectEqual(bounds.len, seen);
+    }
+}
+
+test "latency histogram: a bound bins into the bucket that names it" {
+    const Layout = LatencyHistogram.Layout;
+
+    // `upperBoundNs` and `bucketIndex` have to agree exactly, or a value sitting on a boundary is
+    // reported under an `le` below itself. They do because both route through the same per-octave
+    // table — `nativeBound` is the inverse of `nativeBucketIndex`, not an `exp2` that lands within
+    // a ulp of it. Every bound of every shipped-shape layout, checked against the binning.
+    //
+    // Floors here are all coarse enough that no two bounds round together; `comptimeValidate`
+    // rejects the ones that would (see its `le` collision check).
+    for ([_]u16{ 1, 2, 4, 8, 16 }) |bpd| {
+        for ([_]u64{ 512, 1024 }) |min| {
+            const layout: Layout = .{
+                .min_upper_bound_ns = min,
+                .max_upper_bound_ns = min << 20,
+                .bounds_per_doubling = bpd,
+            };
+            const hist: LatencyHistogram = try .initForTest(std.testing.allocator, layout);
+            defer hist.deinitForTest(std.testing.allocator);
+
+            var prev_bound: u64 = 0;
+            for (0..layout.bucketCount()) |i| {
+                const bound = layout.upperBoundNs(i);
+                // Strictly ascending, which is what keeps two buckets off the same `le` label on
+                // the text path.
+                try std.testing.expect(bound > prev_bound);
+                prev_bound = bound;
+                // The rounded bound must land in bucket `i`, and the next integer must not.
+                try std.testing.expectEqual(i, hist.bucketIndex(bound));
+                if (bound + 1 <= layout.max_upper_bound_ns) {
+                    try std.testing.expect(hist.bucketIndex(bound + 1) > i);
+                }
+            }
+        }
+    }
 }
 
 test "latency histogram: values accumulate across snapshots" {
@@ -1719,20 +1973,22 @@ test "latency histogram: values accumulate across snapshots" {
     hist.observe(513); // bucket 1
     try hist.testExpectBuckets(2, &.{
         .{ .upper_bound = 512, .cumulative_count = 1 },
-        .{ .upper_bound = 609, .cumulative_count = 2 },
+        .{ .upper_bound = 608, .cumulative_count = 2 },
         .{ .upper_bound = 724, .cumulative_count = 2 },
         .{ .upper_bound = 861, .cumulative_count = 2 },
         .{ .upper_bound = 1024, .cumulative_count = 2 },
+        .{ .upper_bound = 1217, .cumulative_count = 2 },
     });
 
     // The prior snapshot folds its counts back into the hot shard, so totals accumulate.
     hist.observe(512); // bucket 0
     try hist.testExpectBuckets(3, &.{
         .{ .upper_bound = 512, .cumulative_count = 2 },
-        .{ .upper_bound = 609, .cumulative_count = 3 },
+        .{ .upper_bound = 608, .cumulative_count = 3 },
         .{ .upper_bound = 724, .cumulative_count = 3 },
         .{ .upper_bound = 861, .cumulative_count = 3 },
         .{ .upper_bound = 1024, .cumulative_count = 3 },
+        .{ .upper_bound = 1217, .cumulative_count = 3 },
     });
 }
 
@@ -1754,10 +2010,11 @@ test "latency histogram: values below the window floor into bucket 0" {
 
     try hist.testExpectBuckets(3, &.{
         .{ .upper_bound = 512, .cumulative_count = 3 },
-        .{ .upper_bound = 609, .cumulative_count = 3 },
+        .{ .upper_bound = 608, .cumulative_count = 3 },
         .{ .upper_bound = 724, .cumulative_count = 3 },
         .{ .upper_bound = 861, .cumulative_count = 3 },
         .{ .upper_bound = 1024, .cumulative_count = 3 },
+        .{ .upper_bound = 1217, .cumulative_count = 3 },
     });
 }
 

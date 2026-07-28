@@ -77,7 +77,7 @@ pub fn writeHistogramBody(
     var snapshot_reader = histogram.swapOutSnapshot();
     defer snapshot_reader.release();
 
-    try writeHistogramSnapshot(&snapshot_reader, metric_id, w);
+    try writeHistogramSnapshot(&snapshot_reader, metric_id, null, w);
 }
 
 /// Writes a snapshot of a `LatencyHistogram` as prometheus histogram entries. Like
@@ -90,6 +90,15 @@ pub fn writeHistogramBody(
 /// `{name}_bucket` / `{name}_sum` / `{name}_count` with the unit already in `{name}`, and the
 /// values are rendered as-is via `numberFmt`. If we later convert to fractional seconds, drop
 /// the naming rule and swap in a seconds-aware formatter.
+///
+/// Only the resolved buckets get an `le` line. The layout's last bucket is the saturating one that
+/// `observe` clamps above-window values into (see `LatencyHistogram.Layout`), and it exists to keep
+/// `count == Σ buckets` for the native protobuf exposition, which has no `+Inf`. The text format
+/// does have `+Inf`, and it is the correct home for that tail: filing a 5ms observation under a
+/// finite `le` of 1.2ms would make `histogram_quantile` interpolate inside a bucket the value is
+/// not in, reporting a confident 1.2ms instead of "past the last bound". `release()` still drains
+/// the skipped bucket back into the hot shard, and `snapshot_reader.count` already includes it, so
+/// `+Inf` and `_count` come out whole.
 pub fn writeLatencyHistogramBody(
     histogram: *const tel.LatencyHistogram,
     metric_id: tel.metric.Id,
@@ -98,7 +107,8 @@ pub fn writeLatencyHistogramBody(
     var snapshot_reader = histogram.swapOutSnapshot();
     defer snapshot_reader.release();
 
-    try writeHistogramSnapshot(&snapshot_reader, metric_id, w);
+    const resolved: usize = @intCast(histogram.layout.resolvedBucketCount());
+    try writeHistogramSnapshot(&snapshot_reader, metric_id, resolved, w);
 }
 
 /// Shared body of `writeHistogramBody` and `writeLatencyHistogramBody`: drains an already-swapped
@@ -109,12 +119,21 @@ pub fn writeLatencyHistogramBody(
 /// the bucket `le` bounds and `_sum` — render via `numberFmt`, which handles both kinds as-is
 /// (`Histogram`'s floats, `LatencyHistogram`'s raw-nanosecond integers); the dimensionless integer
 /// counts (`cumulative_count`, `_count`) always render as `{d}`.
+///
+/// `bucket_limit` caps how many of the reader's buckets get an `le` line; the rest are left to the
+/// caller's `release()` and counted only by `+Inf`. `null` emits every bucket, which is what the
+/// float `Histogram` wants — see `writeLatencyHistogramBody` for the kind that does not.
 fn writeHistogramSnapshot(
     snapshot_reader: anytype,
     metric_id: tel.metric.Id,
+    bucket_limit: ?usize,
     w: *std.Io.Writer,
 ) std.Io.Writer.Error!void {
-    while (snapshot_reader.nextBucket()) |bucket| { // write the buckets
+    var emitted: usize = 0;
+    while (true) : (emitted += 1) { // write the buckets
+        if (bucket_limit) |limit| if (emitted == limit) break;
+        const bucket = snapshot_reader.nextBucket() orelse break;
+
         try w.print("{s}_bucket", .{metric_id.name});
 
         try w.writeByte('{');
@@ -201,8 +220,9 @@ test "prometheus: latency histogram emits ns-suffixed raw nanoseconds" {
     const gpa = std.testing.allocator;
     const Layout = tel.LatencyHistogram.Layout;
 
-    // 4 bounds per doubling over [512, 1024]: rounded geometric le-bounds 512, 609, 724, 861,
-    // 1024; +Inf.
+    // 4 bounds per doubling over [512, 1024]: floored geometric le-bounds 512, 608, 724, 861, 1024,
+    // then +Inf. The layout's saturating bucket (le=1217) is deliberately not rendered here — the
+    // above-window observation belongs to +Inf on this path.
     const histogram: tel.LatencyHistogram = try .initForTest(gpa, Layout{
         .min_upper_bound_ns = 512,
         .max_upper_bound_ns = 1024,
@@ -211,10 +231,10 @@ test "prometheus: latency histogram emits ns-suffixed raw nanoseconds" {
     defer histogram.deinitForTest(gpa);
 
     histogram.observe(512); // bucket 0
-    histogram.observe(513); // bucket 1
+    histogram.observe(513); // bucket 1 (le=608)
     histogram.observe(700); // bucket 2
     histogram.observe(1024); // bucket 4
-    histogram.observe(2000); // +Inf
+    histogram.observe(2000); // above the window -> +Inf only
 
     var output: std.Io.Writer.Allocating = .init(gpa);
     defer output.deinit();
@@ -225,7 +245,7 @@ test "prometheus: latency histogram emits ns-suffixed raw nanoseconds" {
     // metric name itself, which the renderer emits verbatim.
     try std.testing.expectEqualStrings(
         \\test_latency_ns_bucket{le="512"} 1
-        \\test_latency_ns_bucket{le="609"} 2
+        \\test_latency_ns_bucket{le="608"} 2
         \\test_latency_ns_bucket{le="724"} 3
         \\test_latency_ns_bucket{le="861"} 3
         \\test_latency_ns_bucket{le="1024"} 4

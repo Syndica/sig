@@ -5,10 +5,11 @@
 //!
 //! This is a hand-rolled encoder for the fixed set of messages we emit (no protobuf dependency):
 //! * gauges/counters -> `UNTYPED` (matching the text format, which carries no `# TYPE`);
-//! * the float-bounds `Histogram` and any non-`exponential` `LatencyHistogram` -> a classic
-//!   protobuf `Histogram` (explicit `bucket` list);
-//! * an `exponential` `LatencyHistogram` -> a standard exponential native histogram (`schema`,
-//!   `positive_span`, delta-encoded `positive_delta`).
+//! * the float-bounds `Histogram` -> a classic protobuf `Histogram` (explicit `bucket` list),
+//!   its caller-supplied bounds having no exponential schema to sit on;
+//! * a `LatencyHistogram` -> a standard exponential native histogram (`schema`,
+//!   `positive_span`, delta-encoded `positive_delta`), its bounds being schema-aligned by
+//!   construction (see `tel.LatencyHistogram.Layout`).
 //!
 //! The body is a stream of length-delimited `MetricFamily` messages (`encoding=delimited`): each is
 //! prefixed with its byte length as a varint. Metrics are grouped into families by `Id.name`, which
@@ -339,13 +340,7 @@ const NativeHistogramWriter = struct {
 
     fn write(self: NativeHistogramWriter, hw: *std.Io.Writer) Error!void {
         const bucket_count: usize = @intCast(self.layout.bucketCount());
-        // One extra slot for above-window observations. The classic path leans on Prometheus deriving
-        // an implicit `+Inf` bucket from `sample_count`, but a native histogram has no `+Inf`: every
-        // observation must sit in an explicit bucket, or `sample_count` won't equal the bucket sum and
-        // Prometheus rejects the *entire* scrape ("observation count should equal the number of
-        // observations found in the buckets"). We fold the overflow into the native bucket just above
-        // the window (`bucket_count`), the tightest index we can assign from the count alone.
-        const counts = try self.gpa.alloc(u64, bucket_count + 1);
+        const counts = try self.gpa.alloc(u64, bucket_count);
         defer self.gpa.free(counts);
 
         const total_count = self.snap.count;
@@ -358,23 +353,31 @@ const NativeHistogramWriter = struct {
             counts[idx] = b.cumulative_count - prev_cumulative;
             prev_cumulative = b.cumulative_count;
         }
-        // `count` is bumped last in `observe` (after the bucket) and the snapshot drains all in-flight
-        // writers, so it is always >= the in-window bucket sum; the remainder is the above-window
-        // overflow. `-|` is belt-and-suspenders against a future regression of that invariant.
-        std.debug.assert(total_count >= prev_cumulative);
-        counts[bucket_count] = @as(u64, total_count) -| prev_cumulative;
+        // A native histogram has no `+Inf`, so every observation must sit in an explicit bucket or
+        // `sample_count` will not equal the bucket sum and Prometheus rejects the *entire* scrape
+        // ("observation count should equal the number of observations found in the buckets").
+        // `observe` is what makes that hold: above-window values saturate into the final bucket
+        // rather than being dropped, so the last cumulative is the sample count exactly.
+        std.debug.assert(total_count == prev_cumulative);
 
         try writeSint32Field(hw, Histogram.schema, @intCast(self.layout.schema()));
-        try writeDoubleField(hw, Histogram.zero_threshold, 0.0);
-        try writeVarintField(hw, Histogram.zero_count, 0);
+        // Storage bucket 0 holds everything at or below its bound, down to and including 1ns — it
+        // is `(-Inf, b]`, not the ladder bucket `(prev_bound, b]` its index would otherwise name.
+        // The zero bucket is exactly that shape: `[-threshold, +threshold]`. `zeroThreshold` is
+        // `b` itself (not the raw `min_upper_bound_ns` field, and not its floored `le` label), so
+        // the zero bucket and the first positive bucket `(b, next_bound]` tile with no gap or
+        // overlap and bucket 0 maps across exactly.
+        try writeDoubleField(hw, Histogram.zero_threshold, self.layout.zeroThreshold());
+        try writeVarintField(hw, Histogram.zero_count, counts[0]);
         try writeVarintField(hw, Histogram.sample_count, total_count);
         try writeDoubleField(hw, Histogram.sample_sum, @floatFromInt(sum_ns));
 
-        // Populated range [first, last]; native buckets are sparse, so a single span with interior
-        // zero-deltas is the simplest faithful encoding.
+        // Populated range [first, last] over the positive buckets, which start at storage index 1 —
+        // index 0 went out as the zero bucket above. Native buckets are sparse, so a single span
+        // with interior zero-deltas is the simplest faithful encoding.
         var first: ?usize = null;
         var last: usize = 0;
-        for (counts, 0..) |c, k| {
+        for (counts[1..], 1..) |c, k| {
             if (c != 0) {
                 if (first == null) first = k;
                 last = k;
@@ -397,7 +400,9 @@ const NativeHistogramWriter = struct {
                 prev = cur;
             }
         } else {
-            // Mandatory no-op span (offset=0, length=0) marking an empty native histogram.
+            // No positive bucket is populated — everything observed, if anything, sits in the zero
+            // bucket. Still emit the no-op span (offset=0, length=0) so the message reads as a
+            // native histogram rather than an empty classic one.
             try writeSint32Field(&span.writer, BucketSpan.offset, 0);
             try writeVarintField(&span.writer, BucketSpan.length, 0);
             try writeBytesField(hw, Histogram.positive_span, span.written());
@@ -505,7 +510,7 @@ test "prometheus_proto: native histogram round-trips through the wire" {
     hist.observe(512); // bucket 0 (global native index 36)
     hist.observe(513); // bucket 1 (global native index 37)
     hist.observe(700); // bucket 2 (global native index 38)
-    hist.observe(2000); // above the 1024ns window top -> overflow bucket (storage index 5)
+    hist.observe(2000); // above the 1024ns window top -> saturates into storage bucket 5
 
     var metrics: Map = .empty;
     defer metrics.deinit(gpa);
@@ -556,6 +561,8 @@ test "prometheus_proto: native histogram round-trips through the wire" {
     var sample_sum: f64 = 0;
     var span_offset: i64 = 0;
     var span_length: u64 = 0;
+    var zero_threshold: f64 = -1;
+    var zero_count: u64 = 0;
     var deltas: std.ArrayList(i64) = .empty;
     defer deltas.deinit(gpa);
     while (!hr.atEnd()) {
@@ -564,8 +571,8 @@ test "prometheus_proto: native histogram round-trips through the wire" {
             Histogram.schema => schema = unzigzag64(hr.varint()),
             Histogram.sample_count => sample_count = hr.varint(),
             Histogram.sample_sum => sample_sum = @bitCast(hr.fixed64()),
-            Histogram.zero_threshold => _ = hr.fixed64(),
-            Histogram.zero_count => _ = hr.varint(),
+            Histogram.zero_threshold => zero_threshold = @bitCast(hr.fixed64()),
+            Histogram.zero_count => zero_count = hr.varint(),
             Histogram.positive_span => {
                 var sr: TestReader = .{ .buf = hr.bytes() };
                 while (!sr.atEnd()) {
@@ -584,23 +591,31 @@ test "prometheus_proto: native histogram round-trips through the wire" {
 
     // `bounds_per_doubling` 4 renders as native schema 2.
     try testing.expectEqual(@as(i64, 2), schema);
-    try testing.expectEqual(@as(u64, 4), sample_count); // 4 observations total (incl. the overflow)
+    try testing.expectEqual(@as(u64, 4), sample_count); // all four observations
     try testing.expectEqual(@as(f64, 512 + 513 + 700 + 2000), sample_sum);
-    try testing.expectEqual(@as(i64, 36), span_offset); // base_index 36, first populated bucket 0
-    try testing.expectEqual(@as(u64, 6), span_length); // buckets 0..5 (2000 -> overflow bucket 5)
 
-    // Reconstruct per-bucket populations from the delta stream. The key invariant Prometheus enforces
-    // for native histograms: sample_count must equal the sum of bucket populations (no implicit +Inf).
+    // Storage bucket 0 is `(-Inf, 512]`, so it crosses as the zero bucket. Emitted as a ladder
+    // bucket it would instead claim `(430, 512]` and misreport anything below 430.
+    try testing.expectEqual(@as(f64, 512), zero_threshold);
+    try testing.expectEqual(@as(u64, 1), zero_count); // the 512ns observation
+
+    // Positive buckets therefore begin at storage index 1, i.e. global native index 37.
+    try testing.expectEqual(@as(i64, 37), span_offset);
+    try testing.expectEqual(@as(u64, 5), span_length); // storage 1..5 (2000 -> saturating bucket 5)
+
+    // Reconstruct per-bucket populations from the delta stream. The invariant Prometheus enforces
+    // for native histograms: `sample_count` must equal `zero_count` plus the bucket populations,
+    // there being no implicit `+Inf` to absorb a remainder.
     var pop_sum: u64 = 0;
     var acc: i64 = 0;
-    var populated_at_5: u64 = 0;
+    var saturating: u64 = 0;
     for (deltas.items, 0..) |d, k| {
         acc += d;
         pop_sum += @intCast(acc);
-        if (k == 5) populated_at_5 = @intCast(acc);
+        if (k == deltas.items.len - 1) saturating = @intCast(acc);
     }
-    try testing.expectEqual(sample_count, pop_sum); // 512,513,700 in-window + 2000 overflow = 4
-    try testing.expectEqual(@as(u64, 1), populated_at_5); // the 2000 observation, not dropped
+    try testing.expectEqual(sample_count, zero_count + pop_sum);
+    try testing.expectEqual(@as(u64, 1), saturating); // the 2000 observation, not dropped
 }
 
 test "prometheus_proto: a histogram family emits every series, not just the first" {

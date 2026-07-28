@@ -31,8 +31,8 @@ pub fn serviceMain(
         .prefix = @tagName(name),
         .fields = .{
             .packet_latency_ns = .{ .layout = .{
-                .min_upper_bound_ns = 512,
-                .max_upper_bound_ns = 512 << 12,
+                .min_upper_bound_ns = std.math.floorPowerOfTwo(u64, 2 * std.time.ns_per_us),
+                .max_upper_bound_ns = std.math.floorPowerOfTwo(u64, 3 * std.time.ns_per_ms),
                 .bounds_per_doubling = 4,
             } },
         },

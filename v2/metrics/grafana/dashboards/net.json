@@ -436,9 +436,6 @@
         "exemplars": {
           "color": "rgba(255,0,255,0.7)"
         },
-        "filterValues": {
-          "le": 1e-9
-        },
         "legend": {
           "show": true
         },
@@ -467,7 +464,6 @@
           "exemplar": false,
           "expr": "sum(rate(net_packet_latency_ns{variant=\"recv\"}[$__rate_interval]))",
           "format": "heatmap",
-          "legendFormat": "{{le}}",
           "range": true,
           "refId": "A"
         }
@@ -521,9 +517,6 @@
         "exemplars": {
           "color": "rgba(255,0,255,0.7)"
         },
-        "filterValues": {
-          "le": 1e-9
-        },
         "legend": {
           "show": true
         },
@@ -552,7 +545,6 @@
           "exemplar": false,
           "expr": "sum(rate(net_packet_latency_ns{variant=\"send\"}[$__rate_interval]))",
           "format": "heatmap",
-          "legendFormat": "{{le}}",
           "range": true,
           "refId": "A"
         }
