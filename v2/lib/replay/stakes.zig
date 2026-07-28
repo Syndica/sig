@@ -78,6 +78,59 @@ pub const EpochVoters = extern struct {
         const idx_ptr = self.by_vote_pk.getPtrConst(vote_pk) orelse return 0;
         return self.entries[idx_ptr.*].stake;
     }
+
+    /// Populate from a single `VersionedEpochStakes` entry sourced
+    /// from the snapshot manifest.
+    ///
+    /// `memory_base` is the base pointer used to resolve the entry's
+    /// `RelativeSlice` fields (typically `snapshot_metadata.getMemory()`).
+    ///
+    /// Sorts `entries` by stake desc so positional index 0 is the
+    /// highest-staked voter — matches SIMD-0357's post-Alpenglow
+    /// admitted-set ordering, and gives a canonical index for the
+    /// sibling `LiveVoters` arrays.
+    ///
+    /// `commission_bps` is filled zero — the trimmed
+    /// `VersionedEpochStakes.VoteAccountEntry` on the snapshot side
+    /// only carries `{ pubkey, stake }`, and no reader consumes
+    /// commission today.
+    ///
+    /// Errors:
+    /// - `error.TooManyVoters` if the entry exceeds
+    ///   `MAX_ALPENGLOW_VOTE_ACCOUNTS`. Refuses to boot rather than
+    ///   silently truncate; loosen when the snapshot producers are
+    ///   confirmed to enforce the SIMD-0357 cap.
+    /// - `error.MapFull` from the derived side index — should not
+    ///   occur given the pow-2 / 2x-occupancy invariants.
+    pub fn loadFromVersionedEpochStakes(
+        self: *EpochVoters,
+        entry: *const solana.snapshot.ExtraFields.VersionedEpochStakes,
+        memory_base: []const u8,
+    ) !void {
+        self.init();
+        if (entry.vote_accounts.len > MAX_ALPENGLOW_VOTE_ACCOUNTS) return error.TooManyVoters;
+        const vote_accounts = entry.vote_accounts.sliceConst(memory_base.ptr);
+
+        for (vote_accounts, 0..) |src, i| {
+            self.entries[i] = .{
+                .vote_pk = src.pubkey,
+                .stake = src.stake,
+                .commission_bps = 0,
+            };
+        }
+        self.len = @intCast(vote_accounts.len);
+
+        std.mem.sort(Entry, self.entries[0..self.len], {}, struct {
+            fn stakeDesc(_: void, a: Entry, b: Entry) bool {
+                return a.stake > b.stake;
+            }
+        }.stakeDesc);
+
+        for (self.entries[0..self.len], 0..) |*e, i| {
+            try self.by_vote_pk.insert(e.vote_pk, @intCast(i));
+            self.total_stake += e.stake;
+        }
+    }
 };
 
 /// Per-block live vote-account state row. One per position in
@@ -161,6 +214,40 @@ pub const ReplayStakes = struct {
         for (&self.live_voters) |*lv| lv.reset();
         self.boot_epoch = 0;
     }
+
+    /// Populate `epoch_voters` and `boot_epoch` from the snapshot
+    /// manifest. `live_voters` is left in its `init()` state (all
+    /// `.unpopulated`) — the root block has no parent to clone from.
+    ///
+    /// `root_slot` is the slot the snapshot was taken at (i.e. the
+    /// root block's slot). `memory_base` is the base pointer used to
+    /// resolve `RelativeSlice` values in `manifest`, typically
+    /// `snapshot_metadata.getMemory()`.
+    ///
+    /// Errors:
+    /// - `error.MissingEpochStakesForCurrentEpoch` if the manifest
+    ///   has no `VersionedEpochStakes` entry for the boot epoch.
+    ///   Post-Alpenglow this should always be present; on older
+    ///   snapshots it may not be.
+    /// - Propagates errors from `EpochVoters.loadFromVersionedEpochStakes`.
+    pub fn loadFromSnapshot(
+        self: *ReplayStakes,
+        root_slot: Slot,
+        manifest: *const solana.snapshot.Manifest,
+        memory_base: []const u8,
+    ) !void {
+        self.boot_epoch = manifest.bank_fields.epoch_schedule.getEpoch(root_slot);
+
+        const versioned = manifest.extra_fields.versioned_epoch_stakes.sliceConst(memory_base.ptr);
+        const entry: *const solana.snapshot.ExtraFields.VersionedEpochStakes = blk: {
+            for (versioned) |*ves| {
+                if (ves.epoch == self.boot_epoch) break :blk ves;
+            }
+            return error.MissingEpochStakesForCurrentEpoch;
+        };
+
+        try self.epoch_voters.loadFromVersionedEpochStakes(entry, memory_base);
+    }
 };
 
 test "EpochVoters init empties the map and clears len" {
@@ -200,4 +287,81 @@ test "LiveVoters.reset yields all .unpopulated" {
     for (lv.entries) |row| {
         try std.testing.expectEqual(LiveVoter.Kind.unpopulated, row.kind);
     }
+}
+
+test "EpochVoters.loadFromVersionedEpochStakes sorts desc, builds index, sums total" {
+    const VES = solana.snapshot.ExtraFields.VersionedEpochStakes;
+    const VoteAccountEntry = VES.VoteAccountEntry;
+
+    // Fake shared-memory blob: place three VoteAccountEntry rows at a
+    // known aligned offset. The RelativeSlice base is the blob's
+    // start.
+    var buf: [4096]u8 align(@alignOf(VoteAccountEntry)) = @splat(0);
+    const va_offset: u32 = 128;
+    const va_ptr: [*]VoteAccountEntry = @ptrCast(@alignCast(&buf[va_offset]));
+
+    var pk_a: Pubkey = .{ .data = .{0} ** 32 };
+    pk_a.data[0] = 0xAA;
+    var pk_b: Pubkey = .{ .data = .{0} ** 32 };
+    pk_b.data[0] = 0xBB;
+    var pk_c: Pubkey = .{ .data = .{0} ** 32 };
+    pk_c.data[0] = 0xCC;
+
+    // Intentionally not sorted at input.
+    va_ptr[0] = .{ .pubkey = pk_a, .stake = 100 };
+    va_ptr[1] = .{ .pubkey = pk_b, .stake = 500 };
+    va_ptr[2] = .{ .pubkey = pk_c, .stake = 300 };
+
+    const entry: VES = .{
+        .epoch = 42,
+        .total_stake = 0, // unused by the loader
+        .vote_accounts = .{ .offset = va_offset, .len = 3 },
+        .node_to_vote_accounts = .{},
+        .epoch_authorized_voters = .{},
+    };
+
+    const ev = try std.testing.allocator.create(EpochVoters);
+    defer std.testing.allocator.destroy(ev);
+
+    try ev.loadFromVersionedEpochStakes(&entry, &buf);
+
+    try std.testing.expectEqual(@as(u16, 3), ev.len);
+    try std.testing.expectEqual(@as(u64, 900), ev.total_stake);
+
+    // Sorted desc: 500, 300, 100.
+    try std.testing.expectEqual(@as(u64, 500), ev.entries[0].stake);
+    try std.testing.expectEqual(@as(u64, 300), ev.entries[1].stake);
+    try std.testing.expectEqual(@as(u64, 100), ev.entries[2].stake);
+
+    // Index resolves stake correctly regardless of input order.
+    try std.testing.expectEqual(@as(u64, 100), ev.stakeOf(pk_a));
+    try std.testing.expectEqual(@as(u64, 500), ev.stakeOf(pk_b));
+    try std.testing.expectEqual(@as(u64, 300), ev.stakeOf(pk_c));
+
+    // Commission_bps zero-filled (see doc comment).
+    for (ev.entries[0..ev.len]) |e| {
+        try std.testing.expectEqual(@as(u16, 0), e.commission_bps);
+    }
+}
+
+test "EpochVoters.loadFromVersionedEpochStakes rejects over-cap input" {
+    const VES = solana.snapshot.ExtraFields.VersionedEpochStakes;
+    const entry: VES = .{
+        .epoch = 0,
+        .total_stake = 0,
+        // A concocted RelativeSlice claiming length > MAX. Offset
+        // doesn't matter — the length check fires before any read.
+        .vote_accounts = .{ .offset = 0, .len = MAX_ALPENGLOW_VOTE_ACCOUNTS + 1 },
+        .node_to_vote_accounts = .{},
+        .epoch_authorized_voters = .{},
+    };
+
+    const ev = try std.testing.allocator.create(EpochVoters);
+    defer std.testing.allocator.destroy(ev);
+
+    const empty_base: [1]u8 = .{0};
+    try std.testing.expectError(
+        error.TooManyVoters,
+        ev.loadFromVersionedEpochStakes(&entry, &empty_base),
+    );
 }
