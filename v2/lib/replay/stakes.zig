@@ -399,6 +399,13 @@ pub const ReplayStakes = struct {
     /// the epoch of any given slot is derivable from the rotation
     /// state and this field is deleted.
     boot_epoch: Epoch,
+    /// **Provisional.** First slot of the epoch immediately after
+    /// `boot_epoch`. Slots at or beyond this trip
+    /// `ensureSlotInBootEpoch` — the hard-stop for the
+    /// not-yet-implemented boundary path. Cached at boot so the
+    /// hot exec path avoids a per-slot `getEpoch` division.
+    /// Deleted with `boot_epoch`.
+    first_slot_of_next_epoch: Slot,
 
     /// Zero-init the struct to a well-defined empty state. Actual
     /// data is populated by the snapshot boot loader and by the
@@ -407,6 +414,7 @@ pub const ReplayStakes = struct {
         self.epoch_voters.init();
         for (&self.live_voters) |*lv| lv.reset();
         self.boot_epoch = 0;
+        self.first_slot_of_next_epoch = 0;
     }
 
     /// Populate `epoch_voters` and `boot_epoch` from the snapshot
@@ -430,7 +438,9 @@ pub const ReplayStakes = struct {
         manifest: *const solana.snapshot.Manifest,
         memory_base: []const u8,
     ) !void {
-        self.boot_epoch = manifest.bank_fields.epoch_schedule.getEpoch(root_slot);
+        const schedule = &manifest.bank_fields.epoch_schedule;
+        self.boot_epoch = schedule.getEpoch(root_slot);
+        self.first_slot_of_next_epoch = schedule.getFirstSlotInEpoch(self.boot_epoch + 1);
 
         const versioned = manifest.extra_fields.versioned_epoch_stakes.sliceConst(memory_base.ptr);
         const entry: *const solana.snapshot.ExtraFields.VersionedEpochStakes = blk: {
@@ -465,6 +475,18 @@ pub const ReplayStakes = struct {
             std.mem.asBytes(&self.live_voters[child.index()]),
             std.mem.asBytes(&self.live_voters[parent.index()]),
         );
+    }
+
+    /// Hard-stop guard for the not-yet-implemented boundary path.
+    /// Called from replay at every new-slot event; returns
+    /// `error.EpochBoundaryNotYetImplemented` when a fork tries to
+    /// enter the epoch after `boot_epoch`.
+    ///
+    /// Deleted when boundary derivation lands.
+    pub fn ensureSlotInBootEpoch(self: *const ReplayStakes, slot: Slot) !void {
+        if (slot >= self.first_slot_of_next_epoch) {
+            return error.EpochBoundaryNotYetImplemented;
+        }
     }
 };
 
@@ -772,4 +794,22 @@ test "foldLandedVote is a no-op for non-admitted voters" {
     for (lv.entries) |row| {
         try std.testing.expectEqual(LiveVoter.Kind.unpopulated, row.kind);
     }
+}
+
+test "ensureSlotInBootEpoch rejects slots at/beyond the boundary" {
+    const stakes = try std.heap.page_allocator.create(ReplayStakes);
+    defer std.heap.page_allocator.destroy(stakes);
+    stakes.init();
+
+    // Boot into epoch 5 [500..600).
+    stakes.boot_epoch = 5;
+    stakes.first_slot_of_next_epoch = 600;
+
+    // In-epoch slots pass.
+    try stakes.ensureSlotInBootEpoch(500);
+    try stakes.ensureSlotInBootEpoch(599);
+
+    // Boundary and beyond trip.
+    try std.testing.expectError(error.EpochBoundaryNotYetImplemented, stakes.ensureSlotInBootEpoch(600));
+    try std.testing.expectError(error.EpochBoundaryNotYetImplemented, stakes.ensureSlotInBootEpoch(1_000_000));
 }

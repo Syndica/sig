@@ -772,6 +772,10 @@ fn setChildBlockRef(
 
     // optionally allocate a new BlockRef
     child.block_ref = if (parent.id.slot != child.id.slot) ref: {
+        // Hard-stop before allocating a BlockRef for a slot outside
+        // the boot epoch: boundary derivation is not implemented.
+        if (replay_stakes) |s| try s.ensureSlotInBootEpoch(child.id.slot);
+
         // new slot, let's create a new BlockRef
         const new_block = try block_pool.create();
         new_block.* = .{
@@ -837,7 +841,7 @@ fn insertFecSet(
     // additional blocks may be allocated when inserting a fec set
     block_pool: *lib.replay.BlockPool,
     replay_stakes: ?*lib.replay.stakes.ReplayStakes,
-) error{OutOfSpace}!?*MerkleNode {
+) error{ OutOfSpace, EpochBoundaryNotYetImplemented }!?*MerkleNode {
     const zone = tracy.Zone.init(@src(), .{ .name = "insertFecSet" });
     defer zone.deinit();
 
