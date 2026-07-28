@@ -250,6 +250,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                 deshredded_fec_set,
                 &forest,
                 rw.block_pool,
+                replay_stakes,
             )) orelse {
                 zone.text("already found");
                 continue :task .idle;
@@ -367,7 +368,7 @@ fn bootstrap(
         .slot_complete = true,
         .payload_len = 0, // cannot be determined from the snapshot
         .payload_buf = undefined,
-    }, forest, block_pool) orelse unreachable;
+    }, forest, block_pool, null) orelse unreachable;
 
     root_node.block_ref = .init(root_block);
 
@@ -764,6 +765,7 @@ fn setChildBlockRef(
     child: *MerkleNode,
     forest_pool: *MerkleForest.NodePool,
     block_pool: *lib.replay.BlockPool,
+    replay_stakes: ?*lib.replay.stakes.ReplayStakes,
 ) !void {
     std.debug.assert(child.block_ref == .null);
     const parent_block_ref = parent.block_ref.opt() orelse return; // a)
@@ -776,8 +778,10 @@ fn setChildBlockRef(
             .parent = .init(parent_block_ref),
             .slot = .init(child.id.slot),
         };
+        const new_ref = block_pool.ptrToIndex(new_block);
+        if (replay_stakes) |s| s.onBlockCreate(parent_block_ref, new_ref);
 
-        break :ref .init(block_pool.ptrToIndex(new_block)); // b)
+        break :ref .init(new_ref); // b)
     } else ref: {
         // treat the first child as the canonical path
         if (parent.child.opt()) |child_id| if (child_id == forest_pool.ptrToIndex(child)) {
@@ -790,8 +794,10 @@ fn setChildBlockRef(
             .parent = .init(parent_block_ref),
             .slot = .init(child.id.slot),
         };
+        const new_ref = block_pool.ptrToIndex(new_block);
+        if (replay_stakes) |s| s.onBlockCreate(parent_block_ref, new_ref);
 
-        break :ref .init(block_pool.ptrToIndex(new_block)); // c)
+        break :ref .init(new_ref); // c)
 
     };
 }
@@ -801,6 +807,7 @@ fn setChildTreeBlockRefs(
     child: *MerkleNode,
     forest_pool: *MerkleForest.NodePool,
     block_pool: *lib.replay.BlockPool,
+    replay_stakes: ?*lib.replay.stakes.ReplayStakes,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "setChildTreeBlockRefs" });
     defer zone.deinit();
@@ -809,14 +816,14 @@ fn setChildTreeBlockRefs(
     // doesn't apply here)
     std.debug.assert(child.parent != .null);
 
-    try setChildBlockRef(parent, child, forest_pool, block_pool);
+    try setChildBlockRef(parent, child, forest_pool, block_pool, replay_stakes);
 
     // recursively apply BlockRefs to reachable merkle nodes
     // NOTE: it is possible to do this without recursion *or* a stack, as a non-null block_ref can
     //       be used to mark a node as visited.
     var maybe_child = if (child.child.opt()) |id| id.ptr(forest_pool) else null;
     while (maybe_child) |child_node| {
-        try setChildTreeBlockRefs(child, child_node, forest_pool, block_pool);
+        try setChildTreeBlockRefs(child, child_node, forest_pool, block_pool, replay_stakes);
         maybe_child = if (child_node.sibling.opt()) |id| id.ptr(forest_pool) else null;
     }
 }
@@ -829,6 +836,7 @@ fn insertFecSet(
     // block associated parameters
     // additional blocks may be allocated when inserting a fec set
     block_pool: *lib.replay.BlockPool,
+    replay_stakes: ?*lib.replay.stakes.ReplayStakes,
 ) error{OutOfSpace}!?*MerkleNode {
     const zone = tracy.Zone.init(@src(), .{ .name = "insertFecSet" });
     defer zone.deinit();
@@ -869,7 +877,7 @@ fn insertFecSet(
 
     // "propagate" BlockRefs (see `setChildBlockRef` for details)
     if (maybe_parent) |parent| {
-        try setChildTreeBlockRefs(parent, node, &forest.pool, block_pool);
+        try setChildTreeBlockRefs(parent, node, &forest.pool, block_pool, replay_stakes);
     }
 
     return node;
@@ -1648,7 +1656,7 @@ test "MerkleForest tree put" {
 
     const logger = tel.Logger("main").noop;
 
-    const a_inserted = (try insertFecSet(logger, &a, &tree, pool)).?;
+    const a_inserted = (try insertFecSet(logger, &a, &tree, pool, null)).?;
     try std.testing.expect(a_inserted.parent == .null);
     try std.testing.expect(a_inserted.child == .null);
     try std.testing.expect(a_inserted.block_ref == .null);
@@ -1659,23 +1667,23 @@ test "MerkleForest tree put" {
 
     const expected_block_ref: replay.BlockRef.Optional = .init(replay.BlockRef.fromInt(8053));
 
-    const d_inserted = (try insertFecSet(logger, &d, &tree, pool)).?;
+    const d_inserted = (try insertFecSet(logger, &d, &tree, pool, null)).?;
     try std.testing.expect(d_inserted.parent == .null);
     try std.testing.expect(d_inserted.child == .null);
     try std.testing.expect(d_inserted.block_ref == .null); // no path to a => null
 
-    const b_inserted = (try insertFecSet(logger, &b, &tree, pool)).?;
+    const b_inserted = (try insertFecSet(logger, &b, &tree, pool, null)).?;
     try std.testing.expect(b_inserted.parent != .null);
     try std.testing.expect(b_inserted.child == .null);
     try std.testing.expect(b_inserted.block_ref == expected_block_ref);
 
-    const c_inserted = (try insertFecSet(logger, &c, &tree, pool)).?;
+    const c_inserted = (try insertFecSet(logger, &c, &tree, pool, null)).?;
     try std.testing.expect(c_inserted.parent != .null);
     try std.testing.expect(c_inserted.child != .null);
     try std.testing.expect(c_inserted.block_ref == expected_block_ref);
     try std.testing.expect(d_inserted.block_ref == expected_block_ref);
 
-    const e_inserted = (try insertFecSet(logger, &e, &tree, pool)).?;
+    const e_inserted = (try insertFecSet(logger, &e, &tree, pool, null)).?;
     try std.testing.expect(e_inserted.parent != .null);
     try std.testing.expect(e_inserted.child == .null);
     // new slot => new BlockRef
@@ -1683,11 +1691,11 @@ test "MerkleForest tree put" {
     try std.testing.expect(e_inserted.block_ref != expected_block_ref);
 
     // We cannot insert duplicates
-    try std.testing.expectEqual(null, try insertFecSet(logger, &a, &tree, pool));
-    try std.testing.expectEqual(null, try insertFecSet(logger, &b, &tree, pool));
-    try std.testing.expectEqual(null, try insertFecSet(logger, &c, &tree, pool));
-    try std.testing.expectEqual(null, try insertFecSet(logger, &d, &tree, pool));
-    try std.testing.expectEqual(null, try insertFecSet(logger, &e, &tree, pool));
+    try std.testing.expectEqual(null, try insertFecSet(logger, &a, &tree, pool, null));
+    try std.testing.expectEqual(null, try insertFecSet(logger, &b, &tree, pool, null));
+    try std.testing.expectEqual(null, try insertFecSet(logger, &c, &tree, pool, null));
+    try std.testing.expectEqual(null, try insertFecSet(logger, &d, &tree, pool, null));
+    try std.testing.expectEqual(null, try insertFecSet(logger, &e, &tree, pool, null));
 }
 
 test "bootstrap creates root block and chains blockhashes" {
