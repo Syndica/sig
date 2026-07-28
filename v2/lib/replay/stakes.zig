@@ -805,3 +805,174 @@ test "ensureSlotInBootEpoch rejects slots at/beyond the boundary" {
     try std.testing.expectError(error.EpochBoundaryNotYetImplemented, stakes.ensureSlotInBootEpoch(600));
     try std.testing.expectError(error.EpochBoundaryNotYetImplemented, stakes.ensureSlotInBootEpoch(1_000_000));
 }
+
+// ---------------------------------------------------------------------------
+// Integration tests
+// ---------------------------------------------------------------------------
+// Exercise the primitives end-to-end at the stakes-module level:
+//   boot -> query -> fold -> aggregate, across fork trees.
+// These do not touch replay's fec-set / block_pool machinery — that
+// path is covered by the bbt-replay black-box test.
+
+test "integration: boot -> solGetEpochStake -> foldLandedVote -> stakeWeightedTimestamp" {
+    const VES = solana.snapshot.ExtraFields.VersionedEpochStakes;
+    const VoteAccountEntry = VES.VoteAccountEntry;
+
+    // Synthesize a snapshot memory blob with three admitted voters,
+    // stakes 100 / 250 / 650 — total 1000.
+    var buf: [4096]u8 align(@alignOf(VoteAccountEntry)) = @splat(0);
+    const va_off: u32 = 128;
+    const va_ptr: [*]VoteAccountEntry = @ptrCast(@alignCast(&buf[va_off]));
+
+    var pk_a: Pubkey = .{ .data = .{0} ** 32 };
+    pk_a.data[0] = 0xA1;
+    var pk_b: Pubkey = .{ .data = .{0} ** 32 };
+    pk_b.data[0] = 0xB2;
+    var pk_c: Pubkey = .{ .data = .{0} ** 32 };
+    pk_c.data[0] = 0xC3;
+    var pk_stranger: Pubkey = .{ .data = .{0} ** 32 };
+    pk_stranger.data[0] = 0xFF;
+
+    va_ptr[0] = .{ .pubkey = pk_a, .stake = 100 };
+    va_ptr[1] = .{ .pubkey = pk_b, .stake = 250 };
+    va_ptr[2] = .{ .pubkey = pk_c, .stake = 650 };
+
+    const entry: VES = .{
+        .epoch = 7,
+        .total_stake = 0,
+        .vote_accounts = .{ .offset = va_off, .len = 3 },
+        .node_to_vote_accounts = .{},
+        .epoch_authorized_voters = .{},
+    };
+
+    const ev = try std.testing.allocator.create(EpochVoters);
+    defer std.testing.allocator.destroy(ev);
+    try ev.loadFromVersionedEpochStakes(&entry, &buf);
+
+    // Boot invariants: sorted desc, total_stake sums, all lookups hit.
+    try std.testing.expectEqual(@as(u16, 3), ev.len);
+    try std.testing.expectEqual(@as(u64, 1000), ev.total_stake);
+    try std.testing.expectEqual(@as(u64, 650), ev.entries[0].stake);
+
+    // Syscall: null -> total; hit -> voter's stake; miss -> 0.
+    try std.testing.expectEqual(@as(u64, 1000), solGetEpochStake(ev, null));
+    try std.testing.expectEqual(@as(u64, 250), solGetEpochStake(ev, &pk_b));
+    try std.testing.expectEqual(@as(u64, 0), solGetEpochStake(ev, &pk_stranger));
+
+    // Vote-tx fold: three landed votes on a fresh LiveVoters.
+    const lv = try std.testing.allocator.create(LiveVoters);
+    defer std.testing.allocator.destroy(lv);
+    lv.reset();
+
+    foldLandedVote(ev, lv, pk_a, 1000, 1_700_000_005);
+    foldLandedVote(ev, lv, pk_b, 1000, 1_700_000_010);
+    foldLandedVote(ev, lv, pk_c, 1000, 1_700_000_015);
+    foldLandedVote(ev, lv, pk_stranger, 1000, 1_700_000_999); // no-op: unadmitted.
+
+    // Stake-weighted median: sorted by estimate asc:
+    // (a, 5, 100), (b, 10, 250), (c, 15, 650). Half = 500.
+    // acc after a = 100 (≤ 500); after b = 350 (≤ 500); after c = 1000 (> 500)
+    // → estimate = c's timestamp = 1_700_000_015.
+    try std.testing.expectEqual(
+        @as(?i64, 1_700_000_015),
+        stakeWeightedTimestamp(ev, lv, 1000, 400 * std.time.ns_per_ms, null, .DEFAULT),
+    );
+}
+
+test "integration: fork of depth 3 propagates via onBlockCreate, then diverges" {
+    const stakes = try std.heap.page_allocator.create(ReplayStakes);
+    defer std.heap.page_allocator.destroy(stakes);
+    stakes.init();
+
+    var pk_a: Pubkey = .{ .data = .{0} ** 32 };
+    pk_a.data[0] = 1;
+    var pk_b: Pubkey = .{ .data = .{0} ** 32 };
+    pk_b.data[0] = 2;
+    stakes.epoch_voters.entries[0] = .{ .vote_pk = pk_a, .stake = 100, .commission_bps = 0 };
+    stakes.epoch_voters.entries[1] = .{ .vote_pk = pk_b, .stake = 200, .commission_bps = 0 };
+    stakes.epoch_voters.len = 2;
+    stakes.epoch_voters.total_stake = 300;
+    try stakes.epoch_voters.by_vote_pk.insert(pk_a, 0);
+    try stakes.epoch_voters.by_vote_pk.insert(pk_b, 1);
+
+    const root_idx: usize = 0;
+    const a_idx: usize = 1;
+    const b_idx: usize = 2;
+    const c_idx: usize = 3;
+
+    const root_ref: replay.BlockRef = @enumFromInt(root_idx);
+    const a_ref: replay.BlockRef = @enumFromInt(a_idx);
+    const b_ref: replay.BlockRef = @enumFromInt(b_idx);
+    const c_ref: replay.BlockRef = @enumFromInt(c_idx);
+
+    // Root: pk_a votes at slot 100.
+    foldLandedVote(&stakes.epoch_voters, &stakes.live_voters[root_idx], pk_a, 100, 1_700_000_100);
+
+    // Root -> A: memcpy carries pk_a's row; then pk_b votes at A.
+    stakes.onBlockCreate(root_ref, a_ref);
+    try std.testing.expectEqual(@as(Slot, 100), stakes.live_voters[a_idx].entries[0].last_vote_slot);
+    foldLandedVote(&stakes.epoch_voters, &stakes.live_voters[a_idx], pk_b, 200, 1_700_000_200);
+
+    // A -> B: both rows carried; pk_a votes again at B.
+    stakes.onBlockCreate(a_ref, b_ref);
+    try std.testing.expectEqual(@as(Slot, 200), stakes.live_voters[b_idx].entries[1].last_vote_slot);
+    foldLandedVote(&stakes.epoch_voters, &stakes.live_voters[b_idx], pk_a, 300, 1_700_000_300);
+
+    // B -> C: everything up to B carried.
+    stakes.onBlockCreate(b_ref, c_ref);
+    try std.testing.expectEqual(@as(Slot, 300), stakes.live_voters[c_idx].entries[0].last_vote_slot);
+    try std.testing.expectEqual(@as(Slot, 200), stakes.live_voters[c_idx].entries[1].last_vote_slot);
+    try std.testing.expectEqual(@as(i64, 1_700_000_300), stakes.live_voters[c_idx].entries[0].last_vote_timestamp);
+    try std.testing.expectEqual(@as(i64, 1_700_000_200), stakes.live_voters[c_idx].entries[1].last_vote_timestamp);
+
+    // Root remains untouched by descendant folds.
+    try std.testing.expectEqual(@as(Slot, 100), stakes.live_voters[root_idx].entries[0].last_vote_slot);
+    try std.testing.expectEqual(LiveVoter.Kind.unpopulated, stakes.live_voters[root_idx].entries[1].kind);
+}
+
+test "integration: sibling forks stay isolated" {
+    const stakes = try std.heap.page_allocator.create(ReplayStakes);
+    defer std.heap.page_allocator.destroy(stakes);
+    stakes.init();
+
+    var pk_a: Pubkey = .{ .data = .{0} ** 32 };
+    pk_a.data[0] = 1;
+    var pk_b: Pubkey = .{ .data = .{0} ** 32 };
+    pk_b.data[0] = 2;
+    stakes.epoch_voters.entries[0] = .{ .vote_pk = pk_a, .stake = 100, .commission_bps = 0 };
+    stakes.epoch_voters.entries[1] = .{ .vote_pk = pk_b, .stake = 200, .commission_bps = 0 };
+    stakes.epoch_voters.len = 2;
+    stakes.epoch_voters.total_stake = 300;
+    try stakes.epoch_voters.by_vote_pk.insert(pk_a, 0);
+    try stakes.epoch_voters.by_vote_pk.insert(pk_b, 1);
+
+    const parent_idx: usize = 10;
+    const left_idx: usize = 11;
+    const right_idx: usize = 12;
+    const parent_ref: replay.BlockRef = @enumFromInt(parent_idx);
+    const left_ref: replay.BlockRef = @enumFromInt(left_idx);
+    const right_ref: replay.BlockRef = @enumFromInt(right_idx);
+
+    // Parent: pk_a votes.
+    foldLandedVote(&stakes.epoch_voters, &stakes.live_voters[parent_idx], pk_a, 500, 1_700_000_500);
+
+    // Fork left: pk_b votes on the left branch only.
+    stakes.onBlockCreate(parent_ref, left_ref);
+    foldLandedVote(&stakes.epoch_voters, &stakes.live_voters[left_idx], pk_b, 501, 1_700_000_501);
+
+    // Fork right: pk_a re-votes on the right branch with a different timestamp.
+    stakes.onBlockCreate(parent_ref, right_ref);
+    foldLandedVote(&stakes.epoch_voters, &stakes.live_voters[right_idx], pk_a, 502, 1_700_000_502);
+
+    // Left branch: pk_a inherited from parent, pk_b landed on left.
+    try std.testing.expectEqual(@as(Slot, 500), stakes.live_voters[left_idx].entries[0].last_vote_slot);
+    try std.testing.expectEqual(@as(Slot, 501), stakes.live_voters[left_idx].entries[1].last_vote_slot);
+
+    // Right branch: pk_a re-voted on right (updated), pk_b never landed here.
+    try std.testing.expectEqual(@as(Slot, 502), stakes.live_voters[right_idx].entries[0].last_vote_slot);
+    try std.testing.expectEqual(LiveVoter.Kind.unpopulated, stakes.live_voters[right_idx].entries[1].kind);
+
+    // Parent unchanged by either descendant.
+    try std.testing.expectEqual(@as(Slot, 500), stakes.live_voters[parent_idx].entries[0].last_vote_slot);
+    try std.testing.expectEqual(LiveVoter.Kind.unpopulated, stakes.live_voters[parent_idx].entries[1].kind);
+}
