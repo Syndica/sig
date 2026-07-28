@@ -1,8 +1,11 @@
 const std = @import("std");
 const lib = @import("lib");
 const services = @import("services");
+const topology = @import("topology");
 const tel = lib.telemetry;
-const topology = lib.topology;
+
+const gossip = @import("gossip_api");
+const snapshot = @import("snapshot_api");
 
 const Region = topology.Region;
 
@@ -17,10 +20,10 @@ pub fn main() !void {
     const gpa = dba_state.allocator();
 
     const gossip_port = 8001;
-    const self_kp: lib.gossip.KeyPair = .fromKeyPair(try .generateDeterministic(@splat(1)));
-    const ext_kp: lib.gossip.KeyPair = .fromKeyPair(try .generateDeterministic(@splat(2)));
+    const self_kp: lib.crypto.KeyPair = .fromKeyPair(try .generateDeterministic(@splat(1)));
+    const ext_kp: lib.crypto.KeyPair = .fromKeyPair(try .generateDeterministic(@splat(2)));
 
-    const gossip_cluster_info: lib.gossip.ClusterInfo = .{
+    const gossip_cluster_info: gossip.ClusterInfo = .{
         .public_ip = .fromNetAddress(.initIp4(.{ 123, 45, 67, 89 }, gossip_port)),
         .shred_version = 42,
 
@@ -30,17 +33,17 @@ pub fn main() !void {
 
     // -- Create regions -- //
 
-    const gossip_params: lib.gossip.Config.InitParams = .{
+    const gossip_params: gossip.Config.InitParams = .{
         .cluster_info = gossip_cluster_info,
         // TODO: read this from identity file in signer service
         .keypair = self_kp,
         .turbine_recv_port = 8002,
         .advertise_tvu_port = false,
     };
-    var gossip_config: Region(lib.gossip.Config) = try .sized(gossip_params.size());
+    var gossip_config: Region(gossip.Config) = try .sized(gossip_params.size());
     gossip_params.init(gossip_config.ptr());
 
-    var gossip_source_to_snapshot: Region(lib.snapshot.SnapshotSourceRing) = try .simple();
+    var gossip_source_to_snapshot: Region(snapshot.SnapshotSourceRing) = try .simple();
     gossip_source_to_snapshot.ptr().init();
 
     const net_to_gossip_params: lib.net.Pair.InitParams = .{ .port = gossip_port };
@@ -70,7 +73,7 @@ pub fn main() !void {
         var iter = net_pair.recv.get(.writer);
         defer iter.markUsed();
 
-        const gm: lib.gossip.GossipMessage = .{
+        const gm: gossip.GossipMessage = .{
             .ping_message = .{
                 .from = ext_kp.pubkey,
                 .token = ping_token,
@@ -79,7 +82,7 @@ pub fn main() !void {
         };
         const packet = iter.next().?;
         var fbw: std.Io.Writer = .fixed(&packet.data);
-        try lib.gossip.bincode.write(&fbw, gm);
+        try gossip.bincode.write(&fbw, gm);
         packet.len = @intCast(fbw.end);
     }
 
@@ -112,7 +115,7 @@ pub fn main() !void {
 
     // -- Verify outgoing messages -- //
 
-    var msgs: std.ArrayList(lib.gossip.GossipMessage) = .empty;
+    var msgs: std.ArrayList(gossip.GossipMessage) = .empty;
     defer msgs.deinit(gpa);
 
     var msg_buf: [16 * 1024]u8 align(16) = undefined;
@@ -122,7 +125,7 @@ pub fn main() !void {
     defer iter.markUsed();
     while (iter.next()) |packet| {
         var fbr: std.Io.Reader = .fixed(packet.data[0..packet.len]);
-        const gm = try lib.gossip.bincode.read(&msg_fba, &fbr, lib.gossip.GossipMessage);
+        const gm = try gossip.bincode.read(&msg_fba, &fbr, gossip.GossipMessage);
         try msgs.append(gpa, gm);
     }
 

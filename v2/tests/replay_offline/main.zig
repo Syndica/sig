@@ -28,7 +28,12 @@ const lib = @import("lib");
 const services = @import("services");
 const shred_stream = @import("shred_stream");
 const tel = lib.telemetry;
-const topology = lib.topology;
+const topology = @import("topology");
+
+const accounts_db = @import("accounts_db_api");
+const shred = @import("shred_api");
+const snapshot = @import("snapshot_api");
+const replay = @import("replay_api");
 
 const Region = topology.Region;
 
@@ -244,15 +249,11 @@ pub fn main() !void {
 
     // shred.RecvConfig: leader_schedule is zeroed — relies on
     // -Ddebug-skip-shred-sig-verify build flag for offline use.
-    var shred_recv_config: Region(lib.shred.RecvConfig) = try .simple();
+    var shred_recv_config: Region(shred.RecvConfig) = try .simple();
     shred_recv_config.ptr().shred_version = 0;
 
-    var snapshot_config: Region(lib.snapshot.SnapshotConfig) = try .simple();
-    try snapshot_config.ptr().populate(
-        config.snapshot.folder,
-        config.snapshot.known_validators,
-        config.cluster,
-    );
+    var snapshot_config: Region(snapshot.SnapshotConfig) = try .simple();
+    try populateSnapshotConfig(snapshot_config.ptr(), config.snapshot, config.cluster);
 
     if (config.accounts_db.file.len > std.fs.max_path_bytes) {
         std.log.err(
@@ -261,8 +262,8 @@ pub fn main() !void {
         );
         return error.PathTooLong;
     }
-    var accounts_db_config: Region(lib.accounts_db.RootedConfig) = try .sized(
-        @sizeOf(lib.accounts_db.RootedConfig) + config.accounts_db.rooted.toBytes(),
+    var accounts_db_config: Region(accounts_db.RootedConfig) = try .sized(
+        @sizeOf(accounts_db.RootedConfig) + config.accounts_db.rooted.toBytes(),
     );
     accounts_db_config.ptr().file_len = @intCast(config.accounts_db.file.len);
     @memcpy(
@@ -274,39 +275,39 @@ pub fn main() !void {
     // gossip_source_to_snapshot: snapshot service expects this in ReadWrite.
     // In offline mode no gossip writes to it — the snapshot service will find
     // an existing snapshot on disk via findExistingSnapshot() instead.
-    var gossip_source_to_snapshot: Region(lib.snapshot.SnapshotSourceRing) = try .simple();
+    var gossip_source_to_snapshot: Region(snapshot.SnapshotSourceRing) = try .simple();
     gossip_source_to_snapshot.ptr().init();
 
-    var snapshot_ready_to_accounts_db: Region(lib.snapshot.SnapshotData) = try .simple();
+    var snapshot_ready_to_accounts_db: Region(snapshot.SnapshotData) = try .simple();
     snapshot_ready_to_accounts_db.ptr().init();
 
     // RuntimeMetadata: accounts_db will populate slot + blockhash_queue after
     // loading the snapshot. Replay and shred_receiver block on getSlotBlocking()
     // until that happens.
-    var snapshot_metadata: Region(lib.accounts_db.RuntimeMetadata) = try .simple();
+    var snapshot_metadata: Region(accounts_db.RuntimeMetadata) = try .simple();
     snapshot_metadata.ptr().init();
 
     const unrooted_memory = config.accounts_db.unrooted.toBytes();
-    var account_pool: Region(lib.accounts_db.AccountPool) =
-        try .sized(@sizeOf(lib.accounts_db.AccountPool) + unrooted_memory);
+    var account_pool: Region(lib.AccountPool) =
+        try .sized(@sizeOf(lib.AccountPool) + unrooted_memory);
     account_pool.ptr().init(unrooted_memory);
 
-    var replay_scratch: Region([lib.replay.scratch_buffer_size]u8) = try .simple();
+    var replay_scratch: Region([replay.scratch_buffer_size]u8) = try .simple();
 
-    var shreds_to_replay: Region(lib.shred.DeshredRing) = try .simple();
+    var shreds_to_replay: Region(shred.DeshredRing) = try .simple();
     shreds_to_replay.ptr().init();
 
-    var replay_account_lookups: Region(lib.accounts_db.AccountLookups) = try .simple();
+    var replay_account_lookups: Region(accounts_db.AccountLookups) = try .simple();
     replay_account_lookups.ptr().init();
 
-    var transaction_pool: Region(lib.replay.TransactionPool) =
-        try .sized(lib.replay.TransactionPool.size());
+    var transaction_pool: Region(replay.TransactionPool) =
+        try .sized(replay.TransactionPool.size());
     transaction_pool.ptr().init();
 
-    var block_pool: Region(lib.replay.BlockPool) = try .sized(lib.replay.BlockPool.size());
+    var block_pool: Region(replay.BlockPool) = try .sized(replay.BlockPool.size());
     block_pool.ptr().init();
 
-    var exec_req_response: Region(lib.replay.ExecReqResponse) = try .simple();
+    var exec_req_response: Region(replay.ExecReqResponse) = try .simple();
     exec_req_response.ptr().init();
 
     // The telemetry service owns one share; every other telemetry share belongs
@@ -424,4 +425,59 @@ fn resolveRocksDbPath(allocator: std.mem.Allocator, ledger_path: []const u8) ![]
     } else |_| {}
 
     return error.InvalidLedgerPath;
+}
+
+fn populateSnapshotConfig(
+    data: *snapshot.SnapshotConfig,
+    cfg: Config.Snapshot,
+    cluster: lib.solana.Cluster,
+) !void {
+    if (cfg.known_validators.len == 0) {
+        std.log.err(
+            "known_validators must not be empty. Specify validator pubkeys, " ++
+                "or \"*\" to opt in to untrusted snapshot sources.",
+            .{},
+        );
+        return error.NoKnownValidators;
+    }
+    if (cfg.known_validators.len > snapshot.SnapshotConfig.MAX_KNOWN_VALIDATORS) {
+        return error.TooManyKnownValidators;
+    }
+
+    @memcpy(data.folder_buffer[0..cfg.folder.len], cfg.folder);
+    data.folder_len = @intCast(cfg.folder.len);
+    data.cluster = cluster;
+
+    const has_wildcard = for (cfg.known_validators) |entry| {
+        if (std.mem.eql(u8, entry, "*")) break true;
+    } else false;
+
+    if (has_wildcard) {
+        if (cfg.known_validators.len > 1) {
+            std.log.warn(
+                "known_validators contains \"*\" alongside other entries; " ++
+                    "\"*\" takes precedence, ignoring the rest.",
+                .{},
+            );
+        }
+        data.known_validators_allow_all = true;
+        // NOTE: we zero out known_validators_len to make it clear that
+        // no validator pubkeys were provided.
+        data.known_validators_len = 0;
+    } else {
+        data.known_validators_allow_all = false;
+        data.known_validators_len = @intCast(cfg.known_validators.len);
+        for (
+            cfg.known_validators,
+            data.known_validators_buffer[0..cfg.known_validators.len],
+        ) |pkstr, *pkptr| {
+            pkptr.* = lib.solana.Pubkey.parseRuntime(pkstr) catch |err| {
+                std.log.err(
+                    "invalid known_validator entry '{s}': {s}",
+                    .{ pkstr, @errorName(err) },
+                );
+                return err;
+            };
+        }
+    }
 }
