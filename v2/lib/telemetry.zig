@@ -910,6 +910,10 @@ fn nativeBound(schema: u4, index: i64) f64 {
 
 pub const LatencyHistogram = struct {
     layout: Layout,
+    /// `layout.baseIndex()`, resolved once here rather than per observation. It is a pure function
+    /// of `layout` and so never changes, but computing it is a full `nativeBucketIndex` — a `frexp`
+    /// and a table search — which `bucketIndex` would otherwise repeat on every `observe`.
+    base_index: i64,
     /// Used to ensure reads and writes occur on separate shards.
     /// Atomic representation of `ShardSync`.
     shard_sync: *std.atomic.Value(u64),
@@ -1024,9 +1028,11 @@ pub const LatencyHistogram = struct {
             dst[2] = self.max_upper_bound_ns;
         }
 
-        /// Note the `@popCount`/`@clz` builtins and `comptime` prefixes throughout: a plain call to
-        /// a non-`inline` helper yields a runtime-known value even here, which would leave every
-        /// `@compileError` branch live and fire them all unconditionally.
+        /// Note the `@popCount`/`@clz` builtins throughout, and that the `Layout` helpers this leans
+        /// on are `inline fn`: a plain call to a non-`inline` helper yields a runtime-known value
+        /// even here, which would leave every `@compileError` branch live and fire them all
+        /// unconditionally. The remaining `comptime` prefixes mark the calls into `std` and into
+        /// `upperBoundNs`, which are not `inline`.
         pub fn comptimeValidate(comptime self: Layout) void {
             if (self.bounds_per_doubling == 0 or self.bounds_per_doubling > 256 or
                 @popCount(self.bounds_per_doubling) != 1)
@@ -1066,12 +1072,12 @@ pub const LatencyHistogram = struct {
                 ));
             }
 
-            const count = comptime self.bucketCount();
-            const words = comptime header_words + self.elementsFromBucketCount();
+            const count = self.bucketCount();
+            const words = header_words + self.elementsFromBucketCount();
             if (count > max_bucket_count) {
                 // Spell out the product rather than just the total: the two factors are the two
                 // knobs, and which one to turn is the whole question the error has to answer.
-                const spans = comptime self.doublings();
+                const spans = self.doublings();
                 // Widest ladder that still fits at this window width. `spans` is at most 62 and
                 // the branch needs `spans * bounds_per_doubling >= 511`, so this never floors to 0.
                 const fits = comptime std.math.floorPowerOfTwo(
@@ -1121,30 +1127,30 @@ pub const LatencyHistogram = struct {
         /// on: `log2` of `bounds_per_doubling`. The protobuf exposition puts it on the wire as
         /// `Histogram.schema`; keeping the bounds schema-aligned is also what lets `bucketIndex`
         /// reuse `nativeBucketIndex`'s exact `frexp` binning instead of a `log2` that rounds badly.
-        pub fn schema(self: Layout) u4 {
+        pub inline fn schema(self: Layout) u4 {
             return @intCast(@ctz(self.bounds_per_doubling));
         }
 
         /// Number of `x` -> `2x` ranges the window spans. Assumes an exact power-of-two ratio;
         /// `comptimeValidate` and `initFromHeader` are what prove it.
-        fn doublings(self: Layout) u6 {
+        inline fn doublings(self: Layout) u6 {
             return @intCast(@ctz(self.max_upper_bound_ns / self.min_upper_bound_ns));
         }
 
         /// Buckets that resolve a value, one per bound from `min_upper_bound_ns` to
         /// `max_upper_bound_ns`. Both endpoints are inclusive, hence the `+ 1`.
-        pub fn resolvedBucketCount(self: Layout) u64 {
+        pub inline fn resolvedBucketCount(self: Layout) u64 {
             return @as(u64, self.doublings()) * self.bounds_per_doubling + 1;
         }
 
         /// Every bucket in storage: the resolved ones plus the saturating bucket a rung above
         /// `max_upper_bound_ns`, which `observe` clamps larger values into. This is what sizes a
         /// shard, so it is also what `upperBoundNs` and the snapshot readers iterate over.
-        pub fn bucketCount(self: Layout) u64 {
+        pub inline fn bucketCount(self: Layout) u64 {
             return self.resolvedBucketCount() + 1;
         }
 
-        pub fn elementsFromBucketCount(self: Layout) u32 {
+        pub inline fn elementsFromBucketCount(self: Layout) u32 {
             return @intCast(1 + 2 * (2 + self.bucketCount()));
         }
 
@@ -1186,7 +1192,17 @@ pub const LatencyHistogram = struct {
         /// than the label it was just promised. Both endpoints are powers of two, so they are
         /// exact either way; only interior bounds move (`2^(37/4)` is 608.87, so `le="608"`).
         fn upperBoundNs(self: Layout, index: usize) u64 {
-            const gi = self.baseIndex() + @as(i64, @intCast(index));
+            return self.upperBoundNsAt(self.baseIndex(), index);
+        }
+
+        /// `upperBoundNs` with `baseIndex()` supplied by the caller, so a reader walking every
+        /// bucket resolves it once instead of once per bucket — see `LatencyHistogram.base_index`
+        /// for what resolving it costs. `base` has to be `self.baseIndex()`: any other value shifts
+        /// every bound by a constant and still yields plausible integers, so it is asserted rather
+        /// than trusted.
+        fn upperBoundNsAt(self: Layout, base: i64, index: usize) u64 {
+            std.debug.assert(base == self.baseIndex());
+            const gi = base + @as(i64, @intCast(index));
             return @intFromFloat(@floor(nativeBound(self.schema(), gi)));
         }
     };
@@ -1253,6 +1269,7 @@ pub const LatencyHistogram = struct {
         std.debug.assert(shards[0].buckets.len == layout.bucketCount());
         return .{
             .layout = layout,
+            .base_index = layout.baseIndex(),
             .shard_sync = raw.shardSync(),
             .shards = shards,
         };
@@ -1264,7 +1281,7 @@ pub const LatencyHistogram = struct {
         // (see `Layout.min_upper_bound_ns`). Values above the window return an index past the last
         // bucket, which `observe` clamps into the saturating one.
         if (ns == 0) return 0;
-        const local = nativeBucketIndex(self.layout.schema(), ns) - self.layout.baseIndex();
+        const local = nativeBucketIndex(self.layout.schema(), ns) - self.base_index;
         return if (local < 0) 0 else @intCast(local);
     }
 
@@ -1327,6 +1344,7 @@ pub const LatencyHistogram = struct {
             .sum = cold_shard_sum,
 
             .layout = self.layout,
+            .base_index = self.base_index,
             .cold_shard_buckets = cold_shard.buckets,
             .hot_shard_buckets = hot_shard.buckets,
             .hot_shard = hot_shard,
@@ -1347,6 +1365,9 @@ pub const LatencyHistogram = struct {
 
         // internal references
         layout: Layout,
+        /// The histogram's `base_index`, carried along so the walk never resolves it — see
+        /// `Layout.upperBoundNsAt`.
+        base_index: i64,
         cold_shard_buckets: []std.atomic.Value(u64),
         /// See the NOTE on `LatencyHistogram.SnapshotReader.hot_shard_buckets`.
         hot_shard_buckets: []std.atomic.Value(u64),
@@ -1382,7 +1403,7 @@ pub const LatencyHistogram = struct {
             }
             defer self.current_bucket_index += 1;
 
-            const upper_bound = self.layout.upperBoundNs(self.current_bucket_index);
+            const upper_bound = self.layout.upperBoundNsAt(self.base_index, self.current_bucket_index);
             const cold_bucket = &self.cold_shard_buckets[self.current_bucket_index];
             const hot_bucket = &self.hot_shard_buckets[self.current_bucket_index];
 

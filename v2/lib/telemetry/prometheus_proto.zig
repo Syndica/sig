@@ -387,7 +387,7 @@ const NativeHistogramWriter = struct {
         var span: std.Io.Writer.Allocating = .init(self.gpa);
         defer span.deinit();
         if (first) |f| {
-            const offset: i32 = @intCast(self.layout.baseIndex() + @as(i64, @intCast(f)));
+            const offset: i32 = @intCast(self.snap.base_index + @as(i64, @intCast(f)));
             try writeSint32Field(&span.writer, BucketSpan.offset, offset);
             try writeVarintField(&span.writer, BucketSpan.length, last - f + 1);
             try writeBytesField(hw, Histogram.positive_span, span.written());
