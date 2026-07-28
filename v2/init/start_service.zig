@@ -304,7 +304,10 @@ fn notifyThreadCrash() void {
 }
 
 fn abort() noreturn {
-    std.os.linux.exit(255);
+    if (panic_state.thread_crash_fn != null) {
+        std.os.linux.exit(255);
+    }
+    std.os.linux.exit_group(255);
 }
 
 /// Assumes x86-64, and built with frame pointers

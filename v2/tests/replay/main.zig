@@ -172,7 +172,7 @@ pub fn main() !void {
     );
 
     spawned.cancel();
-    try spawned.wait(2 * std.time.ns_per_s);
+    _ = try spawned.wait(2 * std.time.ns_per_s);
 }
 
 fn resignPackets(

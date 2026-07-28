@@ -111,7 +111,7 @@ pub fn main() !void {
     children.cancel();
 
     // and then actually wait for the services to exit
-    try children.wait(2 * std.time.ns_per_s);
+    _ = try children.wait(2 * std.time.ns_per_s);
 
     // -- Verify outgoing messages -- //
 

@@ -44,6 +44,8 @@ pub const max_regions_per_service = lib.ipc.ResolvedArgs.max_regions;
 
 pub const Mode = enum { sandboxed, threaded };
 
+pub const ExitStatus = enum { clean, failed };
+
 /// Pair of structs declaring what regions a service consumes. `ReadOnly` and
 /// `ReadWrite` are each a struct of typed pointers (e.g. `*const Config`, `*Pair`).
 /// `ServiceRegions` mirrors them with corresponding `Region(T).Initialized` fields.
@@ -334,16 +336,31 @@ pub fn Children(Topo: type) type {
             for (self.slice()) |*svc| svc.activity_view.cancel();
         }
 
-        /// Block until the first service exits, then dump its diagnostics.
+        /// Block until the first service exits, dump its diagnostics, and report
+        /// whether it failed.
         /// If `timeout_ns_opt` is non-null, returns `error.Timeout` if no service exits in time.
-        pub fn wait(self: *Children(Topo), timeout_ns_opt: ?u64) error{Timeout}!void {
-            switch (self.mode) {
+        pub fn wait(
+            self: *Children(Topo),
+            timeout_ns_opt: ?u64,
+        ) error{Timeout}!ExitStatus {
+            return switch (self.mode) {
                 .sandboxed => try self.waitSandboxed(timeout_ns_opt),
                 .threaded => try self.waitThreaded(timeout_ns_opt),
-            }
+            };
         }
 
-        fn waitSandboxed(self: *Children(Topo), timeout_ns_opt: ?u64) error{Timeout}!void {
+        /// Cooperatively cancel every service, allow a bounded grace period,
+        /// then terminate the entire process without running libc destructors.
+        pub fn shutdown(self: *Children(Topo), code: u8) noreturn {
+            self.cancel();
+            std.Thread.sleep(std.time.ns_per_s);
+            linux.exit_group(code);
+        }
+
+        fn waitSandboxed(
+            self: *Children(Topo),
+            timeout_ns_opt: ?u64,
+        ) error{Timeout}!ExitStatus {
             const timeout_pid_opt = if (timeout_ns_opt) |timeout_ns|
                 spawnSandboxedTimeout(timeout_ns)
             else
@@ -361,13 +378,15 @@ pub fn Children(Topo: type) type {
 
             for (self.slice()) |*svc| {
                 if (svc.slot.sandboxed != exited_pid) continue;
-                dumpOnExit(&svc.runner.exit, svc.label, exited_pid, status);
-                return;
+                return dumpOnExit(&svc.runner.exit, svc.label, exited_pid, status);
             }
             std.debug.panic("Unknown child pid {} exited", .{exited_pid});
         }
 
-        fn waitThreaded(self: *Children(Topo), timeout_ns_opt: ?u64) error{Timeout}!void {
+        fn waitThreaded(
+            self: *Children(Topo),
+            timeout_ns_opt: ?u64,
+        ) error{Timeout}!ExitStatus {
             // Wait for first service to exit
             if (timeout_ns_opt) |timeout_ns| {
                 self.thread_exit.reset_event.timedWait(timeout_ns) catch {};
@@ -379,7 +398,7 @@ pub fn Children(Topo: type) type {
             if (exited_idx == std.math.maxInt(u16)) return error.Timeout;
 
             const svc = &self.slice()[exited_idx];
-            dumpOnExit(&svc.runner.exit, svc.label, 0, 0);
+            return dumpOnExit(&svc.runner.exit, svc.label, 0, 0);
         }
 
         fn slice(self: *Children(Topo)) []Service {
@@ -654,7 +673,12 @@ fn dumpOnExit(
     label: [:0]const u8,
     pid: linux.pid_t,
     status: u32,
-) void {
+) ExitStatus {
+    const failed = meta.panicMsg() != null or
+        meta.errorName() != null or
+        meta.faultMsg() != null or
+        linux.W.TERMSIG(status) != 0;
+
     if (meta.panicMsg()) |panic_msg| {
         std.log.err(
             "Service `{s}` (pid: {}) panicked with message: {s}",
@@ -691,4 +715,6 @@ fn dumpOnExit(
         std.log.err("Fault trace:", .{});
         std.debug.dumpStackTrace(trace);
     }
+
+    return if (failed) .failed else .clean;
 }
