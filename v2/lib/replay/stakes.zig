@@ -374,6 +374,110 @@ comptime {
     std.debug.assert(@sizeOf(LiveVoters) == MAX_ALPENGLOW_VOTE_ACCOUNTS * 24);
 }
 
+/// Root-map capacity for the delegator → delegation table. Sized
+/// with headroom over mainnet's ~600k stake accounts. Power-of-two
+/// as required by `FixedPubkeyMap`; the effective occupancy budget
+/// is half of this per its 2× load-factor invariant.
+pub const MAX_STAKE_DELEGATIONS_ROOT_CAP: usize = 1 << 20;
+
+/// Per-fork delta capacity — the number of distinct delegator
+/// mutations a single fork may accumulate before the boundary
+/// crossing folds delta into root. Sized for typical per-fork
+/// churn; overflow at insertion is treated as a runtime error.
+pub const MAX_STAKE_DELEGATIONS_DELTA_PER_FORK: usize = 256;
+
+/// One delegator's current delegation state. Populated at boot
+/// from each stake account's `StakeStateV2::Stake` variant.
+///
+/// `credits_observed` is carried alongside the delegation so
+/// partitioned-rewards paths can attribute earnings without a
+/// second accounts_db read at reward time.
+pub const StakeDelegation = extern struct {
+    voter_pk: Pubkey, //             32
+    stake: u64, //                    8
+    activation_epoch: Epoch, //       8
+    deactivation_epoch: Epoch, //     8
+    credits_observed: u64, //         8
+}; //                                64 B
+
+comptime {
+    std.debug.assert(@sizeOf(StakeDelegation) == 64);
+}
+
+/// Immutable per-epoch base of the delegator → delegation table.
+/// Written once at boot (walking every stake account through
+/// accounts_db) and rewritten in place at each epoch boundary
+/// (folding the winning fork's `StakeDelegationsDelta` in).
+/// Never mutated during in-epoch execution.
+///
+/// A `FixedPubkeyMap` value of a 64 B `StakeDelegation` — the
+/// table backing storage is `keys[cap] + values[cap]`, i.e.
+/// `cap * 96 B` per instance.
+pub const StakeDelegationsRoot = collections.FixedPubkeyMap(
+    StakeDelegation,
+    MAX_STAKE_DELEGATIONS_ROOT_CAP,
+);
+
+/// Per-fork accumulator of stake-delegation mutations relative to
+/// `StakeDelegationsRoot`. Byte-copied at `onBlockCreate` from
+/// the parent block's slot, mutated in place by the committer
+/// path as stake ixs land on the fork.
+///
+/// Positional linear array rather than a hash map:
+/// - Per-fork occupancy is bounded and small compared to root.
+/// - Byte-copy at fork branch is the dominant lifecycle cost —
+///   an entry array copies faster than a rebuilt open-address
+///   map.
+/// - Reads are only at boundary crossing (walked once to fold
+///   into root); no need for O(1) lookup on hot paths.
+pub const StakeDelegationsDelta = extern struct {
+    len: u16,
+    _pad0: [6]u8 = @splat(0),
+    entries: [MAX_STAKE_DELEGATIONS_DELTA_PER_FORK]Entry,
+
+    /// One landed mutation. `tombstone` marks accounts closed on
+    /// this fork (withdrawn to zero lamports); the fold-into-root
+    /// path erases the corresponding key.
+    pub const Entry = extern struct {
+        delegator_pk: Pubkey, //     32
+        delegation: StakeDelegation, // 64
+        kind: Kind, //                1
+        _pad: [7]u8 = @splat(0), //   7
+    }; //                           104 B
+
+    pub const Kind = enum(u8) {
+        /// Row is unused (indices ≥ len).
+        unpopulated = 0,
+        /// Delegator's row was created or updated on this fork.
+        upsert = 1,
+        /// Delegator's account was closed on this fork.
+        tombstone = 2,
+    };
+
+    pub const UNPOPULATED_ENTRY: Entry = .{
+        .delegator_pk = Pubkey.ZEROES,
+        .delegation = .{
+            .voter_pk = Pubkey.ZEROES,
+            .stake = 0,
+            .activation_epoch = 0,
+            .deactivation_epoch = 0,
+            .credits_observed = 0,
+        },
+        .kind = .unpopulated,
+    };
+
+    /// Zero-set the delta to an empty state.
+    pub fn reset(self: *StakeDelegationsDelta) void {
+        self.len = 0;
+        self._pad0 = @splat(0);
+        @memset(&self.entries, UNPOPULATED_ENTRY);
+    }
+};
+
+comptime {
+    std.debug.assert(@sizeOf(StakeDelegationsDelta.Entry) == 104);
+}
+
 /// Provisional owner struct for replay's stakes state.
 ///
 /// **Temporary shape.** The rest of v2 exposes shared state as one
@@ -393,6 +497,15 @@ pub const ReplayStakes = struct {
     /// from a parent block's slot at `onBlockCreate`. The root
     /// block's slot is filled by `reset()` at boot.
     live_voters: [replay.BlockPool.capacity]LiveVoters,
+    /// Immutable per-epoch base of the delegator → delegation
+    /// table. Populated once at boot from accounts_db, rewritten
+    /// at each epoch boundary from the winning fork's
+    /// `stake_delegations_delta` fold.
+    stake_delegations_root: StakeDelegationsRoot,
+    /// Per-fork accumulator of stake-delegation mutations, indexed
+    /// by `BlockRef` in lockstep with `live_voters`. Cloned from
+    /// the parent at `onBlockCreate`.
+    stake_delegations_delta: [replay.BlockPool.capacity]StakeDelegationsDelta,
     /// **Provisional.** Hangs the epoch-boundary hard-stop off a
     /// single field. Once boundary derivation lands and replay
     /// tracks `current` / `t_minus_1` / `t_minus_2` rotation slots,
@@ -413,6 +526,8 @@ pub const ReplayStakes = struct {
     pub fn init(self: *ReplayStakes) void {
         self.epoch_voters.init();
         for (&self.live_voters) |*lv| lv.reset();
+        self.stake_delegations_root.init();
+        for (&self.stake_delegations_delta) |*d| d.reset();
         self.boot_epoch = 0;
         self.first_slot_of_next_epoch = 0;
     }
@@ -455,8 +570,9 @@ pub const ReplayStakes = struct {
 
     /// Called by replay whenever a fresh `BlockRef` is allocated
     /// from the `BlockPool` for a genuine new-block event (either a
-    /// slot boundary or a fork within a slot). Byte-copies the
-    /// parent block's `LiveVoters` row into the child slot so the
+    /// slot boundary or a fork within a slot). Byte-copies both the
+    /// parent block's `LiveVoters` row and its
+    /// `StakeDelegationsDelta` row into the child slots so the
     /// child starts from an exact snapshot of the parent's fork
     /// state.
     ///
@@ -474,6 +590,10 @@ pub const ReplayStakes = struct {
         @memcpy(
             std.mem.asBytes(&self.live_voters[child.index()]),
             std.mem.asBytes(&self.live_voters[parent.index()]),
+        );
+        @memcpy(
+            std.mem.asBytes(&self.stake_delegations_delta[child.index()]),
+            std.mem.asBytes(&self.stake_delegations_delta[parent.index()]),
         );
     }
 
@@ -527,6 +647,43 @@ test "LiveVoters.reset yields all .unpopulated" {
     for (lv.entries) |row| {
         try std.testing.expectEqual(LiveVoter.Kind.unpopulated, row.kind);
     }
+}
+
+test "StakeDelegationsDelta.reset yields empty len and .unpopulated rows" {
+    const d = try std.testing.allocator.create(StakeDelegationsDelta);
+    defer std.testing.allocator.destroy(d);
+
+    d.reset();
+    try std.testing.expectEqual(@as(u16, 0), d.len);
+    for (d.entries) |entry| {
+        try std.testing.expectEqual(StakeDelegationsDelta.Kind.unpopulated, entry.kind);
+    }
+}
+
+test "StakeDelegationsRoot insert / getPtrConst round-trip" {
+    // ~96 MB at MAX_STAKE_DELEGATIONS_ROOT_CAP — too large for the
+    // testing allocator, use the page allocator.
+    const root = try std.heap.page_allocator.create(StakeDelegationsRoot);
+    defer std.heap.page_allocator.destroy(root);
+    root.init();
+
+    var delegator: Pubkey = .{ .data = .{0} ** 32 };
+    delegator.data[0] = 0xD1;
+    var voter: Pubkey = .{ .data = .{0} ** 32 };
+    voter.data[0] = 0xE1;
+
+    try root.insert(delegator, .{
+        .voter_pk = voter,
+        .stake = 12_345,
+        .activation_epoch = 10,
+        .deactivation_epoch = std.math.maxInt(Epoch),
+        .credits_observed = 42,
+    });
+
+    const found = root.getPtrConst(delegator) orelse return error.NotFound;
+    try std.testing.expectEqual(voter.data, found.voter_pk.data);
+    try std.testing.expectEqual(@as(u64, 12_345), found.stake);
+    try std.testing.expectEqual(@as(u64, 42), found.credits_observed);
 }
 
 test "EpochVoters.loadFromVersionedEpochStakes sorts desc, builds index, sums total" {
@@ -637,6 +794,54 @@ test "ReplayStakes.onBlockCreate byte-copies parent live_voters into child" {
     // Post-clone, mutating the child must not touch the parent.
     stakes.live_voters[child_idx].entries[0].last_vote_slot = 999;
     try std.testing.expectEqual(@as(Slot, 100), stakes.live_voters[parent_idx].entries[0].last_vote_slot);
+}
+
+test "ReplayStakes.onBlockCreate byte-copies parent stake_delegations_delta into child" {
+    const stakes = try std.heap.page_allocator.create(ReplayStakes);
+    defer std.heap.page_allocator.destroy(stakes);
+    stakes.init();
+
+    const parent_idx: usize = 5;
+    const child_idx: usize = 11;
+
+    var delegator: Pubkey = .{ .data = .{0} ** 32 };
+    delegator.data[0] = 0xD0;
+    var voter: Pubkey = .{ .data = .{0} ** 32 };
+    voter.data[0] = 0xE0;
+
+    stakes.stake_delegations_delta[parent_idx].entries[0] = .{
+        .delegator_pk = delegator,
+        .delegation = .{
+            .voter_pk = voter,
+            .stake = 500,
+            .activation_epoch = 7,
+            .deactivation_epoch = std.math.maxInt(Epoch),
+            .credits_observed = 3,
+        },
+        .kind = .upsert,
+    };
+    stakes.stake_delegations_delta[parent_idx].len = 1;
+
+    const parent_ref: replay.BlockRef = @enumFromInt(parent_idx);
+    const child_ref: replay.BlockRef = @enumFromInt(child_idx);
+    stakes.onBlockCreate(parent_ref, child_ref);
+
+    try std.testing.expectEqual(@as(u16, 1), stakes.stake_delegations_delta[child_idx].len);
+    try std.testing.expectEqual(
+        StakeDelegationsDelta.Kind.upsert,
+        stakes.stake_delegations_delta[child_idx].entries[0].kind,
+    );
+    try std.testing.expectEqual(
+        @as(u64, 500),
+        stakes.stake_delegations_delta[child_idx].entries[0].delegation.stake,
+    );
+
+    // Post-clone, mutating the child must not touch the parent.
+    stakes.stake_delegations_delta[child_idx].entries[0].delegation.stake = 9_999;
+    try std.testing.expectEqual(
+        @as(u64, 500),
+        stakes.stake_delegations_delta[parent_idx].entries[0].delegation.stake,
+    );
 }
 
 test "solGetEpochStake matches SIMD-0133 semantics (null / hit / miss)" {
