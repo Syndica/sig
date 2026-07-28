@@ -133,6 +133,32 @@ pub const EpochVoters = extern struct {
     }
 };
 
+/// Pure implementation of the `sol_get_epoch_stake` SVM syscall
+/// semantic (SIMD-0133).
+///
+/// Callers in the SVM layer are responsible for compute-meter
+/// charging and for translating the pubkey argument out of VM
+/// memory; this function assumes a validated optional pointer.
+///
+/// Semantics:
+/// - `null` → total active stake for the current epoch.
+/// - non-null → stake delegated to the vote account at that
+///   address, or 0 if the address does not correspond to an
+///   admitted voter (SIMD-0357 top-2000 post-Alpenglow; the full
+///   admitted set pre-Alpenglow).
+///
+/// Not yet reachable at runtime — v2 has no SVM interpreter. Once
+/// the exec tile grows one, register this as the handler for
+/// `sol_get_epoch_stake` with the current epoch's `EpochVoters`
+/// bound on the invoke context.
+pub fn solGetEpochStake(
+    epoch_voters: *const EpochVoters,
+    maybe_vote_pk: ?*const Pubkey,
+) u64 {
+    const vote_pk = maybe_vote_pk orelse return epoch_voters.total_stake;
+    return epoch_voters.stakeOf(vote_pk.*);
+}
+
 /// Per-block live vote-account state row. One per position in
 /// `EpochVoters.entries`. `.unpopulated` means "no vote landed on
 /// this fork yet"; `.update` carries the latest vote slot +
@@ -421,4 +447,29 @@ test "ReplayStakes.onBlockCreate byte-copies parent live_voters into child" {
     // Post-clone, mutating the child must not touch the parent.
     stakes.live_voters[child_idx].entries[0].last_vote_slot = 999;
     try std.testing.expectEqual(@as(Slot, 100), stakes.live_voters[parent_idx].entries[0].last_vote_slot);
+}
+
+test "solGetEpochStake matches SIMD-0133 semantics (null / hit / miss)" {
+    const ev = try std.testing.allocator.create(EpochVoters);
+    defer std.testing.allocator.destroy(ev);
+    ev.init();
+
+    var pk_hit: Pubkey = .{ .data = .{0} ** 32 };
+    pk_hit.data[0] = 0xAA;
+    var pk_miss: Pubkey = .{ .data = .{0} ** 32 };
+    pk_miss.data[0] = 0xBB;
+
+    ev.entries[0] = .{ .vote_pk = pk_hit, .stake = 777, .commission_bps = 0 };
+    ev.len = 1;
+    ev.total_stake = 777;
+    try ev.by_vote_pk.insert(pk_hit, 0);
+
+    // null arg -> total_stake.
+    try std.testing.expectEqual(@as(u64, 777), solGetEpochStake(ev, null));
+
+    // hit -> that voter's stake.
+    try std.testing.expectEqual(@as(u64, 777), solGetEpochStake(ev, &pk_hit));
+
+    // miss -> 0.
+    try std.testing.expectEqual(@as(u64, 0), solGetEpochStake(ev, &pk_miss));
 }
