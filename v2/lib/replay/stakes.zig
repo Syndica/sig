@@ -90,10 +90,10 @@ pub const EpochVoters = extern struct {
     /// admitted-set ordering, and gives a canonical index for the
     /// sibling `LiveVoters` arrays.
     ///
-    /// `commission_bps` is filled zero — the trimmed
-    /// `VersionedEpochStakes.VoteAccountEntry` on the snapshot side
-    /// only carries `{ pubkey, stake }`, and no reader consumes
-    /// commission today.
+    /// `commission_bps` is carried across from
+    /// `VersionedEpochStakes.VoteAccountEntry.commission_bps`, which
+    /// the snapshot parser extracts from each vote-account data
+    /// blob during `VersionedEpochStakes.read`.
     ///
     /// `total_stake` is summed from `entries[]`. Agave's
     /// authoritative total is accumulated unconditionally over the
@@ -123,7 +123,7 @@ pub const EpochVoters = extern struct {
             self.entries[i] = .{
                 .vote_pk = src.pubkey,
                 .stake = src.stake,
-                .commission_bps = 0,
+                .commission_bps = src.commission_bps,
             };
         }
         self.len = @intCast(vote_accounts.len);
@@ -548,9 +548,9 @@ test "EpochVoters.loadFromVersionedEpochStakes sorts desc, builds index, sums to
     pk_c.data[0] = 0xCC;
 
     // Intentionally not sorted at input.
-    va_ptr[0] = .{ .pubkey = pk_a, .stake = 100 };
-    va_ptr[1] = .{ .pubkey = pk_b, .stake = 500 };
-    va_ptr[2] = .{ .pubkey = pk_c, .stake = 300 };
+    va_ptr[0] = .{ .pubkey = pk_a, .stake = 100, .commission_bps = 0 };
+    va_ptr[1] = .{ .pubkey = pk_b, .stake = 500, .commission_bps = 0 };
+    va_ptr[2] = .{ .pubkey = pk_c, .stake = 300, .commission_bps = 0 };
 
     const entry: VES = .{
         .epoch = 42,
@@ -841,9 +841,9 @@ test "integration: boot -> solGetEpochStake -> foldLandedVote -> stakeWeightedTi
     var pk_stranger: Pubkey = .{ .data = .{0} ** 32 };
     pk_stranger.data[0] = 0xFF;
 
-    va_ptr[0] = .{ .pubkey = pk_a, .stake = 100 };
-    va_ptr[1] = .{ .pubkey = pk_b, .stake = 250 };
-    va_ptr[2] = .{ .pubkey = pk_c, .stake = 650 };
+    va_ptr[0] = .{ .pubkey = pk_a, .stake = 100, .commission_bps = 0 };
+    va_ptr[1] = .{ .pubkey = pk_b, .stake = 250, .commission_bps = 0 };
+    va_ptr[2] = .{ .pubkey = pk_c, .stake = 650, .commission_bps = 0 };
 
     const entry: VES = .{
         .epoch = 7,
