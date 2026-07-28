@@ -5,6 +5,14 @@ const ipc = @import("ipc.zig");
 const util = @import("util.zig");
 const accounts_db = @import("accounts_db.zig");
 
+comptime {
+    if (@import("builtin").is_test) {
+        _ = @import("replay/stakes.zig");
+    }
+}
+
+pub const stakes = @import("replay/stakes.zig");
+
 // This is a bit large currently because of the unrooted store
 pub const scratch_buffer_size = 3 * 1024 * 1024 * 1024;
 
