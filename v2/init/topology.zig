@@ -351,6 +351,7 @@ pub fn Children(Topo: type) type {
 
         /// Cooperatively cancel every service, allow a bounded grace period,
         /// then terminate the entire process without running libc destructors.
+        /// Must not be called after `cancel`.
         pub fn shutdown(self: *Children(Topo), code: u8) noreturn {
             self.cancel();
             std.Thread.sleep(std.time.ns_per_s);
@@ -674,10 +675,18 @@ fn dumpOnExit(
     pid: linux.pid_t,
     status: u32,
 ) ExitStatus {
+    // Every sandboxed service exits with 255 after completing or aborting the
+    // service protocol. Any other exit code means it died before recording metadata.
+    const service_exit_code = 255;
+    // A pid of zero identifies threaded mode, whose synthetic status must stay excluded.
+    const died_outside_protocol = pid != 0 and
+        linux.W.IFEXITED(status) and
+        linux.W.EXITSTATUS(status) != service_exit_code;
     const failed = meta.panicMsg() != null or
         meta.errorName() != null or
         meta.faultMsg() != null or
-        linux.W.TERMSIG(status) != 0;
+        linux.W.TERMSIG(status) != 0 or
+        died_outside_protocol;
 
     if (meta.panicMsg()) |panic_msg| {
         std.log.err(
@@ -701,6 +710,12 @@ fn dumpOnExit(
         std.log.err(
             "Service `{s}` (pid: {}) exited from signal {}",
             .{ label, pid, linux.W.TERMSIG(status) },
+        );
+    }
+    if (died_outside_protocol) {
+        std.log.err(
+            "Service `{s}` (pid: {}) exited outside the service protocol with code {}",
+            .{ label, pid, linux.W.EXITSTATUS(status) },
         );
     }
     if (meta.errorReturnStackTrace()) |trace| {

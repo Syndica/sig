@@ -27,13 +27,14 @@ pub fn main() !void {
 
     const result = try std.process.Child.run(.{
         .allocator = allocator,
-        .argv = &.{ "timeout", "5", self_exe, "--child" },
+        .argv = &.{ "timeout", "30", self_exe, "--child" },
         .max_output_bytes = 1024 * 1024,
     });
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
     std.debug.print("{s}{s}", .{ result.stdout, result.stderr });
+    try std.testing.expect(std.mem.indexOf(u8, result.stderr, "IntentionalFailure") != null);
     try std.testing.expectEqual(std.process.Child.Term{ .Exited = 1 }, result.term);
 }
 

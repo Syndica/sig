@@ -20,6 +20,6 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, _: ReadWrite) !no
         defer zone.deinit();
 
         try runner.activity.checkCanceled();
-        std.atomic.spinLoopHint();
+        std.Thread.sleep(std.time.ns_per_ms);
     }
 }

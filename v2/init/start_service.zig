@@ -303,6 +303,7 @@ fn notifyThreadCrash() void {
     crash_fn(panic_state.thread_crash_ctx, service_idx);
 }
 
+/// Threaded-mode callers must notify the parent before calling this function (#1721).
 fn abort() noreturn {
     if (panic_state.thread_crash_fn != null) {
         std.os.linux.exit(255);
