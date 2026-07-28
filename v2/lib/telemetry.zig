@@ -829,28 +829,42 @@ pub const Histogram = struct {
     }
 };
 
+/// Largest `schema` the tables below are built for. `Layout.schema()` is `log2` of
+/// `bounds_per_doubling`, which validation caps at 256, so no layout reaches past this.
+const max_schema: u4 = 8;
+
 /// Prometheus native-histogram bucket boundaries within one mantissa octave for a given `schema`:
 /// `bounds[k] = 0.5 * 2^(k / 2^schema)` for `k in 0..2^schema`. Used to bin the `frexp` fraction
 /// (which lies in `[0.5, 1)`) into a sub-octave bucket.
 fn nativeBoundsTable(comptime schema: u4) [@as(usize, 1) << schema]f64 {
-    @setEvalBranchQuota(1_000_000); // comptime `exp2` per entry is branch-heavy
+    // Two comptime backwards branches per entry: the loop iteration, and one inside `exp2`. The
+    // count accumulates across a whole evaluation and the `inline` switches below build every
+    // table in one, so budget for all of them: `sum(2^s for s in 0...max_schema)` entries, times
+    // 2 branches, times 4 for slack.
+    @setEvalBranchQuota(8 * ((@as(u32, 2) << max_schema) - 1));
     var arr: [@as(usize, 1) << schema]f64 = undefined;
     const per_octave: f64 = @floatFromInt(@as(u64, 1) << schema);
-    for (&arr, 0..) |*b, k| {
+    inline for (&arr, 0..) |*b, k| {
         b.* = 0.5 * std.math.exp2(@as(f64, @floatFromInt(k)) / per_octave);
     }
     return arr;
 }
 
-/// Smallest index `k` with `bounds[k] >= frac` (like Go's `sort.SearchFloat64s`), in `0..bounds.len`.
-fn searchFloat(bounds: []const f64, frac: f64) i64 {
-    var lo: usize = 0;
-    var hi: usize = bounds.len;
-    while (lo < hi) {
-        const mid = lo + (hi - lo) / 2;
-        if (bounds[mid] < frac) lo = mid + 1 else hi = mid;
+/// Smallest index `k` with `bounds[k] >= frac` (like Go's `sort.SearchFloat64s`), in `0..len`.
+///
+/// `len` is always `2^schema`, so the range halves cleanly and the search unrolls to a fixed
+/// `log2(len) + 1` compares — the same count the loop form needs — with each comparison folded into
+/// `base` as an integer rather than a jump. That leaves no branches at all, not just no
+/// data-dependent ones. Relies on `bounds` being sorted, which `nativeBoundsTable` builds it to be.
+fn searchFloat(comptime len: usize, bounds: *const [len]f64, frac: f64) i64 {
+    comptime std.debug.assert(std.math.isPowerOfTwo(len));
+    var base: usize = 0;
+    inline for (0..comptime std.math.log2_int(usize, len)) |i| {
+        const half = len >> @intCast(1 + i);
+        base += half * @intFromBool(bounds[base + half - 1] < frac);
     }
-    return @intCast(lo);
+    // A NaN `frac` makes every compare false and lands on 0, matching the loop form.
+    return @intCast(base + @intFromBool(bounds[base] < frac));
 }
 
 /// The global Prometheus native-histogram bucket index for `ns` at `schema`. Splits `ns` with
@@ -862,9 +876,9 @@ fn nativeBucketIndex(schema: u4, ns: u64) i64 {
     const r = std.math.frexp(fv);
     const per_octave: i64 = @as(i64, 1) << @as(u6, schema);
     const s: i64 = switch (schema) {
-        inline 0...8 => |sc| blk: {
+        inline 0...max_schema => |sc| blk: {
             const table = comptime nativeBoundsTable(sc);
-            break :blk searchFloat(&table, r.significand);
+            break :blk searchFloat(table.len, &table, r.significand);
         },
         else => unreachable,
     };
@@ -883,7 +897,7 @@ fn nativeBound(schema: u4, index: i64) f64 {
     const octave = @divFloor(index, per_octave);
     const rem: usize = @intCast(index - octave * per_octave);
     const frac: f64 = switch (schema) {
-        inline 0...8 => |sc| blk: {
+        inline 0...max_schema => |sc| blk: {
             const table = comptime nativeBoundsTable(sc);
             break :blk table[rem];
         },
