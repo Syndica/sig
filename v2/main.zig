@@ -241,7 +241,7 @@ pub fn main() !void {
     shred_recv_data.shred_version = gossip_cluster_info.shred_version;
 
     var snapshot_config: Region(snapshot.SnapshotConfig) = try .simple();
-    try populateSnapshotConfig(snapshot_config.ptr(), config.snapshot, config.cluster);
+    try snapshot_config.ptr().populate(config.snapshot.folder, config.snapshot.known_validators, config.cluster);
 
     var accounts_db_config: Region(accounts_db.RootedConfig) = try .sized(
         @sizeOf(accounts_db.RootedConfig) + config.accounts_db.rooted.toBytes(),
@@ -391,57 +391,3 @@ pub fn main() !void {
     tracy.message("exiting");
 }
 
-fn populateSnapshotConfig(
-    data: *snapshot.SnapshotConfig,
-    cfg: Config.Snapshot,
-    cluster: lib.solana.Cluster,
-) !void {
-    if (cfg.known_validators.len == 0) {
-        std.log.err(
-            "known_validators must not be empty. Specify validator pubkeys, " ++
-                "or \"*\" to opt in to untrusted snapshot sources.",
-            .{},
-        );
-        return error.NoKnownValidators;
-    }
-    if (cfg.known_validators.len > snapshot.SnapshotConfig.MAX_KNOWN_VALIDATORS) {
-        return error.TooManyKnownValidators;
-    }
-
-    @memcpy(data.folder_buffer[0..cfg.folder.len], cfg.folder);
-    data.folder_len = @intCast(cfg.folder.len);
-    data.cluster = cluster;
-
-    const has_wildcard = for (cfg.known_validators) |entry| {
-        if (std.mem.eql(u8, entry, "*")) break true;
-    } else false;
-
-    if (has_wildcard) {
-        if (cfg.known_validators.len > 1) {
-            std.log.warn(
-                "known_validators contains \"*\" alongside other entries; " ++
-                    "\"*\" takes precedence, ignoring the rest.",
-                .{},
-            );
-        }
-        data.known_validators_allow_all = true;
-        // NOTE: we zero out known_validators_len to make it clear that
-        // no validator pubkeys were provided.
-        data.known_validators_len = 0;
-    } else {
-        data.known_validators_allow_all = false;
-        data.known_validators_len = @intCast(cfg.known_validators.len);
-        for (
-            cfg.known_validators,
-            data.known_validators_buffer[0..cfg.known_validators.len],
-        ) |pkstr, *pkptr| {
-            pkptr.* = lib.solana.Pubkey.parseRuntime(pkstr) catch |err| {
-                std.log.err(
-                    "invalid known_validator entry '{s}': {s}",
-                    .{ pkstr, @errorName(err) },
-                );
-                return err;
-            };
-        }
-    }
-}

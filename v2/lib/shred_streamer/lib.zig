@@ -18,3 +18,4 @@ pub const produceLedgerPackets = stream.produceLedgerPackets;
 pub const buildSelectedShredPlan = plan.buildSelectedShredPlan;
 pub const parseArgs = config.parseArgs;
 pub const printHelp = config.printHelp;
+pub const resolveRocksDbPath = config.resolveRocksDbPath;

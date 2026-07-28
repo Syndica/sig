@@ -33,6 +33,7 @@ const parseShredKey = shred_stream.config.parseShredKey;
 const writeShredKey = shred_stream.config.writeShredKey;
 const parseArgs = shred_stream.parseArgs;
 const printHelp = shred_stream.printHelp;
+const resolveRocksDbPath = shred_stream.resolveRocksDbPath;
 
 const agave_cf_meta = shred_stream.config.agave_cf_meta;
 const agave_cf_data_shred = shred_stream.config.agave_cf_data_shred;
@@ -69,7 +70,7 @@ pub fn main() !void {
             // The lib's finalize() makes --target optional (the in-topology
             // service doesn't need it). The CLI still requires it because
             // packets go out over UDP.
-            if (config.target.len == 0) {
+            if (config.target == null) {
                 try stdout.print("missing required argument: --target <ip:port>\n", .{});
                 try printHelp(stdout);
                 try stdout.flush();
@@ -82,7 +83,7 @@ pub fn main() !void {
 }
 
 fn run(allocator: Allocator, stdout: *std.Io.Writer, config: Config) !void {
-    const target = try std.net.Address.parseIpAndPort(config.target);
+    const target = try std.net.Address.parseIpAndPort(config.target.?);
 
     // The lib's AgaveBlockstore.open expects an already-resolved rocksdb
     // directory path; resolve it here in the CLI.
@@ -95,7 +96,7 @@ fn run(allocator: Allocator, stdout: *std.Io.Writer, config: Config) !void {
     try stdout.print("shred-stream config:\n", .{});
     try stdout.print("  ledger: {s}\n", .{config.ledger});
     try stdout.print("  rocksdb: {s}\n", .{blockstore.rocksdb_path});
-    try stdout.print("  target: {s}\n", .{config.target});
+    try stdout.print("  target: {s}\n", .{config.target.?});
     try stdout.print("  start_slot: {?d}\n", .{config.start_slot});
     try stdout.print("  end_slot: {?d}\n", .{config.end_slot});
     try stdout.print("  rate_hz: {?}\n", .{config.rate_hz});
@@ -840,48 +841,4 @@ fn printShredStats(stdout: *std.Io.Writer, name: []const u8, stats: ShredStats) 
     try stdout.print("    selected_last_slot: {?d}\n", .{stats.selected_last_slot});
     try stdout.print("    selected_max_packet_bytes: {d}\n", .{stats.selected_max_packet_bytes});
     try stdout.print("    selected_oversized_packets: {d}\n", .{stats.selected_oversized_packets});
-}
-
-/// Resolves an Agave ledger path to the actual rocksdb directory.
-/// Accepts either the enclosing ledger dir (with a `rocksdb/` subdir) or the
-/// rocksdb dir itself. Returns an owned path — caller must free.
-fn resolveRocksDbPath(allocator: Allocator, ledger_path: []const u8) ![]const u8 {
-    const nested_rocksdb_path = try std.fs.path.join(allocator, &.{ ledger_path, "rocksdb" });
-
-    if (std.fs.cwd().statFile(nested_rocksdb_path)) |stat| {
-        if (stat.kind == .directory) return nested_rocksdb_path;
-    } else |_| {}
-    allocator.free(nested_rocksdb_path);
-
-    if (std.fs.cwd().statFile(ledger_path)) |stat| {
-        if (stat.kind == .directory) return try allocator.dupe(u8, ledger_path);
-    } else |_| {}
-
-    std.debug.print("ledger path does not exist or is not a directory: {s}\n", .{ledger_path});
-    return error.InvalidLedgerPath;
-}
-
-test "resolve rocksdb path" {
-    var tmp = std.testing.tmpDir(.{});
-    defer tmp.cleanup();
-    try tmp.dir.makePath("ledger/rocksdb");
-
-    const ledger_path = try tmp.dir.realpathAlloc(std.testing.allocator, "ledger");
-    defer std.testing.allocator.free(ledger_path);
-
-    const rocksdb_path = try resolveRocksDbPath(std.testing.allocator, ledger_path);
-    defer std.testing.allocator.free(rocksdb_path);
-
-    const expected = try tmp.dir.realpathAlloc(std.testing.allocator, "ledger/rocksdb");
-    defer std.testing.allocator.free(expected);
-
-    try std.testing.expectEqualStrings(expected, rocksdb_path);
-
-    const direct_path = try tmp.dir.realpathAlloc(std.testing.allocator, "ledger/rocksdb");
-    defer std.testing.allocator.free(direct_path);
-
-    const direct_rocksdb_path = try resolveRocksDbPath(std.testing.allocator, direct_path);
-    defer std.testing.allocator.free(direct_rocksdb_path);
-
-    try std.testing.expectEqualStrings(direct_path, direct_rocksdb_path);
 }

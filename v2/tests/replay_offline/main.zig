@@ -208,7 +208,7 @@ pub fn main() !void {
 
         // Resolve `--ledger` to the actual rocksdb directory before writing it
         // into IPC. The service just opens whatever path we give it.
-        const rocksdb_path = resolveRocksDbPath(allocator, stream_cfg.ledger) catch |err| {
+        const rocksdb_path = shred_stream.resolveRocksDbPath(allocator, stream_cfg.ledger) catch |err| {
             try stderr_writer.interface.print(
                 "error: invalid ledger path '{s}': {s}\n",
                 .{ stream_cfg.ledger, @errorName(err) },
@@ -224,10 +224,19 @@ pub fn main() !void {
             stream_cfg.rate_hz,
             @enumFromInt(@intFromEnum(stream_cfg.test_mode)),
             stream_cfg.seed,
-            @intCast(stream_cfg.selected_count),
+            std.math.cast(u32, stream_cfg.selected_count) orelse {
+                try stderr_writer.interface.print("error: --count value too large (max {d})\n", .{std.math.maxInt(u32)});
+                return error.InvalidArguments;
+            },
             @enumFromInt(@intFromEnum(stream_cfg.shred_kind)),
-            @intCast(stream_cfg.plan_limit),
-            @intCast(stream_cfg.corrupt_bytes),
+            std.math.cast(u32, stream_cfg.plan_limit) orelse {
+                try stderr_writer.interface.print("error: --plan-limit value too large (max {d})\n", .{std.math.maxInt(u32)});
+                return error.InvalidArguments;
+            },
+            std.math.cast(u32, stream_cfg.corrupt_bytes) orelse {
+                try stderr_writer.interface.print("error: --corrupt-bytes value too large (max {d})\n", .{std.math.maxInt(u32)});
+                return error.InvalidArguments;
+            },
             stream_cfg.dry_run,
         ) catch |err| {
             try stderr_writer.interface.print(
@@ -253,7 +262,7 @@ pub fn main() !void {
     shred_recv_config.ptr().shred_version = 0;
 
     var snapshot_config: Region(snapshot.SnapshotConfig) = try .simple();
-    try populateSnapshotConfig(snapshot_config.ptr(), config.snapshot, config.cluster);
+    try snapshot_config.ptr().populate(config.snapshot.folder, config.snapshot.known_validators, config.cluster);
 
     if (config.accounts_db.file.len > std.fs.max_path_bytes) {
         std.log.err(
@@ -406,78 +415,3 @@ pub fn main() !void {
     try children.wait(5 * std.time.ns_per_s);
 }
 
-/// Resolves a ledger path to the actual RocksDB directory.
-///
-/// Agave ledger layouts have RocksDB either at `<ledger>/rocksdb` (nested) or
-/// directly at `<ledger>`. This tries the nested path first, then falls back
-/// to the direct path. Returns an owned string that must be freed by the
-/// caller.
-fn resolveRocksDbPath(allocator: std.mem.Allocator, ledger_path: []const u8) ![]const u8 {
-    const nested_rocksdb_path = try std.fs.path.join(allocator, &.{ ledger_path, "rocksdb" });
-
-    if (std.fs.cwd().statFile(nested_rocksdb_path)) |stat| {
-        if (stat.kind == .directory) return nested_rocksdb_path;
-    } else |_| {}
-    allocator.free(nested_rocksdb_path);
-
-    if (std.fs.cwd().statFile(ledger_path)) |stat| {
-        if (stat.kind == .directory) return try allocator.dupe(u8, ledger_path);
-    } else |_| {}
-
-    return error.InvalidLedgerPath;
-}
-
-fn populateSnapshotConfig(
-    data: *snapshot.SnapshotConfig,
-    cfg: Config.Snapshot,
-    cluster: lib.solana.Cluster,
-) !void {
-    if (cfg.known_validators.len == 0) {
-        std.log.err(
-            "known_validators must not be empty. Specify validator pubkeys, " ++
-                "or \"*\" to opt in to untrusted snapshot sources.",
-            .{},
-        );
-        return error.NoKnownValidators;
-    }
-    if (cfg.known_validators.len > snapshot.SnapshotConfig.MAX_KNOWN_VALIDATORS) {
-        return error.TooManyKnownValidators;
-    }
-
-    @memcpy(data.folder_buffer[0..cfg.folder.len], cfg.folder);
-    data.folder_len = @intCast(cfg.folder.len);
-    data.cluster = cluster;
-
-    const has_wildcard = for (cfg.known_validators) |entry| {
-        if (std.mem.eql(u8, entry, "*")) break true;
-    } else false;
-
-    if (has_wildcard) {
-        if (cfg.known_validators.len > 1) {
-            std.log.warn(
-                "known_validators contains \"*\" alongside other entries; " ++
-                    "\"*\" takes precedence, ignoring the rest.",
-                .{},
-            );
-        }
-        data.known_validators_allow_all = true;
-        // NOTE: we zero out known_validators_len to make it clear that
-        // no validator pubkeys were provided.
-        data.known_validators_len = 0;
-    } else {
-        data.known_validators_allow_all = false;
-        data.known_validators_len = @intCast(cfg.known_validators.len);
-        for (
-            cfg.known_validators,
-            data.known_validators_buffer[0..cfg.known_validators.len],
-        ) |pkstr, *pkptr| {
-            pkptr.* = lib.solana.Pubkey.parseRuntime(pkstr) catch |err| {
-                std.log.err(
-                    "invalid known_validator entry '{s}': {s}",
-                    .{ pkstr, @errorName(err) },
-                );
-                return err;
-            };
-        }
-    }
-}

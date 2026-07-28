@@ -85,7 +85,7 @@ pub const ShredKind = enum(u8) {
 
 pub const Config = struct {
     ledger: []const u8,
-    target: []const u8 = "",
+    target: ?[]const u8 = null,
     start_slot: ?Slot = null,
     end_slot: ?Slot = null,
     rate_hz: ?f64 = null,
@@ -141,7 +141,7 @@ pub const PartialConfig = struct {
         };
         // --target is optional: only needed by the legacy UDP path (legacyMain),
         // not by the v2 service which writes directly to the IPC ring.
-        const target = self.target orelse "";
+        const target = self.target;
 
         if (self.start_slot != null and
             self.end_slot != null and
@@ -750,6 +750,29 @@ pub fn corruptPacketBytes(packet_data: []u8, corrupt_bytes: usize, random: std.R
     }
 }
 
+// --- Path resolution ---
+
+/// Resolves an Agave ledger path to the actual RocksDB directory.
+///
+/// Agave ledger layouts have RocksDB either at `<ledger>/rocksdb` (nested) or
+/// directly at `<ledger>`. This tries the nested path first, then falls back
+/// to the direct path. Returns an owned string that must be freed by the
+/// caller.
+pub fn resolveRocksDbPath(allocator: std.mem.Allocator, ledger_path: []const u8) ![]const u8 {
+    const nested_rocksdb_path = try std.fs.path.join(allocator, &.{ ledger_path, "rocksdb" });
+
+    if (std.fs.cwd().statFile(nested_rocksdb_path)) |stat| {
+        if (stat.kind == .directory) return nested_rocksdb_path;
+    } else |_| {}
+    allocator.free(nested_rocksdb_path);
+
+    if (std.fs.cwd().statFile(ledger_path)) |stat| {
+        if (stat.kind == .directory) return try allocator.dupe(u8, ledger_path);
+    } else |_| {}
+
+    return error.InvalidLedgerPath;
+}
+
 // --- Tests ---
 
 var discarding: std.Io.Writer.Discarding = .init(&.{});
@@ -762,7 +785,7 @@ test "parse arguments" {
         );
         const config = result.config;
         try std.testing.expectEqualStrings("ledger", config.ledger);
-        try std.testing.expectEqualStrings("127.0.0.1:8002", config.target);
+        try std.testing.expectEqualStrings("127.0.0.1:8002", config.target.?);
         try std.testing.expectEqual(@as(?Slot, null), config.start_slot);
         try std.testing.expectEqual(@as(?Slot, null), config.end_slot);
         try std.testing.expectEqual(@as(?f64, null), config.rate_hz);
@@ -1225,4 +1248,29 @@ test "slot bounds helpers respect optional bounds" {
     try std.testing.expect(!bounded.slotSelected(21));
     try std.testing.expect(!bounded.pastEndSlot(20));
     try std.testing.expect(bounded.pastEndSlot(21));
+}
+
+test "resolve rocksdb path" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.makePath("ledger/rocksdb");
+
+    const ledger_path = try tmp.dir.realpathAlloc(std.testing.allocator, "ledger");
+    defer std.testing.allocator.free(ledger_path);
+
+    const rocksdb_path = try resolveRocksDbPath(std.testing.allocator, ledger_path);
+    defer std.testing.allocator.free(rocksdb_path);
+
+    const expected = try tmp.dir.realpathAlloc(std.testing.allocator, "ledger/rocksdb");
+    defer std.testing.allocator.free(expected);
+
+    try std.testing.expectEqualStrings(expected, rocksdb_path);
+
+    const direct_path = try tmp.dir.realpathAlloc(std.testing.allocator, "ledger/rocksdb");
+    defer std.testing.allocator.free(direct_path);
+
+    const direct_rocksdb_path = try resolveRocksDbPath(std.testing.allocator, direct_path);
+    defer std.testing.allocator.free(direct_rocksdb_path);
+
+    try std.testing.expectEqualStrings(direct_path, direct_rocksdb_path);
 }
