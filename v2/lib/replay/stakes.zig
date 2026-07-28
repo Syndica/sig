@@ -159,6 +159,133 @@ pub fn solGetEpochStake(
     return epoch_voters.stakeOf(vote_pk.*);
 }
 
+/// Drift bounds for the stake-weighted timestamp median, expressed
+/// as percentages of the poh estimate offset since the epoch start.
+/// Post-Alpenglow defaults match agave's `MAX_ALLOWABLE_DRIFT_PERCENTAGE_FAST`
+/// and `MAX_ALLOWABLE_DRIFT_PERCENTAGE_SLOW_V2`.
+pub const TimestampDrift = extern struct {
+    fast_pct: u32,
+    slow_pct: u32,
+
+    pub const DEFAULT: TimestampDrift = .{ .fast_pct = 25, .slow_pct = 150 };
+};
+
+/// Anchor for the epoch-start drift bound: (slot, timestamp) of the
+/// clock sysvar at the first slot of the current epoch.
+pub const EpochStartTimestamp = extern struct {
+    slot: Slot,
+    timestamp: i64,
+};
+
+/// Pure stake-weighted median timestamp computed over `EpochVoters`
+/// (stake weights) and one fork's `LiveVoters` (live vote
+/// timestamps). Matches agave's `calculate_stake_weighted_timestamp`
+/// semantic and is the value the per-slot clock sysvar update writes
+/// into `Clock.unix_timestamp`.
+///
+/// Not yet reachable at runtime — v2 has no per-slot sysvar update
+/// path. Once one exists it calls this function once per slot with
+/// the current fork's `LiveVoters` and the epoch's `EpochVoters`.
+///
+/// Algorithm (per SIMD / agave):
+/// 1. For each voter whose live row is `.update`, project the vote
+///    timestamp to `current_slot` as
+///    `last_vote_timestamp + elapsed_secs(last_vote_slot -> current_slot)`.
+/// 2. Sort projections asc; walk while accumulating stake; return
+///    the projection at which cumulative stake first exceeds
+///    `total_live_stake / 2` — the stake-weighted median.
+/// 3. If `epoch_start` is provided, bound the median against the
+///    poh estimate offset by `drift.fast_pct` / `drift.slow_pct`.
+///
+/// Returns null iff no voter has a live `.update` row with non-zero
+/// stake (no signal to aggregate).
+pub fn stakeWeightedTimestamp(
+    epoch_voters: *const EpochVoters,
+    live_voters: *const LiveVoters,
+    current_slot: Slot,
+    slot_duration_ns: u64,
+    epoch_start: ?EpochStartTimestamp,
+    drift: TimestampDrift,
+) ?i64 {
+    var pairs: [MAX_ALPENGLOW_VOTE_ACCOUNTS]Pair = undefined;
+    var n: usize = 0;
+    var total_stake: u128 = 0;
+
+    for (0..epoch_voters.len) |i| {
+        const row = &live_voters.entries[i];
+        if (row.kind != .update) continue;
+        const stake = epoch_voters.entries[i].stake;
+        if (stake == 0) continue;
+
+        pairs[n] = .{
+            .estimate = row.last_vote_timestamp +| elapsedSecs(row.last_vote_slot, current_slot, slot_duration_ns),
+            .stake = stake,
+        };
+        n += 1;
+        total_stake +|= stake;
+    }
+    if (total_stake == 0) return null;
+
+    std.mem.sort(Pair, pairs[0..n], {}, Pair.byEstimateAsc);
+
+    var acc: u128 = 0;
+    var estimate: i64 = pairs[0].estimate;
+    for (pairs[0..n]) |p| {
+        acc +|= p.stake;
+        if (acc > total_stake / 2) {
+            estimate = p.estimate;
+            break;
+        }
+    }
+
+    if (epoch_start) |es| {
+        estimate = clampDrift(estimate, es, current_slot, slot_duration_ns, drift);
+    }
+    return estimate;
+}
+
+const Pair = struct {
+    estimate: i64,
+    stake: u64,
+
+    fn byEstimateAsc(_: void, a: Pair, b: Pair) bool {
+        return a.estimate < b.estimate;
+    }
+};
+
+/// `(to_slot - from_slot) * slot_duration_ns / 1e9`, saturating and
+/// truncating to whole seconds.
+fn elapsedSecs(from_slot: Slot, to_slot: Slot, slot_duration_ns: u64) i64 {
+    const slots: u128 = to_slot -| from_slot;
+    const ns: u128 = slots *| @as(u128, slot_duration_ns);
+    const secs: u128 = ns / std.time.ns_per_s;
+    return @intCast(@min(secs, @as(u128, std.math.maxInt(i64))));
+}
+
+fn clampDrift(
+    estimate: i64,
+    epoch_start: EpochStartTimestamp,
+    current_slot: Slot,
+    slot_duration_ns: u64,
+    drift: TimestampDrift,
+) i64 {
+    const poh_off_secs = elapsedSecs(epoch_start.slot, current_slot, slot_duration_ns);
+    const est_off_secs: i64 = @intCast(@max(0, estimate -| epoch_start.timestamp));
+
+    const fast_bound = @divTrunc(poh_off_secs *| @as(i64, @intCast(drift.fast_pct)), 100);
+    const slow_bound = @divTrunc(poh_off_secs *| @as(i64, @intCast(drift.slow_pct)), 100);
+
+    if (est_off_secs > poh_off_secs and est_off_secs - poh_off_secs > slow_bound) {
+        // Slower than poh by more than the slow bound: clamp forward.
+        return epoch_start.timestamp +| poh_off_secs +| slow_bound;
+    }
+    if (est_off_secs < poh_off_secs and poh_off_secs - est_off_secs > fast_bound) {
+        // Faster than poh by more than the fast bound: clamp back.
+        return epoch_start.timestamp +| poh_off_secs -| fast_bound;
+    }
+    return estimate;
+}
+
 /// Per-block live vote-account state row. One per position in
 /// `EpochVoters.entries`. `.unpopulated` means "no vote landed on
 /// this fork yet"; `.update` carries the latest vote slot +
@@ -472,4 +599,89 @@ test "solGetEpochStake matches SIMD-0133 semantics (null / hit / miss)" {
 
     // miss -> 0.
     try std.testing.expectEqual(@as(u64, 0), solGetEpochStake(ev, &pk_miss));
+}
+
+test "stakeWeightedTimestamp returns null when no voter has stake" {
+    const ev = try std.testing.allocator.create(EpochVoters);
+    defer std.testing.allocator.destroy(ev);
+    ev.init();
+    const lv = try std.testing.allocator.create(LiveVoters);
+    defer std.testing.allocator.destroy(lv);
+    lv.reset();
+
+    try std.testing.expectEqual(
+        @as(?i64, null),
+        stakeWeightedTimestamp(ev, lv, 1000, 400 * std.time.ns_per_ms, null, .DEFAULT),
+    );
+}
+
+test "stakeWeightedTimestamp picks stake-weighted median" {
+    // Three voters, all at the same last_vote_slot (offset = 0), with
+    // stakes 10 / 30 / 60 and distinct timestamps. Median crosses at
+    // the voter carrying stake 60 → its timestamp wins.
+    const ev = try std.testing.allocator.create(EpochVoters);
+    defer std.testing.allocator.destroy(ev);
+    ev.init();
+    const lv = try std.testing.allocator.create(LiveVoters);
+    defer std.testing.allocator.destroy(lv);
+    lv.reset();
+
+    var pk0: Pubkey = .{ .data = .{0} ** 32 };
+    pk0.data[0] = 1;
+    var pk1: Pubkey = .{ .data = .{0} ** 32 };
+    pk1.data[0] = 2;
+    var pk2: Pubkey = .{ .data = .{0} ** 32 };
+    pk2.data[0] = 3;
+
+    // Slot 100 for everyone; timestamps in the wrong sorted order.
+    ev.entries[0] = .{ .vote_pk = pk0, .stake = 10, .commission_bps = 0 };
+    ev.entries[1] = .{ .vote_pk = pk1, .stake = 30, .commission_bps = 0 };
+    ev.entries[2] = .{ .vote_pk = pk2, .stake = 60, .commission_bps = 0 };
+    ev.len = 3;
+    ev.total_stake = 100;
+    try ev.by_vote_pk.insert(pk0, 0);
+    try ev.by_vote_pk.insert(pk1, 1);
+    try ev.by_vote_pk.insert(pk2, 2);
+
+    lv.entries[0] = .{ .last_vote_slot = 100, .last_vote_timestamp = 300, .kind = .update };
+    lv.entries[1] = .{ .last_vote_slot = 100, .last_vote_timestamp = 100, .kind = .update };
+    lv.entries[2] = .{ .last_vote_slot = 100, .last_vote_timestamp = 200, .kind = .update };
+
+    // current_slot == last_vote_slot: no projection offset. Sorted
+    // by estimate asc: (100, 30), (200, 60), (300, 10). Total = 100,
+    // half = 50. acc after first = 30 (not > 50); after second = 90
+    // (> 50) → estimate = 200.
+    try std.testing.expectEqual(
+        @as(?i64, 200),
+        stakeWeightedTimestamp(ev, lv, 100, 400 * std.time.ns_per_ms, null, .DEFAULT),
+    );
+}
+
+test "stakeWeightedTimestamp clamps against epoch-start drift" {
+    // One voter with a wildly-slow timestamp; drift bound must clamp
+    // forward to `epoch_start + poh_off + slow_bound`.
+    const ev = try std.testing.allocator.create(EpochVoters);
+    defer std.testing.allocator.destroy(ev);
+    ev.init();
+    const lv = try std.testing.allocator.create(LiveVoters);
+    defer std.testing.allocator.destroy(lv);
+    lv.reset();
+
+    var pk0: Pubkey = .{ .data = .{0} ** 32 };
+    pk0.data[0] = 1;
+    ev.entries[0] = .{ .vote_pk = pk0, .stake = 100, .commission_bps = 0 };
+    ev.len = 1;
+    ev.total_stake = 100;
+    try ev.by_vote_pk.insert(pk0, 0);
+
+    // Voter's projected estimate = 1_000_000, way past poh-implied.
+    lv.entries[0] = .{ .last_vote_slot = 100, .last_vote_timestamp = 1_000_000, .kind = .update };
+
+    // 1000 slots at 400 ms = 400 s of poh offset. slow_pct = 150 →
+    // slow_bound = 600 s. Cap = 1000 + 400 + 600 = 2000.
+    const epoch_start: EpochStartTimestamp = .{ .slot = 100, .timestamp = 1000 };
+    try std.testing.expectEqual(
+        @as(?i64, 2000),
+        stakeWeightedTimestamp(ev, lv, 1100, 400 * std.time.ns_per_ms, epoch_start, .DEFAULT),
+    );
 }
