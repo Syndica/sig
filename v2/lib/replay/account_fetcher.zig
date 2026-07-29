@@ -59,7 +59,8 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
         // union enums is for simplicity mostly, but also since a single FetchEntry can have multiple waiters,
         // we're wasting less space. Though perhaps there's good reason to change this in the future?
 
-        // TODO: flatten both of these.
+        // TODO: flatten both of these by having a pool of nodes.
+
         /// Backing storage for fetch entries.
         entries: [entry_capacity]FetchEntry,
         /// Backing storage for per-request completion waiters.
@@ -293,13 +294,13 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
 
             var len: usize = 0;
             while (len < out.len) : (len += 1) {
-                out[len] = self.popCompletion() orelse break;
+                out[len] = self.popReadyCompletion() orelse break;
             }
 
             return out[0..len];
         }
 
-        pub fn popCompletion(self: *Self) ?Completion {
+        fn popReadyCompletion(self: *Self) ?Completion {
             const entry_id = self.popReady() orelse return null;
             const entry = entry_id.ptr(&self.entry_pool);
 
@@ -630,8 +631,6 @@ test "rooted miss completes as not found" {
         .user_data = 42,
     });
 
-    try std.testing.expect(fetcher.popCompletion() == null);
-
     // Publish the queued Rooted request.
     var completions_buf: [1]TestFetcher.Completion = undefined;
     const completions = fetcher.pollCompletions(&completions_buf);
@@ -848,8 +847,12 @@ test "unrooted accounts bypass rooted and zero-lamport accounts return refs" {
     var rooted_reader = state.account_lookups.in.get(.reader);
     try std.testing.expect(rooted_reader.next() == null);
 
-    const found = state.fetcher.popCompletion().?;
-    const tombstone = state.fetcher.popCompletion().?;
+    var completions_buf: [2]TestFetcher.Completion = undefined;
+    const completions = state.fetcher.pollCompletions(&completions_buf);
+    try std.testing.expectEqual(2, completions.len);
+
+    const found = completions[0];
+    const tombstone = completions[1];
 
     try std.testing.expectEqual(found_ref, found.account_ref);
     try std.testing.expectEqual(tombstone_ref, tombstone.account_ref);
@@ -963,7 +966,10 @@ test "rooted request remains queued while lookup ring is full" {
         state.fetcher.pollCompletions(&completions_buf).len,
     );
     try std.testing.expect(state.fetcher.rooted_head != .null);
-    try std.testing.expect(state.fetcher.popCompletion() == null);
+    try std.testing.expectEqual(
+        0,
+        state.fetcher.pollCompletions(&completions_buf).len,
+    );
 
     // Drain the filler requests.
     var reader = state.account_lookups.in.get(.reader);
