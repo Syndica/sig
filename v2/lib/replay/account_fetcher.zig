@@ -36,8 +36,8 @@ pub const AccountFetcher = AccountFetcherType(Unrooted);
 /// to the existing entry's waiter list.
 ///
 /// The fetcher maintains two queues: one for entries that are queued for rooted lookups and another for
-/// entries that are ready with results. The `poll` method processes these queues, submitting
-/// requests to the `AccountLookups` service and draining completed results.
+/// entries that are ready with results. The `pollCompletions` method processes these queues,
+/// submitting requests to the `AccountLookups` service and draining completed results.
 pub fn AccountFetcherType(comptime UnrootedStore: type) type {
     return struct {
         const Self = @This();
@@ -635,7 +635,7 @@ test "rooted miss completes as not found" {
     // Publish the queued Rooted request.
     var completions_buf: [1]TestFetcher.Completion = undefined;
     const completions = fetcher.pollCompletions(&completions_buf);
-    try std.testing.expect(completions.len == 1);
+    try std.testing.expectEqual(0, completions.len);
 
     var request_reader = account_lookups.in.get(.reader);
     const rooted_request = (request_reader.next() orelse
@@ -656,15 +656,15 @@ test "rooted miss completes as not found" {
     };
     response_writer.markUsed();
 
-    try std.testing.expect(fetcher.pollCompletions());
+    const rooted_completions = fetcher.pollCompletions(&completions_buf);
+    try std.testing.expectEqual(1, rooted_completions.len);
 
-    const completion = fetcher.popCompletion() orelse
-        return error.MissingCompletion;
+    const completion = rooted_completions[0];
 
-    try std.testing.expectEqual(@as(UserData, 42), completion.user_data);
+    try std.testing.expectEqual(42, completion.user_data);
     try std.testing.expect(completion.pubkey.equals(&pubkey));
     try std.testing.expectEqual(AccountRef.invalid, completion.account_ref);
-    try std.testing.expect(fetcher.popCompletion() == null);
+    try std.testing.expectEqual(0, fetcher.pollCompletions(&completions_buf).len);
 }
 
 test "duplicate requests share rooted fetch and receive owned references" {
@@ -702,7 +702,7 @@ test "duplicate requests share rooted fetch and receive owned references" {
     });
 
     // Both submissions share one fetch entry and one queued Rooted request.
-    try std.testing.expectEqual(@as(usize, 1), state.fetcher.active_fetches.count());
+    try std.testing.expectEqual(1, state.fetcher.active_fetches.count());
 
     const entry_id = state.fetcher.rooted_head.opt() orelse
         return error.MissingRootedFetchEntry;
@@ -718,7 +718,9 @@ test "duplicate requests share rooted fetch and receive owned references" {
     try std.testing.expectEqual(second_waiter_id, entry.waiter_tail.opt().?);
     try std.testing.expectEqual(.null, second_waiter_id.ptr(&state.fetcher.waiter_pool).next);
 
-    try std.testing.expect(state.fetcher.pollCompletions());
+    var completions_buf: [2]TestFetcher.Completion = undefined;
+    const published_completions = state.fetcher.pollCompletions(&completions_buf);
+    try std.testing.expectEqual(0, published_completions.len);
 
     var request_reader = state.account_lookups.in.get(.reader);
     const request = request_reader.next() orelse
@@ -742,15 +744,14 @@ test "duplicate requests share rooted fetch and receive owned references" {
     response_writer.next().?.* = rooted_result;
     response_writer.markUsed();
 
-    try std.testing.expect(state.fetcher.pollCompletions());
+    const completions = state.fetcher.pollCompletions(&completions_buf);
+    try std.testing.expectEqual(2, completions.len);
 
-    const first = state.fetcher.popCompletion() orelse
-        return error.MissingCompletion;
-    const second = state.fetcher.popCompletion() orelse
-        return error.MissingCompletion;
+    const first = completions[0];
+    const second = completions[1];
 
-    try std.testing.expectEqual(@as(UserData, 10), first.user_data);
-    try std.testing.expectEqual(@as(UserData, 20), second.user_data);
+    try std.testing.expectEqual(10, first.user_data);
+    try std.testing.expectEqual(20, second.user_data);
     try std.testing.expectEqual(first.account_ref, second.account_ref);
     try std.testing.expect(first.account_ref != .invalid);
 
@@ -763,7 +764,7 @@ test "duplicate requests share rooted fetch and receive owned references" {
 
     // FetchEntry has retired; both completion callers own one ref.
     try std.testing.expectEqual(
-        @as(u32, 2),
+        2,
         account.ref_count.load(.monotonic),
     );
 
@@ -892,7 +893,9 @@ test "rooted responses complete by request id out of order" {
         .user_data = 22,
     });
 
-    try std.testing.expect(state.fetcher.pollCompletions());
+    var completions_buf: [2]TestFetcher.Completion = undefined;
+    const published_completions = state.fetcher.pollCompletions(&completions_buf);
+    try std.testing.expectEqual(0, published_completions.len);
 
     var reader = state.account_lookups.in.get(.reader);
     const first_request = reader.next().?.*;
@@ -903,13 +906,14 @@ test "rooted responses complete by request id out of order" {
     try state.respond(second_request, .invalid);
     try state.respond(first_request, .invalid);
 
-    try std.testing.expect(state.fetcher.pollCompletions());
+    const completions = state.fetcher.pollCompletions(&completions_buf);
+    try std.testing.expectEqual(2, completions.len);
 
-    const first_completion = state.fetcher.popCompletion().?;
-    const second_completion = state.fetcher.popCompletion().?;
+    const first_completion = completions[0];
+    const second_completion = completions[1];
 
     try std.testing.expectEqual(
-        @as(UserData, 22),
+        22,
         first_completion.user_data,
     );
     try std.testing.expect(
@@ -917,7 +921,7 @@ test "rooted responses complete by request id out of order" {
     );
 
     try std.testing.expectEqual(
-        @as(UserData, 11),
+        11,
         second_completion.user_data,
     );
     try std.testing.expect(
@@ -953,7 +957,12 @@ test "rooted request remains queued while lookup ring is full" {
     });
 
     // The entry remains on rooted_head because no ring slot is available.
-    try std.testing.expect(!state.fetcher.pollCompletions());
+    var completions_buf: [1]TestFetcher.Completion = undefined;
+    try std.testing.expectEqual(
+        0,
+        state.fetcher.pollCompletions(&completions_buf).len,
+    );
+    try std.testing.expect(state.fetcher.rooted_head != .null);
     try std.testing.expect(state.fetcher.popCompletion() == null);
 
     // Drain the filler requests.
@@ -964,7 +973,10 @@ test "rooted request remains queued while lookup ring is full" {
     reader.markUsed();
 
     // The next poll can now publish the real request.
-    try std.testing.expect(state.fetcher.pollCompletions());
+    try std.testing.expectEqual(
+        0,
+        state.fetcher.pollCompletions(&completions_buf).len,
+    );
 
     var actual_reader = state.account_lookups.in.get(.reader);
     const request = actual_reader.next().?.*;
@@ -973,11 +985,12 @@ test "rooted request remains queued while lookup ring is full" {
     try std.testing.expect(request.pubkey.equals(&pubkey));
 
     try state.respond(request, .invalid);
-    try std.testing.expect(state.fetcher.pollCompletions());
+    const completions = state.fetcher.pollCompletions(&completions_buf);
+    try std.testing.expectEqual(1, completions.len);
 
-    const completion = state.fetcher.popCompletion().?;
+    const completion = completions[0];
     try std.testing.expectEqual(
-        @as(UserData, 77),
+        77,
         completion.user_data,
     );
     try std.testing.expectEqual(
