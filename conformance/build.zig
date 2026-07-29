@@ -93,6 +93,8 @@ pub fn build(b: *Build) void {
     const sig_v2_mod = sig_v2_dep.module("lib");
     const shred_api_mod = sig_v2_dep.module("shred_api");
     const shred_mod = sig_v2_dep.module("shred");
+    const replay_api_mod = sig_v2_dep.module("replay_api");
+    const replay_mod = sig_v2_dep.module("replay");
 
     const pb_dep = b.dependency("pb", .{
         .target = target,
@@ -105,6 +107,8 @@ pub fn build(b: *Build) void {
         .{ .name = "sig_v2", .module = sig_v2_mod },
         .{ .name = "shred_api", .module = shred_api_mod },
         .{ .name = "shred", .module = shred_mod },
+        .{ .name = "replay_api", .module = replay_api_mod },
+        .{ .name = "replay", .module = replay_mod },
         .{ .name = "protobuf", .module = pb_mod },
         .{ .name = "build-options", .module = build_options.createModule() },
     };
