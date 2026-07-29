@@ -1,5 +1,5 @@
 {
   "build_options": [
-    { "name": "zls-is-build-runner" }
+    { "name": "no-bin" }
   ]
 }

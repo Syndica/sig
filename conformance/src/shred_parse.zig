@@ -25,10 +25,13 @@ const sig_v2 = @import("sig_v2");
 
 const Allocator = std.mem.Allocator;
 
-const Shred = sig_v2.shred.Shred;
-const DeshredRing = sig_v2.shred.DeshredRing;
-const FecSetCtx = sig_v2.shred.FecSetCtx;
-const Receiver = sig_v2.shred.Receiver;
+const shred_api = @import("shred_api");
+const shred_impl = @import("shred");
+
+const Shred = shred_api.Shred;
+const DeshredRing = shred_api.DeshredRing;
+const FecSetCtx = shred_impl.FecSetCtx;
+const Receiver = shred_impl.Receiver;
 
 const Packet = sig_v2.net.Packet;
 

@@ -63,8 +63,8 @@ Once metrics have been collected on two different runs, you can visualize the re
 
 ```bash
 # NOTE: need to format doc to below
-python scripts/view_bench.py results/BenchmarkAccountsDB/readWriteAccounts_runtimes.csv # view runtimes as a charts with one file source
-python scripts/view_bench.py readWriteAccounts_runtimes.csv readWriteAccounts_runtimes_2.csv # compare runtimes against two *equivalent* files
+python v1/scripts/view_bench.py results/BenchmarkAccountsDB/readWriteAccounts_runtimes.csv # view runtimes as a charts with one file source
+python v1/scripts/view_bench.py readWriteAccounts_runtimes.csv readWriteAccounts_runtimes_2.csv # compare runtimes against two *equivalent* files
 ```
 
 ![example_benchmark_viz](/img/bench_eg.png)
@@ -75,5 +75,5 @@ python scripts/view_bench.py readWriteAccounts_runtimes.csv readWriteAccounts_ru
 ### Tracking Benchmarks Over Time
 
 two main scripts are used to track benchmarks over time:
-- `scripts/collect_benchmarks.sh` is periodically called using a cron job to run the benchmarks on new git commits
-- `scripts/benchmark_server.py` is run as a server to visualize the results over time
+- `v1/scripts/collect_benchmarks.sh` is periodically called using a cron job to run the benchmarks on new git commits
+- `v1/scripts/benchmark_server.py` is run as a server to visualize the results over time

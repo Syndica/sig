@@ -22,60 +22,65 @@ pub fn fmtSlice(slice: anytype) FmtSlice(@TypeOf(slice[0])) {
     return .{ .slice = slice };
 }
 
-/// Verifies that a struct, or pointer to struct, has the contract's declarations and fields with
+/// Verifies that a struct, or pointer to struct, has the interface's declarations and fields with
 /// exact types. Methods must use explicit error sets because inferred error sets (`!T`) from
 /// separate declarations never compare equal even if they have the same inferred set of errors.
-pub fn assertInterface(comptime InterfaceType: type, comptime ContractStruct: type) void {
-    const Contract = ContractStruct;
-    const Interface = switch (@typeInfo(InterfaceType)) {
+pub fn assertInterface(
+    /// This type is expected to implement the interface.
+    comptime ImplType: type,
+    /// This struct exists solely to define the interface.
+    comptime InterfaceStruct: type,
+) void {
+    const Interface = InterfaceStruct;
+    const Impl = switch (@typeInfo(ImplType)) {
         .pointer => |info| switch (info.size) {
             .one => info.child,
-            else => @compileError("assertInterface does not accept: " ++ @typeName(InterfaceType)),
+            else => @compileError("assertInterface does not accept: " ++ @typeName(ImplType)),
         },
-        else => InterfaceType,
+        else => ImplType,
     };
 
-    const info = @typeInfo(Contract).@"struct";
-    if (@typeInfo(Interface) != .@"struct") {
-        @compileError(std.fmt.comptimePrint("Expected struct, found {s}", .{@typeName(Interface)}));
+    const info = @typeInfo(Interface).@"struct";
+    if (@typeInfo(Impl) != .@"struct") {
+        @compileError(std.fmt.comptimePrint("Expected struct, found {s}", .{@typeName(Impl)}));
     }
 
-    // Check interface has matching decls/functions.
+    // Check Impl has matching decls/functions.
     inline for (info.decls) |decl| {
-        const ContractDeclType = @TypeOf(@field(Contract, decl.name));
-        if (!@hasDecl(Interface, decl.name)) {
-            @compileError(std.fmt.comptimePrint("{s} missing decl {s}:{s}", .{
-                @typeName(Interface),
-                decl.name,
-                @typeName(ContractDeclType),
-            }));
-        }
-
         const InterfaceDeclType = @TypeOf(@field(Interface, decl.name));
-        if (ContractDeclType != InterfaceDeclType) {
-            @compileError(std.fmt.comptimePrint("{s}.{s} expected decl {s}, found {s}", .{
-                @typeName(Interface),
+        if (!@hasDecl(Impl, decl.name)) {
+            @compileError(std.fmt.comptimePrint("{s} missing decl {s}:{s}", .{
+                @typeName(Impl),
                 decl.name,
-                @typeName(ContractDeclType),
                 @typeName(InterfaceDeclType),
             }));
         }
+
+        const ImplDeclType = @TypeOf(@field(Impl, decl.name));
+        if (InterfaceDeclType != ImplDeclType) {
+            @compileError(std.fmt.comptimePrint("{s}.{s} expected decl {s}, found {s}", .{
+                @typeName(Impl),
+                decl.name,
+                @typeName(InterfaceDeclType),
+                @typeName(ImplDeclType),
+            }));
+        }
     }
 
-    // Check Interface has contract's fields.
+    // Check Impl has the interface's fields.
     for (info.fields) |field| {
-        if (!@hasField(Interface, field.name)) {
+        if (!@hasField(Impl, field.name)) {
             @compileError(std.fmt.comptimePrint("{s} missing field {s}:{s}", .{
-                @typeName(Interface),
+                @typeName(Impl),
                 field.name,
                 @typeName(field.type),
             }));
         }
 
-        const T = @FieldType(Interface, field.name);
+        const T = @FieldType(Impl, field.name);
         if (T != field.type) {
             @compileError(std.fmt.comptimePrint("{s}.{s} is {s}, expected {s}", .{
-                @typeName(Interface),
+                @typeName(Impl),
                 field.name,
                 @typeName(T),
                 @typeName(field.type),
