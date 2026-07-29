@@ -85,7 +85,11 @@ const tracy = @import("tracy");
 const services = @import("services");
 const tel = lib.telemetry;
 
-const replay = lib.replay;
+const shred = @import("shred_api");
+const accounts_db = @import("accounts_db_api");
+
+const api = @import("replay_api");
+const replay = @import("replay");
 
 const Hash = lib.solana.Hash;
 
@@ -100,13 +104,11 @@ pub const std_options = start.options;
 pub const ReadOnly = services.replay.ReadOnly;
 pub const ReadWrite = services.replay.ReadWrite;
 
-var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
+const DeserialStates = [api.BlockPool.capacity]?BlockDeserialState;
+const BlockExecStates = [api.BlockPool.capacity]?BlockExecState;
+const BlockHashStates = [api.BlockPool.capacity]?Hash;
 
-const DeserialStates = [lib.replay.BlockPool.capacity]?BlockDeserialState;
-const BlockExecStates = [lib.replay.BlockPool.capacity]?BlockExecState;
-const BlockHashStates = [lib.replay.BlockPool.capacity]?Hash;
-
-const AccountRef = lib.accounts_db.AccountPool.AccountRef;
+const AccountRef = lib.AccountPool.AccountRef;
 const Pubkey = lib.solana.Pubkey;
 
 pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
@@ -165,7 +167,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             defer zone.deinit();
             try runner.activity.signalActive();
 
-            const response: *const lib.replay.ExecResponse = exec_response_receiver.next() orelse
+            const response: *const api.ExecResponse = exec_response_receiver.next() orelse
                 unreachable;
             defer exec_response_receiver.markUsed();
 
@@ -211,7 +213,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             defer zone.deinit();
             try runner.activity.signalActive();
 
-            const deshredded_fec_set: *const lib.shred.DeshreddedFecSet =
+            const deshredded_fec_set: *const shred.DeshreddedFecSet =
                 deshredded_iter.next() orelse unreachable;
             defer deshredded_iter.markUsed();
 
@@ -287,9 +289,9 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 fn bootstrap(
     logger: tel.Logger("main"),
     runner: lib.runner.Connection,
-    snapshot_metadata: *lib.accounts_db.RuntimeMetadata,
+    snapshot_metadata: *accounts_db.RuntimeMetadata,
     forest: *replay.MerkleForest,
-    block_pool: *lib.replay.BlockPool,
+    block_pool: *api.BlockPool,
     exec_states: *BlockExecStates,
     blockhash_states: *BlockHashStates,
 ) !void {
@@ -299,7 +301,7 @@ fn bootstrap(
     var root_block = bhq: {
         var blockhashes_in = snapshot_metadata.blockhash_queue.hashes.getView(.reader);
         defer blockhashes_in.close();
-        var last_block: ?lib.replay.BlockRef = null;
+        var last_block: ?api.BlockRef = null;
         while (true) {
             const hashes = try blockhashes_in.getBufferBlocking(runner);
             if (hashes.len == 0) break; // blockhashes_out closed their end
@@ -378,7 +380,7 @@ const Unrooted = extern struct {
     // TODO: calculate this constant ourselves / keep it up to date
     const max_mutations_per_block = 367_535;
 
-    const max_blocks = lib.replay.BlockPool.capacity;
+    const max_blocks = api.BlockPool.capacity;
 
     const Map = extern struct {
         len: u32 = 0, // only used to assert `max_mutations_per_block` holds true
@@ -398,7 +400,7 @@ const Unrooted = extern struct {
         fn entry(
             self: anytype,
             seed: u64,
-            account_pool: *lib.accounts_db.AccountPool,
+            account_pool: *lib.AccountPool,
             pubkey: *const Pubkey,
         ) EntryPtr(@TypeOf(self)) {
             var i: usize = @intCast(pubkey.hash(seed) % N);
@@ -414,7 +416,7 @@ const Unrooted = extern struct {
         fn get(
             self: *const Map,
             seed: u64,
-            account_pool: *lib.accounts_db.AccountPool,
+            account_pool: *lib.AccountPool,
             pubkey: *const Pubkey,
         ) AccountRef {
             return self.entry(seed, account_pool, pubkey).*;
@@ -427,7 +429,7 @@ const Unrooted = extern struct {
         fn put(
             self: *Map,
             seed: u64,
-            account_pool: *lib.accounts_db.AccountPool,
+            account_pool: *lib.AccountPool,
             new_account_ref: AccountRef,
         ) AccountRef {
             const zone = tracy.Zone.init(@src(), .{ .name = "Map.put" });
@@ -476,16 +478,16 @@ const Unrooted = extern struct {
         key: *const lib.solana.Pubkey,
 
         // current block + pool for ancestor lookups
-        block: lib.replay.BlockRef,
-        block_pool: *lib.replay.BlockPool,
+        block: api.BlockRef,
+        block_pool: *api.BlockPool,
 
         // account storage
-        account_pool: *lib.accounts_db.AccountPool,
+        account_pool: *lib.AccountPool,
     ) AccountRef {
         const zone = tracy.Zone.init(@src(), .{ .name = "Unrooted.fetch" });
         defer zone.deinit();
 
-        var current: ?*replay.Node = block.ptr(block_pool);
+        var current: ?*api.Node = block.ptr(block_pool);
         while (current) |ancestor_block| {
             const current_map: *const Map =
                 &self.maps[block_pool.ptrToIndex(ancestor_block).index()];
@@ -517,14 +519,14 @@ fn fetchBlocking(
     key: *const lib.solana.Pubkey,
 
     // current block + pool for ancestor lookups
-    block: lib.replay.BlockRef,
-    block_pool: *lib.replay.BlockPool,
+    block: api.BlockRef,
+    block_pool: *api.BlockPool,
 
     // account storage
-    account_pool: *lib.accounts_db.AccountPool,
+    account_pool: *lib.AccountPool,
 
     // ring buffer pair for rooted lookups
-    rooted_lookups: *lib.accounts_db.AccountLookups,
+    rooted_lookups: *accounts_db.AccountLookups,
 ) AccountRef {
     const zone = tracy.Zone.init(@src(), .{ .name = "fetchBlocking" });
     defer zone.deinit();
@@ -569,12 +571,12 @@ fn maybeContinueBlockExec(
     // newly inserted node (or, rarely, when called recursively, the idx=0 ancestor of the block)
     node: *replay.MerkleNode,
     // the block_ref of the newly inserted node
-    block_ref: replay.BlockRef,
+    block_ref: api.BlockRef,
 
     // pools
     forest_pool: *replay.MerkleForest.NodePool,
-    block_pool: *replay.BlockPool,
-    transaction_pool: *lib.replay.TransactionPool,
+    block_pool: *api.BlockPool,
+    transaction_pool: *api.TransactionPool,
 
     // per-block states
     block_exec_states: *BlockExecStates,
@@ -582,18 +584,18 @@ fn maybeContinueBlockExec(
 
     // for sending exec requests
     // NOTE: we should instead be sending to the transaction scheduler (when it is implemented)
-    exec_request_sender: *replay.ExecReqResponse.RequestRing.Iterator(.writer),
+    exec_request_sender: *api.ExecReqResponse.RequestRing.Iterator(.writer),
 
     // for fetching accounts
     unrooted: *Unrooted,
-    account_pool: *lib.accounts_db.AccountPool,
-    rooted_lookups: *lib.accounts_db.AccountLookups,
+    account_pool: *lib.AccountPool,
+    rooted_lookups: *accounts_db.AccountLookups,
 ) !void {
     const zone = tracy.Zone.init(@src(), .{ .name = "maybeContinueBlockExec" });
     defer zone.deinit();
 
     {
-        const block: *const replay.Node = block_ref.ptr(block_pool);
+        const block: *const api.Node = block_ref.ptr(block_pool);
 
         // parentless blocks shouldn't ever reach this stage
         const block_parent = block.parent.opt().?;
@@ -733,7 +735,7 @@ fn maybeContinueBlockExec(
                     if (account_ref == .invalid)
                         @panic("missing address lookup table / TODO: handle bad blocks");
 
-                    const ALT_account: *lib.accounts_db.AccountPool.Account =
+                    const ALT_account: *lib.AccountPool.Account =
                         account_pool.getAccount(account_ref);
 
                     defer if (ALT_account.unref()) account_pool.free(account_ref);
@@ -774,7 +776,7 @@ fn maybeContinueBlockExec(
                 }
             }
 
-            const request: *lib.replay.ExecRequest = exec_request_sender.next() orelse
+            const request: *api.ExecRequest = exec_request_sender.next() orelse
                 @panic("no space");
             request.* = .{
                 .task_id = tx_index,

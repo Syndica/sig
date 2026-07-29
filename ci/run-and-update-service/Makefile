@@ -18,7 +18,6 @@ install-user:
 		useradd -m sig; \
 	fi
 	sudo -u sig git clone https://github.com/Syndica/sig.git /home/sig/sig
-	sudo -u sig mkdir /home/sig/sig/logs
 
 install-config:
 	@if ! [ -f /etc/sig.conf ]; then \

@@ -35,13 +35,15 @@ pub const StatusCache = struct {
             // slot(Slot) + is_root(bool)
             try r.discardAll(8 + 1);
 
-            // status_map: HashMap(Hash, { fork_count: u64, entries: Vec({ key_slice: [20]u8, result: union }) })
+            // status_map: HashMap(Hash, { fork_count: u64,
+            //   entries: Vec({ key_slice: [20]u8, result: union }) })
             const status_map_len = try readInt(u64, r);
             for (0..status_map_len) |_| {
                 // key: Hash + value.fork_count: u64
                 try r.discardAll(32 + 8);
 
-                // value.entries: Vec({ key_slice: KeySlice, result: union(enum(u32)) { ok, err: TransactionError } })
+                // value.entries: Vec({ key_slice: KeySlice,
+                //   result: union(enum(u32)) { ok, err: TransactionError } })
                 const entries_len = try readInt(u64, r);
                 for (0..entries_len) |_| {
                     // key_slice: [20]u8 + result tag: u32
@@ -74,7 +76,8 @@ pub const StatusCache = struct {
         }
     }
 
-    /// Discards an InstructionError union. Most variants are void; Custom is u32; BorshIoError is Vec(u8).
+    /// Discards an InstructionError union. Most variants are void;
+    /// Custom is u32; BorshIoError is Vec(u8).
     ///
     /// See SerdeInstructionError in agave's runtime/src/serde_snapshot/status_cache.rs
     fn discardInstructionError(r: anytype) !void {
@@ -272,7 +275,8 @@ pub const BankFields = struct {
                 8, // stakes.epoch: Epoch
         );
 
-        //   stake_history: Vec({ epoch: Epoch, effective: u64, activating: u64, deactivating: u64 })
+        //   stake_history: Vec({ epoch: Epoch, effective: u64,
+        //     activating: u64, deactivating: u64 })
         const stake_history_len = try readInt(u64, r);
         try r.discardAll(stake_history_len * (8 + // epoch: Epoch
             8 + // effective: u64
@@ -385,7 +389,9 @@ pub const ExtraFields = struct {
             else => |e| return e,
         };
 
-        // _unused_incremental_snapshot_persistence: NullOnEof(?{ full: SlotAndHash, full_capitalization: u64, incremental_hash: Hash, incremental_capitalization: u64 })
+        // _unused_incremental_snapshot_persistence:
+        //   NullOnEof(?{ full: SlotAndHash, full_capitalization: u64,
+        //   incremental_hash: Hash, incremental_capitalization: u64 })
         {
             const is_some = readBool(r) catch |err| switch (err) {
                 error.EndOfStream => false,
@@ -409,7 +415,9 @@ pub const ExtraFields = struct {
             if (is_some) try r.discardAll(32);
         }
 
-        // versioned_epoch_stakes: NullOnEof(Vec({ epoch: u64, value: union(enum(u32)) { current: ... } }))
+        // versioned_epoch_stakes:
+        //   NullOnEof(Vec({ epoch: u64,
+        //   value: union(enum(u32)) { current: ... } }))
         {
             const outer_len = readInt(u64, r) catch |err| switch (err) {
                 error.EndOfStream => 0,
@@ -425,7 +433,8 @@ pub const ExtraFields = struct {
                 //   vote_accounts: VoteAccounts
                 try discardVoteAccounts(r);
 
-                //   stake_delegations: HashMap(Pubkey, { delegation: Delegation, credits_observed: u64 })
+                //   stake_delegations: HashMap(Pubkey,
+                //     { delegation: Delegation, credits_observed: u64 })
                 const stake_del_len = try readInt(u64, r);
                 try r.discardAll(stake_del_len * (32 + // key: Pubkey
                     32 + // delegation.voter_pubkey: Pubkey
@@ -441,14 +450,17 @@ pub const ExtraFields = struct {
                         8, // stakes.epoch: Epoch
                 );
 
-                //   stake_history: Vec({ epoch: Epoch, effective: u64, activating: u64, deactivating: u64 })
+                //   stake_history: Vec({ epoch: Epoch, effective: u64,
+                //     activating: u64, deactivating: u64 })
                 const sh_len = try readInt(u64, r);
                 try r.discardAll(sh_len * (8 + 8 + 8 + 8));
 
                 // current.total_stake: u64
                 try r.discardAll(8);
 
-                // current.node_id_to_vote_accounts: HashMap(Pubkey, { vote_accounts: Vec(Pubkey), total_stake: u64 })
+                // current.node_id_to_vote_accounts:
+                //   HashMap(Pubkey,
+                //   { vote_accounts: Vec(Pubkey), total_stake: u64 })
                 const nv_len = try readInt(u64, r);
                 for (0..nv_len) |_| {
                     // key: Pubkey

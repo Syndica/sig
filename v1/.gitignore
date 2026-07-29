@@ -1,0 +1,8 @@
+/data/test-state
+/data/fuzz-data
+/gossip-dumps
+/kcov-output
+/kcov-merged
+/results
+/validator
+/logs

@@ -25,10 +25,15 @@ const sig_v2 = @import("sig_v2");
 
 const Allocator = std.mem.Allocator;
 
-const Shred = sig_v2.shred.Shred;
-const DeshredRing = sig_v2.shred.DeshredRing;
-const FecSetCtx = sig_v2.shred.FecSetCtx;
-const Receiver = sig_v2.shred.Receiver;
+const shred_api = @import("shred_api");
+const shred_impl = @import("shred");
+const replay_api = @import("replay_api");
+const replay_impl = @import("replay");
+
+const Shred = shred_api.Shred;
+const DeshredRing = shred_api.DeshredRing;
+const FecSetCtx = shred_impl.FecSetCtx;
+const Receiver = shred_impl.Receiver;
 
 const Packet = sig_v2.net.Packet;
 
@@ -36,8 +41,8 @@ const Hash = sig_v2.solana.Hash;
 const Slot = sig_v2.solana.Slot;
 const LeaderSchedule = sig_v2.solana.LeaderSchedule;
 
-const MerkleForest = sig_v2.replay.MerkleForest;
-const BlockPool = sig_v2.replay.BlockPool;
+const MerkleForest = replay_impl.MerkleForest;
+const BlockPool = replay_api.BlockPool;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -288,7 +293,7 @@ const HarnessState = struct {
                 .slot_complete = completed.slot_complete,
             }) catch @panic("OutOfMemory");
 
-            _ = sig_v2.replay.insertFecSet(
+            _ = replay_impl.insertFecSet(
                 sig_v2.telemetry.Logger("main").noop,
                 completed,
                 &self.forest,
@@ -482,7 +487,7 @@ fn buildProtoEffects(
     // which FEC sets agave would have failed to complete.
     var first_seen_parent: std.AutoHashMapUnmanaged(Slot, u16) = .empty;
     defer first_seen_parent.deinit(allocator);
-    var suppressed_fec_sets: std.AutoHashMapUnmanaged(sig_v2.shred.FecSetId, void) = .empty;
+    var suppressed_fec_sets: std.AutoHashMapUnmanaged(shred_api.FecSetId, void) = .empty;
     defer suppressed_fec_sets.deinit(allocator);
     var received: std.AutoHashMapUnmanaged(Slot, u32) = .empty;
     defer received.deinit(allocator);
@@ -789,7 +794,7 @@ fn deriveBlockParseResult(
     dead_slots: *DeadSlots,
 ) !void {
     // Equivocation: any two nodes in `forest.map` sharing a `FecSetId`.
-    var seen_ids: std.AutoHashMapUnmanaged(sig_v2.shred.FecSetId, void) = .empty;
+    var seen_ids: std.AutoHashMapUnmanaged(shred_api.FecSetId, void) = .empty;
     defer seen_ids.deinit(scratch_allocator);
     for (forest.map.values()) |node| {
         const gop_id = try seen_ids.getOrPut(scratch_allocator, node.id);
@@ -824,7 +829,7 @@ fn deriveBlockParseResult(
     // `(slot, fec_set_idx) -> (merkle_root, chained_merkle_root)` map
     // from `in_progress` + `forest.map` — together they cover every FEC
     // set that saw a shred.
-    var pins: std.AutoHashMapUnmanaged(sig_v2.shred.FecSetId, struct {
+    var pins: std.AutoHashMapUnmanaged(shred_api.FecSetId, struct {
         merkle_root: Hash,
         chained_merkle_root: Hash,
     }) = .empty;
@@ -850,7 +855,7 @@ fn deriveBlockParseResult(
     while (pin_it.next()) |entry| {
         const key = entry.key_ptr.*;
         const roots = entry.value_ptr.*;
-        const next_id: sig_v2.shred.FecSetId = .{
+        const next_id: shred_api.FecSetId = .{
             .slot = key.slot,
             .fec_set_idx = key.fec_set_idx + FEC_DATA_SHREDS,
         };
