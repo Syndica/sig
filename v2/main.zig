@@ -382,9 +382,10 @@ pub fn main() !void {
             .rw = .{ .exec_req_response = exec_req_response.finish() },
         },
     });
-    try children.wait(null);
+    const exit_status = try children.wait(null);
 
     tracy.message("exiting");
+    children.shutdown(if (exit_status == .failed) 1 else 0);
 }
 
 fn populateSnapshotConfig(

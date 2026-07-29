@@ -50,7 +50,14 @@ pub fn build(b: *Build) !void {
 
     // bb-test
     const bb_test_step = b.step("bb-test", "Run black box tests.");
-    for (tools.black_box_tests) |bbt| bbt.addToStep(bb_test_step);
+    for (tools.black_box_tests, Tools.black_box_test_descriptions) |bbt, description| {
+        bbt.addToStep(bb_test_step);
+        const test_step = b.step(
+            b.fmt("bb-test-{s}", .{description.name}),
+            b.fmt("Run the {s} black box test.", .{description.name}),
+        );
+        bbt.addToStep(test_step);
+    }
 
     // shred-stream
     const shred_stream_step = b.step("shred-stream", "Stream shreds from an Agave ledger");
@@ -617,6 +624,11 @@ const Tools = struct {
             .root_source_file = "v2/tests/replay/main.zig",
             .services = &.{ "shred_receiver", "replay", "telemetry" },
         },
+        .{
+            .name = "threaded-exit",
+            .root_source_file = "v2/tests/threaded_exit/main.zig",
+            .services = &.{ "failing", "healthy" },
+        },
     };
 
     pub fn init(
@@ -738,9 +750,34 @@ const Tools = struct {
             }, .{ .dest_dir = test_install_dir });
 
             for (description.services) |service_name| {
-                exe.compile.linkLibrary(for (sig.service_libs) |entry| {
+                if (for (sig.service_libs) |entry| {
                     if (std.mem.eql(u8, entry.name, service_name)) break entry.lib;
-                } else std.debug.panic("unknown service '{s}'", .{service_name}));
+                } else null) |service_lib| {
+                    exe.compile.linkLibrary(service_lib);
+                    continue;
+                }
+
+                const service_mod = b.createModule(.{
+                    .root_source_file = b.path(b.fmt(
+                        "v2/tests/threaded_exit/{s}.zig",
+                        .{service_name},
+                    )),
+                    .target = config.target,
+                    .optimize = config.optimize,
+                    .single_threaded = true,
+                    .omit_frame_pointer = false,
+                    .error_tracing = true,
+                    .imports = &.{
+                        .{ .name = "lib", .module = sig.lib },
+                        .{ .name = "start_service", .module = sig.start_service },
+                        .{ .name = "tracy", .module = deps.tracy },
+                    },
+                });
+                exe.compile.linkLibrary(b.addLibrary(.{
+                    .name = b.fmt("test-{s}", .{service_name}),
+                    .root_module = service_mod,
+                    .use_llvm = config.use_llvm,
+                }));
             }
         }
 
