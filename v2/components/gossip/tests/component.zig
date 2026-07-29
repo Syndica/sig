@@ -115,7 +115,10 @@ test "deprecated gossip messages are handled" {
         var values = [_]GossipValue{try testing.signedValue(&remote_keypair, data)};
         try test_node.receiveMessage(
             remote_address,
-            testing.pushMessage(remote_keypair.pubkey, &values),
+            .{ .push_message = .{
+                .from = remote_keypair.pubkey,
+                .values = .{ .items = &values },
+            } },
         );
     }
 
@@ -167,7 +170,7 @@ fn runSnapshotDiscoveryScenario(order: SnapshotDiscoveryOrder) !void {
     var values = [_]GossipValue{first_value};
     try test_node.receiveMessage(
         remote_address,
-        testing.pushMessage(remote_keypair.pubkey, &values),
+        .{ .push_message = .{ .from = remote_keypair.pubkey, .values = .{ .items = &values } } },
     );
     try std.testing.expectEqual(0, test_node.snapshotSources().len);
 
@@ -175,7 +178,7 @@ fn runSnapshotDiscoveryScenario(order: SnapshotDiscoveryOrder) !void {
     values[0] = second_value;
     try test_node.receiveMessage(
         remote_address,
-        testing.pushMessage(remote_keypair.pubkey, &values),
+        .{ .push_message = .{ .from = remote_keypair.pubkey, .values = .{ .items = &values } } },
     );
 
     try std.testing.expectEqual(1, test_node.snapshotSources().len);
@@ -227,7 +230,7 @@ test "older gossip value does not replace newer entry" {
     var values = [_]GossipValue{newer};
     try test_node.receiveMessage(
         remote_address,
-        testing.pushMessage(remote_keypair.pubkey, &values),
+        .{ .push_message = .{ .from = remote_keypair.pubkey, .values = .{ .items = &values } } },
     );
     try std.testing.expectEqual(
         now_ms + 1_000,
@@ -238,7 +241,7 @@ test "older gossip value does not replace newer entry" {
     values[0] = older;
     try test_node.receiveMessage(
         remote_address,
-        testing.pushMessage(remote_keypair.pubkey, &values),
+        .{ .push_message = .{ .from = remote_keypair.pubkey, .values = .{ .items = &values } } },
     );
     try std.testing.expectEqual(
         now_ms + 1_000,

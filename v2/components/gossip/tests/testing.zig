@@ -5,7 +5,6 @@ const api = @import("gossip_api");
 const Ed25519KeyPair = std.crypto.sign.Ed25519.KeyPair;
 
 const Packet = lib.net.Packet;
-const Pubkey = lib.solana.Pubkey;
 
 const bincode = lib.solana.bincode;
 const GossipData = api.GossipData;
@@ -87,12 +86,5 @@ pub fn pingMessage(
         .from = keypair.pubkey,
         .token = token,
         .signature = try keypair.sign(&token),
-    } };
-}
-
-pub fn pushMessage(from: Pubkey, values: []GossipValue) GossipMessage {
-    return .{ .push_message = .{
-        .from = from,
-        .values = .{ .items = values },
     } };
 }

@@ -118,7 +118,10 @@ fn fuzzScenario(context: *ScenarioContext, input: []const u8) !void {
                 )};
                 try context.test_node.receiveMessage(
                     remote_address,
-                    testing.pushMessage(context.remote_keypair.pubkey, &values),
+                    .{ .push_message = .{
+                        .from = context.remote_keypair.pubkey,
+                        .values = .{ .items = &values },
+                    } },
                 );
             },
         }

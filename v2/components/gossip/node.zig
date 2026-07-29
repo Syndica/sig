@@ -130,51 +130,47 @@ pub fn GossipNode(comptime Effects: type) type {
             deprecated: bool,
 
             fn fromData(data: GossipData) error{DeprecatedValue}!EntryInfo {
-                const Fields = struct {
-                    from: Pubkey,
-                    wallclock_ms: u64,
-                    index: u16,
-                    deprecated: bool,
-                };
-                const fields: Fields = switch (data) {
+                return switch (data) {
                     inline .vote, .lowest_slot, .epoch_slots, .duplicate_shred => |value| .{
-                        .from = value.from,
+                        .key = .{
+                            .from = value.from,
+                            .tag = data,
+                            .index = value.index,
+                        },
                         .wallclock_ms = value.wallclock,
-                        .index = value.index,
                         .deprecated = false,
                     },
                     .contact_info => |value| .{
-                        .from = value.from,
+                        .key = .{
+                            .from = value.from,
+                            .tag = .contact_info,
+                            .index = 0,
+                        },
                         .wallclock_ms = value.wallclock.value,
-                        .index = 0,
                         .deprecated = false,
                     },
                     .snapshot_hashes => |value| .{
-                        .from = value.from,
+                        .key = .{
+                            .from = value.from,
+                            .tag = .snapshot_hashes,
+                            .index = 0,
+                        },
                         .wallclock_ms = value.wallclock,
-                        .index = 0,
                         .deprecated = false,
                     },
                     inline .restart_heaviest_fork, .restart_last_voted_fork => |value| .{
-                        .from = value.from,
+                        .key = .{
+                            .from = value.from,
+                            .tag = data,
+                            .index = 0,
+                        },
                         .wallclock_ms = value.wallclock,
-                        .index = 0,
                         .deprecated = true,
                     },
                     inline else => |value| {
                         comptime std.debug.assert(@TypeOf(value) == bincode.Deprecated);
                         return error.DeprecatedValue;
                     },
-                };
-
-                return .{
-                    .key = .{
-                        .from = fields.from,
-                        .tag = std.meta.activeTag(data),
-                        .index = fields.index,
-                    },
-                    .wallclock_ms = fields.wallclock_ms,
-                    .deprecated = fields.deprecated,
                 };
             }
         };
