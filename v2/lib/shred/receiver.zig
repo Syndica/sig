@@ -169,6 +169,10 @@ pub const Receiver = struct {
         );
         zone.text(str);
 
+        // PERF: only the first shred of a new FEC set needs to compute
+        // the merkle root; subsequent shreds can be checked for inclusion
+        // via incremental merkle commit against the ctx's pinned root.
+        // Keying the ctx map on signature (rather than root) preserves this.
         var shred_merkle_root: Hash = undefined;
         try shred.merkleRoot(&shred_merkle_root);
 
