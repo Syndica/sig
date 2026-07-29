@@ -108,8 +108,6 @@ pub const std_options = start.options;
 pub const ReadOnly = services.replay.ReadOnly;
 pub const ReadWrite = services.replay.ReadWrite;
 
-var scratch_memory: [256 * 1024 * 1024]u8 = undefined;
-
 const DeserialStates = [api.BlockPool.capacity]?BlockDeserialState;
 const BlockExecStates = [api.BlockPool.capacity]?BlockExecState;
 const BlockHashStates = [api.BlockPool.capacity]?Hash;

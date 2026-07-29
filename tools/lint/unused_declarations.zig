@@ -1,10 +1,10 @@
 //! Finds unused private `const`, `var`, and `fn` declarations.
 //!
 //! A declaration is used when its identifier appears outside its own declaration. This token-based
-//! heuristic can have false negatives when an unrelated identifier has the same name, but it should
-//! not have false positives. Public and exported declarations are kept. A declaration can opt out
-//! with `// lint: allow_unused` on the line above it. Fix mode removes unused declarations
-//! repeatedly so aliases that become unused after earlier removals are removed too.
+//! heuristic can produce false positives and false negatives because it does not perform name
+//! resolution. Public and exported declarations are kept. A declaration can opt out with
+//! `// lint: allow_unused` on the line above it. Fix mode removes unused declarations repeatedly so
+//! aliases that become unused after earlier removals are removed too.
 
 const std = @import("std");
 
@@ -111,6 +111,8 @@ fn findAndSortUnusedDeclarations(
     candidates: *std.ArrayList(DeclarationCandidate),
 ) !void {
     var identifier_counts = try collectIdentifierCounts(arena, ast);
+    var file_scope_declarations = std.AutoHashMap(std.zig.Ast.Node.Index, void).init(arena);
+    for (ast.rootDecls()) |node| try file_scope_declarations.put(node, {});
 
     var node_index: usize = 0;
     while (node_index < ast.nodes.len) : (node_index += 1) {
@@ -126,6 +128,7 @@ fn findAndSortUnusedDeclarations(
             decl.name,
             decl.first_token,
             decl.last_token,
+            file_scope_declarations.contains(node),
         )) continue;
 
         const loc = core.lineColumn(source, ast.tokenStart(decl.name_token));
@@ -266,37 +269,64 @@ fn sortDeclarationCandidates(candidates: []DeclarationCandidate) void {
 fn collectIdentifierCounts(
     arena: Allocator,
     ast: *const std.zig.Ast,
-) !std.StringHashMap(usize) {
-    var counts = std.StringHashMap(usize).init(arena);
+) !std.StringHashMap(IdentifierCounts) {
+    var counts = std.StringHashMap(IdentifierCounts).init(arena);
 
     var token: std.zig.Ast.TokenIndex = 0;
     while (token < ast.tokens.len) : (token += 1) {
         if (ast.tokenTag(token) != .identifier) continue;
         const name = ast.tokenSlice(token);
         const entry = try counts.getOrPut(name);
-        if (entry.found_existing) {
-            entry.value_ptr.* += 1;
-        } else {
-            entry.value_ptr.* = 1;
-        }
+        if (!entry.found_existing) entry.value_ptr.* = .{};
+        entry.value_ptr.all += 1;
+        if (identifierCountsAsFileScopeUse(ast, token)) entry.value_ptr.file_scope += 1;
     }
 
     return counts;
 }
 
+const IdentifierCounts = struct {
+    /// Every identifier token with this spelling. Nested declarations use this count because a
+    /// field selector may be a qualified reference, as with `foo` in `Container.foo`.
+    all: usize = 0,
+
+    /// Identifier tokens whose syntax can reference a file-scope declaration with this spelling.
+    /// This excludes a matching identifier used as a selector, as with `foo` in `value.foo`, except
+    /// for direct `@This().foo` access.
+    file_scope: usize = 0,
+};
+
+fn identifierCountsAsFileScopeUse(ast: *const std.zig.Ast, token: std.zig.Ast.TokenIndex) bool {
+    // For a file-scope declaration named `foo`, `foo` and `foo.bar` can reference the declaration
+    // because the matching token is bare or the base of a field access. In `bar.foo`, the matching
+    // token is a selector on `bar` and does not refer to the file-scope declaration.
+    if (token == 0 or ast.tokenTag(token - 1) != .period) return true;
+
+    // `@This().foo` is the supported selector form that refers to a file-scope declaration. Its
+    // token sequence has four tokens before `foo`: `@This`, `(`, `)`, and `.`.
+    if (token < 4) return false;
+    return ast.tokenTag(token - 2) == .r_paren and
+        ast.tokenTag(token - 3) == .l_paren and
+        ast.tokenTag(token - 4) == .builtin and
+        std.mem.eql(u8, ast.tokenSlice(token - 4), "@This");
+}
+
 fn identifierUsedOutsideDecl(
     ast: *const std.zig.Ast,
-    identifier_counts: *const std.StringHashMap(usize),
+    identifier_counts: *const std.StringHashMap(IdentifierCounts),
     name: []const u8,
     first: std.zig.Ast.TokenIndex,
     last: std.zig.Ast.TokenIndex,
+    is_file_scope: bool,
 ) bool {
-    const total_count = identifier_counts.get(name) orelse return false;
+    const counts = identifier_counts.get(name) orelse return false;
+    const total_count = if (is_file_scope) counts.file_scope else counts.all;
     var declaration_count: usize = 0;
     var token = first;
     while (token <= last) : (token += 1) {
         if (ast.tokenTag(token) != .identifier) continue;
-        if (std.mem.eql(u8, ast.tokenSlice(token), name)) declaration_count += 1;
+        if (!std.mem.eql(u8, ast.tokenSlice(token), name)) continue;
+        if (!is_file_scope or identifierCountsAsFileScopeUse(ast, token)) declaration_count += 1;
     }
     return total_count > declaration_count;
 }
@@ -508,6 +538,61 @@ test "detects unused field-chain aliases" {
     try std.testing.expectEqual(3, candidates.items[1].line);
     try std.testing.expectEqual(4, candidates.items[2].line);
     try std.testing.expectEqual(5, candidates.items[3].line);
+}
+
+test "field selectors do not use file-scope declarations" {
+    const allocator = std.heap.page_allocator;
+    const source =
+        \\const std = @import("std");
+        \\const Allocator = std.mem.Allocator;
+        \\const lib = @import("lib");
+        \\const tel = lib.telemetry;
+        \\const Pair = lib.net.Pair;
+        \\pub fn entry(rw: anytype) void {
+        \\    _ = rw.tel;
+        \\    _ = lib.net.Pair;
+        \\    _ = std.mem.Allocator;
+        \\}
+        \\
+    ;
+    var candidates: std.ArrayList(DeclarationCandidate) = .empty;
+    try findUnusedDeclarationsInSource(allocator, source, &candidates);
+    try std.testing.expectEqual(3, candidates.items.len);
+    try std.testing.expectEqual(2, candidates.items[0].line);
+    try std.testing.expectEqual(4, candidates.items[1].line);
+    try std.testing.expectEqual(5, candidates.items[2].line);
+}
+
+test "keeps bare file-scope and qualified nested declaration uses" {
+    const allocator = std.heap.page_allocator;
+    const source =
+        \\const lib = @import("lib");
+        \\const Pair = lib.net.Pair;
+        \\const S = struct {
+        \\    const value = 1;
+        \\    pub fn get() u8 {
+        \\        return S.value;
+        \\    }
+        \\};
+        \\pub const iterator = Pair.PacketRing.Iterator(.writer);
+        \\pub const value = S.get();
+        \\
+    ;
+    var candidates: std.ArrayList(DeclarationCandidate) = .empty;
+    try findUnusedDeclarationsInSource(allocator, source, &candidates);
+    try std.testing.expectEqual(0, candidates.items.len);
+}
+
+test "keeps file-scope declarations accessed through @This()" {
+    const allocator = std.heap.page_allocator;
+    const source =
+        \\const value = 1;
+        \\pub const output = @This().value;
+        \\
+    ;
+    var candidates: std.ArrayList(DeclarationCandidate) = .empty;
+    try findUnusedDeclarationsInSource(allocator, source, &candidates);
+    try std.testing.expectEqual(0, candidates.items.len);
 }
 
 test "detects unused transitive aliases" {
