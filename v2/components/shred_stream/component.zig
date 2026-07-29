@@ -302,7 +302,7 @@ pub const Inputs = struct {
     blockstore: AgaveBlockstore,
     selected_shreds: ?SelectedShredPlan,
 
-    pub fn deinit(self: *const Inputs, allocator: Allocator) void {
+    pub fn deinit(self: *Inputs, allocator: Allocator) void {
         self.blockstore.deinit(allocator);
         if (self.selected_shreds) |*plan| plan.deinit(allocator);
     }

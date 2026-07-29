@@ -28,7 +28,8 @@ pub fn main() !void {
     const logger: Logger = .{ .sink = .{ .writer = stderr } };
     const args = argv[1..];
 
-    const inputs: shred_stream.Inputs = try .init(gpa, logger, args);
+    var inputs: shred_stream.Inputs = try .init(gpa, logger, args);
+    defer inputs.deinit(gpa);
 
     const target_str = inputs.config.target orelse {
         std.debug.print("missing required argument: --target <ip:port>\n", .{});
