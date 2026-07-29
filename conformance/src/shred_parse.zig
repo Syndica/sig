@@ -293,7 +293,10 @@ const HarnessState = struct {
                 completed,
                 &self.forest,
                 self.block_pool,
-            ) catch {};
+            ) catch |err| std.debug.panic(
+                "insertFecSet failed: {s}",
+                .{@errorName(err)},
+            );
         }
         self.deshred_reader.markUsed();
     }

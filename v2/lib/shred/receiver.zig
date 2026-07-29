@@ -574,15 +574,19 @@ const InProgressSets = struct {
     signatures: []Signature, // idx correspond with fecset idxs
 
     signature_map: SignatureMap,
-    /// Authoritative primary `(slot, fec_set_idx) → *FecSetCtx`, one entry
-    /// per live ctx. Absorbs case-A equivocation (agave admits both
-    /// same-root variants because `check_merkle_root_consistency` is
-    /// signature-blind) and sig-collision-across-fec-sets under
-    /// sig-verify-off fuzz. `signature_map` is a fast-path index only
-    /// (see `assertCounts`).
+    /// Authoritative `(slot, fec_set_idx) → *FecSetCtx` index: exactly one
+    /// entry per live ctx. `signature_map` is a fast-path secondary index
+    /// keyed by signature (see `assertCounts`), and may drop entries when
+    /// two ctxs collide on a signature.
     ///
-    /// TODO: fold away once signature uniqueness at `(slot, fec_set_idx)`
-    /// is a protocol invariant.
+    /// This map is what lets us merge shreds from the same erasure set
+    /// that arrived under different signatures, which happens in two
+    /// cases:
+    ///  - case-A equivocation: agave's `check_merkle_root_consistency`
+    ///    is signature-blind and admits both same-root variants, so we
+    ///    must too.
+    ///  - sig-verify-off fuzz: signatures aren't checked, so unrelated
+    ///    ctxs can collide on a signature across fec sets.
     id_map: IdMap,
     eviction: Eviction,
 
