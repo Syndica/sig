@@ -186,12 +186,19 @@ pub fn main() !void {
     const separator_index = for (process_args, 0..) |arg, i| {
         if (std.mem.eql(u8, arg, "--")) break i;
     } else process_args.len;
+    const separator_found = separator_index < process_args.len;
     const cfg_path = process_args[1];
-    const log_filters_str_opt = if (separator_index > 2) process_args[2] else null;
-    const shred_stream_args = if (separator_index < process_args.len)
+    // The log filter is only accepted between the config path and `--`. Without
+    // an explicit `--`, everything after the config path is forwarded to the
+    // shred_stream service so a natural invocation like
+    //   ./replay-offline config.zon --ledger PATH ...
+    // works without misparsing `--ledger` as a log-level.
+    const log_filters_str_opt =
+        if (separator_found and separator_index > 2) process_args[2] else null;
+    const shred_stream_args = if (separator_found)
         process_args[separator_index + 1 ..]
     else
-        process_args[2..separator_index];
+        process_args[2..];
 
     const config: Config = cfg: {
         const cfg_file = try std.fs.cwd().openFile(cfg_path, .{});
