@@ -27,6 +27,7 @@ pub fn build(b: *Build) !void {
     const install_step = b.getInstallStep();
     install_step.dependOn(sig.exe.installStep());
     install_step.dependOn(tools.shred_stream.installStep());
+    install_step.dependOn(tools.replay_offline.installStep());
     install_step.dependOn(tools.lint.installStep());
     for (unit_tests.tests.items) |exe| install_step.dependOn(exe.installStep());
     for (tools.black_box_tests) |exe| install_step.dependOn(exe.installStep());
@@ -55,6 +56,10 @@ pub fn build(b: *Build) !void {
     // shred-stream
     const shred_stream_step = b.step("shred-stream", "Stream shreds from an Agave ledger");
     tools.shred_stream.addToStep(shred_stream_step);
+
+    // replay-offline
+    const replay_offline_step = b.step("replay-offline", "Build the offline replay topology");
+    replay_offline_step.dependOn(tools.replay_offline.installStep());
 
     // lint
     const lint_step = b.step("lint", "Run lint checks");
@@ -245,6 +250,7 @@ const Dependencies = struct {
 /// validator binary. Does not include any tests, developer tools, docs, etc.
 const Sig = struct {
     lib: *Build.Module,
+    shred_stream: *Build.Module,
     services_mod: *Build.Module,
     start_service: *Build.Module,
     service_libs: [services.len]Service,
@@ -316,6 +322,20 @@ const Sig = struct {
             },
         });
         unit_tests.add("lib", lib);
+
+        // Shred stream library module — shared code for both the shred_streamer
+        // service and the shred-stream CLI script. Has rocksdb as a dependency
+        // but is NOT linked into the main sig binary.
+        const shred_stream_mod = b.createModule(.{
+            .root_source_file = b.path("v2/lib/shred_streamer/lib.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = &.{
+                .{ .name = "lib", .module = lib },
+                .{ .name = "rocksdb", .module = deps.rocksdb },
+                .{ .name = "rocksdb-c", .module = deps.rocksdb_c },
+            },
+        });
 
         // Components: one per subdir of v2/components/. Each gets lib, tracy, and build-options
         var components: std.StringHashMapUnmanaged(Component) = .empty;
@@ -460,6 +480,10 @@ const Sig = struct {
                     service_component_imports,
                 }),
             });
+            // shred_streamer needs the shred_stream lib (for reading Agave ledger).
+            if (comptime std.mem.eql(u8, service.name, "shred_streamer")) {
+                service_mod.addImport("shred_stream", shred_stream_mod);
+            }
             unit_tests.add(service.name ++ "-service", service_mod);
 
             const service_lib = b.addLibrary(.{
@@ -467,7 +491,11 @@ const Sig = struct {
                 .root_module = service_mod,
                 .use_llvm = config.use_llvm,
             });
-            main.linkLibrary(service_lib);
+            // shred_streamer is only used by the offline-replay topology; don't
+            // link it into the main sig binary so it doesn't pull in rocksdb.
+            if (!comptime std.mem.eql(u8, service.name, "shred_streamer")) {
+                main.linkLibrary(service_lib);
+            }
 
             service_lib_entry.* = .{
                 .name = service.name,
@@ -478,6 +506,7 @@ const Sig = struct {
 
         return .{
             .lib = lib,
+            .shred_stream = shred_stream_mod,
             .services_mod = services_mod,
             .start_service = start_service,
             .service_libs = service_libs,
@@ -598,6 +627,7 @@ fn concatImports(
 /// integration tests, etc.
 const Tools = struct {
     shred_stream: Executable,
+    replay_offline: Executable,
     lint: Executable,
     docs: *Build.Step.InstallDir,
     black_box_tests: [black_box_test_descriptions.len]Executable,
@@ -619,6 +649,17 @@ const Tools = struct {
         },
     };
 
+    /// Services required by the replay-offline topology.
+    const replay_offline_services: []const []const u8 = &.{
+        "shred_streamer",
+        "shred_receiver",
+        "replay",
+        "exec",
+        "snapshot",
+        "accounts_db",
+        "telemetry",
+    };
+
     pub fn init(
         b: *Build,
         config: Config,
@@ -633,6 +674,7 @@ const Tools = struct {
                 .optimize = config.optimize,
                 .imports = &.{
                     .{ .name = "lib", .module = sig.lib },
+                    .{ .name = "shred_stream", .module = sig.shred_stream },
                     .{ .name = "rocksdb", .module = deps.rocksdb },
                     .{ .name = "rocksdb-c", .module = deps.rocksdb_c },
                 },
@@ -744,8 +786,44 @@ const Tools = struct {
             }
         }
 
+        // replay-offline: standalone topology tool that streams shreds from an
+        // Agave ledger through the full replay pipeline (without networking).
+        // Installed to bin/ (not bin/tests/) because it's a tool, not a test.
+        const replay_offline_exe: Executable = blk: {
+            const module = b.createModule(.{
+                .root_source_file = b.path("v2/tests/replay_offline/main.zig"),
+                .target = config.target,
+                .optimize = config.optimize,
+                .imports = concatImports(b, &.{
+                    &.{
+                        .{ .name = "lib", .module = sig.lib },
+                        .{ .name = "tracy", .module = deps.tracy },
+                        .{ .name = "services", .module = sig.services_mod },
+                        .{ .name = "topology", .module = sig.topology },
+                        .{ .name = "shred_stream", .module = sig.shred_stream },
+                    },
+                    sig.api_imports,
+                }),
+            });
+            const exe: Executable = .init(b, .{
+                .install = config.exe.install,
+                .run = false,
+            }, .{
+                .name = "replay-offline",
+                .root_module = module,
+                .use_llvm = config.use_llvm,
+            }, .{});
+            for (replay_offline_services) |service_name| {
+                exe.compile.linkLibrary(for (sig.service_libs) |entry| {
+                    if (std.mem.eql(u8, entry.name, service_name)) break entry.lib;
+                } else std.debug.panic("unknown service '{s}'", .{service_name}));
+            }
+            break :blk exe;
+        };
+
         return .{
             .shred_stream = shred_stream_exe,
+            .replay_offline = replay_offline_exe,
             .lint = lint_exe,
             .docs = install_docs,
             .black_box_tests = bbt_exes,
@@ -803,7 +881,11 @@ const UnitTests = struct {
                 .dest_sub_path = name,
                 .dest_dir = test_install_dir,
             }) else null,
-            .run = if (self.exe_config.run) self.build.addRunArtifact(unit_test) else null,
+            .run = if (self.exe_config.run) blk: {
+                const run = self.build.addRunArtifact(unit_test);
+                run.setCwd(self.build.path("."));
+                break :blk run;
+            } else null,
         }) catch @panic("oom");
         if (self.kcov) |kcov| {
             const kcov_run = self.build.addSystemCommand(&.{
@@ -815,6 +897,7 @@ const UnitTests = struct {
             const output_dir = kcov_run.addOutputDirectoryArg("output");
             kcov_run.addArtifactArg(unit_test);
             kcov_run.has_side_effects = true;
+            kcov_run.setCwd(self.build.path("."));
             kcov.merge_run.step.dependOn(&kcov_run.step);
             kcov.merge_run.addDirectoryArg(output_dir);
         }
@@ -844,8 +927,12 @@ const Executable = struct {
         return .{
             .compile = exe,
             .install = if (options.install) b.addInstallArtifact(exe, install_options) else null,
+            // Executables (sig, sig-lint, black-box tests, ...) reference
+            // on-disk paths relative to the repo root. Pin cwd so `zig build`
+            // works from any subdirectory (e.g. `cd v2 && zig build ci`).
             .run = if (options.run) blk: {
                 const run = b.addRunArtifact(exe);
+                run.setCwd(b.path("."));
                 run.addArgs(b.args orelse &.{});
                 break :blk run;
             } else null,

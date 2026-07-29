@@ -44,6 +44,76 @@ pub const SnapshotConfig = extern struct {
         if (self.known_validators_allow_all) return .allow_all;
         return .{ .set = self.known_validators_buffer[0..self.known_validators_len] };
     }
+
+    /// Populates a shared-memory SnapshotConfig from parsed config fields.
+    /// Used by both the main validator topology (v2/init/main.zig) and the
+    /// offline replay topology (v2/tests/replay_offline/main.zig).
+    ///
+    /// `known_validators` must be non-empty. A single `"*"` entry opts into
+    /// downloading from any peer (untrusted). Otherwise every entry must be
+    /// a valid base58 Pubkey.
+    pub fn populate(
+        self: *SnapshotConfig,
+        folder: []const u8,
+        known_validators: []const []const u8,
+        cluster: lib.solana.Cluster,
+    ) !void {
+        if (folder.len > std.fs.max_path_bytes) {
+            std.log.err(
+                "snapshot folder path too long: {d} bytes (max {d})",
+                .{ folder.len, std.fs.max_path_bytes },
+            );
+            return error.PathTooLong;
+        }
+        if (known_validators.len == 0) {
+            std.log.err(
+                "known_validators must not be empty. Specify validator pubkeys, " ++
+                    "or \"*\" to opt in to untrusted snapshot sources.",
+                .{},
+            );
+            return error.NoKnownValidators;
+        }
+        if (known_validators.len > MAX_KNOWN_VALIDATORS) {
+            return error.TooManyKnownValidators;
+        }
+
+        @memcpy(self.folder_buffer[0..folder.len], folder);
+        self.folder_len = @intCast(folder.len);
+        self.cluster = cluster;
+
+        const has_wildcard = for (known_validators) |entry| {
+            if (std.mem.eql(u8, entry, "*")) break true;
+        } else false;
+
+        if (has_wildcard) {
+            if (known_validators.len > 1) {
+                std.log.warn(
+                    "known_validators contains \"*\" alongside other entries; " ++
+                        "\"*\" takes precedence, ignoring the rest.",
+                    .{},
+                );
+            }
+            self.known_validators_allow_all = true;
+            // NOTE: we zero out known_validators_len to make it clear that no
+            // validator pubkeys were provided.
+            self.known_validators_len = 0;
+        } else {
+            self.known_validators_allow_all = false;
+            self.known_validators_len = @intCast(known_validators.len);
+            for (
+                known_validators,
+                self.known_validators_buffer[0..known_validators.len],
+            ) |pkstr, *pkptr| {
+                pkptr.* = lib.solana.Pubkey.parseRuntime(pkstr) catch |err| {
+                    std.log.err(
+                        "invalid known_validator entry '{s}': {s}",
+                        .{ pkstr, @errorName(err) },
+                    );
+                    return err;
+                };
+            }
+        }
+    }
 };
 
 // Holds decompressed snapshot data given to accounts_db service
