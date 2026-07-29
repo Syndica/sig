@@ -319,97 +319,65 @@ const Sig = struct {
 
         // Components: one per subdir of v2/components/. Each gets lib, tracy, and build-options.
         //
-        // Component-to-component api deps: some component impls need access to a
-        // sibling's api (e.g. replay's MerkleForest consumes shred's DeshreddedFecSet).
-        // Two passes: first build every api (lib/tracy/build-options only), then build
-        // every component module with its own api plus any declared extra sibling apis.
-        var components: std.StringHashMapUnmanaged(Component) = .empty;
-        var api_import_list: std.ArrayList(Build.Module.Import) = .empty;
-
-        // `component_name` → list of sibling `<api_name>` modules its impl also needs.
+        // A component's impl (component.zig + siblings) may opt into a sibling
+        // component's api via `extra_api_deps`. The `_api` module itself always
+        // stays isolated to lib/tracy/build-options so the public surface is
+        // guaranteed cycle-free.
         const extra_api_deps = std.StaticStringMap([]const []const u8).initComptime(&.{
             .{ "replay", &.{"shred_api"} },
         });
 
-        var pending_component_names: std.ArrayList([]const u8) = .empty;
-        var pending_comp_dirs: std.ArrayList([]const u8) = .empty;
-        var pending_apis: std.ArrayList(*Build.Module) = .empty;
+        const component_base_imports: []const Build.Module.Import = &.{
+            .{ .name = "lib", .module = lib },
+            .{ .name = "tracy", .module = deps.tracy },
+            .{ .name = "build-options", .module = build_options_mod },
+        };
 
+        const Pending = struct { name: []const u8, comp_dir: []const u8, api: *Build.Module };
+        var pending: std.ArrayList(Pending) = .empty;
+        var components: std.StringHashMapUnmanaged(Component) = .empty;
+        var api_import_list: std.ArrayList(Build.Module.Import) = .empty;
+
+        // Pass 1: build every api so pass 2's sibling lookups can't miss.
         {
-            var dir = try b.build_root.handle.openDir(
-                "v2/components",
-                .{ .iterate = true },
-            );
+            var dir = try b.build_root.handle.openDir("v2/components", .{ .iterate = true });
             defer dir.close();
             var it = dir.iterate();
             while (try it.next()) |entry| {
                 if (entry.kind != .directory) continue;
                 if (std.mem.eql(u8, entry.name, "runtime")) continue;
                 const name = b.dupe(entry.name);
-
                 const comp_dir = b.fmt("v2/components/{s}", .{name});
-                const imports: []const Build.Module.Import = &.{
-                    .{ .name = "lib", .module = lib },
-                    .{ .name = "tracy", .module = deps.tracy },
-                    .{ .name = "build-options", .module = build_options_mod },
-                };
-
                 const api_name = b.fmt("{s}_api", .{name});
                 const api = b.addModule(api_name, .{
                     .root_source_file = b.path(b.fmt("{s}/api.zig", .{comp_dir})),
                     .target = config.target,
                     .optimize = config.optimize,
-                    .imports = imports,
+                    .imports = component_base_imports,
                 });
                 unit_tests.add(api_name, api);
-
                 try api_import_list.append(b.allocator, .{ .name = api_name, .module = api });
-                try pending_component_names.append(b.allocator, name);
-                try pending_comp_dirs.append(b.allocator, comp_dir);
-                try pending_apis.append(b.allocator, api);
+                try pending.append(b.allocator, .{ .name = name, .comp_dir = comp_dir, .api = api });
             }
         }
 
-        for (
-            pending_component_names.items,
-            pending_comp_dirs.items,
-            pending_apis.items,
-        ) |name, comp_dir, api| {
-            const imports: []const Build.Module.Import = &.{
-                .{ .name = "lib", .module = lib },
-                .{ .name = "tracy", .module = deps.tracy },
-                .{ .name = "build-options", .module = build_options_mod },
-            };
-
-            // Base: own api. Extras: declared sibling apis (see `extra_api_deps`).
-            var component_extras: std.ArrayList(Build.Module.Import) = .empty;
-            try component_extras.append(b.allocator, .{ .name = "api", .module = api });
-            if (extra_api_deps.get(name)) |extras| {
-                for (extras) |extra_api_name| {
-                    for (api_import_list.items) |imp| {
-                        if (std.mem.eql(u8, imp.name, extra_api_name)) {
-                            try component_extras.append(b.allocator, imp);
-                            break;
-                        }
-                    } else @panic(b.fmt(
-                        "extra_api_deps for '{s}' references unknown api '{s}'",
-                        .{ name, extra_api_name },
-                    ));
-                }
+        // Pass 2: build each component impl module.
+        for (pending.items) |p| {
+            var imports: std.ArrayList(Build.Module.Import) = .empty;
+            try imports.appendSlice(b.allocator, component_base_imports);
+            try imports.append(b.allocator, .{ .name = "api", .module = p.api });
+            for (extra_api_deps.get(p.name) orelse &.{}) |extra| {
+                try imports.append(b.allocator, findApi(api_import_list.items, extra));
             }
 
-            const component = b.addModule(name, .{
-                .root_source_file = b.path(b.fmt("{s}/component.zig", .{comp_dir})),
+            const component = b.addModule(p.name, .{
+                .root_source_file = b.path(b.fmt("{s}/component.zig", .{p.comp_dir})),
                 .target = config.target,
                 .optimize = config.optimize,
-                .imports = concatImports(b, &.{
-                    imports,
-                    component_extras.items,
-                }),
+                .imports = imports.items,
             });
-            unit_tests.add(name, component);
-
-            try components.put(b.allocator, name, .{ .api = api, .component = component });
+            unit_tests.add(p.name, component);
+            try components.put(b.allocator, p.name, .{ .api = p.api, .component = component });
         }
 
         // runtime is special cased because it needs codegen and a bunch of extra deps that
@@ -640,6 +608,13 @@ fn concatImports(
         i += g.len;
     }
     return out;
+}
+
+fn findApi(imports: []const Build.Module.Import, name: []const u8) Build.Module.Import {
+    for (imports) |imp| {
+        if (std.mem.eql(u8, imp.name, name)) return imp;
+    }
+    std.debug.panic("extra_api_deps references unknown api '{s}'", .{name});
 }
 
 /// Everything other than Sig itself: developer tools, ci scripts, docs,
