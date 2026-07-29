@@ -89,6 +89,14 @@ v2 can receive shreds received over turbine, but it does not yet support repair,
 zig build shred-stream -- --ledger validator --target 127.0.0.1:8002 --rate-hz 100
 ```
 
+`shred-stream` is also available as a v2 service in the offline replay topology:
+
+```sh
+zig build replay-offline
+```
+
+The standalone tool streams shreds over UDP. The offline topology runs the same shred-stream component inside v2 and writes directly into the shred receiver's packet ring instead of using the network service.
+
 ### Running with Tracy
 
 1. Build with `-Denable-tracy`.

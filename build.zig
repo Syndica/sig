@@ -56,6 +56,10 @@ pub fn build(b: *Build) !void {
     const shred_stream_step = b.step("shred-stream", "Stream shreds from an Agave ledger");
     tools.shred_stream.addToStep(shred_stream_step);
 
+    // replay-offline
+    const replay_offline_step = b.step("replay-offline", "Run replay offline using shred-stream");
+    tools.replay_offline.addToStep(replay_offline_step);
+
     // lint
     const lint_step = b.step("lint", "Run lint checks");
     tools.lint.addToStep(lint_step);
@@ -252,6 +256,7 @@ const Sig = struct {
     exe: Executable,
     topology: *Build.Module,
     api_imports: []const Build.Module.Import,
+    shred_stream_component: *Build.Module,
 
     const Service = struct {
         name: []const u8,
@@ -348,6 +353,12 @@ const Sig = struct {
                 });
                 unit_tests.add(api_name, api);
 
+                const component_extra_imports: []const Build.Module.Import =
+                    if (std.mem.eql(u8, name, "shred_stream")) &.{
+                        .{ .name = "rocksdb", .module = deps.rocksdb },
+                        .{ .name = "rocksdb-c", .module = deps.rocksdb_c },
+                    } else &.{};
+
                 const component = b.addModule(name, .{
                     .root_source_file = b.path(b.fmt("{s}/component.zig", .{comp_dir})),
                     .target = config.target,
@@ -355,6 +366,7 @@ const Sig = struct {
                     .imports = concatImports(b, &.{
                         imports,
                         &.{.{ .name = "api", .module = api }},
+                        component_extra_imports,
                     }),
                 });
                 unit_tests.add(name, component);
@@ -470,7 +482,7 @@ const Sig = struct {
             main.linkLibrary(service_lib);
 
             service_lib_entry.* = .{
-                .name = service.name,
+                .name = service.name ++ "-service",
                 .module = service_mod,
                 .lib = service_lib,
             };
@@ -489,6 +501,7 @@ const Sig = struct {
             }, .{}),
             .topology = topology,
             .api_imports = api_imports,
+            .shred_stream_component = components.get("shred_stream").?.component,
         };
     }
 };
@@ -598,15 +611,12 @@ fn concatImports(
 /// integration tests, etc.
 const Tools = struct {
     shred_stream: Executable,
+    replay_offline: Executable,
     lint: Executable,
     docs: *Build.Step.InstallDir,
     black_box_tests: [black_box_test_descriptions.len]Executable,
 
-    const black_box_test_descriptions = [_]struct {
-        name: []const u8,
-        root_source_file: []const u8,
-        services: []const []const u8,
-    }{
+    const black_box_test_descriptions = [_]TopologyDescription{
         .{
             .name = "gossip",
             .root_source_file = "v2/tests/gossip/main.zig",
@@ -628,13 +638,14 @@ const Tools = struct {
     ) Tools {
         const shred_stream_exe = blk: {
             const module = b.createModule(.{
-                .root_source_file = b.path("tools/shred_stream.zig"),
+                .root_source_file = b.path("tools/shred_stream_net.zig"),
                 .target = config.target,
                 .optimize = config.optimize,
                 .imports = &.{
                     .{ .name = "lib", .module = sig.lib },
                     .{ .name = "rocksdb", .module = deps.rocksdb },
                     .{ .name = "rocksdb-c", .module = deps.rocksdb_c },
+                    .{ .name = "shred_stream", .module = sig.shred_stream_component },
                 },
             });
             unit_tests.add("shred-stream", module);
@@ -659,6 +670,15 @@ const Tools = struct {
             .target = b.graph.host,
             .optimize = .Debug,
         }));
+
+        const replay_offline_exe = createTopology(b, sig, deps, config, .{
+            .name = "replay-offline",
+            .root_source_file = "v2/tests/replay_offline.zig",
+            .services = &.{
+                "shred_stream", "shred_receiver", "replay", "snapshot",
+                "accounts_db",  "telemetry",      "exec",
+            },
+        });
 
         // generates unified docs for all modules
         // NOTE: have to specify `-Dno-bin` & `-Dno-run` in order to
@@ -713,45 +733,65 @@ const Tools = struct {
 
         var bbt_exes: [black_box_test_descriptions.len]Executable = undefined;
         for (black_box_test_descriptions, &bbt_exes) |description, *exe| {
-            exe.* = .init(b, config.exe, .{
-                .name = b.fmt("bbt-{s}", .{description.name}),
-                .root_module = b.createModule(.{
-                    .root_source_file = b.path(description.root_source_file),
-                    .target = config.target,
-                    .optimize = config.optimize,
-                    .imports = concatImports(b, &.{
-                        &.{
-                            .{ .name = "lib", .module = sig.lib },
-                            .{ .name = "tracy", .module = deps.tracy },
-                            .{ .name = "services", .module = sig.services_mod },
-                            .{ .name = "topology", .module = sig.topology },
-                        },
-                        // Black-box tests build shared-memory regions the same
-                        // way `main.zig` does, so they need every component's
-                        // public api. Component implementations are pulled in
-                        // via `linkLibrary(service_lib)` below rather than
-                        // module imports.
-                        sig.api_imports,
-                    }),
-                }),
-                .use_llvm = config.use_llvm,
-            }, .{ .dest_dir = test_install_dir });
-
-            for (description.services) |service_name| {
-                exe.compile.linkLibrary(for (sig.service_libs) |entry| {
-                    if (std.mem.eql(u8, entry.name, service_name)) break entry.lib;
-                } else std.debug.panic("unknown service '{s}'", .{service_name}));
-            }
+            exe.* = createTopology(b, sig, deps, config, description);
         }
 
         return .{
             .shred_stream = shred_stream_exe,
+            .replay_offline = replay_offline_exe,
             .lint = lint_exe,
             .docs = install_docs,
             .black_box_tests = bbt_exes,
         };
     }
 };
+
+const TopologyDescription = struct {
+    name: []const u8,
+    root_source_file: []const u8,
+    services: []const []const u8,
+};
+
+fn createTopology(
+    b: *Build,
+    sig: Sig,
+    deps: Dependencies,
+    config: Config,
+    description: TopologyDescription,
+) Executable {
+    const exe: Executable = .init(b, config.exe, .{
+        .name = b.fmt("bbt-{s}", .{description.name}),
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(description.root_source_file),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = concatImports(b, &.{
+                &.{
+                    .{ .name = "lib", .module = sig.lib },
+                    .{ .name = "tracy", .module = deps.tracy },
+                    .{ .name = "services", .module = sig.services_mod },
+                    .{ .name = "topology", .module = sig.topology },
+                },
+                // Black-box tests build shared-memory regions the same
+                // way `main.zig` does, so they need every component's
+                // public api. Component implementations are pulled in
+                // via `linkLibrary(service_lib)` below rather than
+                // module imports.
+                sig.api_imports,
+            }),
+        }),
+        .use_llvm = config.use_llvm,
+    }, .{ .dest_dir = test_install_dir });
+
+    for (description.services) |service_name| {
+        exe.compile.linkLibrary(for (sig.service_libs) |entry| {
+            if (std.mem.eql(u8, entry.name[0 .. entry.name.len - 8], service_name))
+                break entry.lib;
+        } else std.debug.panic("unknown service '{s}'", .{service_name}));
+    }
+
+    return exe;
+}
 
 /// Consolidated container for unit tests to make it easy to add them, and to
 /// ensure the same configuration is applied to all tests.

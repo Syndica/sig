@@ -1,21 +1,26 @@
 //! Streams raw shreds from an Agave ledger to a UDP target.
 
 const std = @import("std");
-const Ring = @import("lib").ipc.Ring;
+const lib = @import("lib");
 const rocks = @import("rocksdb");
 const rocks_c = @import("rocksdb-c");
 
 const Allocator = std.mem.Allocator;
 const Slot = u64;
+const tel = lib.telemetry;
+const Logger = tel.Logger("main");
+const Packet = lib.net.Packet;
+const PacketRing = lib.net.Pair.PacketRing;
 
 const agave_cf_default = "default";
 const agave_cf_meta = "meta";
 const agave_cf_data_shred = "data_shred";
 const agave_cf_code_shred = "code_shred";
-const max_shred_packet_bytes: usize = 1232;
+const max_shred_packet_bytes: usize = Packet.capacity;
+const packet_ring_packets: u64 = 1 << 14;
 const producer_publish_packets: usize = 32;
-const stream_queue_packets = 8192;
 const no_current_slot = std.math.maxInt(Slot);
+const progress_interval_ns: u64 = std.time.ns_per_s;
 
 const TestMode = enum {
     linear,
@@ -91,7 +96,7 @@ const ShredKindFilter = enum {
 
 const Config = struct {
     ledger: []const u8,
-    target: []const u8,
+    target: ?[]const u8 = null,
     start_slot: ?Slot = null,
     end_slot: ?Slot = null,
     rate_hz: ?f64 = null,
@@ -145,10 +150,7 @@ const PartialConfig = struct {
             try stdout.print("missing required argument: --ledger <path>\n", .{});
             return error.InvalidArguments;
         };
-        const target = self.target orelse {
-            try stdout.print("missing required argument: --target <ip:port>\n", .{});
-            return error.InvalidArguments;
-        };
+        const target = self.target;
 
         if (self.start_slot != null and
             self.end_slot != null and
@@ -295,175 +297,156 @@ const Arg = enum {
     }
 };
 
-pub fn main() !void {
-    var gpa_state: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa_state.deinit();
-    const gpa = gpa_state.allocator();
+pub const Inputs = struct {
+    config: Config,
+    blockstore: AgaveBlockstore,
+    selected_shreds: ?SelectedShredPlan,
 
-    const argv = try std.process.argsAlloc(gpa);
-    defer std.process.argsFree(gpa, argv);
+    pub fn deinit(self: *const Inputs, allocator: Allocator) void {
+        self.blockstore.deinit(allocator);
+        if (self.selected_shreds) |*plan| plan.deinit(allocator);
+    }
 
-    var stdout_buf: [1024]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
-    const stdout = &stdout_writer.interface;
+    pub fn init(allocator: Allocator, logger: Logger, args: []const []const u8) !Inputs {
+        var output_buf: [64 * 1024]u8 = undefined;
+        var output_writer = std.Io.Writer.fixed(&output_buf);
 
-    const parse_result = parseArgs(stdout, argv[1..]) catch |err| switch (err) {
-        error.InvalidArguments => {
-            try printHelp(stdout);
-            try stdout.flush();
+        const parse_result = parseArgs(&output_writer, args) catch |err| {
+            logger.err().logf(
+                "invalid shred-stream args: {s}",
+                .{output_buf[0..output_writer.end]},
+            );
             return err;
-        },
-        error.WriteFailed => return err,
+        };
+        const config = switch (parse_result) {
+            .help => {
+                try printHelp(&output_writer);
+                logger.info().logf("{s}", .{output_buf[0..output_writer.end]});
+                return error.Help;
+            },
+            .config => |c| c,
+        };
+        output_writer.end = 0;
+
+        var blockstore = try AgaveBlockstore.open(allocator, logger, config.ledger);
+        errdefer blockstore.deinit(allocator);
+
+        try output_writer.print("shred-stream config:\n", .{});
+        try output_writer.print("  ledger: {s}\n", .{config.ledger});
+        try output_writer.print("  rocksdb: {s}\n", .{blockstore.rocksdb_path});
+        if (config.target) |target| try output_writer.print("  target: {s}\n", .{target});
+        try output_writer.print("  start_slot: {?d}\n", .{config.start_slot});
+        try output_writer.print("  end_slot: {?d}\n", .{config.end_slot});
+        try output_writer.print("  rate_hz: {?d}\n", .{config.rate_hz});
+        try output_writer.print("  test_mode: {s}\n", .{config.test_mode.name()});
+        try output_writer.print("  seed: {?d}\n", .{config.seed});
+        if (config.test_mode.usesSelectedShreds()) {
+            try output_writer.print("  selected_count: {d}\n", .{config.selected_count});
+            try output_writer.print("  shred_kind: {s}\n", .{config.shred_kind.name()});
+            try output_writer.print("  plan_limit: {d}\n", .{config.plan_limit});
+            if (config.test_mode == .corrupt) {
+                try output_writer.print("  corrupt_bytes: {d}\n", .{config.corrupt_bytes});
+            }
+        }
+        try output_writer.print("  dry_run: {}\n", .{config.dry_run});
+        try output_writer.print("  column_families:\n", .{});
+        try output_writer.print("    {s}: present\n", .{agave_cf_meta});
+        try output_writer.print("    {s}: present\n", .{agave_cf_data_shred});
+        try output_writer.print("    {s}: {s}\n", .{
+            agave_cf_code_shred,
+            if (blockstore.has_code_shred) "present" else "missing",
+        });
+        if (!blockstore.has_code_shred) {
+            try output_writer.print(
+                "warning: missing optional {s} column family; streaming data shreds only\n",
+                .{agave_cf_code_shred},
+            );
+        }
+
+        var stop: std.atomic.Value(bool) = .init(false);
+        var selected_shreds: ?SelectedShredPlan = null;
+        errdefer if (selected_shreds) |*plan| plan.deinit(allocator);
+        if (config.test_mode.usesSelectedShreds()) {
+            selected_shreds = try buildSelectedShredPlan(
+                allocator,
+                &output_writer,
+                &blockstore,
+                config,
+                &stop,
+            );
+            try printSelectedShredPlan(
+                &output_writer,
+                &selected_shreds.?,
+                config.test_mode,
+                config.plan_limit,
+            );
+        }
+
+        logger.info().logf("{s}", .{output_buf[0..output_writer.end]});
+
+        return .{
+            .config = config,
+            .blockstore = blockstore,
+            .selected_shreds = selected_shreds,
+        };
+    }
+};
+
+/// Service entry point: parses args from the shared memory `Args` region and
+/// runs the producer inline, publishing into `packet_writer`.
+pub fn run(
+    allocator: Allocator,
+    logger: Logger,
+    ring_writer: *PacketRing.Iterator(.writer),
+    in: Inputs,
+) !void {
+    if (in.config.dry_run) {
+        var output_buf: [64 * 1024]u8 = undefined;
+        var output_writer = std.Io.Writer.fixed(&output_buf);
+        const stats = try scanLedger(&in.blockstore, in.config);
+        try printLedgerStats(&output_writer, stats);
+        logger.info().logf("{s}", .{output_buf[0..output_writer.end]});
+        return;
+    }
+
+    var stop: std.atomic.Value(bool) = .init(false);
+
+    var progress: ProducerProgress = .{};
+    var net_progress: NetThreadProgress = .{};
+    var packet_writer: PacketWriter = .{
+        .iter = ring_writer,
+        .stop = &stop,
+        .logger = logger,
+        .producer_progress = &progress,
+        .net_progress = &net_progress,
+        .rate_hz = in.config.rate_hz,
+        .publish_packets = if (in.config.rate_hz == null) producer_publish_packets else 1,
+        .packet_interval_ns = if (in.config.rate_hz) |rate|
+            @max(1, @as(u64, @intFromFloat(@ceil(
+                @as(f64, @floatFromInt(std.time.ns_per_s)) / rate,
+            ))))
+        else
+            null,
+        .last_snapshot = ProgressSnapshot.init(&progress, &net_progress),
+        .last_log_ns = std.time.nanoTimestamp(),
     };
 
-    switch (parse_result) {
-        .help => try printHelp(stdout),
-        .config => |config| try run(gpa, stdout, config),
-    }
-    try stdout.flush();
-}
+    const stats = try produceLedgerPackets(
+        allocator,
+        &in.blockstore,
+        in.config,
+        if (in.selected_shreds) |*plan| plan else null,
+        &packet_writer,
+        &stop,
+        &progress,
+    );
+    packet_writer.flush();
 
-fn run(allocator: Allocator, stdout: *std.Io.Writer, config: Config) !void {
-    const target = try std.net.Address.parseIpAndPort(config.target);
-
-    var blockstore = try AgaveBlockstore.open(allocator, config.ledger);
-    defer blockstore.deinit(allocator);
-
-    try stdout.print("shred-stream config:\n", .{});
-    try stdout.print("  ledger: {s}\n", .{config.ledger});
-    try stdout.print("  rocksdb: {s}\n", .{blockstore.rocksdb_path});
-    try stdout.print("  target: {s}\n", .{config.target});
-    try stdout.print("  start_slot: {?d}\n", .{config.start_slot});
-    try stdout.print("  end_slot: {?d}\n", .{config.end_slot});
-    try stdout.print("  rate_hz: {?}\n", .{config.rate_hz});
-    try stdout.print("  test_mode: {s}\n", .{config.test_mode.name()});
-    try stdout.print("  seed: {?}\n", .{config.seed});
-    if (config.test_mode.usesSelectedShreds()) {
-        try stdout.print("  selected_count: {d}\n", .{config.selected_count});
-        try stdout.print("  shred_kind: {s}\n", .{config.shred_kind.name()});
-        try stdout.print("  plan_limit: {d}\n", .{config.plan_limit});
-        if (config.test_mode == .corrupt) {
-            try stdout.print("  corrupt_bytes: {d}\n", .{config.corrupt_bytes});
-        }
-    }
-    try stdout.print("  dry_run: {}\n", .{config.dry_run});
-    try stdout.print("  column_families:\n", .{});
-    try stdout.print("    {s}: present\n", .{agave_cf_meta});
-    try stdout.print("    {s}: present\n", .{agave_cf_data_shred});
-    try stdout.print("    {s}: {s}\n", .{
-        agave_cf_code_shred,
-        if (blockstore.has_code_shred) "present" else "missing",
-    });
-
-    if (!blockstore.has_code_shred) {
-        try stdout.print(
-            "warning: missing optional {s} column family; streaming data shreds only\n",
-            .{agave_cf_code_shred},
-        );
-    }
-
-    var selected_shreds: ?SelectedShredPlan = null;
-    defer if (selected_shreds) |*plan| plan.deinit(allocator);
-    if (config.test_mode.usesSelectedShreds()) {
-        var preflight_stop: std.atomic.Value(bool) = .init(false);
-        selected_shreds = try buildSelectedShredPlan(
-            allocator,
-            stdout,
-            &blockstore,
-            config,
-            &preflight_stop,
-        );
-        try printSelectedShredPlan(stdout, &selected_shreds.?, config.test_mode, config.plan_limit);
-    }
-
-    if (config.dry_run) {
-        const stats = try scanLedger(&blockstore, config);
-        try printLedgerStats(stdout, stats);
-    } else {
-        const sockfd = try std.posix.socket(
-            target.any.family,
-            std.posix.SOCK.DGRAM | std.posix.SOCK.CLOEXEC,
-            std.posix.IPPROTO.UDP,
-        );
-        // The net thread borrows this fd. Keep ownership here so every path joins
-        // the net thread before closing the fd exactly once.
-        defer std.posix.close(sockfd);
-
-        var ring: StreamPacketRing = undefined;
-        ring.init();
-
-        var producer_done: std.atomic.Value(bool) = .init(false);
-        var stop: std.atomic.Value(bool) = .init(false);
-        var net_thread_failed: std.atomic.Value(bool) = .init(false);
-        var net_thread_stats: NetThreadStats = .{};
-        var net_progress: NetThreadProgress = .{};
-        var producer_failed: std.atomic.Value(bool) = .init(false);
-        var producer_progress: ProducerProgress = .{};
-        var producer_result: ProducerThreadResult = .{};
-
-        var maybe_net_thread: ?std.Thread = null;
-        var maybe_producer_thread: ?std.Thread = null;
-        errdefer {
-            stop.store(true, .release);
-            producer_done.store(true, .release);
-            if (maybe_producer_thread) |thread| thread.join();
-            if (maybe_net_thread) |thread| thread.join();
-        }
-
-        maybe_net_thread = try std.Thread.spawn(
-            .{},
-            netThreadMain,
-            .{
-                &ring,
-                &producer_done,
-                &stop,
-                &net_thread_stats,
-                &net_progress,
-                &net_thread_failed,
-                sockfd,
-                target,
-                config.rate_hz,
-            },
-        );
-
-        maybe_producer_thread = try std.Thread.spawn(
-            .{},
-            producerThreadMain,
-            .{
-                &blockstore,
-                allocator,
-                config,
-                if (selected_shreds) |*plan| plan else null,
-                &ring,
-                &producer_done,
-                &stop,
-                &producer_progress,
-                &producer_failed,
-                &producer_result,
-            },
-        );
-
-        try monitorProgress(
-            stdout,
-            &ring,
-            &producer_done,
-            &stop,
-            &producer_progress,
-            &net_progress,
-            config.rate_hz,
-        );
-
-        maybe_producer_thread.?.join();
-        maybe_producer_thread = null;
-        maybe_net_thread.?.join();
-        maybe_net_thread = null;
-
-        try printProducerStats(stdout, producer_result.stats);
-        try printNetThreadStats(stdout, net_thread_stats);
-
-        if (producer_failed.load(.monotonic)) return error.ProducerThreadFailed;
-        if (net_thread_failed.load(.monotonic)) return error.NetThreadFailed;
-    }
+    var output_buf: [64 * 1024]u8 = undefined;
+    var output_writer = std.Io.Writer.fixed(&output_buf);
+    try printProducerStats(&output_writer, stats);
+    try printNetThreadStats(&output_writer, packet_writer.net_stats);
+    logger.info().logf("{s}", .{output_buf[0..output_writer.end]});
 }
 
 const AgaveBlockstore = struct {
@@ -472,16 +455,16 @@ const AgaveBlockstore = struct {
     column_families: []const rocks.ColumnFamily,
     has_code_shred: bool,
 
-    fn open(allocator: Allocator, ledger_path: []const u8) !AgaveBlockstore {
-        const rocksdb_path = try resolveRocksDbPath(allocator, ledger_path);
+    fn open(allocator: Allocator, logger: Logger, ledger_path: []const u8) !AgaveBlockstore {
+        const rocksdb_path = try resolveRocksDbPath(allocator, logger, ledger_path);
         errdefer allocator.free(rocksdb_path);
 
-        var available_cfs = try listColumnFamilies(allocator, rocksdb_path);
+        var available_cfs = try listColumnFamilies(allocator, logger, rocksdb_path);
         defer available_cfs.deinit(allocator);
 
-        try requireColumnFamily(&available_cfs, agave_cf_default);
-        try requireColumnFamily(&available_cfs, agave_cf_meta);
-        try requireColumnFamily(&available_cfs, agave_cf_data_shred);
+        try requireColumnFamily(&available_cfs, logger, agave_cf_default);
+        try requireColumnFamily(&available_cfs, logger, agave_cf_meta);
+        try requireColumnFamily(&available_cfs, logger, agave_cf_data_shred);
 
         const has_code_shred = available_cfs.contains(agave_cf_code_shred);
         const cfs = try columnFamilyDescriptions(allocator, has_code_shred);
@@ -502,8 +485,8 @@ const AgaveBlockstore = struct {
             &err_data,
         ) catch |err| {
             if (err_data) |rocks_err| {
-                std.debug.print(
-                    "failed to open RocksDB at {s}: {s}\n",
+                logger.err().logf(
+                    "failed to open RocksDB at {s}: {s}",
                     .{ rocksdb_path, rocks_err.data },
                 );
             }
@@ -622,16 +605,6 @@ const SelectedShredAction = enum {
     }
 };
 
-const StreamPacket = extern struct {
-    data: [max_shred_packet_bytes]u8,
-    slot: Slot,
-    shred_index: u64,
-    len: u16,
-    kind: ShredKind,
-};
-
-const StreamPacketRing = Ring(stream_queue_packets, StreamPacket);
-
 const NetThreadStats = struct {
     data_packets: u64 = 0,
     code_packets: u64 = 0,
@@ -639,12 +612,12 @@ const NetThreadStats = struct {
     empty_polls: u64 = 0,
     send_errors: u64 = 0,
 
-    fn recordPacket(self: *NetThreadStats, packet: *const StreamPacket) void {
-        switch (packet.kind) {
+    fn recordPacket(self: *NetThreadStats, kind: ShredKind, payload_len: usize) void {
+        switch (kind) {
             .data => self.data_packets += 1,
             .code => self.code_packets += 1,
         }
-        self.payload_bytes += packet.len;
+        self.payload_bytes += @intCast(payload_len);
     }
 };
 
@@ -699,10 +672,6 @@ const ProducerProgress = struct {
     }
 };
 
-const ProducerThreadResult = struct {
-    stats: ProducerStats = .{},
-};
-
 const ProgressSnapshot = struct {
     produced_packets: u64,
     sent_packets: u64,
@@ -728,221 +697,174 @@ const ProgressSnapshot = struct {
 };
 
 // Adapts the fallible net thread loop to std.Thread.spawn's void entry point.
-fn netThreadMain(
-    ring: *StreamPacketRing,
-    done: *std.atomic.Value(bool),
+pub fn netThreadMain(
+    ring: *PacketRing,
+    producer_done: *std.atomic.Value(bool),
     stop: *std.atomic.Value(bool),
-    stats: *NetThreadStats,
-    progress: *NetThreadProgress,
     failed: *std.atomic.Value(bool),
+    send_errors: *std.atomic.Value(u64),
+    packets_sent: *std.atomic.Value(u64),
+    payload_bytes_sent: *std.atomic.Value(u64),
     sockfd: std.posix.fd_t,
     target: std.net.Address,
-    rate_hz: ?f64,
 ) !void {
     var reader = ring.get(.reader);
     netThreadMainInner(
         &reader,
-        done,
+        producer_done,
         stop,
-        stats,
-        progress,
+        packets_sent,
+        payload_bytes_sent,
         sockfd,
         target,
-        rate_hz,
     ) catch |err| {
         failed.store(true, .release);
-        stats.send_errors += 1;
-        progress.store(stats.*);
+        _ = send_errors.fetchAdd(1, .monotonic);
         stop.store(true, .release);
         return err;
     };
 }
 
 fn netThreadMainInner(
-    reader: *StreamPacketRing.Iterator(.reader),
-    done: *std.atomic.Value(bool),
+    reader: *PacketRing.Iterator(.reader),
+    producer_done: *std.atomic.Value(bool),
     stop: *std.atomic.Value(bool),
-    stats: *NetThreadStats,
-    progress: *NetThreadProgress,
+    packets_sent: *std.atomic.Value(u64),
+    payload_bytes_sent: *std.atomic.Value(u64),
     sockfd: std.posix.fd_t,
     target: std.net.Address,
-    rate_hz: ?f64,
 ) !void {
     defer reader.markUsed();
 
-    const packet_interval_ns: ?u64 = if (rate_hz) |rate|
-        @max(1, @as(u64, @intFromFloat(@ceil(@as(f64, @floatFromInt(std.time.ns_per_s)) / rate))))
-    else
-        null;
-    var base_instant: ?std.time.Instant = null;
-    var next_send_offset_ns: u64 = 0;
-
-    while (!stop.load(.acquire) and (!done.load(.acquire) or reader.peek() != null)) {
-        var consumed: usize = 0;
-        while (consumed < producer_publish_packets) {
-            const packet = reader.next() orelse break;
-
-            if (packet_interval_ns) |interval_ns| {
-                const now = try std.time.Instant.now();
-                const now_offset_ns = if (base_instant) |base|
-                    now.since(base)
-                else blk: {
-                    base_instant = now;
-                    break :blk 0;
-                };
-
-                if (now_offset_ns < next_send_offset_ns) {
-                    std.Thread.sleep(next_send_offset_ns - now_offset_ns);
-                }
-
-                const sent = try std.posix.sendto(
-                    sockfd,
-                    packet.data[0..packet.len],
-                    std.posix.MSG.NOSIGNAL,
-                    &target.any,
-                    target.getOsSockLen(),
-                );
-                std.debug.assert(sent == packet.len);
-
-                const after = try std.time.Instant.now();
-                const after_offset_ns = after.since(base_instant.?);
-                next_send_offset_ns = @max(next_send_offset_ns, after_offset_ns) + interval_ns;
-            } else {
-                const sent = try std.posix.sendto(
-                    sockfd,
-                    packet.data[0..packet.len],
-                    std.posix.MSG.NOSIGNAL,
-                    &target.any,
-                    target.getOsSockLen(),
-                );
-                std.debug.assert(sent == packet.len);
-            }
-
-            stats.recordPacket(packet);
-            consumed += 1;
+    while (!stop.load(.acquire)) {
+        var did_send = false;
+        while (reader.next()) |packet| {
+            const sent = try std.posix.sendto(
+                sockfd,
+                packet.data[0..packet.len],
+                std.posix.MSG.NOSIGNAL,
+                &target.any,
+                target.getOsSockLen(),
+            );
+            std.debug.assert(sent == packet.len);
+            _ = packets_sent.fetchAdd(1, .monotonic);
+            _ = payload_bytes_sent.fetchAdd(packet.len, .monotonic);
+            did_send = true;
         }
 
-        if (consumed != 0) {
-            progress.store(stats.*);
+        if (did_send) {
             reader.markUsed();
             continue;
         }
 
-        stats.empty_polls += 1;
-        if (stats.empty_polls % 1024 == 0) {
-            progress.empty_polls.store(stats.empty_polls, .release);
-        }
+        if (producer_done.load(.acquire)) break;
         std.atomic.spinLoopHint();
     }
 }
 
-fn producerThreadMain(
-    blockstore: *const AgaveBlockstore,
-    allocator: Allocator,
-    config: Config,
-    selected_shreds: ?*const SelectedShredPlan,
-    ring: *StreamPacketRing,
-    done: *std.atomic.Value(bool),
+/// Wraps a downstream `PacketRing.Iterator(.writer)` with the service-mode
+/// state: rate limiter, sink stats, progress log. Producer helpers write
+/// directly to the downstream ring through this; the caller-owned
+/// `unpublished_packets` counter still drives batching.
+const PacketWriter = struct {
+    iter: *PacketRing.Iterator(.writer),
     stop: *std.atomic.Value(bool),
-    progress: *ProducerProgress,
-    failed: *std.atomic.Value(bool),
-    result: *ProducerThreadResult,
-) !void {
-    var writer = ring.get(.writer);
-    result.stats = produceLedgerPackets(
-        allocator,
-        blockstore,
-        config,
-        selected_shreds,
-        &writer,
-        stop,
-        progress,
-    ) catch |err| {
-        failed.store(true, .release);
-        stop.store(true, .release);
-        done.store(true, .release);
-        return err;
-    };
-    progress.store(result.stats);
-    done.store(true, .release);
-}
-
-fn monitorProgress(
-    stdout: *std.Io.Writer,
-    ring: *StreamPacketRing,
-    producer_done: *std.atomic.Value(bool),
-    stop: *std.atomic.Value(bool),
+    logger: Logger,
     producer_progress: *ProducerProgress,
     net_progress: *NetThreadProgress,
     rate_hz: ?f64,
-) !void {
-    var last_snapshot = ProgressSnapshot.init(producer_progress, net_progress);
-    while (!stop.load(.acquire) and !producer_done.load(.acquire)) {
-        std.Thread.sleep(std.time.ns_per_s);
-        try printProgress(stdout, ring, producer_progress, net_progress, last_snapshot, rate_hz);
-        last_snapshot = ProgressSnapshot.init(producer_progress, net_progress);
-    }
-
-    while (!stop.load(.acquire)) {
-        const queue_packets = ring.tail.value.load(.acquire) -% ring.head.value.load(.acquire);
-        if (queue_packets == 0) break;
-        std.Thread.sleep(std.time.ns_per_s);
-        try printProgress(stdout, ring, producer_progress, net_progress, last_snapshot, rate_hz);
-        last_snapshot = ProgressSnapshot.init(producer_progress, net_progress);
-    }
-}
-
-fn printProgress(
-    stdout: *std.Io.Writer,
-    ring: *StreamPacketRing,
-    producer_progress: *ProducerProgress,
-    net_progress: *NetThreadProgress,
+    publish_packets: usize,
+    packet_interval_ns: ?u64,
+    base_ns: ?i128 = null,
+    next_send_offset_ns: i128 = 0,
+    net_stats: NetThreadStats = .{},
     last_snapshot: ProgressSnapshot,
-    rate_hz: ?f64,
-) !void {
-    const current_slot = producer_progress.current_slot.load(.acquire);
-    const slots = producer_progress.slots.load(.acquire);
-    const produced_data = producer_progress.data_packets.load(.acquire);
-    const produced_code = producer_progress.code_packets.load(.acquire);
-    const produced_packets = produced_data + produced_code;
-    const sent_data = net_progress.data_packets.load(.acquire);
-    const sent_code = net_progress.code_packets.load(.acquire);
-    const sent_packets = sent_data + sent_code;
-    const send_pps = sent_packets -| last_snapshot.sent_packets;
-    const produced_pps = produced_packets -| last_snapshot.produced_packets;
-    const queue_packets = ring.tail.value.load(.acquire) -% ring.head.value.load(.acquire);
-    const producer_full_polls = producer_progress.full_polls.load(.acquire);
-    const sender_empty_polls = net_progress.empty_polls.load(.acquire);
-    const producer_blocked = queue_packets == stream_queue_packets or
-        producer_full_polls != last_snapshot.producer_full_polls;
-    const net_idle = sender_empty_polls != last_snapshot.sender_empty_polls;
+    last_log_ns: i128,
 
-    if (current_slot == no_current_slot) {
-        try stdout.print("slot=-", .{});
-    } else {
-        try stdout.print("slot={d}", .{current_slot});
+    fn next(self: *PacketWriter) ?*Packet {
+        self.rateLimit();
+        const slot = self.iter.next() orelse {
+            self.net_stats.empty_polls += 1;
+            self.printProgress();
+            return null;
+        };
+        slot.addr = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 0);
+        return slot;
     }
-    try stdout.print(
-        " slots={d} produced={d} sent={d} produce_pps={d} send_pps={d}" ++
-            " queue={d}/{d} producer_backpressured={} net_idle={}",
-        .{
-            slots,
-            produced_packets,
-            sent_packets,
-            produced_pps,
-            send_pps,
-            queue_packets,
-            stream_queue_packets,
-            producer_blocked,
-            net_idle,
-        },
-    );
-    if (rate_hz) |rate| {
-        try stdout.print(" rate_hz={d:.0}", .{rate});
+
+    fn rateLimit(self: *PacketWriter) void {
+        const interval_ns = self.packet_interval_ns orelse return;
+        const now = std.time.nanoTimestamp();
+        const now_offset_ns = if (self.base_ns) |base|
+            now - base
+        else blk: {
+            self.base_ns = now;
+            break :blk 0;
+        };
+
+        if (now_offset_ns < self.next_send_offset_ns) {
+            std.Thread.sleep(@intCast(self.next_send_offset_ns - now_offset_ns));
+        }
+
+        const after_offset_ns = std.time.nanoTimestamp() - self.base_ns.?;
+        self.next_send_offset_ns = @max(self.next_send_offset_ns, after_offset_ns) + interval_ns;
     }
-    try stdout.print("\n", .{});
-    try stdout.flush();
-}
+
+    fn markUsed(self: *PacketWriter) void {
+        self.iter.markUsed();
+        self.net_progress.store(self.net_stats);
+        self.printProgress();
+    }
+
+    /// Called after producer finishes; publishes any remaining unmarked writes.
+    fn flush(self: *PacketWriter) void {
+        self.markUsed();
+    }
+
+    /// Emits a progress line once per `progress_interval_ns`; a no-op otherwise.
+    /// Safe to call from any stall or per-packet path.
+    fn printProgress(self: *PacketWriter) void {
+        const now = std.time.nanoTimestamp();
+        if (now - self.last_log_ns < progress_interval_ns) return;
+        self.last_log_ns = now;
+
+        const current_slot = self.producer_progress.current_slot.load(.acquire);
+        const slots = self.producer_progress.slots.load(.acquire);
+        const produced_data = self.producer_progress.data_packets.load(.acquire);
+        const produced_code = self.producer_progress.code_packets.load(.acquire);
+        const produced_packets = produced_data + produced_code;
+        const sent_data = self.net_progress.data_packets.load(.acquire);
+        const sent_code = self.net_progress.code_packets.load(.acquire);
+        const sent_packets = sent_data + sent_code;
+        const produced_pps = produced_packets -| self.last_snapshot.produced_packets;
+        const send_pps = sent_packets -| self.last_snapshot.sent_packets;
+        const queue_packets = self.iter.view.ring.tail.value.load(.acquire) -%
+            self.iter.view.ring.head.value.load(.acquire);
+        const producer_full_polls = self.producer_progress.full_polls.load(.acquire);
+        const producer_backpressured = queue_packets == packet_ring_packets or
+            producer_full_polls != self.last_snapshot.producer_full_polls;
+
+        self.logger.info().logf(
+            "slot={?d} slots={d} produced={d} sent={d} " ++
+                "produce_pps={d} send_pps={d} queue={d}/{d} " ++
+                "producer_backpressured={} rate_hz={?d}",
+            .{
+                if (current_slot == no_current_slot) null else current_slot,
+                slots,
+                produced_packets,
+                sent_packets,
+                produced_pps,
+                send_pps,
+                queue_packets,
+                packet_ring_packets,
+                producer_backpressured,
+                self.rate_hz,
+            },
+        );
+
+        self.last_snapshot = ProgressSnapshot.init(self.producer_progress, self.net_progress);
+    }
+};
 
 const ShredStats = struct {
     total_packets: u64 = 0,
@@ -1000,7 +922,7 @@ fn produceLedgerPackets(
     blockstore: *const AgaveBlockstore,
     config: Config,
     selected_shreds: ?*const SelectedShredPlan,
-    writer: *StreamPacketRing.Iterator(.writer),
+    writer: *PacketWriter,
     stop: *std.atomic.Value(bool),
     progress: *ProducerProgress,
 ) !ProducerStats {
@@ -1052,7 +974,7 @@ fn produceOrderedLedgerPackets(
     blockstore: *const AgaveBlockstore,
     config: Config,
     comptime direction: rocks.IteratorDirection,
-    writer: *StreamPacketRing.Iterator(.writer),
+    writer: *PacketWriter,
     stop: *std.atomic.Value(bool),
     progress: *ProducerProgress,
 ) !ProducerStats {
@@ -1082,10 +1004,7 @@ fn produceOrderedLedgerPackets(
     while (try slot_iter.next(&err_data)) |entry| {
         if (stop.load(.acquire)) break;
 
-        const slot = parseSlotKey(entry[0].data) catch |err| {
-            std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
-            return err;
-        };
+        const slot = try parseSlotKey(entry[0].data);
         if (config.pastSlotRange(slot, direction)) break;
         if (!config.slotSelected(slot)) continue;
 
@@ -1144,7 +1063,7 @@ fn produceGlobalShuffledRefSchedule(
     allocator: Allocator,
     blockstore: *const AgaveBlockstore,
     config: Config,
-    writer: *StreamPacketRing.Iterator(.writer),
+    writer: *PacketWriter,
     stop: *std.atomic.Value(bool),
     progress: *ProducerProgress,
 ) !ProducerStats {
@@ -1161,7 +1080,7 @@ fn produceSlotShuffledPackets(
     allocator: Allocator,
     blockstore: *const AgaveBlockstore,
     config: Config,
-    writer: *StreamPacketRing.Iterator(.writer),
+    writer: *PacketWriter,
     stop: *std.atomic.Value(bool),
     progress: *ProducerProgress,
 ) !ProducerStats {
@@ -1191,10 +1110,7 @@ fn produceSlotShuffledPackets(
     while (try slot_iter.next(&err_data)) |entry| {
         if (stop.load(.acquire)) break;
 
-        const slot = parseSlotKey(entry[0].data) catch |err| {
-            std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
-            return err;
-        };
+        const slot = try parseSlotKey(entry[0].data);
         if (config.pastEndSlot(slot)) break;
         if (!config.slotSelected(slot)) continue;
 
@@ -1261,10 +1177,7 @@ fn buildOrderedRefSchedule(
     while (try slot_iter.next(&err_data)) |entry| {
         if (stop.load(.acquire)) break;
 
-        const slot = parseSlotKey(entry[0].data) catch |err| {
-            std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
-            return err;
-        };
+        const slot = try parseSlotKey(entry[0].data);
         if (config.pastEndSlot(slot)) break;
         if (!config.slotSelected(slot)) continue;
 
@@ -1302,13 +1215,7 @@ fn collectSlotShredRefs(
     while (try iter.next(&err_data)) |entry| {
         if (stop.load(.acquire)) break;
 
-        const key = parseShredKey(entry[0].data) catch |err| {
-            std.debug.print(
-                "invalid {s} key length: {d}\n",
-                .{ kind.columnFamilyName(), entry[0].data.len },
-            );
-            return err;
-        };
+        const key = try parseShredKey(entry[0].data);
         if (key.slot != slot) break;
         try refs.append(
             allocator,
@@ -1345,7 +1252,7 @@ fn produceSelectedShredSchedule(
     blockstore: *const AgaveBlockstore,
     selected_shreds: *const SelectedShredPlan,
     config: Config,
-    writer: *StreamPacketRing.Iterator(.writer),
+    writer: *PacketWriter,
     stop: *std.atomic.Value(bool),
     progress: *ProducerProgress,
 ) !ProducerStats {
@@ -1509,7 +1416,7 @@ fn produceRefSchedule(
     blockstore: *const AgaveBlockstore,
     schedule: *const RefSchedule,
     skip_indices: []const usize,
-    writer: *StreamPacketRing.Iterator(.writer),
+    writer: *PacketWriter,
     stop: *std.atomic.Value(bool),
     progress: *ProducerProgress,
 ) !ProducerStats {
@@ -1551,7 +1458,7 @@ fn produceCorruptShredByRef(
     shred_ref: ShredRef,
     corrupt_bytes: usize,
     random: std.Random,
-    writer: *StreamPacketRing.Iterator(.writer),
+    writer: *PacketWriter,
     stop: *std.atomic.Value(bool),
     progress: *ProducerProgress,
     unpublished_packets: *usize,
@@ -1579,7 +1486,6 @@ fn produceCorruptShredByRef(
     try corruptPacketBytes(corrupt_data, corrupt_bytes, random);
 
     try publishPacket(
-        shred_ref.key(),
         shred_ref.kind,
         corrupt_data,
         writer,
@@ -1608,7 +1514,7 @@ fn corruptPacketBytes(packet_data: []u8, corrupt_bytes: usize, random: std.Rando
 fn produceShredByRef(
     blockstore: *const AgaveBlockstore,
     shred_ref: ShredRef,
-    writer: *StreamPacketRing.Iterator(.writer),
+    writer: *PacketWriter,
     stop: *std.atomic.Value(bool),
     progress: *ProducerProgress,
     unpublished_packets: *usize,
@@ -1629,7 +1535,6 @@ fn produceShredByRef(
     defer packet.deinit();
 
     try publishPacket(
-        shred_ref.key(),
         shred_ref.kind,
         packet.data,
         writer,
@@ -1641,10 +1546,9 @@ fn produceShredByRef(
 }
 
 fn publishPacket(
-    key: ShredKey,
     kind: ShredKind,
     packet_data: []const u8,
-    writer: *StreamPacketRing.Iterator(.writer),
+    writer: *PacketWriter,
     stop: *std.atomic.Value(bool),
     progress: *ProducerProgress,
     unpublished_packets: *usize,
@@ -1664,16 +1568,14 @@ fn publishPacket(
         std.atomic.spinLoopHint();
     };
 
-    out.slot = key.slot;
-    out.shred_index = key.index;
-    out.kind = kind;
     out.len = @intCast(packet_data.len);
     @memcpy(out.data[0..packet_data.len], packet_data);
 
     stats.recordPacket(kind, packet_data.len);
+    writer.net_stats.recordPacket(kind, packet_data.len);
     unpublished_packets.* += 1;
 
-    if (unpublished_packets.* == producer_publish_packets) {
+    if (unpublished_packets.* == writer.publish_packets) {
         progress.store(stats.*);
         writer.markUsed();
         unpublished_packets.* = 0;
@@ -1685,7 +1587,7 @@ fn produceSlotShreds(
     slot: Slot,
     kind: ShredKind,
     comptime direction: rocks.IteratorDirection,
-    writer: *StreamPacketRing.Iterator(.writer),
+    writer: *PacketWriter,
     stop: *std.atomic.Value(bool),
     progress: *ProducerProgress,
     unpublished_packets: *usize,
@@ -1715,16 +1617,9 @@ fn produceSlotShreds(
     while (try iter.next(&err_data)) |entry| {
         if (stop.load(.acquire)) break;
 
-        const key = parseShredKey(entry[0].data) catch |err| {
-            std.debug.print(
-                "invalid {s} key length: {d}\n",
-                .{ kind.columnFamilyName(), entry[0].data.len },
-            );
-            return err;
-        };
+        const key = try parseShredKey(entry[0].data);
         if (key.slot != slot) break;
         try publishPacket(
-            key,
             kind,
             entry[1].data,
             writer,
@@ -1757,10 +1652,7 @@ fn scanSlots(blockstore: *const AgaveBlockstore, config: Config) !SlotStats {
     defer if (err_data) |err| err.deinit();
 
     while (try iter.next(&err_data)) |entry| {
-        const slot = parseSlotKey(entry[0].data) catch |err| {
-            std.debug.print("invalid {s} key length: {d}\n", .{ agave_cf_meta, entry[0].data.len });
-            return err;
-        };
+        const slot = try parseSlotKey(entry[0].data);
         if (config.pastEndSlot(slot)) break;
         stats.record(slot, config.slotSelected(slot));
     }
@@ -1792,13 +1684,7 @@ fn scanShreds(
     defer if (err_data) |err| err.deinit();
 
     while (try iter.next(&err_data)) |entry| {
-        const key = parseShredKey(entry[0].data) catch |err| {
-            std.debug.print(
-                "invalid {s} key length: {d}\n",
-                .{ column_family_name, entry[0].data.len },
-            );
-            return err;
-        };
+        const key = try parseShredKey(entry[0].data);
         if (config.pastEndSlot(key.slot)) break;
         stats.record(key, entry[1].data.len, config.slotSelected(key.slot));
     }
@@ -1973,7 +1859,11 @@ fn writeShredKey(key: *[16]u8, shred_key: ShredKey) void {
     std.mem.writeInt(u64, key[8..16], shred_key.index, .big);
 }
 
-fn resolveRocksDbPath(allocator: Allocator, ledger_path: []const u8) ![]const u8 {
+fn resolveRocksDbPath(
+    allocator: Allocator,
+    logger: Logger,
+    ledger_path: []const u8,
+) ![]const u8 {
     const nested_rocksdb_path = try std.fs.path.join(allocator, &.{ ledger_path, "rocksdb" });
 
     if (std.fs.cwd().statFile(nested_rocksdb_path)) |stat| {
@@ -1985,7 +1875,7 @@ fn resolveRocksDbPath(allocator: Allocator, ledger_path: []const u8) ![]const u8
         if (stat.kind == .directory) return try allocator.dupe(u8, ledger_path);
     } else |_| {}
 
-    std.debug.print("ledger path does not exist or is not a directory: {s}\n", .{ledger_path});
+    logger.err().logf("ledger path does not exist or is not a directory: {s}", .{ledger_path});
     return error.InvalidLedgerPath;
 }
 
@@ -2005,7 +1895,11 @@ const ColumnFamilyNames = struct {
     }
 };
 
-fn listColumnFamilies(allocator: Allocator, rocksdb_path: []const u8) !ColumnFamilyNames {
+fn listColumnFamilies(
+    allocator: Allocator,
+    logger: Logger,
+    rocksdb_path: []const u8,
+) !ColumnFamilyNames {
     const options = rocks_c.rocksdb_options_create() orelse return error.RocksDBOptionsCreate;
     defer rocks_c.rocksdb_options_destroy(options);
 
@@ -2022,8 +1916,8 @@ fn listColumnFamilies(allocator: Allocator, rocksdb_path: []const u8) !ColumnFam
     );
     if (err_ptr) |err_z| {
         defer rocks_c.rocksdb_free(err_z);
-        std.debug.print(
-            "failed to list RocksDB column families at {s}: {s}\n",
+        logger.err().logf(
+            "failed to list RocksDB column families at {s}: {s}",
             .{ rocksdb_path, std.mem.span(err_z) },
         );
         return error.RocksDBListColumnFamilies;
@@ -2046,9 +1940,13 @@ fn listColumnFamilies(allocator: Allocator, rocksdb_path: []const u8) !ColumnFam
     return .{ .names = names };
 }
 
-fn requireColumnFamily(available_cfs: *const ColumnFamilyNames, name: []const u8) !void {
+fn requireColumnFamily(
+    available_cfs: *const ColumnFamilyNames,
+    logger: Logger,
+    name: []const u8,
+) !void {
     if (available_cfs.contains(name)) return;
-    std.debug.print("missing required column family: {s}\n", .{name});
+    logger.err().logf("missing required column family: {s}", .{name});
     return error.MissingRequiredColumnFamily;
 }
 
@@ -2065,7 +1963,7 @@ fn columnFamilyDescriptions(
     return cfs;
 }
 
-fn parseArgs(stdout: *std.Io.Writer, args: []const []const u8) ParseArgsError!ParseResult {
+pub fn parseArgs(stdout: *std.Io.Writer, args: []const []const u8) ParseArgsError!ParseResult {
     var config: PartialConfig = .{};
     var seen: std.EnumSet(Arg) = .initEmpty();
 
@@ -2239,7 +2137,7 @@ fn parseCorruptBytes(stdout: *std.Io.Writer, value: []const u8) ParseArgsError!u
     return corrupt_bytes;
 }
 
-fn printHelp(stdout: *std.Io.Writer) !void {
+pub fn printHelp(stdout: *std.Io.Writer) !void {
     try stdout.print(
         \\usage: shred-stream --ledger <path> --target <ip:port> [options]
         \\
@@ -2273,7 +2171,7 @@ test "parse arguments" {
         );
         const config = result.config;
         try std.testing.expectEqualStrings("ledger", config.ledger);
-        try std.testing.expectEqualStrings("127.0.0.1:8002", config.target);
+        try std.testing.expectEqualStrings("127.0.0.1:8002", config.target.?);
         try std.testing.expectEqual(@as(?Slot, null), config.start_slot);
         try std.testing.expectEqual(@as(?Slot, null), config.end_slot);
         try std.testing.expectEqual(@as(?f64, null), config.rate_hz);
@@ -2739,7 +2637,7 @@ test "resolve rocksdb path" {
     const ledger_path = try tmp.dir.realpathAlloc(std.testing.allocator, "ledger");
     defer std.testing.allocator.free(ledger_path);
 
-    const rocksdb_path = try resolveRocksDbPath(std.testing.allocator, ledger_path);
+    const rocksdb_path = try resolveRocksDbPath(std.testing.allocator, .noop, ledger_path);
     defer std.testing.allocator.free(rocksdb_path);
 
     const expected = try tmp.dir.realpathAlloc(std.testing.allocator, "ledger/rocksdb");
@@ -2750,7 +2648,7 @@ test "resolve rocksdb path" {
     const direct_path = try tmp.dir.realpathAlloc(std.testing.allocator, "ledger/rocksdb");
     defer std.testing.allocator.free(direct_path);
 
-    const direct_rocksdb_path = try resolveRocksDbPath(std.testing.allocator, direct_path);
+    const direct_rocksdb_path = try resolveRocksDbPath(std.testing.allocator, .noop, direct_path);
     defer std.testing.allocator.free(direct_rocksdb_path);
 
     try std.testing.expectEqualStrings(direct_path, direct_rocksdb_path);

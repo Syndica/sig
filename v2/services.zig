@@ -13,6 +13,7 @@ const shred_api = @import("shred_api");
 const gossip_api = @import("gossip_api");
 const snapshot_api = @import("snapshot_api");
 const replay_api = @import("replay_api");
+const shred_stream_api = @import("shred_stream_api");
 
 pub const accounts_db = struct {
     pub const components = &.{"accounts_db"};
@@ -131,5 +132,18 @@ pub const telemetry = struct {
 
     pub const ReadWrite = struct {
         region: *lib.telemetry.Region,
+    };
+};
+
+pub const shred_stream = struct {
+    pub const components = &.{"shred_stream"};
+
+    pub const ReadOnly = struct {
+        args: *const shred_stream_api.Args,
+    };
+
+    pub const ReadWrite = struct {
+        shred_pair: *lib.net.Pair,
+        tel: *lib.telemetry.Region,
     };
 };
