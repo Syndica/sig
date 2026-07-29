@@ -59,6 +59,7 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
         // union enums is for simplicity mostly, but also since a single FetchEntry can have multiple waiters,
         // we're wasting less space. Though perhaps there's good reason to change this in the future?
 
+        // TODO: flatten both of these.
         /// Backing storage for fetch entries.
         entries: [entry_capacity]FetchEntry,
         /// Backing storage for per-request completion waiters.
@@ -86,6 +87,7 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
         const WaiterId = WaiterPool.ItemId;
 
         // TODO: custom map.
+        // Maps the fetch request (block_ref, pubkey) to the ID of the fetch entry in the `entries` array.
         const FetchMap = std.HashMapUnmanaged(
             FetchKey,
             EntryId,
@@ -130,7 +132,7 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
 
             /// links `FetchEntry`s together in the rooted and ready queues.
             /// It's either the next entry waiting to be sent to rooted, or
-            /// an entry that has completed and whose result is ready for waiters.
+            /// the entry that has completed and whose result is ready for waiters.
             queue_next: EntryId.Optional,
 
             result: AccountRef = .invalid,
@@ -205,7 +207,7 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
         /// for the same `(block_ref, pubkey)`.
         ///
         /// New fetches check unrooted state immediately. Misses are queued for rooted
-        /// AccountsDB lookup and later driven by `poll`.
+        /// AccountsDB lookup and later driven by `pollCompletions`.
         pub fn submit(self: *Self, request: Request) error{Full}!void {
             // Create a new waiter for this request
             const waiter_id = self.waiter_pool.createId() catch return error.Full;
@@ -279,12 +281,22 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
             self.enqueueRooted(entry_id);
         }
 
-        /// Poll the fetcher to drive any pending rooted requests and process any completed results.
-        pub fn poll(self: *Self) bool {
-            var progressed = false;
-            progressed = self.drainRootedResults() or progressed;
-            progressed = self.submitRootedRequests() or progressed;
-            return progressed;
+        /// Drives the fetcher by submitting queued requests to the rooted AccountsDB and draining completed results.
+        ///
+        /// Returns a slice of completions.
+        pub fn pollCompletions(
+            self: *Self,
+            out: []Completion,
+        ) []Completion {
+            self.drainRootedResults();
+            self.submitRootedRequests();
+
+            var len: usize = 0;
+            while (len < out.len) : (len += 1) {
+                out[len] = self.popCompletion() orelse break;
+            }
+
+            return out[0..len];
         }
 
         pub fn popCompletion(self: *Self) ?Completion {
@@ -422,9 +434,7 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
         }
 
         /// Empty rooted queue of requests by submitting them to rooted.
-        ///
-        /// Returns true if any requests were submitted, false if the queue was empty.
-        fn submitRootedRequests(self: *Self) bool {
+        fn submitRootedRequests(self: *Self) void {
             var writer = self.account_lookups.in.get(.writer);
             var submitted: usize = 0;
 
@@ -446,11 +456,7 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
                 submitted += 1;
             }
 
-            if (submitted == 0)
-                return false;
-
             writer.markUsed();
-            return true;
         }
 
         /// Drains results from the rooted DB.
@@ -459,7 +465,7 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
         /// updated with the result and moved to the ready queue.
         ///
         /// Returns true if any results were processed, false if the queue was empty.
-        fn drainRootedResults(self: *Self) bool {
+        fn drainRootedResults(self: *Self) void {
             var reader = self.account_lookups.out.get(.reader);
             var consumed: usize = 0;
 
@@ -468,12 +474,7 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
                 self.processRootedResult(response.*);
             }
 
-            // If we didn't consume any results, return false to indicate no progress was made.
-            if (consumed == 0)
-                return false;
-
             reader.markUsed();
-            return true;
         }
 
         /// Processes a single result from the rooted DB, updating the corresponding fetch entry
@@ -632,7 +633,9 @@ test "rooted miss completes as not found" {
     try std.testing.expect(fetcher.popCompletion() == null);
 
     // Publish the queued Rooted request.
-    try std.testing.expect(fetcher.poll());
+    var completions_buf: [1]TestFetcher.Completion = undefined;
+    const completions = fetcher.pollCompletions(&completions_buf);
+    try std.testing.expect(completions.len == 1);
 
     var request_reader = account_lookups.in.get(.reader);
     const rooted_request = (request_reader.next() orelse
@@ -653,7 +656,7 @@ test "rooted miss completes as not found" {
     };
     response_writer.markUsed();
 
-    try std.testing.expect(fetcher.poll());
+    try std.testing.expect(fetcher.pollCompletions());
 
     const completion = fetcher.popCompletion() orelse
         return error.MissingCompletion;
@@ -715,7 +718,7 @@ test "duplicate requests share rooted fetch and receive owned references" {
     try std.testing.expectEqual(second_waiter_id, entry.waiter_tail.opt().?);
     try std.testing.expectEqual(.null, second_waiter_id.ptr(&state.fetcher.waiter_pool).next);
 
-    try std.testing.expect(state.fetcher.poll());
+    try std.testing.expect(state.fetcher.pollCompletions());
 
     var request_reader = state.account_lookups.in.get(.reader);
     const request = request_reader.next() orelse
@@ -739,7 +742,7 @@ test "duplicate requests share rooted fetch and receive owned references" {
     response_writer.next().?.* = rooted_result;
     response_writer.markUsed();
 
-    try std.testing.expect(state.fetcher.poll());
+    try std.testing.expect(state.fetcher.pollCompletions());
 
     const first = state.fetcher.popCompletion() orelse
         return error.MissingCompletion;
@@ -889,7 +892,7 @@ test "rooted responses complete by request id out of order" {
         .user_data = 22,
     });
 
-    try std.testing.expect(state.fetcher.poll());
+    try std.testing.expect(state.fetcher.pollCompletions());
 
     var reader = state.account_lookups.in.get(.reader);
     const first_request = reader.next().?.*;
@@ -900,7 +903,7 @@ test "rooted responses complete by request id out of order" {
     try state.respond(second_request, .invalid);
     try state.respond(first_request, .invalid);
 
-    try std.testing.expect(state.fetcher.poll());
+    try std.testing.expect(state.fetcher.pollCompletions());
 
     const first_completion = state.fetcher.popCompletion().?;
     const second_completion = state.fetcher.popCompletion().?;
@@ -950,7 +953,7 @@ test "rooted request remains queued while lookup ring is full" {
     });
 
     // The entry remains on rooted_head because no ring slot is available.
-    try std.testing.expect(!state.fetcher.poll());
+    try std.testing.expect(!state.fetcher.pollCompletions());
     try std.testing.expect(state.fetcher.popCompletion() == null);
 
     // Drain the filler requests.
@@ -961,7 +964,7 @@ test "rooted request remains queued while lookup ring is full" {
     reader.markUsed();
 
     // The next poll can now publish the real request.
-    try std.testing.expect(state.fetcher.poll());
+    try std.testing.expect(state.fetcher.pollCompletions());
 
     var actual_reader = state.account_lookups.in.get(.reader);
     const request = actual_reader.next().?.*;
@@ -970,7 +973,7 @@ test "rooted request remains queued while lookup ring is full" {
     try std.testing.expect(request.pubkey.equals(&pubkey));
 
     try state.respond(request, .invalid);
-    try std.testing.expect(state.fetcher.poll());
+    try std.testing.expect(state.fetcher.pollCompletions());
 
     const completion = state.fetcher.popCompletion().?;
     try std.testing.expectEqual(
