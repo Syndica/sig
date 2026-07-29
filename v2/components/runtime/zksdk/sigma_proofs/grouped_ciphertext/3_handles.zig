@@ -8,7 +8,6 @@ const sig = @import("../../../component.zig");
 
 const ed25519 = sig.crypto.ed25519;
 const Edwards25519 = std.crypto.ecc.Edwards25519;
-const elgamal = sig.zksdk.elgamal;
 const ElGamalKeypair = sig.zksdk.ElGamalKeypair;
 const ElGamalPubkey = sig.zksdk.ElGamalPubkey;
 const GroupedElGamalCiphertext = sig.zksdk.GroupedElGamalCiphertext(3);

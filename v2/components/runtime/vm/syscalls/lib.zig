@@ -97,13 +97,14 @@ pub const Syscall = enum {
     sol_invoke_signed_c,
     sol_invoke_signed_rust,
 
-    /// We basically just store this as an array of syscall enumerations with their murmur hash as the value.
-    /// This makes lookups O(N) relative to the number of syscalls, however this shouldn't be a huge problem.
-    /// The hashmap approach we had before only slightly reduced the lookup times, all of which was wiped
-    /// out by the cost of allocating it. So this is the prefered approach for now.
+    /// We basically just store this as an array of syscall enumerations with their murmur hash as
+    /// the value. This makes lookups O(N) relative to the number of syscalls, however this
+    /// shouldn't be a huge problem. The hashmap approach we had before only slightly reduced the
+    /// lookup times, all of which was wiped out by the cost of allocating it. So this is the
+    /// prefered approach for now.
     ///
-    /// TODO: perhaps we can look into a PHF based approach here, although I imagine it'll just end up
-    /// being keyed by murmur and truncated to unique bits.
+    /// TODO: perhaps we can look into a PHF based approach here, although I imagine it'll just
+    /// end up being keyed by murmur and truncated to unique bits.
     pub const Registry = struct {
         map: std.EnumArray(Syscall, ?u32),
         is_stubbed: bool,
@@ -123,9 +124,11 @@ pub const Syscall = enum {
         pub fn get(self: *const Registry, bytes: u32) ?SyscallFn {
             const syscall: Syscall = for (self.map.values, 0..) |entry, i| {
                 const value = entry orelse continue; // disabled entries don't collide
-                if (value == bytes) break @enumFromInt(i); // assumes that the EnumArray will be in "array" mode, which it should be.
+                if (value == bytes) break @enumFromInt(i); // assumes that the EnumArray will be
+                // in "array" mode, which it should be.
             } else return null; // no such hash
-            // TODO: consider just making a build flag for harness builds that removes this check entirely for perf
+            // TODO: consider just making a build flag for harness builds that removes this check
+            // entirely for perf
             return if (self.is_stubbed) &stubbed else map.getPtrConst(syscall).*;
         }
 

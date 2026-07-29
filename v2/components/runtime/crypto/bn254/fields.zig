@@ -104,7 +104,8 @@ pub const Fp = struct {
             .big => byteSwap(input.*),
             .little => input.*,
         };
-        // NOTE: We perform the mask *after* the byteSwap, so we don't need to select the offset for the mask again.
+        // NOTE: We perform the mask *after* the byteSwap, so we don't need to select the offset
+        // for the mask again.
         if (maybe_flags != null) limbs[31] &= Flags.MASK;
 
         // Check that we've decoded a valid field element.

@@ -8,10 +8,15 @@ pub fn DynamicArrayBitSet(comptime MaskIntType: type) type {
     const mask_info: std.builtin.Type = @typeInfo(MaskIntType);
 
     // Make sure the mask int is indeed an int
-    if (mask_info != .int) @compileError("ArrayBitSet can only operate on integer masks, but was passed " ++ @typeName(MaskIntType));
+    if (mask_info != .int) @compileError(
+        "ArrayBitSet can only operate on integer masks, but was passed " ++ @typeName(MaskIntType),
+    );
 
     // It must also be unsigned.
-    if (mask_info.int.signedness != .unsigned) @compileError("ArrayBitSet requires an unsigned integer mask type, but was passed " ++ @typeName(MaskIntType));
+    if (mask_info.int.signedness != .unsigned) @compileError(
+        "ArrayBitSet requires an unsigned integer mask type, but was passed " ++
+            @typeName(MaskIntType),
+    );
 
     // And it must not be empty.
     if (MaskIntType == u0)
@@ -26,7 +31,8 @@ pub fn DynamicArrayBitSet(comptime MaskIntType: type) type {
         if (desired_bits < byte_size) desired_bits = byte_size;
         const FixedMaskType = std.meta.Int(.unsigned, desired_bits);
         @compileError("ArrayBitSet was passed integer type " ++ @typeName(MaskIntType) ++
-            ", which is not a power of two.  Please round this up to a power of two integer size (i.e. " ++ @typeName(FixedMaskType) ++ ").");
+            ", which is not a power of two.  Please round this up to a power of two integer" ++
+            " size (i.e. " ++ @typeName(FixedMaskType) ++ ").");
     }
 
     // Make sure the integer has no padding bits.
@@ -37,7 +43,8 @@ pub fn DynamicArrayBitSet(comptime MaskIntType: type) type {
         desired_bits = std.math.ceilPowerOfTwoAssert(usize, desired_bits);
         const FixedMaskType = std.meta.Int(.unsigned, desired_bits);
         @compileError("ArrayBitSet was passed integer type " ++ @typeName(MaskIntType) ++
-            ", which contains padding bits.  Please round this up to an unpadded integer size (i.e. " ++ @typeName(FixedMaskType) ++ ").");
+            ", which contains padding bits.  Please round this up to an unpadded integer" ++
+            " size (i.e. " ++ @typeName(FixedMaskType) ++ ").");
     }
 
     return struct {
@@ -170,7 +177,8 @@ pub fn DynamicArrayBitSet(comptime MaskIntType: type) type {
                 var bulk_mask_index: usize = undefined;
                 if (start_bit > 0) {
                     self.masks[start_mask_index] =
-                        (self.masks[start_mask_index] & ~(std.math.boolMask(MaskInt, true) << start_bit)) |
+                        (self.masks[start_mask_index] &
+                            ~(std.math.boolMask(MaskInt, true) << start_bit)) |
                         (std.math.boolMask(MaskInt, value) << start_bit);
                     bulk_mask_index = start_mask_index + 1;
                 } else {
@@ -183,8 +191,10 @@ pub fn DynamicArrayBitSet(comptime MaskIntType: type) type {
 
                 if (end_bit > 0) {
                     self.masks[end_mask_index] =
-                        (self.masks[end_mask_index] & (std.math.boolMask(MaskInt, true) << end_bit)) |
-                        (std.math.boolMask(MaskInt, value) >> ((@bitSizeOf(MaskInt) - 1) - (end_bit - 1)));
+                        (self.masks[end_mask_index] &
+                            (std.math.boolMask(MaskInt, true) << end_bit)) |
+                        (std.math.boolMask(MaskInt, value) >>
+                            ((@bitSizeOf(MaskInt) - 1) - (end_bit - 1)));
                 }
             }
         }
@@ -337,9 +347,6 @@ pub fn DynamicArrayBitSet(comptime MaskIntType: type) type {
         }
         fn maskIndex(index: usize) usize {
             return index >> @bitSizeOf(ShiftInt);
-        }
-        fn boolMaskBit(index: usize, value: bool) MaskInt {
-            return @as(MaskInt, @intFromBool(value)) << @as(ShiftInt, @intCast(index));
         }
     };
 }

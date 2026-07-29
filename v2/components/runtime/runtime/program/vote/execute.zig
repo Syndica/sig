@@ -43,7 +43,8 @@ pub fn execute(
 
     const tc = ic.tc;
 
-    // Default compute units for the system program are applied via the declare_process_instruction macro
+    // Default compute units for the system program are applied via the
+    // declare_process_instruction macro
     // [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/programs/vote/src/vote_processor.rs#L55
     try tc.consumeCompute(vote_program.COMPUTE_UNITS);
 
@@ -260,7 +261,8 @@ fn executeIntializeAccount(
 
 /// [agave] https://github.com/anza-xyz/agave/blob/ddec7bdbcf308a853d464f865ae4962acbc2b9cd/programs/vote/src/vote_state/mod.rs#L884-L903
 ///
-/// Note: Versioned state is not implemented for creating new vote account, as current check in Agaave implementation
+/// Note: Versioned state is not implemented for creating new vote account,
+/// as current check in Agaave implementation
 /// here https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/programs/vote/src/vote_state/mod.rs#L890-L892
 /// suggests creating only current version is supported.
 fn intializeAccount(
@@ -613,7 +615,8 @@ fn authorize(
             );
 
             // [agave] https://github.com/anza-xyz/agave/blob/01e50dc39bde9a37a9f15d64069459fe7502ec3e/programs/vote/src/vote_state/mod.rs#L701-L709
-            // The current authorized withdrawer or the epoch authorized voter must sign the transaction.
+            // The current authorized withdrawer or the epoch authorized voter must sign the
+            // transaction.
             validateIsSigner(vote_state.withdrawerKey().*, signers) catch {
                 // If the vote state isn't a valid signer, check if the epoch voter is.
                 try validateIsSigner(epoch_authorized_voter, signers);
@@ -1110,7 +1113,9 @@ fn updateCommission(
     const enforce_commission_update_rule = !disable_commission_update_rule and
         commission > vote_state.commission();
 
-    if (enforce_commission_update_rule and !isCommissionUpdateAllowed(clock.slot, &epoch_schedule)) {
+    if (enforce_commission_update_rule and
+        !isCommissionUpdateAllowed(clock.slot, &epoch_schedule))
+    {
         ic.tc.custom_error = @intFromEnum(VoteError.commission_update_too_late);
         return InstructionError.Custom;
     }
@@ -1215,9 +1220,9 @@ fn widthraw(
                 const last_epoch_credit = epoch_credits[epoch_credits.len - 1];
                 const current_epoch = clock.epoch;
                 const last_epoch_with_credits = last_epoch_credit.epoch;
-                // if current_epoch - last_epoch_with_credits < 2 then the validator has received credits
-                // either in the current epoch or the previous epoch. If it's >= 2 then it has been at least
-                // one full epoch since the validator has received credits.
+                // if current_epoch - last_epoch_with_credits < 2 then the validator has received
+                // credits either in the current epoch or the previous epoch. If it's >= 2 then it
+                // has been at least one full epoch since the validator has received credits.
                 break :blk (current_epoch -| last_epoch_with_credits) < 2;
             } else {
                 break :blk false;
@@ -1229,7 +1234,8 @@ fn widthraw(
             return InstructionError.Custom;
         } else switch (target_version) {
             // [agave] deinitialize_vote_account_state — `match target_version { V4 => ... }`.
-            // [SIMD-0185] Withdraw: completely zero vote account data for fully withdrawn v4 accounts.
+            // [SIMD-0185] Withdraw: completely zero vote account data for fully withdrawn v4
+            // accounts.
             .v4 => {
                 const data = try vote_account.mutableAccountData();
                 @memset(data, 0);
@@ -6194,7 +6200,7 @@ test "vote_program: vote with v4 feature" {
     );
 }
 
-// ── SIMD-0232: UpdateCommissionCollector tests ──────────────────────
+// -- SIMD-0232: UpdateCommissionCollector tests --
 
 test "update_commission_collector inflation_rewards" {
     const ids = sig.runtime.ids;
@@ -7597,7 +7603,9 @@ const PopFixture = struct {
 //     DST / encoding drift that a self-generated vector alone would not
 //     surface.
 //       vote_pubkey hex: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-//       bls_pk hex:      b8778284f744f6ae2791145183ef8fcb66dcd6602da8ca1add3e6828904db482708fb1d9bd2cbeb72320cdef56d173bc
+//       bls_pk hex:
+//         b8778284f744f6ae2791145183ef8fcb66dcd6602da8ca1add3e6828904db482
+//         708fb1d9bd2cbeb72320cdef56d173bc
 //       pop hex:         b21b2bc4933e1d2cd32e9b976cc89a98d14f45c89356bb67afab0bc48a6ff9c2
 //                        d3c4d2394d68706077e5dd7596459da70227c70f2f14adbfbcf6b46ae34f970f
 //                        88b49dd8185f705333f682eb27674e8abbdf21519dd01424f6993713c9e4632d
@@ -7954,7 +7962,7 @@ test "vote_program: initialize_account_v2 rejects when too few accounts" {
     }
 }
 
-// ── SIMD-0291: UpdateCommissionBps tests ────────────────────────────
+// -- SIMD-0291: UpdateCommissionBps tests --
 
 // Happy path: V4 + both feature gates active, withdrawer signs, kind =
 // inflation_rewards. inflation_rewards_commission_bps must be updated.

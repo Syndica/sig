@@ -83,7 +83,8 @@ pub fn memmove(tc: *TransactionContext, memory_map: *MemoryMap, reg_map: *Regist
     const src_host = try memory_map.translateSlice(u8, .constant, src_addr, len, check_aligned);
 
     const S = struct {
-        // memmove() is in Zig's compiler-rt, but not exposed via builtin or stdlib outside this symbol:
+        // memmove() is in Zig's compiler-rt, but not exposed via builtin or stdlib outside this
+        // symbol:
         // https://github.com/ziglang/zig/blob/79460d4a3eef8eb927b02a7eda8bc9999a766672/lib/compiler_rt/memmove.zig#L9-L22
         // TODO(0.15): Use `@memmove` builtin.
         extern fn memmove(dst: ?[*]u8, src: ?[*]const u8, len: usize) callconv(.c) ?[*]u8;

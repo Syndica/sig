@@ -512,13 +512,14 @@ pub const Assembler = struct {
 
                     const instruction: Instruction = switch (bind.inst) {
                         .alu_binary => inst: {
-                            if (operands[0] == .register and operands[1] == .register) break :inst .{
-                                .opcode = @enumFromInt(bind.opc | Instruction.x),
-                                .dst = operands[0].register,
-                                .src = operands[1].register,
-                                .off = 0,
-                                .imm = 0,
-                            };
+                            if (operands[0] == .register and operands[1] == .register)
+                                break :inst .{
+                                    .opcode = @enumFromInt(bind.opc | Instruction.x),
+                                    .dst = operands[0].register,
+                                    .src = operands[1].register,
+                                    .off = 0,
+                                    .imm = 0,
+                                };
 
                             if (operands[0].register == .r10 and
                                 bind.opc == Instruction.alu64 | Instruction.add and

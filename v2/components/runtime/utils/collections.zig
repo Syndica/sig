@@ -555,8 +555,12 @@ pub fn SortedMapCustom(
             reader: anytype,
             params: sig.bincode.Params,
         ) !SortedMapSelf {
-            const unmanaged =
-                try sig.bincode.readWithLimit(limit_allocator, Unmanaged, reader, params);
+            const unmanaged = try sig.bincode.readWithLimit(
+                limit_allocator,
+                Unmanaged,
+                reader,
+                params,
+            );
             return .{
                 .allocator = limit_allocator.backing_allocator, // patch persistent.
                 .unmanaged = unmanaged,

@@ -1,4 +1,3 @@
-const builtin = @import("builtin");
 const std = @import("std");
 const solana = @import("lib").solana;
 
@@ -77,7 +76,8 @@ pub const Rent = extern struct {
     }
 
     pub fn initRandom(random: std.Random) Rent {
-        // Used by BankFeilds.initRandom inside accounts_db.manager.runLoop, should be made test only when possible.
+        // Used by BankFeilds.initRandom inside accounts_db.manager.runLoop, should be made test
+        // only when possible.
         // if (!builtin.is_test) @compileError("only for testing");
         return .{
             .lamports_per_byte_year = random.int(u64),

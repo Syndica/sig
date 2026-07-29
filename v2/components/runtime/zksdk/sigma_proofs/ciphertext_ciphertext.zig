@@ -31,7 +31,8 @@ pub const Proof = struct {
         .{ .label = "first-pubkey", .type = .validate_pubkey },
         .{ .label = "second-pubkey", .type = .validate_pubkey },
         .{ .label = "first-ciphertext", .type = .validate_ciphertext },
-        // The second ciphertext is allowed to be the identity point, as this is a common state in Token-2022.
+        // The second ciphertext is allowed to be the identity point, as this is a common state
+        // in Token-2022.
         .{ .label = "second-ciphertext", .type = .ciphertext },
         .domain(.@"ciphertext-ciphertext-equality-proof"),
 

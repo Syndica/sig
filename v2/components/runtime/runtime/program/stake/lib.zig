@@ -2,7 +2,6 @@ const std = @import("std");
 const sig = @import("../../../component.zig");
 const solana = @import("lib").solana;
 
-const bincode = sig.bincode;
 const Pubkey = solana.Pubkey;
 const Epoch = sig.core.Epoch;
 const Slot = sig.core.Slot;
@@ -234,7 +233,8 @@ pub const StakeStateV2 = union(enum) {
                     warmupCooldownRate(current_epoch, new_rate_activation_epoch);
 
                 const newly_effective_cluster_stake =
-                    @as(f64, @floatFromInt(prev_cluster_stake.effective)) * warmup_cooldown_rate_val;
+                    @as(f64, @floatFromInt(prev_cluster_stake.effective)) *
+                    warmup_cooldown_rate_val;
                 const weighted_effective_state: u64 =
                     @intFromFloat(weight * newly_effective_cluster_stake);
                 const newly_effective_stake = @max(weighted_effective_state, 1);
@@ -515,8 +515,8 @@ pub const Instruction = union(enum) {
     ///
     /// Upon success:
     ///   * the balance of the delegated stake account will be reduced to the undelegated amount in
-    ///     the account (rent exempt minimum and any additional lamports not part of the delegation),
-    ///     and scheduled for deactivation.
+    ///     the account (rent exempt minimum and any additional lamports not part of the
+    ///     delegation), and scheduled for deactivation.
     ///   * the provided uninitialized stake account will receive the original balance of the
     ///     delegated stake account, minus the rent exempt minimum, and scheduled for activation to
     ///     the provided vote account. Any existing lamports in the uninitialized stake account
@@ -559,8 +559,8 @@ pub const Instruction = union(enum) {
     /// authority.
     ///
     /// The source account must be fully active or fully inactive. The destination may be in any
-    /// mergeable state (active, inactive, or activating, but not in warmup cooldown). Only lamports that
-    /// are neither backing a delegation nor required for rent-exemption may be moved.
+    /// mergeable state (active, inactive, or activating, but not in warmup cooldown). Only lamports
+    /// that are neither backing a delegation nor required for rent-exemption may be moved.
     ///
     /// # Account references
     ///   0. `[WRITE]` Active or inactive source stake account

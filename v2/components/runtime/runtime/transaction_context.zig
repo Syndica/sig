@@ -4,11 +4,9 @@ const std14 = @import("std14");
 const sig = @import("../component.zig");
 const solana = @import("lib").solana;
 
-const program = sig.runtime.program;
 const vm = sig.vm;
 
 const Hash = solana.Hash;
-const Instruction = sig.core.instruction.Instruction;
 const InstructionError = sig.core.instruction.InstructionError;
 const EpochStakeReader = sig.runtime.execution_interfaces.EpochStakeReader;
 const Pubkey = solana.Pubkey;
@@ -151,7 +149,8 @@ pub const TransactionContext = struct {
         if (self.log_collector) |*lc| lc.deinit(self.allocator);
 
         // Clean up CPI instruction infos stored in the trace.
-        // Top-level instructions (depth == 1) are owned by ResolvedTransaction and cleaned up there.
+        // Top-level instructions (depth == 1) are owned by ResolvedTransaction and cleaned up
+        // there.
         // CPI instructions (depth > 1) are created during execution and owned by this trace.
         for (self.instruction_trace.slice()) |entry| {
             if (entry.depth > 1) {

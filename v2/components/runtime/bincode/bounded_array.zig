@@ -32,8 +32,12 @@ pub fn standardConfig(comptime List: type) bincode.FieldConfig(List) {
                 errdefer for (data.constSlice()) |e| bincode.free(limit_allocator.allocator(), e);
 
                 for (0..len) |_| {
-                    const elem =
-                        try bincode.readWithLimit(limit_allocator, list_info.Elem, reader, params);
+                    const elem = try bincode.readWithLimit(
+                        limit_allocator,
+                        list_info.Elem,
+                        reader,
+                        params,
+                    );
                     data.appendAssumeCapacity(elem);
                 }
 

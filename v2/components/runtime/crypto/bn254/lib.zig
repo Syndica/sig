@@ -187,7 +187,8 @@ pub const G2 = struct {
         const x3b = p.x.sq().mul(p.x).add(Fp2.constants.twist_b_mont);
         if (!y2.eql(x3b)) return error.NotWellFormed;
 
-        // G2 does *not* have prime order, so we need to perform a secondary subgroup membership check.
+        // G2 does *not* have prime order, so we need to perform a secondary subgroup membership
+        // check.
         // https://eprint.iacr.org/2022/348, Sec 3.1.
         // [r]P == 0 <==> [x+1]P + ψ([x]P) + ψ²([x]P) = ψ³([2x]P)
         const xp: G2 = shared.mulScalar(p, Fp.constants.x);
@@ -239,7 +240,8 @@ pub const G2 = struct {
 
         if (is_inf) {
             @memset(out, 0);
-            // The infinity point in the result is set if and only if the infinity flag is set in the Y coordinate.
+            // The infinity point in the result is set if and only if the infinity flag is set
+            // in the Y coordinate.
             out[if (endian == .big) 0 else 63] |= flag_inf;
             return;
         }

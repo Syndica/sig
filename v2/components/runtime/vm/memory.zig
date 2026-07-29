@@ -248,23 +248,11 @@ pub const MemoryState = enum {
             .mutable => []u8,
         };
     }
-
-    fn Many(self: MemoryState) type {
-        return switch (self) {
-            .constant => [*]const u8,
-            .mutable => [*]u8,
-        };
-    }
 };
 
 const HostMemory = union(MemoryState) {
     mutable: []u8,
     constant: []const u8,
-
-    fn getSlice(self: HostMemory, comptime state: MemoryState) !state.Slice() {
-        if (self != state) return error.AccessViolation;
-        return @field(self, @tagName(state));
-    }
 };
 
 // [agave] https://github.com/anza-xyz/sbpf/blob/a8247dd30714ef286d26179771724b91b199151b/src/memory_region.rs#L54

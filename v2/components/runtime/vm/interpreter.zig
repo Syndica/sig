@@ -343,13 +343,6 @@ pub const Vm = struct {
             self.registers.set(.pc, pc + 1);
         }
 
-        fn hor64_imm(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
-            defer self.registers.set(.pc, pc + 1);
-            const lhs = self.registers.getPtrConst(inst.dst).*;
-            const result = lhs | @as(u64, inst.imm) << 32;
-            self.registers.set(inst.dst, result);
-        }
-
         // memory
 
         inline fn memop(
@@ -968,7 +961,8 @@ pub const Vm = struct {
 
     /// Returns `true` when the instruction executed stops the VM.
     ///
-    /// NOTE: no `inline`, since we tail call. But looking at the codegen, it does inline the tail call.
+    /// NOTE: no `inline`, since we tail call. But looking at the codegen, it does inline the tail
+    /// call.
     fn step(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
         return @call(
             // self-hosted x86_64 backend does not support .always_tail
