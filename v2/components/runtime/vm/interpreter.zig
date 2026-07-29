@@ -343,6 +343,16 @@ pub const Vm = struct {
             self.registers.set(.pc, pc + 1);
         }
 
+        // Dispatched via `@hasDecl(v2, field.name)` when building the jump table (see below).
+        // The linter can't see this indirect use, so opt out of the unused-declaration check.
+        // lint: allow_unused
+        fn hor64_imm(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
+            defer self.registers.set(.pc, pc + 1);
+            const lhs = self.registers.getPtrConst(inst.dst).*;
+            const result = lhs | @as(u64, inst.imm) << 32;
+            self.registers.set(inst.dst, result);
+        }
+
         // memory
 
         inline fn memop(
