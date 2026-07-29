@@ -354,7 +354,7 @@ const Sig = struct {
                     .optimize = config.optimize,
                     .imports = concatImports(b, &.{
                         imports,
-                        &.{.{ .name = "api", .module = api }},
+                        &.{.{ .name = api_name, .module = api }},
                     }),
                 });
                 unit_tests.add(name, component);
