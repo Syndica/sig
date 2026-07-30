@@ -26,11 +26,13 @@ const SnapshotSource = struct {
     slot: Slot,
     hash: Hash,
 };
+const TestLogStore = lib.telemetry.TestLogStore;
 const TestMetricStore = lib.telemetry.TestMetricStore;
 
 allocator: std.mem.Allocator,
 /// Backing memory for the node's fixed-buffer allocations, reused by reset.
 scratch: []u8,
+log_store: TestLogStore,
 metric_store: TestMetricStore,
 effects: *Effects,
 /// GossipNode under test, reinitialized by reset.
@@ -130,6 +132,9 @@ pub fn init(
     errdefer allocator.free(scratch);
     var fixed_buffer: std.heap.FixedBufferAllocator = .init(scratch);
 
+    var log_store = try TestLogStore.init(allocator, .{});
+    errdefer log_store.deinit();
+
     var metric_store = try TestMetricStore.init(allocator, .{});
     errdefer metric_store.deinit();
     const metrics = appendGossipMetrics(&metric_store);
@@ -149,6 +154,7 @@ pub fn init(
     return .{
         .allocator = allocator,
         .scratch = scratch,
+        .log_store = log_store,
         .metric_store = metric_store,
         .effects = effects,
         .node = node,
@@ -157,6 +163,7 @@ pub fn init(
 }
 
 pub fn deinit(self: *TestNode) void {
+    self.log_store.deinit();
     self.metric_store.deinit();
     self.allocator.free(self.scratch);
     self.allocator.destroy(self.effects);
@@ -173,6 +180,7 @@ pub fn reset(self: *TestNode, now_ms: u64) !void {
     self.effects.packets_len = 0;
     self.effects.snapshot_sources_len = 0;
 
+    self.log_store.reset();
     self.metric_store.reset();
     const metrics = appendGossipMetrics(&self.metric_store);
 
@@ -183,12 +191,16 @@ pub fn reset(self: *TestNode, now_ms: u64) !void {
     self.node.assertInvariants();
 }
 
+pub fn logs(self: *TestNode) *TestLogStore {
+    return &self.log_store;
+}
+
 pub fn identity(self: *const TestNode) Pubkey {
     return self.effects.keypair.pubkey;
 }
 
 pub fn poll(self: *TestNode) !void {
-    try self.node.poll(.noop, self.now_ms);
+    try self.node.poll(self.log_store.logger("poll"), self.now_ms);
     self.node.assertInvariants();
 }
 
@@ -197,7 +209,7 @@ pub fn advanceMs(self: *TestNode, duration_ms: u64) void {
 }
 
 pub fn receivePacket(self: *TestNode, packet: *const Packet) void {
-    self.node.processPacket(.noop, self.now_ms, packet);
+    self.node.processPacket(self.log_store.logger("processPacket"), self.now_ms, packet);
     self.node.assertInvariants();
 }
 
