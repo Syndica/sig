@@ -486,6 +486,7 @@ pub const VersionedTransaction = struct {
             remaining: u8,
 
             pub const Item = struct {
+                pubkey_byte_offset: u16,
                 account_key: *const Pubkey,
                 writable_indexes: []const u8,
                 readonly_indexes: []const u8,
@@ -509,9 +510,15 @@ pub const VersionedTransaction = struct {
                 const readonly_indexes =
                     try self.reader.takeBytes(readonly_count);
 
+                const pubkey_byte_offset =
+                    account_key_bytes.ptr - self.reader.bytes.ptr;
+
+                std.debug.assert(pubkey_byte_offset <= std.math.maxInt(u16));
+
                 self.remaining -= 1;
 
                 return .{
+                    .pubkey_byte_offset = @intCast(pubkey_byte_offset),
                     .account_key = account_key,
                     .writable_indexes = writable_indexes,
                     .readonly_indexes = readonly_indexes,

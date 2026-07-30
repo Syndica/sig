@@ -154,12 +154,12 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
             account_lookups: *AccountLookups,
             unrooted: *UnrootedStore,
             block_pool: *BlockPool,
-        ) !void {
+        ) void {
             var active_fetches: FetchMap = .empty;
-            try active_fetches.ensureTotalCapacity(
+            active_fetches.ensureTotalCapacity(
                 allocator,
                 @intCast(entry_capacity),
-            );
+            ) catch @panic("failed to allocate active_fetches map");
 
             self.* = .{
                 .allocator = allocator,
@@ -543,7 +543,7 @@ const FetcherTestState = struct {
     fn init(
         self: *FetcherTestState,
         account_pool: *AccountPool,
-    ) !void {
+    ) void {
         self.account_lookups.init();
 
         self.block_pool = @ptrCast(&self.block_pool_memory);
@@ -551,7 +551,7 @@ const FetcherTestState = struct {
 
         self.unrooted.init();
 
-        try self.fetcher.init(
+        self.fetcher.init(
             std.testing.allocator,
             account_pool,
             &self.account_lookups,
@@ -615,7 +615,7 @@ test "rooted miss completes as not found" {
     unrooted.init();
 
     var fetcher: TestFetcher = undefined;
-    try fetcher.init(
+    fetcher.init(
         std.testing.allocator,
         &account_pool,
         &account_lookups,
@@ -685,7 +685,7 @@ test "duplicate requests share rooted fetch and receive owned references" {
     try rooted_state.putAccounts(logger, &.{expected});
 
     var state: FetcherTestState = undefined;
-    try state.init(rooted_state.account_pool);
+    state.init(rooted_state.account_pool);
     defer state.deinit();
 
     const block_ref = try state.addBlock(null, 2);
@@ -786,7 +786,7 @@ test "unrooted accounts bypass rooted and zero-lamport accounts return refs" {
     account_pool.init(memory_len);
 
     var state: FetcherTestState = undefined;
-    try state.init(account_pool);
+    state.init(account_pool);
     defer state.deinit();
 
     const block_ref = try state.addBlock(null, 1);
@@ -879,7 +879,7 @@ test "rooted responses complete by request id out of order" {
     account_pool.init(0);
 
     var state: FetcherTestState = undefined;
-    try state.init(&account_pool);
+    state.init(&account_pool);
     defer state.deinit();
 
     const block_ref = try state.addBlock(null, 1);
@@ -938,7 +938,7 @@ test "rooted request remains queued while lookup ring is full" {
     account_pool.init(0);
 
     var state: FetcherTestState = undefined;
-    try state.init(&account_pool);
+    state.init(&account_pool);
     defer state.deinit();
 
     // Occupy the entire Rooted request ring.
