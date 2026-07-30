@@ -840,12 +840,16 @@ pub const Histogram = struct {
     }
 };
 
+/// A latency histogram over the bucket geometry a `Layout` describes. Two shards, so a reader can
+/// swap one out and drain it while writers carry on in the other — see `swapOutSnapshot`. Built
+/// over region storage with `fromRaw`; the shard fields are pointers into that storage, so a copy
+/// of the handle writes to the same counters.
 pub const LatencyHistogram = struct {
     layout: Layout,
     /// `layout.baseIndex()`, resolved once here and not at each observation. The value is a pure
     /// function of `layout`, so it never changes. A `baseIndex` call runs a full
-    /// `nativeBucketIndex`: one `frexp` and one table search. `bucketIndex` would repeat that
-    /// work at each `observe`.
+    /// `nativeBucketIndex`: one `frexp` and two table loads. `bucketIndex` would repeat that work
+    /// at each `observe`.
     base_index: i64,
     /// Used to ensure reads and writes occur on separate shards.
     /// Atomic representation of `ShardSync`.
@@ -853,8 +857,9 @@ pub const LatencyHistogram = struct {
     /// One hot shard for writing, one cold shard for reading.
     shards: [2]Shard,
 
-    /// A windowed histogram with geometric (log-exponential) bucket bounds. Bucket `i`'s upper
-    /// bound is `2^((base_index + i) / bounds_per_doubling)` ns, where `base_index = baseIndex()`.
+    /// The bucket geometry of a `LatencyHistogram`: a window of geometric (log-exponential)
+    /// bounds. Bucket `i`'s upper bound is `2^((base_index + i) / bounds_per_doubling)` ns, where
+    /// `base_index = baseIndex()`.
     ///
     /// Two expositions render the same storage, and the bounds being geometric is what lets one
     /// layout serve both:
@@ -929,6 +934,7 @@ pub const LatencyHistogram = struct {
         /// before the `Raw` shard elements.
         pub const header_words: u32 = 3;
 
+        /// Reads back a layout that `writeHeader` serialized.
         pub fn initFromHeader(src: []const u64) Layout {
             std.debug.assert(src.len == header_words);
             const layout: Layout = .{
@@ -962,12 +968,15 @@ pub const LatencyHistogram = struct {
             dst[2] = self.max_upper_bound_ns;
         }
 
-        /// This function uses the `@popCount` and `@clz` builtins, and the `Layout` helpers that
-        /// it calls are `inline fn`. A call to a helper that is not `inline` gives a
-        /// runtime-known value even here. Then each `@compileError` branch stays live, and all of
-        /// them fire. The remaining `comptime` prefixes mark the calls into `std` and into
-        /// `upperBoundNs`, which are not `inline`.
+        /// Rejects an unusable layout at compile time, naming the nearest legal value in each
+        /// message. Every accessor below assumes this ran; `initFromHeader` re-asserts the checks
+        /// that a round trip through a region header can break.
         pub fn comptimeValidate(comptime self: Layout) void {
+            // Each condition below has to fold to a comptime-known value, or its `@compileError`
+            // branch stays live and every message fires at once. That holds because `@popCount`
+            // and `@clz` are builtins and the `Layout` helpers called here are `inline fn` — a
+            // call to one that is not would be runtime-known even in this context. The `comptime`
+            // prefixes mark the calls into `std` and into `upperBoundNs`, which are not `inline`.
             if (self.bounds_per_doubling == 0 or self.bounds_per_doubling > 256 or
                 @popCount(self.bounds_per_doubling) != 1)
                 @compileError(std.fmt.comptimePrint(
@@ -1084,6 +1093,8 @@ pub const LatencyHistogram = struct {
             return self.resolvedBucketCount() + 1;
         }
 
+        /// `u64` words the shard storage occupies, following the `header_words`: one
+        /// `shard_sync`, then two shards of `sum`, `count`, and one word per bucket.
         pub inline fn elementsFromBucketCount(self: Layout) u32 {
             return @intCast(1 + 2 * (2 + self.bucketCount()));
         }
@@ -1312,8 +1323,9 @@ pub const LatencyHistogram = struct {
         /// Cumulative counts for each upper bound.
         buckets: []std.atomic.Value(u64),
 
-        /// For when `elems` does not already represent a valid shard, see `Shard.init`.
-        /// Assumes `elems.len >= 2`.
+        /// Reinterprets `elems` in place as a shard's fields; it does not initialize them. Call
+        /// `initZeroes` on the result when `elems` does not already hold a valid shard. Assumes
+        /// `elems.len >= 2`.
         pub fn fromElements(elems: []u64) Shard {
             return .{
                 .sum = @ptrCast(&elems[0]),
@@ -1322,9 +1334,8 @@ pub const LatencyHistogram = struct {
             };
         }
 
-        /// XXX: Not an atomic operation. This method overwrites all pointed-to data directly
-        /// Assumes `self.buckets.len == init_data.buckets.len`.
-        /// Sets all pointed-to data to zero.
+        /// XXX: Not an atomic operation. Zeroes `sum`, `count`, and every bucket by writing
+        /// through the pointers directly, so no other thread may be touching the shard.
         pub fn initZeroes(self: Shard) void {
             self.sum.* = .init(0);
             self.count.* = .init(0);
@@ -1357,6 +1368,7 @@ pub const LatencyHistogram = struct {
         }
     };
 
+    /// Builds a histogram handle over `raw`'s storage, which must have been sized from `layout`.
     pub fn fromRaw(layout: Layout, raw: Raw) LatencyHistogram {
         const shards = raw.shards();
         // `bucketIndex` bounds observations against `layout`, not against the slice, so a `raw`
@@ -1415,7 +1427,7 @@ pub const LatencyHistogram = struct {
     }
 
     /// Swaps the hot and cold shards, then returns a reader over a consistent snapshot of the
-    /// now-cold shard. Mirrors `LatencyHistogram.swapOutSnapshot`.
+    /// now-cold shard. Mirrors `Histogram.swapOutSnapshot`.
     pub fn swapOutSnapshot(self: *const LatencyHistogram) SnapshotReader {
         // Make the hot shard cold. Some writers may still be writing to it, but no new ones will.
         const shard_sync = self.flipShard(.acq_rel);
@@ -1451,8 +1463,8 @@ pub const LatencyHistogram = struct {
     }
 
     /// Iterates a cold-shard snapshot as cumulative prometheus buckets, folding each bucket back
-    /// into the hot shard as it goes. Mirrors `LatencyHistogram.SnapshotReader`, except bucket
-    /// bounds are derived from `layout` via `upperBoundNs` rather than a stored slice.
+    /// into the hot shard as it goes. Mirrors `Histogram.SnapshotReader`, except bucket bounds are
+    /// derived from `layout` via `upperBoundNs` rather than a stored slice.
     pub const SnapshotReader = struct {
         /// Total number of events observed by the histogram.
         count: u63,
@@ -1465,7 +1477,7 @@ pub const LatencyHistogram = struct {
         /// `Layout.upperBoundNsAt`.
         base_index: i64,
         cold_shard_buckets: []std.atomic.Value(u64),
-        /// See the NOTE on `LatencyHistogram.SnapshotReader.hot_shard_buckets`.
+        /// See the NOTE on `Histogram.SnapshotReader.hot_shard_buckets`.
         hot_shard_buckets: []std.atomic.Value(u64),
         hot_shard: *const Shard,
 
@@ -1517,7 +1529,8 @@ pub const LatencyHistogram = struct {
         }
     };
 
-    /// Used to initialize a latency histogram in-place, backed by a heap allocation.
+    /// Allocates shard storage sized for `layout` and returns a handle over it. Pair with
+    /// `deinitForTest`.
     pub fn initForTest(
         gpa: std.mem.Allocator,
         layout: Layout,
@@ -1573,7 +1586,7 @@ pub const LatencyHistogram = struct {
 /// (e.g. `method_elapsed_seconds`) carrying a series per tag under a `variant="<tag>"` label, so
 /// variants can be summed together or filtered apart in Prometheus/Grafana. `kind` selects the
 /// backing histogram: `.latency` for ns-native `LatencyHistogram`, `.standard` for `Histogram`
-/// with explicit bounds. Every variant shares one `Kind`, so the series aggregate cleanly; the
+/// with explicit bounds. Every variant shares one `kind`, so the series aggregate cleanly; the
 /// bucket layout itself is still supplied once by the appender.
 pub fn VariantHistogram(comptime V: type, comptime kind: metric.HistogramKind) type {
     const Hist = kind.StructType();
@@ -1627,28 +1640,28 @@ pub fn VariantHistogram(comptime V: type, comptime kind: metric.HistogramKind) t
     };
 }
 
-/// A timer for one span. `init` reads the monotonic clock; `observe` reads it again and records the
-/// elapsed nanoseconds into the histogram.
+/// A timer for one span. `init` reads the monotonic clock; `observe` reads it again and records
+/// the elapsed nanoseconds into the histogram.
 ///
-/// `V` selects the shape. `null` gives a plain `Histogram` or `LatencyHistogram` and an `observe()`
-/// taking no argument. A `VariantHistogram`'s value type gives `observe(tag)`, which selects the
-/// series at the end of the span, after an outcome such as an error tag is known. `tag` must be
-/// comptime-known; dispatch a runtime one with
+/// `V` selects the shape. `null` gives a plain `Histogram` or `LatencyHistogram` and an
+/// `observe()` taking no argument. A `VariantHistogram`'s value type gives `observe(tag)`, which
+/// selects the series at the end of the span, once an outcome such as an error tag is known.
+/// `tag` must be comptime-known; dispatch a runtime one with
 /// `switch (tag) { inline else => |t| obs.observe(t) }`.
 ///
-/// The recorded value is always in nanoseconds, so the histogram's bounds must be in nanoseconds
-/// too. A `LatencyHistogram` derives its bounds from a `Layout`, which already is. A
+/// The recorded value is always in nanoseconds, so the histogram's bounds must be too. A
+/// `LatencyHistogram` derives them from a `Layout`, which is already in nanoseconds; a
 /// `kind == .standard` histogram uses whatever `upper_bounds` it was registered with. Nothing
 /// checks the unit, and bounds in another unit mislabel every bucket.
 ///
 /// Holds a pointer to the histogram handle, which the caller must keep alive. Call `observe` once
 /// per observer: it does not stop or reset the timer, so a second call records a second span.
 ///
-/// `defer obs.observe()` records on every exit from the enclosing scope, including `break`,
-/// `continue`, and error returns — there is no way to disarm an observer. Only use it where every
-/// exit ends a span worth recording. A scope that can leave without completing one, such as a drain
-/// loop that breaks on `error.WouldBlock`, must instead call `observe` on the success path; a
-/// `defer` there records the failed operation as if it had succeeded.
+/// `defer obs.observe()` records on every exit from the enclosing scope (`break`, `continue`, and
+/// error returns included) and there is no way to disarm an observer. Only use it where every
+/// exit ends a span worth recording. A scope that can leave without completing one, such as a
+/// drain loop that breaks on `error.WouldBlock`, must call `observe` on the success path instead;
+/// a `defer` there records the failed operation as if it had succeeded.
 pub fn LatencyObserver(comptime kind: metric.HistogramKind, comptime V: ?type) type {
     // `V` is the variant histogram's value type, not its `Tag`. The two differ for a tagged union,
     // whose `Tag` is the union's tag type, so reconstructing from `Tag` would name a different
