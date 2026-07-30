@@ -1,7 +1,7 @@
 const std = @import("std");
 const tracy = @import("tracy");
 const lib = @import("lib");
-const api = @import("api");
+const api = @import("shred_api");
 const reed_sol = @import("reed_solomon.zig");
 const build_options = @import("build-options");
 

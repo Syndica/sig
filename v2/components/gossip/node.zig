@@ -4,7 +4,7 @@
 
 const std = @import("std");
 const lib = @import("lib");
-const api = @import("api");
+const api = @import("gossip_api");
 const tel = lib.telemetry;
 
 const assert = std.debug.assert;

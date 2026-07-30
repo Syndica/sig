@@ -5,7 +5,7 @@ comptime {
     }
 }
 
-pub const api = @import("api");
+pub const api = @import("accounts_db_api");
 
 pub const Rooted = @import("rooted.zig").Rooted;
 pub const Table = @import("table.zig").Table;

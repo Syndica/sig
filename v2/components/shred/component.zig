@@ -9,7 +9,7 @@ comptime {
     }
 }
 
-pub const api = @import("api");
+pub const api = @import("shred_api");
 
 pub const Receiver = @import("receiver.zig").Receiver;
 pub const FecSetCtx = @import("receiver.zig").FecSetCtx;
