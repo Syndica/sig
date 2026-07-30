@@ -138,10 +138,9 @@ const DataShredCapture = struct {
 const FECSetParseResult = struct {
     merkle_root: Hash,
     chained_merkle_root: Hash,
-    /// Full concatenation of every data shred's data region across all 32
-    /// slots (mirrors agave's fixture, not sig's ring which truncates at
-    /// the first data_complete). Populated from `DataShredCapture` entries
-    /// matching `(slot, fec_set_idx)` at proto-encode time.
+    /// Concatenation of the data regions of all 32 data shreds in this FEC
+    /// set. Filled at proto-encode time by matching `DataShredCapture`
+    /// entries on `(slot, fec_set_idx)`.
     payload: []const u8,
     slot: Slot,
     fec_set_index: u32,
@@ -192,9 +191,10 @@ const HarnessState = struct {
     /// Dedup set for `data_shreds`; a shred can appear in `in_progress`
     /// across multiple processPacket calls, so we key on (slot, slot_idx).
     seen_data_shreds: std.AutoHashMapUnmanaged(ShredKey, void) = .empty,
-    /// Slots the per-packet loop observed as case-B equivocation via a
-    /// receiver error return. The equivocating variant never reaches
-    /// `MerkleForest`, so the return-value observation is the only signal.
+    /// Slots where `processPacket` returned a conflict error (equivocation
+    /// with a mismatched root, variant mismatch, malformed recovery). The
+    /// rejected shred never reaches `MerkleForest`, so this is the only
+    /// signal `buildProtoEffects` has for those slots.
     dead_slots_from_errors: std.AutoHashMapUnmanaged(Slot, void) = .empty,
 
     fn init(allocator: Allocator) !*HarnessState {
@@ -329,17 +329,12 @@ fn executeShredParse(
     st.receiver.updateSlotRange(ctx.root_slot, maxShredSlot(ctx.root_slot));
     st.leader_schedule.base_slot = ctx.root_slot;
 
-    // Map proto bool flags into the Receiver's per-feature activation slot.
-    // Agave's `check_feature_activation` uses an epoch-delayed semantic:
-    // a feature activated at slot `s` only takes effect for shreds in
-    // epoch > epoch(s). Agave's harness uses `EpochSchedule::default()`,
-    // which sets `warmup = true`: epoch 0 is only `MINIMUM_SLOTS_PER_EPOCH`
-    // (= 32) slots long, and later epochs double in size up to
-    // `DEFAULT_SLOTS_PER_EPOCH`. A feature activated at slot 0 therefore
-    // first applies at the start of epoch 1, i.e. slot 32. The Receiver's
-    // check is a plain `shred.slot >= activation_slot`, so map proto
-    // `true` to slot 32 so sig's gate mirrors agave's epoch-aware check.
-    // `false` -> disabled (maxInt).
+    // Feature-activation slots. Agave activates a feature from the epoch
+    // after the one containing the activation slot; on the default
+    // (warmup=true) schedule epoch 0 is 32 slots, so activation-at-0
+    // first applies at slot 32. The Receiver's check is a plain
+    // `shred.slot >= activation_slot`, so proto `true` maps to 32 and
+    // `false` disables via `maxInt`.
     const MINIMUM_SLOTS_PER_EPOCH: Slot = 32;
     const features = ctx.features orelse pb.ShredFeatures{};
     st.receiver.features = .{
@@ -381,12 +376,9 @@ fn executeShredParse(
             &st.deshred_writer,
             .noop,
         ) catch |err| switch (err) {
-            // Case-B equivocation surfaces to the harness only via error
-            // return: the equivocating variant is rejected at admission
-            // (or its ctx is retired by the RS-recovery errdefer) and
-            // leaves no trace in `MerkleForest`. Fold the shred's slot
-            // into `dead_slots_from_errors` so `buildProtoEffects` can
-            // merge it into the fixture-level dead-slots set.
+            // Conflict / equivocation errors: the rejected shred leaves
+            // no trace in `MerkleForest`, so record its slot here for
+            // `buildProtoEffects` to fold into the dead-slots set.
             error.MerkleRootConflict,
             error.MismatchedMerkleRoot,
             error.MismatchedChainedMerkleRoot,
@@ -454,37 +446,28 @@ fn buildProtoEffects(
     );
     out.shred_results.appendSliceAssumeCapacity(st.shred_parse_results.items);
 
-    // Block-parse verdict is derived post-hoc from replay state
-    // (MerkleForest) plus receiver-internal admission-time state
-    // (in_progress ctxs). The runtime keeps no per-slot dead flag; the
-    // harness reconstructs one from receiver+forest for the block-level
-    // verdict.
+    // The runtime keeps no per-slot dead flag, so derive one from
+    // `MerkleForest` + `receiver.in_progress` for the block verdict.
     var dead_slots: DeadSlots = .empty;
     defer dead_slots.deinit(allocator);
     try deriveBlockParseResult(&st.receiver, &st.forest, allocator, &dead_slots);
-    // Fold in slots for which `processPacket` returned a case-B
-    // equivocation error. Under signature-primary + id-secondary
-    // keying these variants never reach `in_progress` or `MerkleForest`,
-    // so `deriveBlockParseResult` can't see them; the return-value
-    // observation captured in the per-shred loop is the only signal.
+    // Errors captured in the per-shred loop are the only signal for
+    // conflicting variants that never landed in `in_progress` or
+    // `MerkleForest`.
     var err_it = st.dead_slots_from_errors.keyIterator();
     while (err_it.next()) |slot| try dead_slots.put(allocator, slot.*, {});
     if (dead_slots.count() > 0) out.block_parse_result = .REJECTED_INVALID_HEADER;
 
-    // Simulate agave's per-shred admission ordering. `check_insert_data_shred`
-    // enforces, in order:
-    //   1. First-seen `parent_offset` per slot (pinned in `slot_meta.parent_slot`
-    //      by `maybe_update_parent_info`). Mismatches return `InvalidShred` —
-    //      the shred never lands in `data_shred_cf` and never bumps
-    //      `slot_meta.received`. Slot is marked dead.
-    //   2. `last_in_slot && slot_idx < slot_meta.received`. Rejected shreds are
-    //      dropped and the slot is marked dead.
-    //   3. `slot_idx >= slot_meta.last_index` (once `last_in_slot` pins it).
-    //   4. On admission, `slot_meta.received = max(slot_meta.received, slot_idx + 1)`.
-    // Sig's runtime keeps no `slot_parents` / `dead_slots` / per-slot last-
-    // index state (design decision), so the harness reconstructs the same
-    // rejection sequence from the receiver's captured admissions to know
-    // which FEC sets agave would have failed to complete.
+    // Reimplement agave's `check_insert_data_shred` per-slot admission
+    // rules, in order:
+    //   1. Parent-offset pin: first-seen `parent_offset` wins; mismatch
+    //      marks the slot dead and skips the `received` bump.
+    //   2. `last_in_slot` with `slot_idx < received`: reject, mark dead.
+    //   3. `slot_idx >= last_index` (once `last_in_slot` pins it): reject.
+    //   4. On admission: `received = max(received, slot_idx + 1)`.
+    // Sig's runtime carries none of this per-slot state, so we run it
+    // here over captured admissions to identify FEC sets agave would
+    // have failed to complete.
     var first_seen_parent: std.AutoHashMapUnmanaged(Slot, u16) = .empty;
     defer first_seen_parent.deinit(allocator);
     var suppressed_fec_sets: std.AutoHashMapUnmanaged(shred_api.FecSetId, void) = .empty;
@@ -548,10 +531,8 @@ fn buildProtoEffects(
         fec_res.payload = payload.toOwnedSlice(st.allocator) catch @panic("OutOfMemory");
     }
 
-    // Emit fec_set_results in (slot, fec_set_index) order. Suppress any
-    // FEC set that agave would have rejected at insertion (parent-offset
-    // mismatch here; cross-FEC / equivocation checks in
-    // `deriveBlockParseResult`) so its harness emits no result for them.
+    // Emit in (slot, fec_set_index) order, dropping any FEC set that
+    // admission checks (above) or `deriveBlockParseResult` marked bad.
     std.sort.heap(FECSetParseResult, st.fec_set_results.items, {}, fecOrder);
 
     var i: usize = 0;
@@ -686,13 +667,9 @@ fn verifyTicksFromDataShreds(
     defer allocator.free(fba_buf);
     var fba = std.heap.FixedBufferAllocator.init(fba_buf);
 
-    // slot_is_full mirrors agave's `SlotMeta::is_full`, which requires
-    // the shred at `last_index` to sit inside the received contiguous
-    // prefix from index 0 (i.e. `slot_meta.received > last_index`). A
-    // `LAST_SHRED_IN_SLOT` shred past a gap must not flip the flag
-    // because agave never observes it as "the slot's last shred" in
-    // that arrival shape. Set inside the walk loop below, after the
-    // gap-break, so only shreds actually consumed contribute.
+    // A LAST_SHRED_IN_SLOT flag only marks the slot full if it lies
+    // within the contiguous prefix from index 0. Set inside the
+    // gap-bounded walk so shreds past a gap don't flip it.
     var slot_is_full = false;
 
     var all_entries: std.ArrayListUnmanaged(sig_v2.solana.transaction.Entry) = .empty;
@@ -707,8 +684,8 @@ fn verifyTicksFromDataShreds(
         if (s.last_shred_in_slot) slot_is_full = true;
         batch_buf.appendSlice(fba.allocator(), s.payload) catch return .rejected;
         if (s.data_complete) {
-            // Each data-complete batch is one wincode `BlockComponent`:
-            // `Vec<Entry>` with a u64 length prefix, followed by a
+            // Each data-complete batch is one bincode `BlockComponent`:
+            // a `Vec<Entry>` with a u64 length prefix, followed by a
             // `VersionedBlockMarker` when the length is 0.
             var reader: std.Io.Reader = .fixed(batch_buf.items);
             const entries = sig_v2.solana.bincode.read(
@@ -773,20 +750,17 @@ fn verifyTicksFromDataShreds(
 
 const DeadSlots = std.AutoHashMapUnmanaged(Slot, void);
 
-/// Folds cross-FEC-set invariants into a per-slot dead map (agave-parity
-/// for `mark_slot_dead_if_not_full`). Reads `MerkleForest` and
-/// `receiver.in_progress` so failures on incomplete FEC sets are still
-/// visible even though the receiver keeps no per-slot dead flag.
+/// Cross-FEC-set invariant checks that mark slots dead, reading both
+/// `MerkleForest` (completed sets) and `receiver.in_progress` (partial
+/// sets):
+///  - Equivocation: two nodes in `forest.map` sharing a `FecSetId`
+///    (defensive — normally caught at admission).
+///  - `parent_offset` divergence across in-progress ctxs of the same slot.
+///  - SIMD-0340 chain: `chained_merkle_root` of `(slot, k+32)` must equal
+///    `merkle_root` of `(slot, k)`.
 ///
-/// Checked here:
-/// - Case-B equivocation from `forest.map` (defensive; normally caught
-///   at admission and folded via `dead_slots_from_errors`).
-/// - Per-slot `parent_offset` divergence across `in_progress` ctxs.
-/// - SIMD-0340 chained-merkle-root check for `(slot, k)` → `(slot, k+32)`.
-///
-/// Iterating `id_map` (not `signature_map`) is required: sig-collision
-/// under fuzz makes the older ctx reachable only via `id_map`. See
-/// `InProgressSets.id_map`.
+/// Iterates `id_map` because signature-collision under fuzz can hide the
+/// older ctx from `signature_map`.
 fn deriveBlockParseResult(
     receiver: *const Receiver,
     forest: *const MerkleForest,

@@ -170,18 +170,15 @@ pub const Receiver = struct {
         );
         zone.text(str);
 
-        // PERF: only the first shred of a new FEC set needs to compute
-        // the merkle root; subsequent shreds can be checked for inclusion
-        // via incremental merkle commit against the ctx's pinned root.
-        // Keying the ctx map on signature (rather than root) preserves this.
+        // TODO: skip re-computation on the sig-hit fast path once we have
+        // incremental inclusion proofs against the ctx's pinned merkle root.
         var shred_merkle_root: Hash = undefined;
         try shred.merkleRoot(&shred_merkle_root);
 
-        // Two-tier ctx lookup: signature fast-path (31/64 honest shreds),
-        // then `(slot, fec_set_idx)` fallback. The fallback absorbs case-A
-        // equivocation (agave-parity: signature-blind merkle-root pinning)
-        // and sig-collision-across-fec-sets under sig-verify-off fuzz. See
-        // `InProgressSets.id_map` for the invariant.
+        // Two-tier lookup: signature fast-path (31/64 shreds hit here),
+        // then `(slot, fec_set_idx)` fallback for shreds that arrived
+        // under a different signature but the same erasure set. See
+        // `InProgressSets.id_map`.
         const resolved: ?*FecSetCtx = resolve: {
             if (state.in_progress.getFecSetCtx(&shred.signature)) |ctx| {
                 if (state.in_progress.fecSetIdOf(ctx).eql(&fec_set_id))
@@ -200,10 +197,10 @@ pub const Receiver = struct {
                 return error.VariantMismatchFromFecSet;
             }
 
-            // Case-A (matching root) admits into the merged ctx; case-B
-            // (mismatched root) rejects. Unreachable on the sig-hit path in
-            // production (signature covers the root); reachable via
-            // id-secondary hit or under sig-verify-off fuzz.
+            // Matching root admits into the merged ctx; mismatch rejects.
+            // In production, a sig-map hit implies a matching root (the
+            // signature covers it); this branch only rejects via the
+            // id-map fallback or when signature verification is disabled.
             if (!shred_merkle_root.eql(&fec_set_ctx.merkle_root))
                 return error.MismatchedMerkleRoot;
             if (!shred.chainedMerkleRoot().eql(&fec_set_ctx.chained_merkle_root))
@@ -218,9 +215,8 @@ pub const Receiver = struct {
                 .missing => {},
                 // fec set was finished already, let's ignore it
                 .matching_signature => return .fec_set_already_finished,
-                // Erasure set already completed under a different signature.
-                // Same case-A/case-B discriminator as the in-progress path,
-                // post-completion.
+                // Set completed under a different signature. Admit if
+                // the merkle roots agree; reject otherwise.
                 .mismatching_signature => {
                     const roots = state.done.getRoots(fec_set_id).?;
                     if (roots.merkle_root.eql(&shred_merkle_root))
@@ -582,17 +578,15 @@ const InProgressSets = struct {
     signature_map: SignatureMap,
     /// Authoritative `(slot, fec_set_idx) → *FecSetCtx` index: exactly one
     /// entry per live ctx. `signature_map` is a fast-path secondary index
-    /// keyed by signature (see `assertCounts`), and may drop entries when
-    /// two ctxs collide on a signature.
+    /// keyed by signature and may drop entries when two ctxs collide on a
+    /// signature (see `assertCounts`).
     ///
-    /// This map is what lets us merge shreds from the same erasure set
-    /// that arrived under different signatures, which happens in two
-    /// cases:
-    ///  - case-A equivocation: agave's `check_merkle_root_consistency`
-    ///    is signature-blind and admits both same-root variants, so we
-    ///    must too.
-    ///  - sig-verify-off fuzz: signatures aren't checked, so unrelated
-    ///    ctxs can collide on a signature across fec sets.
+    /// Lets us merge shreds of the same erasure set that arrived under
+    /// different signatures, which happens in two cases:
+    ///  - Agave-parity equivocation: `check_merkle_root_consistency` is
+    ///    signature-blind, so we admit both same-root variants regardless
+    ///    of which signature they carry.
+    ///  - Sig-verify-off fuzz: unrelated ctxs can collide on a signature.
     id_map: IdMap,
     eviction: Eviction,
 
