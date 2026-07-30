@@ -354,7 +354,7 @@ const Sig = struct {
                     .optimize = config.optimize,
                     .imports = concatImports(b, &.{
                         imports,
-                        &.{.{ .name = "api", .module = api }},
+                        &.{.{ .name = api_name, .module = api }},
                     }),
                 });
                 unit_tests.add(name, component);
@@ -435,6 +435,7 @@ const Sig = struct {
 
         var service_libs: [services.len]Service = undefined;
         inline for (services, &service_libs) |service, *service_lib_entry| {
+            const service_name = service.name ++ "-service";
             const service_def = @field(services_root, service.name);
             const component_names: []const []const u8 = if (@hasDecl(service_def, "components"))
                 service_def.components
@@ -460,17 +461,17 @@ const Sig = struct {
                     service_component_imports,
                 }),
             });
-            unit_tests.add(service.name ++ "-service", service_mod);
+            unit_tests.add(service_name, service_mod);
 
             const service_lib = b.addLibrary(.{
-                .name = service.name,
+                .name = service_name,
                 .root_module = service_mod,
                 .use_llvm = config.use_llvm,
             });
             main.linkLibrary(service_lib);
 
             service_lib_entry.* = .{
-                .name = service.name,
+                .name = service_name,
                 .module = service_mod,
                 .lib = service_lib,
             };
@@ -739,7 +740,8 @@ const Tools = struct {
 
             for (description.services) |service_name| {
                 exe.compile.linkLibrary(for (sig.service_libs) |entry| {
-                    if (std.mem.eql(u8, entry.name, service_name)) break entry.lib;
+                    if (std.mem.eql(u8, entry.name[0 .. entry.name.len - 8], service_name))
+                        break entry.lib;
                 } else std.debug.panic("unknown service '{s}'", .{service_name}));
             }
         }
