@@ -53,7 +53,7 @@ pub const SlotHashes = struct {
             slot,
             Entry.searchCmp,
         );
-        // If the slot is to old, do not insert. Otherwise if the entries are full, pop the last
+        // If the slot is too old, do not insert. Otherwise if the entries are full, pop the last
         // entry.
         if (index == MAX_ENTRIES) return;
 
