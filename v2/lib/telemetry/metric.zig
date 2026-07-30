@@ -297,6 +297,20 @@ pub const Appender = struct {
         return vh;
     }
 
+    /// Registers one latency series per outcome of `Result` (its payload variants plus its errors,
+    /// flattened per `config`) and returns a `ResultLatencyHistogram` that observes raw `Result` values.
+    /// Storage/registration reuse `appendVariantHistogram` over the synthesized label enum.
+    pub fn appendResultLatencyHistogram(
+        self: Appender,
+        comptime name: []const u8,
+        comptime Result: type,
+        comptime config: tel.ResultLatencyHistogramLabelConfig,
+        comptime layout: tel.LatencyHistogram.Layout,
+    ) tel.ResultLatencyHistogram(Result, config) {
+        const Rh = tel.ResultLatencyHistogram(Result, config);
+        return .{ .inner = self.appendVariantHistogram(name, Rh.LabelEnum, .latency, layout) };
+    }
+
     pub fn appendFields(
         self: Appender,
         comptime S: type,
@@ -333,6 +347,16 @@ pub const Appender = struct {
                 else => blk: {
                     if (isVariantCounter(s_field.type)) {
                         break :blk self.appendVariantCounter(id_name, s_field.type.Value);
+                    } else if (maybeResultLatencyHistogram(s_field.type)) {
+                        break :blk self.appendResultLatencyHistogram(
+                            id_name,
+                            s_field.type.Result,
+                            s_field.type.label_config,
+                            field_config.layout orelse @compileError(std.fmt.comptimePrint(
+                                "ResultLatencyHistogram metric '{s}' requires a `.layout`.\n",
+                                .{s_field.name},
+                            )),
+                        );
                     } else if (maybeVariantHistogram(s_field.type)) |hist_kind| {
                         break :blk self.appendVariantHistogram(
                             id_name,
@@ -470,6 +494,7 @@ pub fn FieldConfigs(comptime S: type) type {
             tel.LatencyHistogram => FieldConfigLatencyHistogram,
             else => blk: {
                 if (isVariantCounter(s_field.type)) break :blk FieldConfigBasic;
+                if (maybeResultLatencyHistogram(s_field.type)) break :blk FieldConfigLatencyHistogram;
                 if (maybeVariantHistogram(s_field.type)) |kind| break :blk kind.FieldConfigType();
                 @compileError("Unsupported: " ++ @typeName(s_field.type));
             },
@@ -503,6 +528,17 @@ inline fn isVariantCounter(comptime S: type) bool {
         if (!is_variant) return false;
         if (tel.Variant(S.Value) != S) return false;
         return true;
+    }
+}
+
+inline fn maybeResultLatencyHistogram(comptime S: type) bool {
+    comptime {
+        if (@typeInfo(S) != .@"struct") return false;
+        if (!@hasDecl(S, "Result") or @TypeOf(S.Result) != type) return false;
+        if (!@hasDecl(S, "label_config") or @TypeOf(S.label_config) != tel.ResultLatencyHistogramLabelConfig) return false;
+        // Reconstruct-and-compare, exactly like maybeVariantHistogram: relies on Zig memoizing the
+        // generic instantiation so re-passing the stored (Result, label_config) yields the same type.
+        return tel.ResultLatencyHistogram(S.Result, S.label_config) == S;
     }
 }
 
@@ -792,4 +828,93 @@ test "variant histogram: appendFields registers latency and bounds variants" {
     }
     try std.testing.expectEqual(@as(usize, 2), latency_series); // get, put
     try std.testing.expectEqual(@as(usize, 2), sizes_series); // ok, err
+}
+
+/// Snapshots the single `ResultLatencyHistogram` series whose flattened label is `label` and asserts its
+/// observation count.
+fn expectResultSeriesCount(rh: anytype, comptime label: []const u8, expected: u63) !void {
+    var snap = rh.get(@field(@TypeOf(rh).LabelEnum, label)).swapOutSnapshot();
+    defer snap.release();
+    try std.testing.expectEqual(expected, snap.count);
+}
+
+test "result histogram: observe dispatches a runtime result to its own series" {
+    const gpa = std.testing.allocator;
+    const E = error{ Boom, Splat };
+    const P = union(enum) { ok, retry: u8 };
+    const Result = E!P;
+
+    const region, const buf = try testRegion(gpa);
+    defer gpa.free(buf);
+
+    const rh = region.metricAppender().appendResultLatencyHistogram(
+        "op_elapsed_ns",
+        Result,
+        .{},
+        .{ .min_upper_bound_ns = 512, .max_upper_bound_ns = 512 << 4, .bounds_per_doubling = 4 },
+    );
+
+    // Runtime values, not comptime literals: this is the only thing that exercises `indexOf`. A
+    // `comptime`-constrained or mis-ordered mapping would fail here but pass a literal-only suite.
+    const results = [_]Result{ .ok, .{ .retry = 3 }, error.Boom, error.Splat, .ok };
+    for (results) |result| rh.observe(result, 700);
+
+    // Each outcome landed in exactly its own series — payloads and errors both.
+    try expectResultSeriesCount(rh, "ok", 2);
+    try expectResultSeriesCount(rh, "retry", 1);
+    try expectResultSeriesCount(rh, "err_boom", 1);
+    try expectResultSeriesCount(rh, "err_splat", 1);
+
+    // The registered metric carries one labeled series per outcome.
+    var metrics = try testCollect(gpa, region);
+    defer metrics.deinit(gpa);
+    var seen: usize = 0;
+    for (metrics.keys(), metrics.values()) |id, any| {
+        if (!std.mem.eql(u8, id.name, "op_elapsed_ns")) continue;
+        seen += 1;
+        try std.testing.expectEqual(@as(usize, 1), id.label_count);
+        try std.testing.expectEqual(Kind.latency_histogram, std.meta.activeTag(any));
+    }
+    try std.testing.expectEqual(@as(usize, 4), seen); // ok, retry, err_boom, err_splat
+}
+
+test "result histogram: appendFields detects and registers a ResultLatencyHistogram field" {
+    const gpa = std.testing.allocator;
+    const E = error{ Boom, Splat };
+    const P = union(enum) { ok, retry: u8 };
+    const Metrics = struct {
+        op_elapsed_ns: tel.ResultLatencyHistogram(E!P, .{}),
+    };
+
+    const region, const buf = try testRegion(gpa);
+    defer gpa.free(buf);
+
+    const m = region.metricAppender().appendFields(Metrics, .{
+        .prefix = "svc",
+        .fields = .{
+            .op_elapsed_ns = .{ .layout = .{
+                .min_upper_bound_ns = 512,
+                .max_upper_bound_ns = 512 << 4,
+                .bounds_per_doubling = 4,
+            } },
+        },
+    });
+
+    // Runtime result through the appendFields-registered handle.
+    var pick_err = true;
+    _ = &pick_err;
+    var result: E!P = .ok;
+    if (pick_err) result = error.Splat;
+    m.op_elapsed_ns.observe(result, 700);
+
+    try expectResultSeriesCount(m.op_elapsed_ns, "err_splat", 1);
+    try expectResultSeriesCount(m.op_elapsed_ns, "ok", 0);
+
+    var metrics = try testCollect(gpa, region);
+    defer metrics.deinit(gpa);
+    var series: usize = 0;
+    for (metrics.keys()) |id| {
+        if (std.mem.eql(u8, id.name, "svc_op_elapsed_ns")) series += 1;
+    }
+    try std.testing.expectEqual(@as(usize, 4), series); // ok, retry, err_boom, err_splat
 }

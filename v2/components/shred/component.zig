@@ -4,6 +4,7 @@
 
 comptime {
     if (@import("builtin").is_test) {
+        _ = @import("ReceiverMetrics.zig");
         _ = @import("receiver.zig");
         _ = @import("reed_solomon.zig");
     }
@@ -13,3 +14,4 @@ pub const api = @import("shred_api");
 
 pub const Receiver = @import("receiver.zig").Receiver;
 pub const FecSetCtx = @import("receiver.zig").FecSetCtx;
+pub const ReceiverMetrics = @import("ReceiverMetrics.zig");

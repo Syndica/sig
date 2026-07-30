@@ -79,10 +79,33 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     const allocator = fba.allocator();
 
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
+    const metrics = rw.tel.metricAppender().appendFields(shred.ReceiverMetrics, .{
+        .prefix = @tagName(name),
+        .fields = .{
+            // 512ns - 2.048us, 1 bound = 1 bucket
+            .reset_elapsed_ns = .{ .layout = .{
+                .min_upper_bound_ns = std.math.floorPowerOfTwo(u64, std.time.ns_per_us),
+                .max_upper_bound_ns = std.math.floorPowerOfTwo(u64, 3 * std.time.ns_per_us),
+                .bounds_per_doubling = 1,
+            } },
+            // 512ns - 2.048us, 1 bound = 1 bucket
+            .update_slot_range_elapsed_ns = .{ .layout = .{
+                .min_upper_bound_ns = std.math.floorPowerOfTwo(u64, std.time.ns_per_us),
+                .max_upper_bound_ns = std.math.floorPowerOfTwo(u64, 3 * std.time.ns_per_us),
+                .bounds_per_doubling = 1,
+            } },
+            // 1.024ns - 2.097152ms, 2 bounds = 1 bucket
+            .process_packet_elapsed_ns = .{ .layout = .{
+                .min_upper_bound_ns = std.math.floorPowerOfTwo(u64, 2 * std.time.ns_per_us),
+                .max_upper_bound_ns = std.math.floorPowerOfTwo(u64, 3 * std.time.ns_per_ms),
+                .bounds_per_doubling = 2,
+            } },
+        },
+    });
     rw.tel.signalReady();
     logger.info().logf("Waiting for shreds on port {}", .{rw.tvu_socket.port});
 
-    var receiver: Receiver = try .init(allocator, max_in_progress, max_done);
+    var receiver: Receiver = try .init(allocator, max_in_progress, max_done, metrics);
     defer receiver.deinit(allocator);
 
     var packet_iter = rw.tvu_socket.recv.get(.reader);
