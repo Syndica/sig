@@ -49,7 +49,7 @@ pub const Region = extern struct {
         /// The most verbose level enabled by any filter in `log_filters_encoded`.
         /// Writers gate on this; the exact (service, scope) filter is still applied
         /// by the telemetry service in `log.streamLogs`.
-        max_log_level: log.Level = .trace,
+        max_log_level: log.Level,
         /// The length of the encoded log filters byte string.
         log_filters_len: u32,
 
@@ -68,6 +68,19 @@ pub const Region = extern struct {
         /// Number of `u64` elements available for histogram backing storage.
         /// A histogram with N buckets consumes `3 * N + 6` elements.
         histogram_data_len: u32,
+
+        /// The padded size of the region header, with no trailing allocations.
+        /// Only the `*_len` and `service_count` fields affect layout. `port` and
+        /// `max_log_level` are configuration, and arbitrary here.
+        const header_padded_size = Info.regionSize(.{
+            .port = 0,
+            .max_log_level = .trace,
+            .log_filters_len = 0,
+            .service_count = 0,
+            .id_mem_len = 0,
+            .gauges_len = 0,
+            .histogram_data_len = 0,
+        });
 
         /// NOTE: keep in sync with `Region.getSlices`.
         pub fn regionSize(self: Info) usize {
@@ -158,15 +171,7 @@ pub const Region = extern struct {
         const buf: []align(@alignOf(u64)) u8 = trailing: {
             const ptr: [*]align(@alignOf(u64)) u8 = @ptrCast(self);
             const full: []align(@alignOf(u64)) u8 = ptr[0..self.info.regionSize()];
-            const header_padded_size = comptime Info.regionSize(.{
-                .port = 0,
-                .log_filters_len = 0,
-                .service_count = 0,
-                .id_mem_len = 0,
-                .gauges_len = 0,
-                .histogram_data_len = 0,
-            });
-            break :trailing full[header_padded_size..];
+            break :trailing full[Info.header_padded_size..];
         };
         var seek: usize = 0;
         const log_filters =
@@ -250,13 +255,13 @@ pub fn Logger(comptime scope_str: []const u8) type {
         sink: log.MessageSink,
         /// See `Region.Info.max_log_level`. Scope-independent, so it survives
         /// `withScope`/`from` unchanged.
-        max_level: log.Level = .trace,
+        max_level: log.Level,
 
         const LoggerSelf = @This();
 
         pub const scope = scope_str;
 
-        pub const noop: LoggerSelf = .{ .sink = .noop };
+        pub const noop: LoggerSelf = .{ .sink = .noop, .max_level = .trace };
 
         pub fn from(logger: anytype) LoggerSelf {
             const LoggerOther = Logger(@TypeOf(logger).scope);
@@ -520,11 +525,11 @@ test "max_level survives withScope and from" {
 test "acquireLogger takes max_level from the region's filters" {
     const gpa = std.testing.allocator;
 
-    // `.warn` rather than the `Info.max_log_level` field default, so that leaving the
-    // field untouched would not pass.
+    // `.warn` rather than the most verbose level, so that a logger which never consulted
+    // the region's filters would not pass.
     const params: Region.InitParams = .{
         .port = 0,
-        .log_filters_encoded = comptime log.Filter.parseListStrLitIntoBinary(.warn, "").?,
+        .log_filters_encoded = log.Filter.parseListStrLitIntoBinary(.warn, "").?,
         .service_count = 1,
         .id_mem_len = 0,
         .gauges_len = 0,
