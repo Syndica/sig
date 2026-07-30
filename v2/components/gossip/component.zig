@@ -6,7 +6,7 @@ comptime {
     }
 }
 
-pub const api = @import("api");
+pub const api = @import("gossip_api");
 
 pub const GossipNode = @import("node.zig").GossipNode;
 pub const Metrics = @import("Metrics.zig");

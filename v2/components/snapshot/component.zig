@@ -4,6 +4,6 @@ comptime {
     }
 }
 
-pub const api = @import("api");
+pub const api = @import("snapshot_api");
 
 pub const download = @import("download.zig");

@@ -1,5 +1,5 @@
 const lib = @import("lib");
-const api = @import("api");
+const api = @import("gossip_api");
 const tel = lib.telemetry;
 
 const Metrics = @This();
