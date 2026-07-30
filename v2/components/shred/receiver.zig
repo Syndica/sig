@@ -18,6 +18,7 @@ const DeshreddedFecSet = api.DeshreddedFecSet;
 const DeshredRing = api.DeshredRing;
 const FecSetId = api.FecSetId;
 const Shred = api.Shred;
+const ReceiverMetrics = @import("ReceiverMetrics.zig");
 
 /// Takes in shreds, and writes out deshredded fec sets.
 /// For full docs see `services/shred_receiver.zig`.
@@ -31,6 +32,8 @@ pub const Receiver = struct {
     in_progress: InProgressSets,
     done: DoneSets,
 
+    metrics: ReceiverMetrics,
+
     /// Per-feature activation slots. A feature is enforced for shreds
     /// whose slot is `>= activation_slot`; the default `maxInt(Slot)`
     /// keeps every feature inactive.
@@ -42,6 +45,7 @@ pub const Receiver = struct {
         allocator: std.mem.Allocator,
         in_progress_capacity: u32,
         done_capacity: u32,
+        metrics: ReceiverMetrics,
     ) !Receiver {
         var in_progress: InProgressSets = try .init(allocator, in_progress_capacity);
         errdefer in_progress.deinit(allocator);
@@ -56,6 +60,8 @@ pub const Receiver = struct {
             .root_slot = 0,
             .max_slot = std.math.maxInt(Slot),
             .features = .{},
+
+            .metrics = metrics,
         };
     }
 
@@ -69,6 +75,9 @@ pub const Receiver = struct {
     /// (e.g. the conformance shred-parse harness, which runs one fixture per
     /// invocation and must not leak state between them).
     pub fn reset(self: *Receiver) void {
+        const method_obs = self.metrics.reset_elapsed_ns.observer();
+        defer method_obs.observe();
+
         self.in_progress.reset();
         self.done.reset();
         self.root_slot = 0;
@@ -77,14 +86,43 @@ pub const Receiver = struct {
     }
 
     pub fn updateSlotRange(self: *Receiver, root_slot: Slot, max_slot: Slot) void {
+        const method_obs = self.metrics.update_slot_range_elapsed_ns.observer();
+        defer method_obs.observe();
+
+        self.updateSlotRangeImpl(root_slot, max_slot);
+    }
+
+    fn updateSlotRangeImpl(self: *Receiver, root_slot: Slot, max_slot: Slot) void {
         self.root_slot = root_slot;
         self.max_slot = max_slot;
 
         // TODO: this is where we would add code to prune entries outside of the new range.
     }
 
-    // TODO: report return values to observability
-    // TODO: report back equivocating shreds, so that we can construct and send out duplicate proofs
+    pub const ProcessPacketError = error{
+        ShredOlderThanRoot,
+        ShredTooNew,
+        ShredVersionMismatch,
+        FecSetIndexTooHigh,
+        SlotIndexTooHigh,
+        BadDataShredCount,
+        BadCodeShredCount,
+        BadCodeShredIdx,
+        UnexpectedDataCompleteShred,
+        InvalidFecSetIdx,
+        ShredIdxTooLarge,
+        MerkleCountTooLarge,
+        VariantMismatchFromFecSet,
+        MismatchedMerkleRoot,
+        EquivocationDifferentHashForSameFecSetId,
+        EquivocationMatchingFecSetWithDifferentSignatureAlreadyInProgress,
+        UnknownLeader,
+    } || (Shred.PacketCheckedError ||
+        std.fmt.BufPrintError ||
+        Shred.ComputeMerkleRootError ||
+        lib.crypto.ed25519.VerifySignatureError ||
+        InProgressSets.CreateFecSetCtxError);
+
     pub fn processPacket(
         state: *Receiver,
         leader_schedule: *const lib.solana.LeaderSchedule,
@@ -92,10 +130,36 @@ pub const Receiver = struct {
         packet: *const Packet,
         deshred_writer: *DeshredRing.Iterator(.writer),
         logger: lib.telemetry.Logger("processPacket"),
-    ) !NonErrorStatus {
+    ) ProcessPacketError!NonErrorStatus {
         const zone = tracy.Zone.init(@src(), .{ .name = "processPacket" });
         defer zone.deinit();
 
+        const method_obs = state.metrics.process_packet_elapsed_ns.observer();
+
+        const result = state.processPacketImpl(
+            leader_schedule,
+            network_shred_version,
+            packet,
+            deshred_writer,
+            logger,
+            zone,
+        );
+
+        method_obs.observe(result);
+        return result;
+    }
+
+    // TODO: report return values to observability
+    // TODO: report back equivocating shreds, so that we can construct and send out duplicate proofs
+    fn processPacketImpl(
+        state: *Receiver,
+        leader_schedule: *const lib.solana.LeaderSchedule,
+        network_shred_version: u16,
+        packet: *const Packet,
+        deshred_writer: *DeshredRing.Iterator(.writer),
+        logger: lib.telemetry.Logger("processPacket"),
+        zone: tracy.Zone,
+    ) ProcessPacketError!NonErrorStatus {
         // check that the shred variant is supported and the header is valid
         const shred = try Shred.fromPacketChecked(packet);
 
@@ -579,12 +643,14 @@ const InProgressSets = struct {
         return self.signature_map.getAdapted(signature, map_ctx);
     }
 
+    pub const CreateFecSetCtxError = error{};
+
     // returns undefined memory, which must be immediately set by the caller
     fn createFecSetCtx(
         self: *InProgressSets,
         id: FecSetId,
         signature: *const Signature,
-    ) !*FecSetCtx {
+    ) CreateFecSetCtxError!*FecSetCtx {
         const map_ctx = self.mapContext();
 
         self.assertCounts();
@@ -756,7 +822,10 @@ fn signTestDataPacket(packet: *Packet, keypair: *const lib.crypto.KeyPair) !void
 test "shred.receiver: empty packet" {
     const allocator = std.testing.allocator;
 
-    var receiver: Receiver = try .init(allocator, 1, 1);
+    const metrics: ReceiverMetrics = try .initForTest(allocator);
+    defer metrics.deinitForTest(allocator);
+
+    var receiver: Receiver = try .init(allocator, 1, 1, metrics);
     defer receiver.deinit(allocator);
 
     var packet: Packet = undefined;
@@ -780,7 +849,10 @@ test "shred.receiver: empty packet" {
 test "shred.receiver: shred version mismatch" {
     const allocator = std.testing.allocator;
 
-    var receiver: Receiver = try .init(allocator, 1, 1);
+    const metrics: ReceiverMetrics = try .initForTest(allocator);
+    defer metrics.deinitForTest(allocator);
+
+    var receiver: Receiver = try .init(allocator, 1, 1, metrics);
     defer receiver.deinit(allocator);
 
     var packet: Packet = undefined;
@@ -804,7 +876,10 @@ test "shred.receiver: shred version mismatch" {
 test "shred.receiver: one shred (unfinished fec set)" {
     const allocator = std.testing.allocator;
 
-    var receiver: Receiver = try .init(allocator, 1, 1);
+    const metrics: ReceiverMetrics = try .initForTest(allocator);
+    defer metrics.deinitForTest(allocator);
+
+    var receiver: Receiver = try .init(allocator, 1, 1, metrics);
     defer receiver.deinit(allocator);
 
     const std_keypair = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(@splat(1));
@@ -839,7 +914,10 @@ test "shred.receiver: one shred (unfinished fec set)" {
 test "shred.receiver: duplicate shred" {
     const allocator = std.testing.allocator;
 
-    var receiver: Receiver = try .init(allocator, 1, 1);
+    const metrics: ReceiverMetrics = try .initForTest(allocator);
+    defer metrics.deinitForTest(allocator);
+
+    var receiver: Receiver = try .init(allocator, 1, 1, metrics);
     defer receiver.deinit(allocator);
 
     const std_keypair = try std.crypto.sign.Ed25519.KeyPair.generateDeterministic(@splat(1));

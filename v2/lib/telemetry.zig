@@ -1605,6 +1605,343 @@ pub fn LatencyObserver(comptime kind: metric.HistogramKind, comptime V: ?type) t
     };
 }
 
+/// Presentation-only config for `ResultLatencyHistogram` labels. Whether flattening happens at all is
+/// decided by the `Result` type (an `error_union`/`error_set` flattens; anything else is rejected),
+/// so this struct only tunes the label *text*, never the shape.
+pub const ResultLatencyHistogramLabelConfig = struct {
+    /// Optional per-payload-variant label prefix, distinguishing e.g. a `full_` from an `early_`
+    /// completion of the same variant. Keyed by the payload field's original (pre-snake_case) name.
+    /// Both halves are checked at comptime: every key must name a payload variant, and every value
+    /// must end in `_`. A key that matches nothing is a typo, and a typo here is invisible at
+    /// runtime — the series is still recorded, just under the unprefixed name.
+    payload_prefix: std.StaticStringMap([]const u8) = .{},
+};
+
+/// Backstop on how many series one `ResultLatencyHistogram` may claim. Not a budget — a `Result` anywhere
+/// near this is an error set that grew by accident, not a decision. Every outcome costs a full
+/// `LatencyHistogram` out of the single fixed `histogram_data` region the whole process shares, and
+/// a flattened `Result` is the one metric whose width is set by a type someone else can widen:
+/// adding a `try` to a callee adds a series here, with no diff to the metrics code.
+///
+/// The cost is worth knowing before raising this. On a 1024ns..2MiB-ns window at 4 bounds per
+/// doubling — the shred receiver's — one series is 100 u64 words, so 43 outcomes already claim
+/// ~4.3k of the 12,288 words `init/main.zig` hands the whole process. At this ceiling one metric
+/// would take over half of it.
+const result_histogram_max_series = 64;
+
+/// A `VariantHistogram(LabelEnum, .latency)` fronted by a `Result`-aware `observe`. Hand it the raw
+/// `Error!Payload` (or error-set) value and it records into the matching per-outcome latency series
+/// — the flattening/naming a `Result` needs (which a bare `VariantHistogram` can't express) lives
+/// here, while all storage, registration, and exposition are delegated to the inner
+/// `VariantHistogram`. The label enum is synthesized internally; callers never name it.
+///
+/// Register it like any other metric field: `metric.Appender.appendFields` detects the type and
+/// routes it through `appendResultLatencyHistogram`, which needs the same `.layout` a `LatencyHistogram`
+/// does. One series per outcome is registered up front, so the error set decides how much of the
+/// shared histogram region this metric claims — see `result_histogram_max_series`.
+pub fn ResultLatencyHistogram(comptime ResultT: type, comptime config: ResultLatencyHistogramLabelConfig) type {
+    return struct {
+        inner: Inner,
+        const ResultLatencyHistogramSelf = @This();
+
+        /// One entry per exposed series: the `variant="<label>"` string paired with the runtime
+        /// discriminant that selects it. `ResultLatencyHistogram` derives both its label enum and its `observe`
+        /// dispatch from the same slot list, so the two can never disagree.
+        const ResultSlot = struct {
+            label: [:0]const u8,
+            origin: Origin,
+
+            const Origin = union(enum) {
+                /// Active payload variant selects this slot; the `usize` indexes `std.meta.fields(Payload)`.
+                payload: usize,
+                /// This error value (matched by `@errorName`) selects this slot.
+                err: [:0]const u8,
+            };
+        };
+
+        /// The original `Error!Payload` (or error-set) type this histogram observes. Retaining it is
+        /// what lets `observe` accept a raw result instead of a pre-mapped tag.
+        pub const Result = ResultT;
+        pub const label_config = config;
+        pub const slots = flattenResult(ResultT, config);
+        pub const LabelEnum = ResultLabelEnum(slots);
+        pub const Inner = VariantHistogram(LabelEnum, .latency);
+
+        const PayloadT = switch (@typeInfo(Result)) {
+            .error_union => |eu| eu.payload,
+            else => void,
+        };
+        const ErrorSetT = switch (@typeInfo(Result)) {
+            .error_union => |eu| eu.error_set,
+            .error_set => Result,
+            else => void,
+        };
+
+        comptime {
+            // `observe` reaches `inner.histograms` by raw slot index, while registration filled that
+            // array through `Inner.Indexer`. Those are the same slot only because `LabelEnum` is
+            // dense and in slot order, which is this type's whole correctness argument — assert it
+            // rather than assume it.
+            for (0..slots.len) |i| std.debug.assert(Inner.Indexer.indexOf(@enumFromInt(i)) == i);
+        }
+
+        /// Builds every series on the heap, outside any metric region, so a test can hold a metrics
+        /// struct without standing up an `Appender`. See `LatencyHistogram.initForTest`.
+        pub fn initForTest(
+            gpa: std.mem.Allocator,
+            layout: LatencyHistogram.Layout,
+        ) std.mem.Allocator.Error!ResultLatencyHistogramSelf {
+            return .{ .inner = try initVariantForTest(LabelEnum, .latency, gpa, layout) };
+        }
+
+        /// Only valid if `self` was initialized using `initForTest`.
+        pub fn deinitForTest(self: ResultLatencyHistogramSelf, gpa: std.mem.Allocator) void {
+            deinitVariantForTest(self.inner, gpa);
+        }
+
+        /// Records `ns` into the series selected by `result`. Indexes the inner histogram array
+        /// directly with a runtime slot index, so — unlike `VariantHistogram.observe` — it needs no
+        /// comptime-known tag.
+        pub fn observe(self: *const ResultLatencyHistogramSelf, result: Result, ns: u64) void {
+            self.inner.histograms[indexOf(result)].observe(ns);
+        }
+
+        pub fn observer(self: *const ResultLatencyHistogramSelf) ResultLatencyObserver(ResultLatencyHistogramSelf) {
+            return .init(self);
+        }
+
+        /// The individual histogram handle registered for one outcome, for operations beyond
+        /// `observe` (e.g. snapshotting a single outcome's distribution). Mirrors
+        /// `VariantHistogram.get`; `label` is the flattened name, not the original variant.
+        pub fn get(self: *const ResultLatencyHistogramSelf, comptime label: LabelEnum) LatencyHistogram {
+            return self.inner.get(label);
+        }
+
+        /// Runtime value -> slot index. Every arm resolves through `slots`, so this cannot drift
+        /// from the labels the inner `VariantHistogram` registered.
+        fn indexOf(result: Result) usize {
+            return switch (@typeInfo(Result)) {
+                .error_union => if (result) |payload| payloadIndex(payload) else |err| errIndex(err),
+                .error_set => errIndex(result),
+                else => comptime unreachable,
+            };
+        }
+
+        fn payloadIndex(payload: PayloadT) usize {
+            return switch (@typeInfo(PayloadT)) {
+                .@"union" => switch (payload) {
+                    inline else => |_, tag| comptime slotForPayload(@tagName(tag)),
+                },
+                .@"enum" => switch (payload) {
+                    inline else => |tag| comptime slotForPayload(@tagName(tag)),
+                },
+                else => comptime unreachable,
+            };
+        }
+
+        fn errIndex(err: ErrorSetT) usize {
+            return switch (err) {
+                inline else => |e| comptime slotForErr(@errorName(e)),
+            };
+        }
+
+        /// Resolves through `slots` rather than returning `fieldIndex` directly. Payload slots are
+        /// currently emitted first and in field order, so the two always agree and the scan is an
+        /// identity — it is here so that a change to slot ordering stays a compile error rather than
+        /// a silent relabelling.
+        fn slotForPayload(comptime name: []const u8) usize {
+            @setEvalBranchQuota(1000 + slots.len * 200);
+            const want = std.meta.fieldIndex(PayloadT, name).?;
+            for (slots, 0..) |slot, i| switch (slot.origin) {
+                .payload => |idx| if (idx == want) return i,
+                .err => {},
+            };
+            @compileError("ResultLatencyHistogram: no slot for payload variant `" ++ name ++ "`");
+        }
+
+        fn slotForErr(comptime name: []const u8) usize {
+            @setEvalBranchQuota(1000 + slots.len * 200);
+            for (slots, 0..) |slot, i| switch (slot.origin) {
+                .err => |ename| if (std.mem.eql(u8, ename, name)) return i,
+                .payload => {},
+            };
+            @compileError("ResultLatencyHistogram: no slot for error `" ++ name ++ "`");
+        }
+
+        /// The single comptime pass over `Result`. Payload variants come first, in field order, then
+        /// the errors; each error label is `err_`-prefixed unless it already is.
+        ///
+        /// Error order is whatever `@typeInfo` reports, which is Zig's own — not the order they were
+        /// declared in, and not stable against unrelated code that mentions the same errors. Nothing
+        /// depends on it: `slotForErr` matches by name, and a series is identified in the exposition
+        /// by its label text. Only the slot a given error lands in can move between builds.
+        fn flattenResult(comptime Res: type, comptime cfg: ResultLatencyHistogramLabelConfig) []const ResultSlot {
+            comptime {
+                const info = @typeInfo(Res);
+                const payload_names: []const [:0]const u8 = switch (info) {
+                    .error_union => |eu| switch (@typeInfo(eu.payload)) {
+                        // A bare `union` is accepted by `fieldNames` but has no tag to dispatch on,
+                        // and would fail much later, inside `observe`, pointing here instead of at
+                        // the caller's type.
+                        .@"union" => |u| if (u.tag_type == null) @compileError(
+                            "ResultLatencyHistogram payload `" ++ @typeName(eu.payload) ++
+                                "` is an untagged union; it has no tag to select a series with. " ++
+                                "Make it a `union(enum)`.",
+                        ) else std.meta.fieldNames(eu.payload),
+                        .@"enum" => std.meta.fieldNames(eu.payload),
+                        else => @compileError(
+                            "ResultLatencyHistogram payload must be a tagged union or enum; got " ++
+                                @typeName(eu.payload),
+                        ),
+                    },
+                    .error_set => &.{},
+                    else => @compileError(
+                        "ResultLatencyHistogram requires an error union (`E!P`) or error set; got " ++
+                            @typeName(Res) ++ ". For a plain enum/union, use VariantHistogram directly.",
+                    ),
+                };
+                const ErrSet = switch (info) {
+                    .error_union => |eu| eu.error_set,
+                    .error_set => Res,
+                    else => unreachable,
+                };
+                const err_fields = @typeInfo(ErrSet).error_set orelse @compileError(
+                    "ResultLatencyHistogram needs a concrete error set, and `" ++ @typeName(ErrSet) ++
+                        "` has none to enumerate. Every error becomes its own registered series, " ++
+                        "so the set has to be nameable: declare one " ++
+                        "(`pub const FooError = error{...}`) and return `FooError!Payload`.",
+                );
+
+                for (cfg.payload_prefix.keys(), cfg.payload_prefix.values()) |key, prefix| {
+                    for (payload_names) |name| {
+                        if (std.mem.eql(u8, name, key)) break;
+                    } else @compileError(
+                        "ResultLatencyHistogram: payload_prefix key `" ++ key ++
+                            "` names no payload variant of " ++ @typeName(Res) ++ ".",
+                    );
+                    if (prefix.len == 0 or prefix[prefix.len - 1] != '_') @compileError(
+                        "ResultLatencyHistogram: payload_prefix value `" ++ prefix ++ "` (for `" ++ key ++
+                            "`) must end in `_`, so it reads as one label segment.",
+                    );
+                }
+
+                const count = payload_names.len + err_fields.len;
+                if (count > result_histogram_max_series) @compileError(std.fmt.comptimePrint(
+                    "ResultLatencyHistogram: {s} flattens to {d} outcomes, over the {d}-series cap. Each " ++
+                        "one claims a full LatencyHistogram from the shared histogram region; an " ++
+                        "error set this wide is usually one that grew by accident. Narrow the set, " ++
+                        "or raise `result_histogram_max_series` deliberately.\n",
+                    .{ @typeName(Res), count, result_histogram_max_series },
+                ));
+                @setEvalBranchQuota(1000 + err_fields.len * 500 + count * count * 10);
+
+                var res_slots: [count]ResultSlot = undefined;
+                for (payload_names, 0..) |name, i| {
+                    const prefix = cfg.payload_prefix.get(name) orelse "";
+                    res_slots[i] = .{ .label = snakeCase(prefix, name), .origin = .{ .payload = i } };
+                }
+                for (err_fields, payload_names.len..) |field, i| {
+                    // Decided on the snake_cased spelling, not the raw name: error names are
+                    // conventionally PascalCase, so testing `ErrFoo` against a snake_case prefix
+                    // would prefix it a second time.
+                    const prefix =
+                        if (std.mem.startsWith(u8, snakeCase("", field.name), "err_")) "" else "err_";
+                    res_slots[i] = .{ .label = snakeCase(prefix, field.name), .origin = .{ .err = field.name } };
+                }
+
+                for (res_slots, 0..) |a, i| for (res_slots[i + 1 ..]) |b| {
+                    if (std.mem.eql(u8, a.label, b.label)) {
+                        // Payload slots all precede error slots, so an `.err` on the left means both
+                        // are errors.
+                        const advice = switch (a.origin) {
+                            .payload => switch (b.origin) {
+                                .payload => "Two payload variants snake_case to one spelling. " ++
+                                    "Rename one.",
+                                .err => "A payload variant collides with a flattened error. " ++
+                                    "Rename the payload variant, or give it a `payload_prefix`.",
+                            },
+                            .err => "Two errors snake_case to one spelling. Rename one.",
+                        };
+                        @compileError(
+                            "ResultLatencyHistogram label collision in " ++ @typeName(Result) ++ ": `" ++
+                                a.label ++ "` names two outcomes. " ++ advice,
+                        );
+                    }
+                };
+
+                const frozen = res_slots;
+                return &frozen;
+            }
+        }
+
+        fn ResultLabelEnum(comptime res_slots: []const ResultSlot) type {
+            comptime {
+                var fields: [res_slots.len]std.builtin.Type.EnumField = undefined;
+                for (res_slots, 0..) |slot, i| fields[i] = .{ .name = slot.label, .value = i };
+                const frozen = fields;
+                return @Type(.{ .@"enum" = .{
+                    .tag_type = std.math.IntFittingRange(0, @max(1, res_slots.len) - 1),
+                    .fields = &frozen,
+                    .decls = &.{},
+                    .is_exhaustive = true,
+                } });
+            }
+        }
+
+        fn snakeCase(comptime prefix: []const u8, comptime name: []const u8) [:0]const u8 {
+            comptime {
+                std.debug.assert(prefix.len == 0 or prefix[prefix.len - 1] == '_');
+                // The function puts an underscore only before an uppercase character, and never before two
+                // uppercase characters in sequence. Thus, at worst, every second character gets one:
+                // `aAaA` -> `a_aa_a`. Twice the length is a sufficient over-allocation.
+                var buf: [prefix.len + name.len * 2:0]u8 = undefined;
+                @memcpy(buf[0..prefix.len], prefix);
+                var len = prefix.len;
+
+                for (name, 0..) |char, i| {
+                    if (std.ascii.isUpper(char) and i > 0) {
+                        const starts_word = !std.ascii.isUpper(name[i - 1]);
+                        const ends_acronym = i + 1 < name.len and std.ascii.isLower(name[i + 1]);
+                        if (starts_word or ends_acronym) {
+                            buf[len] = '_';
+                            len += 1;
+                        }
+                    }
+                    buf[len] = std.ascii.toLower(char);
+                    len += 1;
+                }
+                buf[len] = 0;
+
+                const frozen = buf;
+                return frozen[0..len :0];
+            }
+        }
+    };
+}
+
+/// Times an operation and records the elapsed nanoseconds into the `ResultLatencyHistogram` series chosen
+/// by the operation's result. Mirrors `LatencyObserver`, but `observe` takes the raw `Result`.
+pub fn ResultLatencyObserver(comptime RH: type) type {
+    return struct {
+        hist: *const RH,
+        start_ns: u64,
+        const ResultLatencyObserverSelf = @This();
+
+        pub fn init(hist: *const RH) ResultLatencyObserverSelf {
+            return .{ .hist = hist, .start_ns = clock.monotonic(.ns) };
+        }
+
+        /// Nanoseconds since construction; saturating so a non-monotonic clock can't underflow.
+        pub fn elapsedNs(self: ResultLatencyObserverSelf) u64 {
+            return clock.monotonic(.ns) -| self.start_ns;
+        }
+
+        pub fn observe(self: ResultLatencyObserverSelf, result: RH.Result) void {
+            self.hist.observe(result, self.elapsedNs());
+        }
+    };
+}
+
 fn initBuckets(
     comptime len: usize,
     upper_bounds: *const [len]f64,
@@ -2245,4 +2582,141 @@ test "latency observer: a plain histogram observes through the same ns contract"
     try std.testing.expectEqual(@as(u63, 1), snap.count);
     try std.testing.expect(snap.sum >= @as(f64, @floatFromInt(before)));
     try std.testing.expect(snap.sum <= @as(f64, @floatFromInt(after)));
+}
+
+// Deliberately awkward spellings: a payload variant carrying a struct, one that needs a prefix to
+// stay distinct, an error whose name starts an acronym, and one already spelled `err_`.
+const ResultTestStatus = union(enum) {
+    unfinished_fec_set: struct { received: u8 },
+    fec_set_finished,
+    shred_already_seen,
+};
+const ResultTestError = error{ ShredTooNew, IOFailure, err_already_prefixed };
+const ResultTestHistogram = ResultLatencyHistogram(ResultTestError!ResultTestStatus, .{
+    .payload_prefix = .initComptime(.{
+        .{ "fec_set_finished", "full_" },
+        .{ "shred_already_seen", "early_" },
+    }),
+});
+
+/// Asserts a `ResultLatencyHistogram` exposes exactly these labels, in any order. `expectEqualSlices` is
+/// wrong for the error half: `@typeInfo` reports an error set in Zig's order, not the declaration's,
+/// and unrelated code mentioning the same errors can change it. The spellings are the contract.
+fn expectLabels(comptime Rh: type, want: []const []const u8) !void {
+    const names = std.meta.fieldNames(Rh.LabelEnum);
+    try std.testing.expectEqual(want.len, names.len);
+    for (want) |w| {
+        for (names) |got| {
+            if (std.mem.eql(u8, got, w)) break;
+        } else {
+            std.debug.print("ResultLatencyHistogram has no label `{s}`\n", .{w});
+            return error.TestExpectedEqual;
+        }
+    }
+}
+
+test "result histogram: flattens payloads then errors into one label per outcome" {
+    // Payload variants keep field order and take their configured prefix.
+    try std.testing.expectEqualSlices([]const u8, &.{
+        "unfinished_fec_set",
+        "full_fec_set_finished",
+        "early_shred_already_seen",
+    }, std.meta.fieldNames(ResultTestHistogram.LabelEnum)[0..3]);
+
+    // Then one label per error: snake_cased, `err_`-prefixed unless the name already is.
+    // `IOFailure` is the acronym case — the boundary falls before the last capital, not between
+    // every pair.
+    try expectLabels(ResultTestHistogram, &.{
+        "unfinished_fec_set",
+        "full_fec_set_finished",
+        "early_shred_already_seen",
+        "err_shred_too_new",
+        "err_io_failure",
+        "err_already_prefixed",
+    });
+}
+
+test "result histogram: a runtime result records into its own series" {
+    const gpa = std.testing.allocator;
+
+    const rh: ResultTestHistogram = try .initForTest(gpa, observer_test_layout);
+    defer rh.deinitForTest(gpa);
+
+    // Runtime values, not comptime literals: `observe` takes the raw result, and this is what
+    // exercises the slot dispatch. A mis-ordered mapping passes a literal-only suite and fails here.
+    const results: []const ResultTestError!ResultTestStatus = &.{
+        .{ .unfinished_fec_set = .{ .received = 3 } },
+        .fec_set_finished,
+        .fec_set_finished,
+        error.IOFailure,
+        error.err_already_prefixed,
+    };
+    for (results) |result| rh.observe(result, 700);
+
+    inline for (.{
+        .{ .unfinished_fec_set, 1 },
+        .{ .full_fec_set_finished, 2 },
+        .{ .early_shred_already_seen, 0 },
+        .{ .err_shred_too_new, 0 },
+        .{ .err_io_failure, 1 },
+        .{ .err_already_prefixed, 1 },
+    }) |case| {
+        var snap = rh.get(case[0]).swapOutSnapshot();
+        defer snap.release();
+        try std.testing.expectEqual(@as(u63, case[1]), snap.count);
+    }
+}
+
+test "result histogram: the observer files a span by its outcome" {
+    const gpa = std.testing.allocator;
+
+    const rh: ResultTestHistogram = try .initForTest(gpa, observer_test_layout);
+    defer rh.deinitForTest(gpa);
+
+    // The span opens before the outcome is known, which is the whole point: no comptime tag is
+    // needed at the end, just the result the operation returned.
+    const obs = rh.observer();
+    const before = obs.elapsedNs();
+    var result: ResultTestError!ResultTestStatus = .fec_set_finished;
+    _ = &result;
+    obs.observe(result);
+    const after = obs.elapsedNs();
+
+    var snap = rh.get(.full_fec_set_finished).swapOutSnapshot();
+    defer snap.release();
+    try std.testing.expectEqual(@as(u63, 1), snap.count);
+    try std.testing.expect(snap.sum >= before);
+    try std.testing.expect(snap.sum <= after);
+}
+
+test "result histogram: a bare error set flattens to errors alone" {
+    const gpa = std.testing.allocator;
+    const Rh = ResultLatencyHistogram(ResultTestError, .{});
+
+    try expectLabels(Rh, &.{ "err_shred_too_new", "err_io_failure", "err_already_prefixed" });
+
+    const rh: Rh = try .initForTest(gpa, observer_test_layout);
+    defer rh.deinitForTest(gpa);
+
+    rh.observe(error.ShredTooNew, 700);
+
+    var snap = rh.get(.err_shred_too_new).swapOutSnapshot();
+    defer snap.release();
+    try std.testing.expectEqual(@as(u63, 1), snap.count);
+}
+
+test "result histogram: an enum payload flattens like a union one" {
+    const gpa = std.testing.allocator;
+    const Rh = ResultLatencyHistogram(ResultTestError!enum { hit, miss }, .{});
+
+    const rh: Rh = try .initForTest(gpa, observer_test_layout);
+    defer rh.deinitForTest(gpa);
+
+    var outcome: @typeInfo(Rh.Result).error_union.payload = .miss;
+    _ = &outcome;
+    rh.observe(outcome, 700);
+
+    var snap = rh.get(.miss).swapOutSnapshot();
+    defer snap.release();
+    try std.testing.expectEqual(@as(u63, 1), snap.count);
 }

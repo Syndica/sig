@@ -197,7 +197,7 @@ const HarnessState = struct {
         ls.base_slot = 0;
         @memset(&ls.leaders, .ZEROES);
 
-        const receiver = try Receiver.init(allocator, IN_PROGRESS_CAPACITY, DONE_CAPACITY);
+        const receiver = try Receiver.init(allocator, IN_PROGRESS_CAPACITY, DONE_CAPACITY, .initNoop());
 
         self.* = .{
             .allocator = allocator,

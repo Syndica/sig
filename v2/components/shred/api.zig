@@ -227,9 +227,28 @@ pub const Shred = extern struct {
     const merkle_node_size = 20;
     const merkle_root_size = 32;
 
+    pub const PacketCheckedError = error{
+        PacketUnderMinHeaderSize,
+        UnsupportedVariant,
+        PacketUnderHeaderSize,
+        DataSmallerThanHeader,
+        DataPacketUnderMinSize,
+        DataEffectiveSizeTooSmall,
+        CodeShredOverMaxSize,
+        PacketSizeUnderExpected3,
+        DataShredMarkedCompleteIsNotLastInSet,
+        BadOffset,
+        BadSlotOrParentOffset,
+        BadSlotIdx,
+        BadCodeShredIdx,
+        NoCodeOrDataCount,
+        CodeOrDataCountTooLarge,
+        SlotIndexTooHigh,
+    };
+
     // [firedancer] https://github.com/firedancer-io/firedancer/commit/7cbb71919ec9b8045c247957280e5b15d1e0cb85
     /// Makes sure that the *layout* of the Shred is valid.
-    pub fn fromPacketChecked(packet: *const Packet) !*const Shred {
+    pub fn fromPacketChecked(packet: *const Packet) PacketCheckedError!*const Shred {
         if (packet.len < min_header_size) return error.PacketUnderMinHeaderSize;
         if (!Shred.hasSupportedVariant(&packet.data)) return error.UnsupportedVariant;
 
@@ -442,8 +461,10 @@ pub const Shred = extern struct {
         @panic("unimplemented");
     }
 
+    pub const MerkleRootError = ComputeMerkleRootError;
+
     // Reconstructs the merkle root from a shred
-    pub fn merkleRoot(shred: *const Shred, out: *Hash) !void {
+    pub fn merkleRoot(shred: *const Shred, out: *Hash) MerkleRootError!void {
         const zone = tracy.Zone.init(@src(), .{ .name = "merkleRoot" });
         defer zone.deinit();
 
@@ -478,12 +499,16 @@ pub const Shred = extern struct {
         out.* = t;
     }
 
+    pub const ComputeMerkleRootError = error{
+        InvalidMerkleProof,
+    };
+
     fn computeMerkleRoot(
         shred_idx: u32,
         leaf_node: *const Hash,
         proof_nodes: []const MerkleProofNode,
         out: *Hash,
-    ) !void {
+    ) ComputeMerkleRootError!void {
         var idx = shred_idx;
         out.* = leaf_node.*;
 

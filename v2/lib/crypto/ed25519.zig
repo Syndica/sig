@@ -126,6 +126,12 @@ pub fn verifyBatchOverSingleMessage(
     }
 }
 
+pub const VerifySignatureError = error{
+    InvalidSignature,
+} || (std.crypto.errors.NonCanonicalError ||
+    std.crypto.errors.EncodingError ||
+    AffineLowOrderError);
+
 /// See the doc-comment above `verifyBatchOverSingleMessage` for further detail,
 /// but this is that same thing, just for single messages, and with the ability to toggle
 /// between `verify` and `verify_strict` semantics (used in ed25519 precompile).
@@ -134,7 +140,7 @@ pub fn verifySignature(
     pubkey: *const Pubkey,
     message: []const u8,
     strict: bool,
-) !void {
+) VerifySignatureError!void {
     const s = signature.s;
     const r = signature.r;
     try Edwards25519.scalar.rejectNonCanonical(s);
@@ -166,6 +172,8 @@ pub fn affineEqual(a: Edwards25519, b: Edwards25519) bool {
     return x1.equivalent(a.x) and y1.equivalent(a.y);
 }
 
+pub const AffineLowOrderError = error{WeakPublicKey};
+
 /// Determines whether `a` is of small order (in the torision subgroup E[8]), but with the
 /// assumption that `a.Z == 1`.
 ///
@@ -189,7 +197,7 @@ pub fn affineEqual(a: Edwards25519, b: Edwards25519) bool {
 /// just checking a single coordinate of the point is enough to determine if it's in the blacklist,
 /// meaning we only need 4 equivalence checks to cover all of the pairs.
 ///
-pub fn affineLowOrder(a: Edwards25519) !void {
+pub fn affineLowOrder(a: Edwards25519) AffineLowOrderError!void {
     // y coordinate of points 5 and 6
     const y0: Edwards25519.Fe = .{ .limbs = .{
         0x4d3d706a17c7,

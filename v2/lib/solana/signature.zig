@@ -33,7 +33,11 @@ pub const Signature = extern struct {
         return .{ .r = signature.r, .s = signature.s };
     }
 
-    pub fn verify(self: *const Signature, pubkey: *const Pubkey, message: []const u8) !void {
+    pub fn verify(
+        self: *const Signature,
+        pubkey: *const Pubkey,
+        message: []const u8,
+    ) ed25519.VerifySignatureError!void {
         const zone = tracy.Zone.init(@src(), .{ .name = "Sig.verify" });
         defer zone.deinit();
 
