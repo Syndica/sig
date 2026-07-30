@@ -1242,8 +1242,8 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
                                         // HostMemory couples the writability of a region to the
                                         // slice type we are unable to promote a constant region
                                         // to a mutable region. In practice during runtime all
-                                        // region host memory is allocated so constCast should
-                                        // okay however this is not something we should rely on.
+                                        // region host memory is allocated so constCast should be
+                                        // okay; however this is not something we should rely on.
                                         // We need to rework our HostMemory and MemoryState
                                         // implementation to decouple the writability of a region
                                         // from the slice type.
