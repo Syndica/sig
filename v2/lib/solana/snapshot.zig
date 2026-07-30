@@ -500,6 +500,50 @@ pub const AccountsDbFields = extern struct {
     }
 };
 
+/// Bytes to peek from a vote-account data blob to reach the commission
+/// field across all recognised `VoteStateVersions` layouts. v4 has the
+/// deepest commission at offset 132 (u16); +2 for the field bytes.
+const VOTE_STATE_COMMISSION_PREFIX_LEN: usize = 132 + 2;
+
+/// Extract `commission` from a `VoteStateVersions`-encoded account
+/// data blob, returning it as basis points (0..10000). Returns 0
+/// for unknown discriminants, uninitialized vote states, or blobs
+/// too short for the encoded variant.
+///
+/// Wire layout (bincode, LE):
+///   [u32 discriminant]
+///     0 -> uninitialized
+///     1 -> v1_14_11: node_pubkey(32) + withdrawer(32) + commission(u8 at 68)
+///     2 -> v3:       node_pubkey(32) + withdrawer(32) + commission(u8 at 68)
+///     3 -> v4:       node_pubkey(32) + withdrawer(32) +
+///                    inflation_rewards_collector(32) +
+///                    block_revenue_collector(32) +
+///                    inflation_rewards_commission_bps(u16 at 132)
+///
+/// v1_14_11 / v3 store a percentage (0..100); scaled to bps by ×100.
+/// v4 stores bps directly (SIMD-0185).
+fn voteStateCommissionBps(data: []const u8) u16 {
+    if (data.len < 4) return 0;
+    const discriminant = std.mem.readInt(u32, data[0..4], .little);
+    switch (discriminant) {
+        1, 2 => {
+            const off = 4 + 32 + 32;
+            if (data.len < off + 1) return 0;
+            const pct = data[off];
+            if (pct > 100) return 0;
+            return @as(u16, pct) * 100;
+        },
+        3 => {
+            const off = 4 + 32 + 32 + 32 + 32;
+            if (data.len < off + 2) return 0;
+            const bps = std.mem.readInt(u16, data[off..][0..2], .little);
+            if (bps > 10_000) return 0;
+            return bps;
+        },
+        else => return 0,
+    }
+}
+
 pub const ExtraFields = extern struct {
     versioned_epoch_stakes: RelativeSlice(VersionedEpochStakes) = .{},
     /// - TowerBFT: the Merkle root of the last FEC set of the block
@@ -516,7 +560,12 @@ pub const ExtraFields = extern struct {
 
         pub const VoteAccountEntry = extern struct {
             pubkey: Pubkey,
-            stake: u64, // kept as Versioned entry cant lookup past/future epoch VoteAccount data
+            stake: u64,
+            /// Extracted from the vote-account data blob during snapshot
+            /// parsing; kept here because the Versioned entry cannot look
+            /// up past/future-epoch VoteAccount data at read time.
+            commission_bps: u16,
+            _pad: [6]u8 = @splat(0),
         };
 
         pub const NodeToVoterEntry = extern struct {
@@ -556,12 +605,25 @@ pub const ExtraFields = extern struct {
                 } = undefined;
                 try r.readSliceAll(std.mem.asBytes(&header));
 
-                entry.* = .{ .pubkey = header.key, .stake = header.stake };
-                try r.discardAll(header.data_len + // data bytes (TODO: validate this against account data?)
+                // Peek the prefix of the vote-account data blob so the
+                // commission field is captured here rather than by a
+                // second pass over accounts_db at boot. The prefix bound
+                // covers the largest known VoteStateVersions layout up
+                // to the commission field (v4, offset 132 + u16).
+                var vs_prefix: [VOTE_STATE_COMMISSION_PREFIX_LEN]u8 = @splat(0);
+                const to_read = @min(header.data_len, vs_prefix.len);
+                try r.readSliceAll(vs_prefix[0..to_read]);
+                try r.discardAll(header.data_len - to_read + // remaining data bytes
                     32 + // owner: Pubkey
                     1 + // executable: bool
                     8 // rent_epoch: Epoch
                 );
+
+                entry.* = .{
+                    .pubkey = header.key,
+                    .stake = header.stake,
+                    .commission_bps = voteStateCommissionBps(vs_prefix[0..to_read]),
+                };
             }
 
             //   stake_delegations: HashMap(Pubkey, { Delegation, credits_observed: u64 })
@@ -1120,4 +1182,49 @@ test "deserialized snapshot matches generated snapshot json" {
 
 fn jsonU64(value: std.json.Value) u64 {
     return @intCast(value.integer);
+}
+
+test "voteStateCommissionBps decodes v1_14_11 / v3 percentage as bps" {
+    var buf: [128]u8 = @splat(0);
+    // discriminant = 2 (v3)
+    std.mem.writeInt(u32, buf[0..4], 2, .little);
+    buf[4 + 32 + 32] = 42; // commission = 42%
+    try std.testing.expectEqual(@as(u16, 4200), voteStateCommissionBps(buf[0..69]));
+
+    // discriminant = 1 (v1_14_11) — same offsets
+    std.mem.writeInt(u32, buf[0..4], 1, .little);
+    buf[4 + 32 + 32] = 7;
+    try std.testing.expectEqual(@as(u16, 700), voteStateCommissionBps(buf[0..69]));
+}
+
+test "voteStateCommissionBps decodes v4 bps directly" {
+    var buf: [256]u8 = @splat(0);
+    std.mem.writeInt(u32, buf[0..4], 3, .little);
+    const off = 4 + 32 + 32 + 32 + 32;
+    std.mem.writeInt(u16, buf[off..][0..2], 750, .little);
+    try std.testing.expectEqual(@as(u16, 750), voteStateCommissionBps(buf[0 .. off + 2]));
+}
+
+test "voteStateCommissionBps returns 0 on malformed / uninitialized" {
+    // Too short for a discriminant.
+    try std.testing.expectEqual(@as(u16, 0), voteStateCommissionBps(&.{ 0, 1 }));
+
+    // Uninitialized.
+    var buf: [4]u8 = @splat(0);
+    try std.testing.expectEqual(@as(u16, 0), voteStateCommissionBps(&buf));
+
+    // v3 discriminant but truncated body.
+    std.mem.writeInt(u32, buf[0..4], 2, .little);
+    try std.testing.expectEqual(@as(u16, 0), voteStateCommissionBps(&buf));
+
+    // v3 with out-of-range percentage.
+    var big: [80]u8 = @splat(0);
+    std.mem.writeInt(u32, big[0..4], 2, .little);
+    big[4 + 32 + 32] = 200; // > 100
+    try std.testing.expectEqual(@as(u16, 0), voteStateCommissionBps(&big));
+
+    // Unknown discriminant.
+    var unk: [4]u8 = @splat(0);
+    std.mem.writeInt(u32, unk[0..4], 99, .little);
+    try std.testing.expectEqual(@as(u16, 0), voteStateCommissionBps(&unk));
 }

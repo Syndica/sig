@@ -61,12 +61,34 @@ pub fn main() !void {
         try .sized(@sizeOf(lib.snapshot.SnapshotMetadata) + snapshot_fba_size);
     snapshot_metadata.ptr().init(snapshot_fba_size);
     snapshot_metadata.ptr().manifest.extra_fields.block_id = first_shred.chainedMerkleRoot().*;
+    snapshot_metadata.ptr().manifest.bank_fields.epoch_schedule = .INIT;
     {
         const bhq = &snapshot_metadata.ptr().manifest.bank_fields.blockhash_queue;
         bhq.max_age = 300;
         bhq.hashes[0] = .ZEROES;
         bhq.hashes_count = 1;
         bhq.last_hash = .ZEROES;
+    }
+    {
+        // Minimal VersionedEpochStakes so replay's stakes boot loader
+        // finds an entry for the derived boot epoch. Entry epoch must
+        // match the epoch derived from `parent_slot` under
+        // `EpochSchedule.INIT`; empty vote_accounts keeps downstream
+        // reads no-ops until fixtures grow real stakes data.
+        const VES = lib.solana.snapshot.ExtraFields.VersionedEpochStakes;
+        const boot_epoch = snapshot_metadata.ptr().manifest.bank_fields
+            .epoch_schedule.getEpoch(fixture.manifest.shreds.parent_slot);
+        const memory = snapshot_metadata.ptr().getMemory();
+        const ves_ptr: *VES = @ptrCast(@alignCast(memory.ptr));
+        ves_ptr.* = .{
+            .epoch = boot_epoch,
+            .total_stake = 0,
+            .vote_accounts = .{},
+            .node_to_vote_accounts = .{},
+            .epoch_authorized_voters = .{},
+        };
+        snapshot_metadata.ptr().manifest.extra_fields.versioned_epoch_stakes =
+            .{ .offset = 0, .len = 1 };
     }
     snapshot_metadata.ptr().populateSlot(fixture.manifest.shreds.parent_slot);
 
