@@ -112,6 +112,7 @@ pub fn AccountFetcherType(comptime UnrootedStore: type) type {
             block_ref: BlockRef,
             pubkey: Pubkey,
 
+            // TODO: do we need this? I don;t think the resolver reallt cares about this since pubkey should be enough?
             /// Opaque to AccountFetcher.
             user_data: UserDataType,
         };
