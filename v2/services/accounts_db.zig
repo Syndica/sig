@@ -20,6 +20,51 @@ pub const std_options = start.options;
 pub const ReadOnly = services.accounts_db.ReadOnly;
 pub const ReadWrite = services.accounts_db.ReadWrite;
 
+const ServiceLogger = lib.telemetry.Logger("main");
+
+/// Bootstrap-blocked observability for the snapshot-bytes wait. Held by pointer
+/// on the `SnapshotBufReader` so it survives across pass-by-value copies of the
+/// reader. See issue #1746.
+const SnapshotWaitState = struct {
+    logger: ServiceLogger,
+    start_ns: u64,
+    gate: lib.telemetry.ThrottledLogger,
+    logged_awaiting: bool = false,
+    logged_ready: bool = false,
+
+    const AWAITING_LOG_INTERVAL_NS: u64 = 10 * std.time.ns_per_s;
+    const AWAITING_WARN_AFTER_NS: u64 = 5 * 60 * std.time.ns_per_s;
+
+    fn maybeLogAwaiting(self: *SnapshotWaitState) void {
+        const now_ns = lib.clock.monotonic(.ns);
+        if (!self.gate.tick(now_ns)) return;
+        self.logged_awaiting = true;
+        const elapsed_ns = now_ns -| self.start_ns;
+        const elapsed_s = elapsed_ns / std.time.ns_per_s;
+        const escalate =
+            !self.gate.escalated and elapsed_ns >= AWAITING_WARN_AFTER_NS;
+        if (escalate) {
+            self.gate.escalated = true;
+            self.logger.warn().logf(
+                "accounts_db: awaiting snapshot bytes from snapshot service ({d}s)",
+                .{elapsed_s},
+            );
+        } else {
+            self.logger.info().logf(
+                "accounts_db: awaiting snapshot bytes from snapshot service ({d}s)",
+                .{elapsed_s},
+            );
+        }
+    }
+
+    fn markReady(self: *SnapshotWaitState) void {
+        if (self.logged_awaiting and !self.logged_ready) {
+            self.logged_ready = true;
+            self.logger.info().log("accounts_db: receiving snapshot bytes");
+        }
+    }
+};
+
 pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     rw.tel.signalReady();
@@ -30,6 +75,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     const Global = struct {
         var fba_memory: [32 * 1024 * 1024]u8 = undefined;
         var rooted: Rooted = undefined;
+        var wait_state: SnapshotWaitState = undefined;
     };
 
     const rooted = &Global.rooted;
@@ -50,20 +96,42 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     if (rooted.table.count() == 0) {
         logger.info().log("no existing rooted db. reading from snapshot");
 
+        const now_ns = lib.clock.monotonic(.ns);
+        Global.wait_state = .{
+            .logger = logger,
+            .start_ns = now_ns,
+            .gate = .init(SnapshotWaitState.AWAITING_LOG_INTERVAL_NS, now_ns),
+        };
+
         const SnapshotDataRingReader = @TypeOf(in);
         const SnapshotBufReader = struct {
             in_: *SnapshotDataRingReader,
             runner_: lib.runner.Connection,
             completion_: *std.atomic.Value(f64),
+            wait_: *SnapshotWaitState,
 
             pub fn percentCompleted(self: @This()) f64 {
                 return self.completion_.load(.monotonic);
             }
 
             pub fn getBuffer(self: @This()) []const u8 {
-                return self.in_.getBufferBlocking(self.runner_) catch |err| switch (err) {
-                    error.Canceled => return &.{}, // cancel -> EOF
+                // Fast path: bytes already available, no waiting.
+                if (self.in_.getBuffer()) |buf| {
+                    self.wait_.markReady();
+                    return buf;
+                }
+
+                // Slow path: mirror `getBufferBlocking`'s idle/active signaling,
+                // and additionally emit throttled "still awaiting" logs so an
+                // operator can tell the service is blocked upstream (see #1746).
+                const buf = while (true) {
+                    self.wait_.maybeLogAwaiting();
+                    self.runner_.activity.signalIdleSpinning() catch return &.{};
+                    if (self.in_.getBuffer()) |b| break b;
                 };
+                self.runner_.activity.signalActive() catch return &.{};
+                self.wait_.markReady();
+                return buf;
             }
 
             pub fn advance(self: @This(), n: usize) void {
@@ -76,6 +144,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             .in_ = &in,
             .runner_ = runner,
             .completion_ = &rw.ready_snapshot_in.completion,
+            .wait_ = &Global.wait_state,
         });
 
         logger.info().log("reading snapshot accounts");

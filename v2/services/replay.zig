@@ -275,6 +275,74 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     }
 }
 
+/// Bootstrap-blocked observability for replay's wait on runtime metadata
+/// (blockhash queue + root slot) from accounts_db. Kept next to `bootstrap`
+/// because the waits happen only during bootstrap. See issue #1746.
+const RuntimeMetadataWaitState = struct {
+    logger: tel.Logger("main"),
+    start_ns: u64,
+    gate: tel.ThrottledLogger,
+    logged_awaiting: bool = false,
+    logged_ready: bool = false,
+
+    const AWAITING_LOG_INTERVAL_NS: u64 = 10 * std.time.ns_per_s;
+    // accounts_db loading a mainnet snapshot can take longer than 10 minutes;
+    // avoid alerting the operator until we're well past the realistic tail.
+    const AWAITING_WARN_AFTER_NS: u64 = 15 * 60 * std.time.ns_per_s;
+
+    fn maybeLogAwaiting(self: *RuntimeMetadataWaitState) void {
+        const now_ns = lib.clock.monotonic(.ns);
+        if (!self.gate.tick(now_ns)) return;
+        self.logged_awaiting = true;
+        const elapsed_ns = now_ns -| self.start_ns;
+        const elapsed_s = elapsed_ns / std.time.ns_per_s;
+        const escalate =
+            !self.gate.escalated and elapsed_ns >= AWAITING_WARN_AFTER_NS;
+        if (escalate) {
+            self.gate.escalated = true;
+            self.logger.warn().logf(
+                "replay: awaiting runtime metadata from accounts_db ({d}s)",
+                .{elapsed_s},
+            );
+        } else {
+            self.logger.info().logf(
+                "replay: awaiting runtime metadata from accounts_db ({d}s)",
+                .{elapsed_s},
+            );
+        }
+    }
+
+    fn markReady(self: *RuntimeMetadataWaitState) void {
+        if (self.logged_awaiting and !self.logged_ready) {
+            self.logged_ready = true;
+            self.logger.info().log("replay: receiving runtime metadata");
+        }
+    }
+};
+
+/// Non-blocking + throttled-logging wrapper around
+/// `blockhashes_in.getBufferBlocking(runner)`. Mirrors the idle/active signaling
+/// of `getBufferBlocking` and additionally emits periodic "still awaiting" logs
+/// while the reader has nothing to return.
+fn waitForBlockhashes(
+    blockhashes_in: anytype,
+    runner: lib.runner.Connection,
+    wait_state: *RuntimeMetadataWaitState,
+) ![]const Hash {
+    if (blockhashes_in.getBuffer()) |buf| {
+        wait_state.markReady();
+        return buf;
+    }
+    const buf = while (true) {
+        wait_state.maybeLogAwaiting();
+        try runner.activity.signalIdleSpinning();
+        if (blockhashes_in.getBuffer()) |b| break b;
+    };
+    try runner.activity.signalActive();
+    wait_state.markReady();
+    return buf;
+}
+
 /// Reads all the RuntimeMetadata provided by accountsdb from the snapshot or
 /// its internal state. This bootstraps replay with information about its
 /// starting root slot, and some older info like the history of blockhashes.
@@ -299,6 +367,18 @@ fn bootstrap(
     exec_states: *BlockExecStates,
     blockhash_states: *BlockHashStates,
 ) !void {
+    // Bootstrap-blocked observability (issue #1746). Emits a periodic info log
+    // while replay has not yet received any runtime-metadata bytes from
+    // accounts_db, and escalates to warn after 15 minutes. Silent on the
+    // healthy path once the first chunk arrives.
+    logger.info().log("replay: awaiting runtime metadata from accounts_db");
+    const now_ns = lib.clock.monotonic(.ns);
+    var wait_state: RuntimeMetadataWaitState = .{
+        .logger = logger,
+        .start_ns = now_ns,
+        .gate = .init(RuntimeMetadataWaitState.AWAITING_LOG_INTERVAL_NS, now_ns),
+    };
+
     var num_hashes: usize = 0;
     // Drain the blockhash queue into the block tree. accountsdb writes into
     // this ring blocks waiting for the reader (us).
@@ -307,7 +387,7 @@ fn bootstrap(
         defer blockhashes_in.close();
         var last_block: ?api.BlockRef = null;
         while (true) {
-            const hashes = try blockhashes_in.getBufferBlocking(runner);
+            const hashes = try waitForBlockhashes(&blockhashes_in, runner, &wait_state);
             if (hashes.len == 0) break; // blockhashes_out closed their end
             for (hashes) |*hash| {
                 const block = try block_pool.createId();

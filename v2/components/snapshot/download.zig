@@ -929,6 +929,19 @@ pub const Downloader = struct {
     metrics: Metrics,
     logger: tel.Logger("snapshot"),
 
+    // Bootstrap-blocked observability (issue #1746).
+    // Emits a periodic info log while the downloader has no candidates, and
+    // escalates to warn once after `awaiting_warn_after_ns` has elapsed.
+    // If we ever logged an "awaiting" message, we also emit a one-shot info
+    // log when a usable peer is found.
+    bootstrap_start_ns: u64,
+    awaiting_gate: tel.ThrottledLogger,
+    logged_awaiting: bool,
+    logged_ready: bool,
+
+    const AWAITING_LOG_INTERVAL_NS: u64 = 10 * std.time.ns_per_s;
+    const AWAITING_WARN_AFTER_NS: u64 = 60 * std.time.ns_per_s;
+
     pub fn init(
         gossip_to_snapshot: *SnapshotSourceRing,
         known_validators: KnownValidators,
@@ -936,6 +949,7 @@ pub const Downloader = struct {
         metrics: Metrics,
         logger: tel.Logger("snapshot"),
     ) !Downloader {
+        const now_ns = lib.clock.monotonic(.ns);
         return .{
             .ring = try IoUring.init(IO_URING_ENTRIES, 0),
             .gossip_iter = gossip_to_snapshot.get(.reader),
@@ -950,6 +964,10 @@ pub const Downloader = struct {
             .run_result = null,
             .metrics = metrics,
             .logger = logger,
+            .bootstrap_start_ns = now_ns,
+            .awaiting_gate = .init(AWAITING_LOG_INTERVAL_NS, now_ns),
+            .logged_awaiting = false,
+            .logged_ready = false,
         };
     }
 
@@ -974,6 +992,7 @@ pub const Downloader = struct {
 
         while (true) {
             try self.drainGossip();
+            self.maybeLogAwaitingPeers();
 
             _ = try self.ring.submit_and_wait(0);
             const n = try self.ring.copy_cqes(&cqes, 0);
@@ -2663,6 +2682,67 @@ pub const Downloader = struct {
             .time = now,
             .bytes_written = state.bytes_written,
         };
+    }
+
+    /// Bootstrap observability: log at most once per 10s while we have no
+    /// download candidates from gossip. Distinguishes between "no peers arrived
+    /// at all" and "peers arrived but none are usable". Once a candidate has
+    /// begun racing (or a winner is picked), emits a one-shot "ready" info log
+    /// if we previously logged that we were waiting.
+    ///
+    /// See issue #1746.
+    fn maybeLogAwaitingPeers(self: *Downloader) void {
+        // We only care about the pre-race window. Once `.racing` starts, we
+        // may still transition through failures, but the "awaiting peers"
+        // phase is over — the download-side already logs failures.
+        const still_awaiting = self.download_race.phase == .idle;
+
+        if (!still_awaiting) {
+            if (self.logged_awaiting and !self.logged_ready) {
+                self.logged_ready = true;
+                self.logger.info().log(
+                    "snapshot: found usable peer, starting download",
+                );
+            }
+            return;
+        }
+
+        const now_ns = lib.clock.monotonic(.ns);
+        if (!self.awaiting_gate.tick(now_ns)) return;
+
+        self.logged_awaiting = true;
+        const elapsed_ns = now_ns -| self.bootstrap_start_ns;
+        const elapsed_s = elapsed_ns / std.time.ns_per_s;
+        const peers_seen = self.dedupe_map.len;
+        const escalate = !self.awaiting_gate.escalated and
+            elapsed_ns >= AWAITING_WARN_AFTER_NS;
+        if (escalate) self.awaiting_gate.escalated = true;
+
+        if (peers_seen == 0) {
+            if (escalate) {
+                self.logger.warn().logf(
+                    "snapshot: awaiting peers from gossip ({d}s, none received)",
+                    .{elapsed_s},
+                );
+            } else {
+                self.logger.info().logf(
+                    "snapshot: awaiting peers from gossip ({d}s, none received)",
+                    .{elapsed_s},
+                );
+            }
+        } else {
+            if (escalate) {
+                self.logger.warn().logf(
+                    "snapshot: no usable peers so far ({d}s, received={d}, active_probes={d})",
+                    .{ elapsed_s, peers_seen, self.active_probes },
+                );
+            } else {
+                self.logger.info().logf(
+                    "snapshot: no usable peers so far ({d}s, received={d}, active_probes={d})",
+                    .{ elapsed_s, peers_seen, self.active_probes },
+                );
+            }
+        }
     }
 
     /// Retires all active download connections except the one at `keep_index`.

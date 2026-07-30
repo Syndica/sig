@@ -112,6 +112,16 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     });
 
     var it = rw.net_pair.recv.get(.reader);
+
+    // Bootstrap-blocked observability: emit periodic logs while gossip has not
+    // yet received any inbound packet. Silent on the healthy path (after the
+    // first packet arrives, these variables are never touched again).
+    // See issue #1746.
+    const bootstrap_start_ns = lib.clock.monotonic(.ns);
+    var awaiting_gate: lib.telemetry.ThrottledLogger = .init(10 * std.time.ns_per_s, bootstrap_start_ns);
+    const warn_after_ns = 60 * std.time.ns_per_s;
+    var first_packet_received = false;
+
     while (true) {
         now = lib.clock.wallclock(.ms);
         try gossip_node.poll(.from(logger), now);
@@ -122,10 +132,43 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
             // For now this should work fine, but in theory there's a very slim chance
             // of a race condition (it should be basically impossible to manifest
             // in the one black-box test that currently exists for this).
+
+            if (!first_packet_received) {
+                const now_ns = lib.clock.monotonic(.ns);
+                if (awaiting_gate.tick(now_ns)) {
+                    const elapsed_s = (now_ns -| bootstrap_start_ns) / std.time.ns_per_s;
+                    if (!awaiting_gate.escalated and
+                        now_ns -| bootstrap_start_ns >= warn_after_ns)
+                    {
+                        awaiting_gate.escalated = true;
+                        logger.warn().logf(
+                            "gossip has received no packets from cluster ({d}s)",
+                            .{elapsed_s},
+                        );
+                    } else {
+                        logger.info().logf(
+                            "gossip has received no packets from cluster ({d}s)",
+                            .{elapsed_s},
+                        );
+                    }
+                }
+            }
+
             try runner.activity.signalIdleSpinning();
             continue;
         };
         try runner.activity.signalActive();
+
+        if (!first_packet_received) {
+            first_packet_received = true;
+            const elapsed_s =
+                (lib.clock.monotonic(.ns) -| bootstrap_start_ns) / std.time.ns_per_s;
+            logger.info().logf(
+                "gossip received first packets from cluster ({d}s)",
+                .{elapsed_s},
+            );
+        }
+
         gossip_node.processPacket(.from(logger), now, packet);
         it.markUsed();
     }

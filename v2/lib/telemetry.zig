@@ -453,6 +453,75 @@ pub const Gauge = struct {
     }
 };
 
+/// Emits at most one log per `interval_ns`, with an optional one-shot
+/// escalation flag that callers can use to promote the level from info to warn
+/// exactly once after some deadline has elapsed.
+///
+/// This is intended for use in bootstrap wait loops where a service is blocked
+/// on an upstream signal (e.g. gossip peers, snapshot bytes, runtime metadata)
+/// and needs to periodically inform the operator without spamming the log.
+///
+/// Callers pass `now_ns` from a monotonic clock so this stays testable and
+/// avoids taking a dependency on the wall clock here. The first tick fires
+/// only after `interval_ns` has elapsed since `start_ns`.
+pub const ThrottledLogger = struct {
+    interval_ns: u64,
+    last_ns: u64,
+    /// Set to true once the caller has emitted the escalated (e.g. warn) log.
+    /// Use to keep escalation to a single emission per stage.
+    escalated: bool = false,
+
+    pub fn init(interval_ns: u64, start_ns: u64) ThrottledLogger {
+        return .{ .interval_ns = interval_ns, .last_ns = start_ns };
+    }
+
+    /// Returns true if at least `interval_ns` has elapsed since the last tick
+    /// that returned true (or since construction). When it returns true, the
+    /// internal timer is advanced to `now_ns`.
+    pub fn tick(self: *ThrottledLogger, now_ns: u64) bool {
+        // Saturating subtract guards against a hypothetical clock regression.
+        if (now_ns -| self.last_ns >= self.interval_ns) {
+            self.last_ns = now_ns;
+            return true;
+        }
+        return false;
+    }
+};
+
+test "ThrottledLogger: does not fire until interval has elapsed" {
+    var t: ThrottledLogger = .init(1_000, 0);
+    try std.testing.expect(!t.tick(0));
+    try std.testing.expect(!t.tick(1));
+    try std.testing.expect(!t.tick(999));
+    try std.testing.expect(t.tick(1_000));
+}
+
+test "ThrottledLogger: subsequent ticks respect the interval" {
+    var t: ThrottledLogger = .init(1_000, 0);
+    try std.testing.expect(t.tick(1_000));
+    try std.testing.expect(!t.tick(1_500));
+    try std.testing.expect(t.tick(2_001));
+    try std.testing.expect(!t.tick(2_500));
+    try std.testing.expect(t.tick(3_500));
+}
+
+test "ThrottledLogger: escalated flag is caller-owned and starts false" {
+    var t: ThrottledLogger = .init(1_000, 0);
+    try std.testing.expect(!t.escalated);
+    t.escalated = true;
+    try std.testing.expect(t.escalated);
+    // Escalation flag does not affect tick behavior.
+    try std.testing.expect(t.tick(2_000));
+}
+
+test "ThrottledLogger: start_ns suppresses early ticks" {
+    // Simulates production usage: monotonic clock is already large at construction.
+    var t: ThrottledLogger = .init(1_000, 50_000);
+    try std.testing.expect(!t.tick(50_000)); // same instant as construction
+    try std.testing.expect(!t.tick(50_500)); // within interval
+    try std.testing.expect(t.tick(51_000)); // exactly one interval later
+}
+
 /// Can be used as a counter or a gauge.
 pub fn Variant(comptime V: type) type {
     return struct {
