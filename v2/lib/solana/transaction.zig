@@ -415,6 +415,18 @@ pub const VersionedTransaction = struct {
             return ptr[0..count];
         }
 
+        pub fn pubkeyAtByteOffset(
+            self: View,
+            byte_offset: u16,
+        ) *const Pubkey {
+            const offset: usize = byte_offset;
+
+            std.debug.assert(offset <= self.payload.len);
+            std.debug.assert(Pubkey.SIZE <= self.payload.len - offset);
+
+            return @ptrCast(self.payload[offset..].ptr);
+        }
+
         pub fn recentBlockhash(self: View) *const Hash {
             const offset: usize = self.layout.recent_blockhash_off;
 

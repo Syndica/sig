@@ -7,9 +7,9 @@ const AccountLookups = lib.accounts_db.AccountLookups;
 const BlockPool = lib.replay.BlockPool;
 const BlockRef = lib.replay.BlockRef;
 const TransactionPool = lib.replay.TransactionPool;
-const VersionedTransaction = lib.replay.VersionedTransaction;
+const VersionedTransaction = lib.solana.transaction.VersionedTransaction;
 
-const TransactionRef = lib.replay.TransactionRef;
+const TransactionRef = TransactionPool.ItemId;
 
 const account_fetcher = @import("account_fetcher.zig");
 
@@ -27,14 +27,16 @@ pub const AccountResolver = struct {
     fetcher: AccountFetcher,
     transaction_pool: *TransactionPool,
 
-    pending_buf: [MAX_PENDING_TRANSACTIONS]PendingTransaction,
     pending_pool: PendingPool,
 
     /// Used to track the set of transactions with unsubmitted work waiting to be sent to the AccountFetcher.
     active: [MAX_PENDING_TRANSACTIONS]ResolutionId,
     active_len: usize,
 
-    const PendingPool = lib.collections.Pool(PendingTransaction, u16);
+    const PendingPool = lib.collections.SharedPool(
+        PendingTransaction,
+        MAX_PENDING_TRANSACTIONS,
+    );
 
     pub const ResolutionId = PendingPool.ItemId;
 
@@ -73,31 +75,31 @@ pub const AccountResolver = struct {
     };
 
     pub fn init(
+        self: *Self,
         allocator: std.mem.Allocator,
         account_pool: *AccountPool,
         account_lookups: *AccountLookups,
         unrooted: *Unrooted,
         block_pool: *BlockPool,
         transaction_pool: *TransactionPool,
-    ) AccountResolver {
-        // TODO: clean this up, remove undefined.
-        const pending_buf = undefined;
-        const pending_pool = PendingPool.init(&pending_buf);
-        return AccountResolver{
-            .fetcher = AccountFetcher.init(
-                allocator,
-                account_pool,
-                account_lookups,
-                unrooted,
-                block_pool,
-            ),
+    ) void {
+        self.* = .{
+            .fetcher = undefined,
             .transaction_pool = transaction_pool,
-            .pending_buf = pending_buf,
-            .pending_pool = pending_pool,
-            // TODO: clean this up, remove undefined.
+            .pending_pool = undefined,
             .active = undefined,
             .active_len = 0,
         };
+
+        self.fetcher.init(
+            allocator,
+            account_pool,
+            account_lookups,
+            unrooted,
+            block_pool,
+        );
+
+        self.pending_pool.init();
     }
 
     pub fn resolve(
@@ -145,7 +147,7 @@ pub const AccountResolver = struct {
         self.active[self.active_len] = resolution_id;
         self.active_len += 1;
 
-        self.submitWork();
+        _ = self.submitWork();
 
         return resolution_id;
     }
@@ -164,7 +166,7 @@ pub const AccountResolver = struct {
 
                 const pubkey = switch (work) {
                     .static => |i| transaction.staticAccountKeys()[i],
-                    .lut => |i| transaction.lookupKeyAt(i),
+                    .lut => |offset| transaction.pubkeyAtByteOffset(offset).*,
                 };
 
                 const ticket = FetchTicket{
