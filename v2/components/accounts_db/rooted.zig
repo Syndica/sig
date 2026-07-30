@@ -392,9 +392,10 @@ pub const Rooted = struct {
 
     pub fn loadSnapshot(
         self: *Rooted,
+        SnapshotReader: type,
         logger: tel.Logger("Rooted.loadSnapshot"),
         runner: lib.runner.Connection,
-        snapshot_iter: anytype, // lib.solana.snapshot.SnapshotIter(anytype),
+        snapshot_iter: *lib.solana.snapshot.SnapshotIter(SnapshotReader),
         runtime_metadata: *RuntimeMetadata,
     ) !void {
         const zone = tracy.Zone.init(@src(), .{ .name = "loadSnapshot" });
