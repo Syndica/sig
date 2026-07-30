@@ -840,85 +840,6 @@ pub const Histogram = struct {
     }
 };
 
-/// Largest `schema` the tables below are built for. `Layout.schema()` is `log2` of
-/// `bounds_per_doubling`, which validation caps at 256, so no layout reaches past this.
-const max_schema: u4 = 8;
-
-/// Prometheus native-histogram bucket boundaries within one mantissa octave for a given `schema`:
-/// `bounds[k] = 0.5 * 2^(k / 2^schema)` for `k in 0..2^schema`. Used to bin the `frexp` fraction
-/// (which lies in `[0.5, 1)`) into a sub-octave bucket.
-fn nativeBoundsTable(comptime schema: u4) [@as(usize, 1) << schema]f64 {
-    // Two comptime backwards branches per entry: the loop iteration, and one inside `exp2`. The
-    // count accumulates across a whole evaluation and the `inline` switches below build every
-    // table in one, so budget for all of them: `sum(2^s for s in 0...max_schema)` entries, times
-    // 2 branches, times 4 for slack.
-    @setEvalBranchQuota(8 * ((@as(u32, 2) << max_schema) - 1));
-    var arr: [@as(usize, 1) << schema]f64 = undefined;
-    const per_octave: f64 = @floatFromInt(@as(u64, 1) << schema);
-    inline for (&arr, 0..) |*b, k| {
-        b.* = 0.5 * std.math.exp2(@as(f64, @floatFromInt(k)) / per_octave);
-    }
-    return arr;
-}
-
-/// Smallest index `k` with `bounds[k] >= frac` (like Go's `sort.SearchFloat64s`), in `0..len`.
-///
-/// `len` is always `2^schema`. The range halves exactly, so the search unrolls to
-/// `log2(len) + 1` compares, the same count the loop form needs. Each compare adds into `base`
-/// as an integer instead of a jump, so no branch remains at all. `bounds` must be sorted;
-/// `nativeBoundsTable` builds it that way.
-fn searchFloat(comptime len: usize, bounds: *const [len]f64, frac: f64) i64 {
-    comptime std.debug.assert(std.math.isPowerOfTwo(len));
-    var base: usize = 0;
-    inline for (0..comptime std.math.log2_int(usize, len)) |i| {
-        const half = len >> @intCast(1 + i);
-        base += half * @intFromBool(bounds[base + half - 1] < frac);
-    }
-    // A NaN `frac` makes every compare false and lands on 0, matching the loop form.
-    return @intCast(base + @intFromBool(bounds[base] < frac));
-}
-
-/// The global Prometheus native-histogram bucket index for `ns` at `schema`. Splits `ns` with
-/// `frexp` and bins the fraction via a per-schema boundary table, so the result is exact at octave
-/// boundaries (mirrors `prometheus/client_golang`) and avoids the off-by-one a naive
-/// `ceil(2^schema * log2(ns))` suffers from floating-point error. Assumes `ns >= 1`.
-fn nativeBucketIndex(schema: u4, ns: u64) i64 {
-    const fv: f64 = @floatFromInt(ns);
-    const r = std.math.frexp(fv);
-    const per_octave: i64 = @as(i64, 1) << @as(u6, schema);
-    const s: i64 = switch (schema) {
-        inline 0...max_schema => |sc| blk: {
-            const table = comptime nativeBoundsTable(sc);
-            break :blk searchFloat(table.len, &table, r.significand);
-        },
-        else => unreachable,
-    };
-    return (@as(i64, r.exponent) - 1) * per_octave + s;
-}
-
-/// The inclusive upper bound of global native bucket `index` at `schema`: `2^(index / 2^schema)`.
-/// Built by splitting `index` into an octave and a sub-octave remainder and reading the same table
-/// `nativeBucketIndex` bins against, rather than by `exp2`-ing the quotient, which makes the two
-/// exact inverses: `nativeBucketIndex(schema, nativeBound(schema, i)) == i`. A bound derived any
-/// other way can land a ulp off and rounding it would name a value in the neighbouring bucket.
-fn nativeBound(schema: u4, index: i64) f64 {
-    const per_octave: i64 = @as(i64, 1) << @as(u6, schema);
-    // Floor division, so a negative `index` (a bound below 1ns) splits the same way as a positive
-    // one; `rem` is then always in `0..per_octave`.
-    const octave = @divFloor(index, per_octave);
-    const rem: usize = @intCast(index - octave * per_octave);
-    const frac: f64 = switch (schema) {
-        inline 0...max_schema => |sc| blk: {
-            const table = comptime nativeBoundsTable(sc);
-            break :blk table[rem];
-        },
-        else => unreachable,
-    };
-    // `table` holds `0.5 * 2^(rem / 2^schema)`, i.e. the bound already halved into `frexp`'s
-    // `[0.5, 1)`, hence the `+ 1` on the exponent.
-    return std.math.ldexp(frac, @intCast(octave + 1));
-}
-
 pub const LatencyHistogram = struct {
     layout: Layout,
     /// `layout.baseIndex()`, resolved once here and not at each observation. The value is a pure
@@ -1219,6 +1140,167 @@ pub const LatencyHistogram = struct {
             return @intFromFloat(@floor(nativeBound(self.schema(), gi)));
         }
     };
+
+    /// Largest `schema` the tables below are built for. `Layout.schema()` is `log2` of
+    /// `bounds_per_doubling`, which validation caps at 256, so no layout reaches past this.
+    const max_schema: u4 = 8;
+
+    /// Comptime branch budgets for the two table builders below, derived from one cost model so
+    /// the pair cannot drift apart.
+    ///
+    /// Each budget covers the whole schema ladder rather than a single schema:
+    /// `@setEvalBranchQuota` raises one counter for a whole analysis, and the `inline` switches in
+    /// `nativeBucketIndex` and `nativeBound` instantiate every schema within one.
+    const quotas = struct {
+        /// `sum(2^s for s in 0...max_schema)`. A table at schema `s` holds `2^s + 1` entries, so a
+        /// total across the ladder is this plus `schema_count`.
+        const schema_entry_sum: u32 = (@as(u32, 2) << max_schema) - 1;
+        const schema_count: u32 = @as(u32, max_schema) + 1;
+
+        /// Backwards branches to build `nativeBoundsTable` for every schema: two per entry — the
+        /// loop iteration, and one inside `exp2`.
+        const bounds_branches: u32 = 2 * (schema_entry_sum + schema_count);
+
+        /// Backwards branches to build `nativeSlotTable` for every schema; the bounds table it
+        /// indexes is the caller's, and counted once above. The `while` scanning `bounds` costs
+        /// only the iterations it takes — a condition that fails on entry is not a backwards
+        /// branch — so `k` advancing is counted once per table, not once per slot.
+        const slot_branches: u32 =
+            2 * schema_entry_sum + // `2^(s + 1)` slot-loop iterations per schema
+            (schema_entry_sum + schema_count); // `k` advancing, `2^s + 1` per table
+
+        /// Budget for `nativeBound`'s `inline` switch, which builds the bounds tables and never
+        /// reaches `nativeSlotTable`. Kept apart from `table_branch` so that path is held to its
+        /// own cost rather than to the pair's.
+        const bounds_branch: u32 = 2 * bounds_branches;
+
+        /// Budget for `nativeBucketIndex`'s `inline` switch, which builds a bounds table per
+        /// schema and the slot table that indexes it. Safe to pair with the smaller budget above
+        /// in either order: `@setEvalBranchQuota` only ever raises the counter, never lowers it.
+        ///
+        /// Both are doubled. The model tracks the real cost — 1040 against 1057 measured for the
+        /// bounds tables alone, 2582 against 2627 for the pair, on Zig 0.15.2 — but cannot match
+        /// it, since the branches inside `exp2` are std's to change. Overshooting only delays the
+        /// runaway-loop backstop a quota exists to be; undershooting fails the build loudly, so
+        /// the slack costs nothing.
+        const table_branch: u32 = 2 * (bounds_branches + slot_branches);
+    };
+
+    /// Prometheus native-histogram bucket boundaries within one mantissa octave for a given
+    /// `schema`: `bounds[k] = 0.5 * 2^(k / 2^schema)` for `k in 0...2^schema`. Used to bin the
+    /// `frexp` fraction (which lies in `[0.5, 1)`) into a sub-octave bucket.
+    ///
+    /// The range is inclusive at both ends, so the last entry is the octave's own top, `1.0`, which
+    /// no fraction ever reaches. It is there so `nativeBucketIndex` can run its correction compare
+    /// unconditionally: `nativeSlotTable` may name the bound above the ladder, and that index has
+    /// to land on an entry rather than on a bounds check.
+    fn nativeBoundsTable(comptime schema: u4) [(@as(usize, 1) << schema) + 1]f64 {
+        @setEvalBranchQuota(quotas.bounds_branch);
+        var arr: [(@as(usize, 1) << schema) + 1]f64 = undefined;
+        const per_octave: f64 = @floatFromInt(@as(u64, 1) << schema);
+        inline for (&arr, 0..) |*b, k| {
+            b.* = 0.5 * std.math.exp2(@as(f64, @floatFromInt(k)) / per_octave);
+        }
+        return arr;
+    }
+
+    /// Mantissa bits of the `frexp` fraction that `nativeSlotTable` is indexed by. A slot spans a
+    /// relative width of `2^-bits` while adjacent bounds sit a factor `2^(1 / 2^schema)` apart, so
+    /// `schema + 1` is the smallest count that keeps at most one bound inside any one slot — the
+    /// property the single correction compare rests on. `nativeSlotTable` proves it per slot rather
+    /// than leaving it to the algebra here.
+    fn nativeSlotBits(comptime schema: u4) u6 {
+        return schema + 1;
+    }
+
+    /// Maps a slot of the `frexp` fraction to the sub-octave bucket its *bottom* falls in: entry
+    /// `slot` is the smallest `k` with `bounds[k] >= 0.5 * (1 + slot / 2^nativeSlotBits)`.
+    ///
+    /// This is what replaces a binary search over `bounds`. Because a slot holds at most one
+    /// bound, every fraction in it lands in either that `k` or `k + 1`, and one compare against
+    /// `bounds[k]` settles which. That compare is against the same `f64` entry the last step of a
+    /// search would have reached, so this bins identically to searching rather than approximately
+    /// — which it has to, since `nativeBound` reads the same table and the two are required to be
+    /// exact inverses.
+    ///
+    /// A search costs `log2(2^schema) + 1` dependent loads, growing with the ladder's resolution.
+    /// This costs two, at every schema.
+    fn nativeSlotTable(
+        comptime schema: u4,
+        comptime bounds: [(@as(usize, 1) << schema) + 1]f64,
+    ) [@as(usize, 1) << nativeSlotBits(schema)]u16 {
+        @setEvalBranchQuota(quotas.table_branch);
+        var table: [@as(usize, 1) << nativeSlotBits(schema)]u16 = undefined;
+        const width: f64 = @floatFromInt(table.len);
+        // Slot bottoms climb with `slot` and `bounds` ascends, so the answer never moves backwards:
+        // `k` carries across iterations and crosses `bounds` once for the whole table, rather than
+        // being re-sought per slot. `slot / width` is a dyadic fraction and exact in `f64`, so the
+        // bottoms really are strictly increasing and not merely nearly so.
+        var k: usize = 0;
+        inline for (&table, 0..) |*entry, slot| {
+            const lo = 0.5 * (1.0 + @as(f64, @floatFromInt(slot)) / width);
+            const hi = 0.5 * (1.0 + @as(f64, @floatFromInt(slot + 1)) / width);
+            // Terminates inside the table: `lo` is always below 1.0, which the final entry holds.
+            inline while (bounds[k] < lo) k += 1;
+            entry.* = @intCast(k);
+            // The correction `nativeBucketIndex` applies is a single `+1`, so a slot holding a
+            // second bound would silently bin everything past it one bucket low.
+            if (k + 1 < bounds.len and bounds[k + 1] < hi) @compileError(std.fmt.comptimePrint(
+                "slot {d} of schema {d} spans two bounds; raise nativeSlotBits.",
+                .{ slot, schema },
+            ));
+        }
+        return table;
+    }
+
+    /// The global Prometheus native-histogram bucket index for `ns` at `schema`. Splits `ns` with
+    /// `frexp` and bins the fraction against a per-schema boundary table, so the result is exact at
+    /// octave boundaries (mirrors `prometheus/client_golang`) and avoids the off-by-one a naive
+    /// `ceil(2^schema * log2(ns))` suffers from floating-point error. Assumes `ns >= 1`.
+    fn nativeBucketIndex(schema: u4, ns: u64) i64 {
+        const fv: f64 = @floatFromInt(ns);
+        const r = std.math.frexp(fv);
+        const per_octave: i64 = @as(i64, 1) << @as(u6, schema);
+        const s: i64 = switch (schema) {
+            inline 0...max_schema => |sc| blk: {
+                const bounds = comptime nativeBoundsTable(sc);
+                const slots = comptime nativeSlotTable(sc, bounds);
+                // Every fraction shares one exponent field, so the top `nativeSlotBits` mantissa
+                // bits name the slot on their own, with no compare to get there.
+                const mantissa: u64 = @bitCast(r.significand);
+                const shift = comptime 52 - nativeSlotBits(sc);
+                const slot: usize = @intCast((mantissa >> shift) & (slots.len - 1));
+                const k = slots[slot];
+                break :blk @as(i64, k) + @intFromBool(bounds[k] < r.significand);
+            },
+            else => unreachable,
+        };
+        return (@as(i64, r.exponent) - 1) * per_octave + s;
+    }
+
+    /// The inclusive upper bound of global native bucket `index` at `schema`:
+    /// `2^(index / 2^schema)`. Built by splitting `index` into an octave and a sub-octave
+    /// remainder and reading the same table `nativeBucketIndex` bins against, rather than by
+    /// `exp2`-ing the quotient, which makes the two exact inverses:
+    /// `nativeBucketIndex(schema, nativeBound(schema, i)) == i`. A bound derived any other way can
+    /// land a ulp off and rounding it would name a value in the neighbouring bucket.
+    fn nativeBound(schema: u4, index: i64) f64 {
+        const per_octave: i64 = @as(i64, 1) << @as(u6, schema);
+        // Floor division, so a negative `index` (a bound below 1ns) splits the same way as a
+        // positive one; `rem` is then always in `0..per_octave`.
+        const octave = @divFloor(index, per_octave);
+        const rem: usize = @intCast(index - octave * per_octave);
+        const frac: f64 = switch (schema) {
+            inline 0...max_schema => |sc| blk: {
+                const table = comptime nativeBoundsTable(sc);
+                break :blk table[rem];
+            },
+            else => unreachable,
+        };
+        // `table` holds `0.5 * 2^(rem / 2^schema)`, i.e. the bound already halved into `frexp`'s
+        // `[0.5, 1)`, hence the `+ 1` on the exponent.
+        return std.math.ldexp(frac, @intCast(octave + 1));
+    }
 
     const ShardSync = Histogram.ShardSync;
 
