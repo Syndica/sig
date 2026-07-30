@@ -15,6 +15,7 @@ const std = @import("std");
 const replay = @import("../replay.zig");
 const solana = @import("../solana.zig");
 const collections = @import("../collections.zig");
+const util = @import("../util.zig");
 
 const Pubkey = solana.Pubkey;
 const Slot = solana.Slot;
@@ -380,11 +381,19 @@ comptime {
 /// is half of this per its 2× load-factor invariant.
 pub const MAX_STAKE_DELEGATIONS_ROOT_CAP: usize = 1 << 20;
 
-/// Per-fork delta capacity — the number of distinct delegator
-/// mutations a single fork may accumulate before the boundary
-/// crossing folds delta into root. Sized for typical per-fork
-/// churn; overflow at insertion is treated as a runtime error.
-pub const MAX_STAKE_DELEGATIONS_DELTA_PER_FORK: usize = 256;
+/// Shared delta arena capacity. Bounds the total number of
+/// stake-delegation mutations coexisting across all unrooted forks
+/// between root advances. Sized with ~40× headroom over the
+/// largest single-boundary redelegation cascade seen on mainnet
+/// (~5k mutations); a full arena at 131k nodes represents ~433
+/// slots of continuous churn at the historical peak of ~300
+/// mutations/slot, well past any plausible unrooted depth.
+///
+/// See `stakes-v2-proposal-v2.md` §11.3 for why this is a hard
+/// cap: OOM is treated as fatal, since it implies replay's
+/// root-advance schedule is falling further behind than any
+/// realistic consensus event can produce.
+pub const MAX_STAKE_DELTA_NODES: usize = 1 << 17;
 
 /// One delegator's current delegation state. Populated at boot
 /// from each stake account's `StakeStateV2::Stake` variant.
@@ -404,78 +413,157 @@ comptime {
     std.debug.assert(@sizeOf(StakeDelegation) == 64);
 }
 
-/// Immutable per-epoch base of the delegator → delegation table.
-/// Written once at boot (walking every stake account through
-/// accounts_db) and rewritten in place at each epoch boundary
-/// (folding the winning fork's `StakeDelegationsDelta` in).
-/// Never mutated during in-epoch execution.
+/// Rooted delegator → delegation table.
+///
+/// Populated once at boot (walking every stake account through
+/// accounts_db) and mutated in place afterwards:
+/// - At every root advance, the winning fork's ancestor chain of
+///   `StakeDeltaNode`s is folded in (upserts / tombstones).
+/// - During partitioned reward distribution at epoch start,
+///   `credits_observed` is bumped in-row on each affected
+///   delegation without any accounts_db round-trip.
 ///
 /// A `FixedPubkeyMap` value of a 64 B `StakeDelegation` — the
 /// table backing storage is `keys[cap] + values[cap]`, i.e.
-/// `cap * 96 B` per instance.
+/// `cap * 96 B` per instance (~96 MB at
+/// `MAX_STAKE_DELEGATIONS_ROOT_CAP`).
 pub const StakeDelegationsRoot = collections.FixedPubkeyMap(
     StakeDelegation,
     MAX_STAKE_DELEGATIONS_ROOT_CAP,
 );
 
-/// Per-fork accumulator of stake-delegation mutations relative to
-/// `StakeDelegationsRoot`. Byte-copied at `onBlockCreate` from
-/// the parent block's slot, mutated in place by the committer
-/// path as stake ixs land on the fork.
+/// One landed stake-delegation mutation, held in the shared
+/// `StakeDeltaArena`. Each node is owned by exactly one block —
+/// the block on which its stake-ix committed — and chained
+/// newest-first onto that block's `stake_delta_head` entry.
 ///
-/// Positional linear array rather than a hash map:
-/// - Per-fork occupancy is bounded and small compared to root.
-/// - Byte-copy at fork branch is the dominant lifecycle cost —
-///   an entry array copies faster than a rebuilt open-address
-///   map.
-/// - Reads are only at boundary crossing (walked once to fold
-///   into root); no need for O(1) lookup on hot paths.
-pub const StakeDelegationsDelta = extern struct {
-    len: u16,
-    _pad0: [6]u8 = @splat(0),
-    entries: [MAX_STAKE_DELEGATIONS_DELTA_PER_FORK]Entry,
-
-    /// One landed mutation. `tombstone` marks accounts closed on
-    /// this fork (withdrawn to zero lamports); the fold-into-root
-    /// path erases the corresponding key.
-    pub const Entry = extern struct {
-        delegator_pk: Pubkey, //     32
-        delegation: StakeDelegation, // 64
-        kind: Kind, //                1
-        _pad: [7]u8 = @splat(0), //   7
-    }; //                           104 B
+/// The block-tree parent link is the sole spine along which
+/// ancestor deltas are reached: reads walk their own block's
+/// head, then their parent's head, and so on up to the current
+/// rooted block. No node is ever shared across two blocks, so
+/// prune of a losing fork just walks and frees its own head chain.
+///
+/// The `next` field serves dual duty via `StakeDeltaArena`'s
+/// intrusive free list: when the node is allocated, `next`
+/// chain-links siblings on the same block; when freed, `next`
+/// links the node into the arena's free list. Callers should
+/// treat all other fields as undefined when the node is on the
+/// free list.
+///
+/// See `stakes-v2-proposal-v2.md` §6.
+pub const StakeDeltaNode = extern struct {
+    delegator_pk: Pubkey, //                              32
+    delegation: StakeDelegation, //                       64
+    kind: Kind, //                                         1
+    _pad: [3]u8 = @splat(0), //                            3
+    next: StakeDeltaArena.Id.Optional, //                  4
 
     pub const Kind = enum(u8) {
-        /// Row is unused (indices ≥ len).
-        unpopulated = 0,
-        /// Delegator's row was created or updated on this fork.
-        upsert = 1,
-        /// Delegator's account was closed on this fork.
-        tombstone = 2,
+        /// Delegator's row was created or updated on this block.
+        /// `delegation` holds the post-tx state.
+        upsert = 0,
+        /// Delegator's account was closed on this block.
+        /// `delegation` is undefined.
+        tombstone = 1,
+    };
+}; //                                                    104 B
+
+comptime {
+    std.debug.assert(@sizeOf(StakeDeltaNode) == 104);
+}
+
+/// Shared arena of `StakeDeltaNode`s. Every delta node lives here,
+/// referenced by `stake_delta_head[block]` chains. Inline
+/// extern struct so it can be embedded directly in
+/// `ReplayStakes` without a separate backing region.
+///
+/// Uses an intrusive free list on `StakeDeltaNode.next`: freed
+/// nodes' `next` points to the previous free-head; the head
+/// itself is the arena's `free_head`.
+pub const StakeDeltaArena = extern struct {
+    nodes: [MAX_STAKE_DELTA_NODES]StakeDeltaNode,
+    /// Head of the free list. `.null` iff the arena is exhausted.
+    free_head: Id.Optional,
+
+    pub const Id = enum(u32) {
+        _,
+
+        pub fn index(self: Id) u32 {
+            return @intFromEnum(self);
+        }
+
+        pub const Optional = util.PackedOptional(Id, std.math.maxInt(u32));
     };
 
-    pub const UNPOPULATED_ENTRY: Entry = .{
-        .delegator_pk = Pubkey.ZEROES,
-        .delegation = .{
-            .voter_pk = Pubkey.ZEROES,
-            .stake = 0,
-            .activation_epoch = 0,
-            .deactivation_epoch = 0,
-            .credits_observed = 0,
-        },
-        .kind = .unpopulated,
-    };
+    comptime {
+        std.debug.assert(MAX_STAKE_DELTA_NODES < std.math.maxInt(u32));
+    }
 
-    /// Zero-set the delta to an empty state.
-    pub fn reset(self: *StakeDelegationsDelta) void {
-        self.len = 0;
-        self._pad0 = @splat(0);
-        @memset(&self.entries, UNPOPULATED_ENTRY);
+    /// Initialise the arena to fully-empty state: every node on
+    /// the free list, chained 0 → 1 → ... → cap-1 → null.
+    pub fn init(self: *StakeDeltaArena) void {
+        for (self.nodes[0 .. MAX_STAKE_DELTA_NODES - 1], 0..) |*n, i| {
+            n.* = undefined;
+            n.next = .init(@enumFromInt(i + 1));
+        }
+        self.nodes[MAX_STAKE_DELTA_NODES - 1] = undefined;
+        self.nodes[MAX_STAKE_DELTA_NODES - 1].next = .null;
+        self.free_head = .init(@enumFromInt(0));
+    }
+
+    /// Allocate a node. Caller populates every field.
+    /// `error.OutOfSpace` iff the arena is full — treat as fatal
+    /// per `stakes-v2-proposal-v2.md` §11.3.
+    pub fn createId(self: *StakeDeltaArena) !Id {
+        const head = self.free_head.opt() orelse return error.OutOfSpace;
+        self.free_head = self.nodes[head.index()].next;
+        return head;
+    }
+
+    /// Return a node to the free list. `id` must have been
+    /// obtained from a matching `createId` call and not already
+    /// destroyed.
+    pub fn destroyId(self: *StakeDeltaArena, id: Id) void {
+        self.nodes[id.index()] = undefined;
+        self.nodes[id.index()].next = self.free_head;
+        self.free_head = .init(id);
+    }
+
+    pub fn indexToPtr(self: *StakeDeltaArena, id: Id) *StakeDeltaNode {
+        return &self.nodes[id.index()];
+    }
+
+    pub fn indexToConstPtr(self: *const StakeDeltaArena, id: Id) *const StakeDeltaNode {
+        return &self.nodes[id.index()];
     }
 };
 
+/// Per-block running `(effective, activating, deactivating)`
+/// triple used by the `StakeHistory` sysvar update path.
+///
+/// Copied parent → child at `onBlockCreate`; maintained
+/// incrementally by the committer as each stake-ix lands (the
+/// exec tile has the pre-state in hand, so the delta is a
+/// three-way subtract with no fork-aware cache read).
+///
+/// See `stakes-v2-proposal-v2.md` §6.2 / §11.4 for the
+/// snapshot-at-boundary semantics: these three values are exact
+/// for the epoch they were computed in; boundary derivation
+/// recomputes them against the new epoch's activation state.
+pub const StakeAggregates = extern struct {
+    effective: u64, //    8
+    activating: u64, //   8
+    deactivating: u64, // 8
+
+    pub const ZERO: StakeAggregates = .{
+        .effective = 0,
+        .activating = 0,
+        .deactivating = 0,
+    };
+}; //                    24 B
+
 comptime {
-    std.debug.assert(@sizeOf(StakeDelegationsDelta.Entry) == 104);
+    std.debug.assert(@sizeOf(StakeAggregates) == 24);
 }
 
 /// Provisional owner struct for replay's stakes state.
@@ -497,15 +585,29 @@ pub const ReplayStakes = struct {
     /// from a parent block's slot at `onBlockCreate`. The root
     /// block's slot is filled by `reset()` at boot.
     live_voters: [replay.BlockPool.capacity]LiveVoters,
-    /// Immutable per-epoch base of the delegator → delegation
-    /// table. Populated once at boot from accounts_db, rewritten
-    /// at each epoch boundary from the winning fork's
-    /// `stake_delegations_delta` fold.
+    /// Rooted delegator → delegation table. Populated once at boot
+    /// from accounts_db and mutated at each root advance (fold of
+    /// the winning fork's ancestor delta chain) and during
+    /// partitioned reward distribution (`credits_observed` bumps).
     stake_delegations_root: StakeDelegationsRoot,
-    /// Per-fork accumulator of stake-delegation mutations, indexed
-    /// by `BlockRef` in lockstep with `live_voters`. Cloned from
-    /// the parent at `onBlockCreate`.
-    stake_delegations_delta: [replay.BlockPool.capacity]StakeDelegationsDelta,
+    /// Shared arena of `StakeDeltaNode`s. All in-flight
+    /// stake-delegation mutations across all unrooted forks share
+    /// this pool; each node is chained onto exactly one block's
+    /// `stake_delta_head` entry, freed on that block's fold-into-
+    /// root or on that block's prune.
+    stake_delta_arena: StakeDeltaArena,
+    /// Per-block head of the arena chain owned by that block.
+    /// `.null` means "no stake-ix landed on this block yet". Reads
+    /// walk this head, then follow `replay.Node.parent` up the
+    /// block tree to reach ancestor deltas. Zeroed to `.null` at
+    /// `onBlockCreate` — deltas are per-block, never shared across
+    /// parent/child.
+    stake_delta_head: [replay.BlockPool.capacity]StakeDeltaArena.Id.Optional,
+    /// Per-block running `(effective, activating, deactivating)`
+    /// triple for the `StakeHistory` sysvar. Byte-copied
+    /// parent → child at `onBlockCreate`; maintained incrementally
+    /// by the committer on each stake-ix.
+    stake_aggregates: [replay.BlockPool.capacity]StakeAggregates,
     /// **Provisional.** Hangs the epoch-boundary hard-stop off a
     /// single field. Once boundary derivation lands and replay
     /// tracks `current` / `t_minus_1` / `t_minus_2` rotation slots,
@@ -527,7 +629,9 @@ pub const ReplayStakes = struct {
         self.epoch_voters.init();
         for (&self.live_voters) |*lv| lv.reset();
         self.stake_delegations_root.init();
-        for (&self.stake_delegations_delta) |*d| d.reset();
+        self.stake_delta_arena.init();
+        for (&self.stake_delta_head) |*h| h.* = .null;
+        for (&self.stake_aggregates) |*a| a.* = StakeAggregates.ZERO;
         self.boot_epoch = 0;
         self.first_slot_of_next_epoch = 0;
     }
@@ -570,11 +674,12 @@ pub const ReplayStakes = struct {
 
     /// Called by replay whenever a fresh `BlockRef` is allocated
     /// from the `BlockPool` for a genuine new-block event (either a
-    /// slot boundary or a fork within a slot). Byte-copies both the
-    /// parent block's `LiveVoters` row and its
-    /// `StakeDelegationsDelta` row into the child slots so the
-    /// child starts from an exact snapshot of the parent's fork
-    /// state.
+    /// slot boundary or a fork within a slot).
+    ///
+    /// Copies the parent's `LiveVoters` and `stake_aggregates`
+    /// slots into the child, and resets the child's
+    /// `stake_delta_head` to `.null` — ancestor deltas are reached
+    /// by walking `replay.Node.parent`, not by copy.
     ///
     /// Not called for same-slot canonical extensions — those reuse
     /// the parent's `BlockRef` unchanged (see
@@ -584,17 +689,15 @@ pub const ReplayStakes = struct {
         parent: replay.BlockRef,
         child: replay.BlockRef,
     ) void {
-        // Explicit @memcpy on the byte view. Struct-assignment on a
-        // ~48 KB value can pass through a stack temporary in Debug
-        // mode; the byte-level memcpy stays in-place.
+        // Explicit @memcpy on the byte view — struct-assignment of
+        // a ~48 KB value can pass through a stack temporary in
+        // Debug mode; byte-level memcpy stays in place.
         @memcpy(
             std.mem.asBytes(&self.live_voters[child.index()]),
             std.mem.asBytes(&self.live_voters[parent.index()]),
         );
-        @memcpy(
-            std.mem.asBytes(&self.stake_delegations_delta[child.index()]),
-            std.mem.asBytes(&self.stake_delegations_delta[parent.index()]),
-        );
+        self.stake_aggregates[child.index()] = self.stake_aggregates[parent.index()];
+        self.stake_delta_head[child.index()] = .null;
     }
 
     /// Hard-stop guard for the not-yet-implemented boundary path.
@@ -649,15 +752,60 @@ test "LiveVoters.reset yields all .unpopulated" {
     }
 }
 
-test "StakeDelegationsDelta.reset yields empty len and .unpopulated rows" {
-    const d = try std.testing.allocator.create(StakeDelegationsDelta);
-    defer std.testing.allocator.destroy(d);
+test "StakeAggregates.ZERO is all zero" {
+    const a: StakeAggregates = StakeAggregates.ZERO;
+    try std.testing.expectEqual(@as(u64, 0), a.effective);
+    try std.testing.expectEqual(@as(u64, 0), a.activating);
+    try std.testing.expectEqual(@as(u64, 0), a.deactivating);
+}
 
-    d.reset();
-    try std.testing.expectEqual(@as(u16, 0), d.len);
-    for (d.entries) |entry| {
-        try std.testing.expectEqual(StakeDelegationsDelta.Kind.unpopulated, entry.kind);
-    }
+test "StakeDeltaArena: alloc + chain + destroy" {
+    // ~13.6 MB inline arena — page allocator to keep it off the
+    // testing allocator's small heap.
+    const arena = try std.heap.page_allocator.create(StakeDeltaArena);
+    defer std.heap.page_allocator.destroy(arena);
+    arena.init();
+
+    var dpk: Pubkey = .{ .data = .{0} ** 32 };
+    dpk.data[0] = 0xD0;
+    var vpk: Pubkey = .{ .data = .{0} ** 32 };
+    vpk.data[0] = 0xE0;
+
+    const id_a = try arena.createId();
+    const n_a = arena.indexToPtr(id_a);
+    n_a.* = .{
+        .delegator_pk = dpk,
+        .delegation = .{
+            .voter_pk = vpk,
+            .stake = 1,
+            .activation_epoch = 0,
+            .deactivation_epoch = std.math.maxInt(Epoch),
+            .credits_observed = 0,
+        },
+        .kind = .upsert,
+        .next = .null,
+    };
+
+    const id_b = try arena.createId();
+    const n_b = arena.indexToPtr(id_b);
+    n_b.* = .{
+        .delegator_pk = dpk,
+        .delegation = undefined,
+        .kind = .tombstone,
+        .next = .init(id_a),
+    };
+
+    try std.testing.expectEqual(StakeDeltaNode.Kind.tombstone, n_b.kind);
+    try std.testing.expectEqual(id_a, n_b.next.opt().?);
+    try std.testing.expectEqual(StakeDeltaNode.Kind.upsert, arena.indexToPtr(n_b.next.opt().?).kind);
+
+    // Destroy + realloc — id_b's slot should be reused (LIFO).
+    arena.destroyId(id_b);
+    const id_c = try arena.createId();
+    try std.testing.expectEqual(id_b, id_c);
+
+    arena.destroyId(id_c);
+    arena.destroyId(id_a);
 }
 
 test "StakeDelegationsRoot insert / getPtrConst round-trip" {
@@ -796,7 +944,7 @@ test "ReplayStakes.onBlockCreate byte-copies parent live_voters into child" {
     try std.testing.expectEqual(@as(Slot, 100), stakes.live_voters[parent_idx].entries[0].last_vote_slot);
 }
 
-test "ReplayStakes.onBlockCreate byte-copies parent stake_delegations_delta into child" {
+test "ReplayStakes.onBlockCreate copies aggregates and resets delta head" {
     const stakes = try std.heap.page_allocator.create(ReplayStakes);
     defer std.heap.page_allocator.destroy(stakes);
     stakes.init();
@@ -804,44 +952,48 @@ test "ReplayStakes.onBlockCreate byte-copies parent stake_delegations_delta into
     const parent_idx: usize = 5;
     const child_idx: usize = 11;
 
-    var delegator: Pubkey = .{ .data = .{0} ** 32 };
-    delegator.data[0] = 0xD0;
-    var voter: Pubkey = .{ .data = .{0} ** 32 };
-    voter.data[0] = 0xE0;
-
-    stakes.stake_delegations_delta[parent_idx].entries[0] = .{
-        .delegator_pk = delegator,
-        .delegation = .{
-            .voter_pk = voter,
-            .stake = 500,
-            .activation_epoch = 7,
-            .deactivation_epoch = std.math.maxInt(Epoch),
-            .credits_observed = 3,
-        },
-        .kind = .upsert,
+    stakes.stake_aggregates[parent_idx] = .{
+        .effective = 1_000,
+        .activating = 200,
+        .deactivating = 50,
     };
-    stakes.stake_delegations_delta[parent_idx].len = 1;
-
     const parent_ref: replay.BlockRef = @enumFromInt(parent_idx);
     const child_ref: replay.BlockRef = @enumFromInt(child_idx);
+
+    // Simulate the parent having accumulated one delta node.
+    const parent_head_id = try stakes.stake_delta_arena.createId();
+    const parent_node = stakes.stake_delta_arena.indexToPtr(parent_head_id);
+    parent_node.* = .{
+        .delegator_pk = .{ .data = .{0xD0} ++ .{0} ** 31 },
+        .delegation = .{
+            .voter_pk = .{ .data = .{0xE0} ++ .{0} ** 31 },
+            .stake = 42,
+            .activation_epoch = 3,
+            .deactivation_epoch = std.math.maxInt(Epoch),
+            .credits_observed = 0,
+        },
+        .kind = .upsert,
+        .next = .null,
+    };
+    stakes.stake_delta_head[parent_idx] = .init(parent_head_id);
+
     stakes.onBlockCreate(parent_ref, child_ref);
 
-    try std.testing.expectEqual(@as(u16, 1), stakes.stake_delegations_delta[child_idx].len);
-    try std.testing.expectEqual(
-        StakeDelegationsDelta.Kind.upsert,
-        stakes.stake_delegations_delta[child_idx].entries[0].kind,
-    );
-    try std.testing.expectEqual(
-        @as(u64, 500),
-        stakes.stake_delegations_delta[child_idx].entries[0].delegation.stake,
-    );
+    try std.testing.expectEqual(@as(u64, 1_000), stakes.stake_aggregates[child_idx].effective);
+    try std.testing.expectEqual(@as(u64, 200), stakes.stake_aggregates[child_idx].activating);
+    try std.testing.expectEqual(@as(u64, 50), stakes.stake_aggregates[child_idx].deactivating);
 
-    // Post-clone, mutating the child must not touch the parent.
-    stakes.stake_delegations_delta[child_idx].entries[0].delegation.stake = 9_999;
+    // Child's head is fresh — the parent's chain is NOT shared.
     try std.testing.expectEqual(
-        @as(u64, 500),
-        stakes.stake_delegations_delta[parent_idx].entries[0].delegation.stake,
+        @as(?StakeDeltaArena.Id, null),
+        stakes.stake_delta_head[child_idx].opt(),
     );
+    // Parent's head is untouched.
+    try std.testing.expectEqual(parent_head_id, stakes.stake_delta_head[parent_idx].opt().?);
+
+    // Mutating the child's aggregate must not touch the parent's.
+    stakes.stake_aggregates[child_idx].effective = 9_999;
+    try std.testing.expectEqual(@as(u64, 1_000), stakes.stake_aggregates[parent_idx].effective);
 }
 
 test "solGetEpochStake matches SIMD-0133 semantics (null / hit / miss)" {
