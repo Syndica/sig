@@ -1126,23 +1126,18 @@ fn runCreateAccountRentCheck(
 }
 
 test "loadAndExecuteTransaction: native-loader owner does not skip rent-state verification" {
-    // Regression for #1714: a System CreateAccount can set owner = Native Loader, and the
-    // resulting sub-rent-exempt account must be rejected like any other owner (matches Agave).
     const allocator = std.testing.allocator;
 
     const native = try runCreateAccountRentCheck(allocator, sig.runtime.ids.NATIVE_LOADER_ID);
-    try std.testing.expect(native.err != null);
     try std.testing.expectEqual(
         TransactionError{ .InsufficientFundsForRent = .{ .account_index = 1 } },
-        native.err.?,
+        native.err,
     );
-    try std.testing.expectEqual(@as(u64, 0), native.target_lamports);
+    try std.testing.expectEqual(0, native.target_lamports);
 
-    // System-owned control: rejected before and after the fix.
     const control = try runCreateAccountRentCheck(allocator, sig.runtime.program.system.ID);
-    try std.testing.expect(control.err != null);
     try std.testing.expectEqual(
         TransactionError{ .InsufficientFundsForRent = .{ .account_index = 1 } },
-        control.err.?,
+        control.err,
     );
 }
