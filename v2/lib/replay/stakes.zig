@@ -21,8 +21,7 @@ const Slot = solana.Slot;
 const Epoch = solana.Epoch;
 
 /// SIMD-0357 caps the admitted vote-account set at 2000 post-Alpenglow.
-/// Pre-Alpenglow, the effective count on mainnet is around ~1400, so
-/// this is a comfortable bound in both regimes.
+/// Pre-Alpenglow mainnet: ~1400 active.
 pub const MAX_ALPENGLOW_VOTE_ACCOUNTS: u16 = 2000;
 
 /// `FixedPubkeyMap` requires a power-of-two capacity and callers size to
@@ -33,13 +32,11 @@ const EpochVotersIndex = collections.FixedPubkeyMap(u16, EPOCH_VOTERS_INDEX_CAP)
 
 /// Frozen per-epoch snapshot of admitted voters.
 ///
-/// `entries` is the source of truth. `by_vote_pk` and `total_stake`
-/// are derived from `entries` and refreshed atomically with it — only
-/// at snapshot boot today; at each epoch-boundary crossing once
-/// boundary derivation is wired in.
+/// `entries` is the source of truth; `by_vote_pk` and `total_stake` are
+/// derived from it and rebuilt atomically with any change.
 ///
-/// Layout is `extern` so the struct can be persisted or shared as-is;
-/// downstream consumers may map it directly.
+/// TODO: rebuild is currently only triggered at snapshot boot. Wire up
+/// the epoch-boundary rebuild once boundary derivation lands.
 pub const EpochVoters = extern struct {
     len: u16,
     _pad0: [6]u8 = @splat(0),
@@ -61,8 +58,7 @@ pub const EpochVoters = extern struct {
         std.debug.assert(@sizeOf(Entry) == 48);
     }
 
-    /// Zero the struct and reset the map to empty. Call before
-    /// building.
+    /// Zero the struct and reset the map.
     pub fn init(self: *EpochVoters) void {
         self.len = 0;
         self._pad0 = @splat(0);
@@ -72,8 +68,8 @@ pub const EpochVoters = extern struct {
         self.total_stake = 0;
     }
 
-    /// O(1) lookup of a voter's stake by vote pubkey. Miss returns 0
-    /// (agave / firedancer parity with sol_get_epoch_stake).
+    /// O(1) stake lookup by vote pubkey. Miss returns 0 (SIMD-0133
+    /// semantic for `sol_get_epoch_stake` on a non-admitted account).
     pub fn stakeOf(self: *const EpochVoters, vote_pk: Pubkey) u64 {
         const idx_ptr = self.by_vote_pk.getPtrConst(vote_pk) orelse return 0;
         return self.entries[idx_ptr.*].stake;
@@ -82,32 +78,22 @@ pub const EpochVoters = extern struct {
     /// Populate from a single `VersionedEpochStakes` entry sourced
     /// from the snapshot manifest.
     ///
-    /// `memory_base` is the base pointer used to resolve the entry's
+    /// `memory_base` is the base used to resolve the entry's
     /// `RelativeSlice` fields (typically `snapshot_metadata.getMemory()`).
     ///
-    /// Sorts `entries` by stake desc so positional index 0 is the
-    /// highest-staked voter — matches SIMD-0357's post-Alpenglow
-    /// admitted-set ordering, and gives a canonical index for the
-    /// sibling `LiveVoters` arrays.
+    /// Sorts `entries` by stake desc — matches SIMD-0357's post-Alpenglow
+    /// admitted-set ordering and gives a canonical positional index for
+    /// the sibling `LiveVoters` arrays.
     ///
-    /// `commission_bps` is carried across from
-    /// `VersionedEpochStakes.VoteAccountEntry.commission_bps`, which
-    /// the snapshot parser extracts from each vote-account data
-    /// blob during `VersionedEpochStakes.read`.
-    ///
-    /// `total_stake` is summed from `entries[]`. Agave's
-    /// authoritative total is accumulated unconditionally over the
-    /// full vote-accounts map (including zero-stake rows) in
-    /// `parse_epoch_vote_accounts`
-    /// (https://github.com/anza-xyz/agave/blob/802264fcc093dc041a991e07d3196a96254b912e/runtime/src/epoch_stakes.rs#L337-L371)
-    /// and serialized as `entry.total_stake`; the two agree when the
-    /// snapshot's `vote_accounts` slice enumerates every summed row.
+    /// `total_stake` is summed from `entries[]` rather than read from
+    /// the entry's serialised `total_stake`; the two agree when the
+    /// snapshot enumerates every summed row. [agave]
+    /// https://github.com/anza-xyz/agave/blob/802264fcc093dc041a991e07d3196a96254b912e/runtime/src/epoch_stakes.rs#L337-L371
     ///
     /// Errors:
     /// - `error.TooManyVoters` if the entry exceeds
     ///   `MAX_ALPENGLOW_VOTE_ACCOUNTS`. Refuses to boot rather than
-    ///   silently truncate; loosen when the snapshot producers are
-    ///   confirmed to enforce the SIMD-0357 cap.
+    ///   silently truncate.
     /// - `error.MapFull` from the derived side index — should not
     ///   occur given the pow-2 / 2x-occupancy invariants.
     pub fn loadFromVersionedEpochStakes(
@@ -142,23 +128,17 @@ pub const EpochVoters = extern struct {
 };
 
 /// Pure implementation of the `sol_get_epoch_stake` SVM syscall
-/// semantic (SIMD-0133).
+/// semantic (SIMD-0133). Callers in the SVM layer own compute-meter
+/// charging and VM-memory translation; this function takes a
+/// validated optional pointer.
 ///
-/// Callers in the SVM layer are responsible for compute-meter
-/// charging and for translating the pubkey argument out of VM
-/// memory; this function assumes a validated optional pointer.
-///
-/// Semantics:
 /// - `null` → total active stake for the current epoch.
-/// - non-null → stake delegated to the vote account at that
-///   address, or 0 if the address does not correspond to an
-///   admitted voter (SIMD-0357 top-2000 post-Alpenglow; the full
-///   admitted set pre-Alpenglow).
+/// - non-null → stake delegated to that vote account, or 0 if the
+///   account is not in the admitted set (SIMD-0357 top-2000
+///   post-Alpenglow; full set pre-Alpenglow).
 ///
-/// Not yet reachable at runtime — v2 has no SVM interpreter. Once
-/// the exec tile grows one, register this as the handler for
-/// `sol_get_epoch_stake` with the current epoch's `EpochVoters`
-/// bound on the invoke context.
+/// TODO: not yet wired — v2 has no SVM interpreter. Register as the
+/// `sol_get_epoch_stake` handler when the exec tile grows one.
 pub fn solGetEpochStake(
     epoch_voters: *const EpochVoters,
     maybe_vote_pk: ?*const Pubkey,
@@ -168,9 +148,9 @@ pub fn solGetEpochStake(
 }
 
 /// Drift bounds for the stake-weighted timestamp median, expressed
-/// as percentages of the poh estimate offset since the epoch start.
-/// Post-Alpenglow defaults match agave's `MAX_ALLOWABLE_DRIFT_PERCENTAGE_FAST`
-/// and `MAX_ALLOWABLE_DRIFT_PERCENTAGE_SLOW_V2`.
+/// as percentages of the poh-estimate offset since the epoch start.
+/// Defaults are the pre-Alpenglow `MAX_ALLOWABLE_DRIFT_PERCENTAGE_FAST`
+/// / `MAX_ALLOWABLE_DRIFT_PERCENTAGE_SLOW_V2` values.
 pub const TimestampDrift = extern struct {
     fast_pct: u32,
     slow_pct: u32,
@@ -189,35 +169,27 @@ pub const EpochStartTimestamp = extern struct {
     timestamp: i64,
 };
 
-/// Pre-Alpenglow stake-weighted median timestamp computed over
+/// Pre-Alpenglow stake-weighted median timestamp, computed over
 /// `EpochVoters` (stake weights) and one fork's `LiveVoters` (live
-/// vote timestamps). Matches agave's `calculate_stake_weighted_timestamp`
-/// and is the value the per-slot clock sysvar update writes into
-/// `Clock.unix_timestamp` under TowerBFT.
+/// vote timestamps). Value written into `Clock.unix_timestamp` by
+/// the per-slot clock-sysvar update under TowerBFT. Not called under
+/// Alpenglow — `Clock.unix_timestamp` comes from the block footer's
+/// `block_producer_time_nanos` (SIMD-0363).
 ///
-/// Under Alpenglow, `Clock.unix_timestamp` is instead set from the
-/// block footer's `block_producer_time_nanos` (SIMD-0363; agave
-/// `Bank::update_clock_from_footer` in
-/// `agave/runtime/src/bank.rs`). This function is unreachable in
-/// the Alpenglow path and retires when the feature is cluster-wide.
-///
-/// Not yet reachable at runtime — v2 has no per-slot sysvar update
-/// path. Once one exists it calls this function once per pre-Alpenglow
-/// slot with the current fork's `LiveVoters` and the epoch's
-/// `EpochVoters`.
-///
-/// Algorithm (per SIMD / agave):
+/// Algorithm:
 /// 1. For each voter whose live row is `.update`, project the vote
 ///    timestamp to `current_slot` as
 ///    `last_vote_timestamp + elapsed_secs(last_vote_slot -> current_slot)`.
 /// 2. Sort projections asc; walk while accumulating stake; return
 ///    the projection at which cumulative stake first exceeds
-///    `total_live_stake / 2` — the stake-weighted median.
+///    `total_live_stake / 2`.
 /// 3. If `epoch_start` is provided, bound the median against the
-///    poh estimate offset by `drift.fast_pct` / `drift.slow_pct`.
+///    poh-estimate offset by `drift.fast_pct` / `drift.slow_pct`.
 ///
 /// Returns null iff no voter has a live `.update` row with non-zero
-/// stake (no signal to aggregate).
+/// stake.
+///
+/// TODO: not yet wired — v2 has no per-slot sysvar update path.
 pub fn stakeWeightedTimestamp(
     epoch_voters: *const EpochVoters,
     live_voters: *const LiveVoters,
@@ -307,30 +279,22 @@ fn clampDrift(
 
 /// Fold a pre-Alpenglow landed vote into the fork's `LiveVoters`.
 /// Overwrites the admitted voter's row with the new `.update` state;
-/// no-op if the vote account isn't in the admitted set (miss on
-/// `by_vote_pk`).
+/// no-op on a miss.
 ///
 /// Miss semantics: post-Alpenglow (SIMD-0357) only the top-2000
-/// admitted voters have positional slots. A vote tx from a non-
-/// admitted vote account lands successfully at the tx level but
-/// contributes nothing to the timestamp aggregate. Pre-Alpenglow
-/// every vote account is admitted, so misses shouldn't happen in
-/// practice.
+/// admitted voters have positional slots, so a vote from a non-
+/// admitted account lands at the tx level but contributes nothing
+/// to the timestamp aggregate. Pre-Alpenglow every vote account is
+/// admitted, so misses shouldn't happen in practice.
 ///
-/// Under Alpenglow, individual vote messages leave the block and
-/// travel over the votor/consensus lane; replay cannot observe them
-/// during block execution and this fold path is never invoked.
-/// `Clock.unix_timestamp` is written from the block footer instead
-/// (see `stakeWeightedTimestamp` doc for the SIMD-0363 reference).
+/// Not called under Alpenglow — vote messages leave the block for
+/// the votor lane and replay cannot observe them during execution.
 ///
-/// Not yet reachable at runtime — v2 has no vote-program execution.
-/// When the exec tile grows one, the committer path decodes each
-/// landed vote ix and calls this with the extracted
-/// `(vote_pk, last_vote_slot, last_vote_timestamp)`. This fold path
-/// retires with the pre-Alpenglow Clock derivation.
-///
-/// Vote-account deletion (the `.invalidate` transition) is not
+/// The `.invalidate` transition (vote-account deletion) is not
 /// modelled.
+///
+/// TODO: not yet wired — v2 has no vote-program execution. The
+/// committer path will call this once the exec tile grows one.
 pub fn foldLandedVote(
     epoch_voters: *const EpochVoters,
     live_voters: *LiveVoters,
@@ -352,10 +316,9 @@ pub fn foldLandedVote(
 /// + timestamp; `.invalidate` marks the voter as retired on this
 /// fork (vote account closed).
 ///
-/// Populated by `foldLandedVote` from vote-tx execution; consumed by
-/// `stakeWeightedTimestamp` for the pre-Alpenglow Clock derivation.
-/// Both paths retire under Alpenglow (Clock is written from the
-/// block footer instead — see `stakeWeightedTimestamp`).
+/// Populated by `foldLandedVote`; consumed by
+/// `stakeWeightedTimestamp`. Unused under Alpenglow (see
+/// `stakeWeightedTimestamp`).
 pub const LiveVoter = extern struct {
     last_vote_slot: Slot, //          8
     last_vote_timestamp: i64, //      8
@@ -390,55 +353,40 @@ pub const LiveVoter = extern struct {
 pub const LiveVoters = extern struct {
     entries: [MAX_ALPENGLOW_VOTE_ACCOUNTS]LiveVoter,
 
-    /// Zero out every row to `.unpopulated`. Used for the root block
-    /// at snapshot boot, and as a defensive scrub before a
-    /// `BlockPool` slot is re-issued.
+    /// Zero out every row to `.unpopulated`.
     pub fn reset(self: *LiveVoters) void {
         @memset(&self.entries, LiveVoter.UNPOPULATED);
     }
 };
 
 comptime {
-    // Sanity: keeps memory budgeting honest.
     std.debug.assert(@sizeOf(LiveVoters) == MAX_ALPENGLOW_VOTE_ACCOUNTS * 24);
 }
 
-/// Provisional owner struct for replay's stakes state.
+/// Owner struct for replay's stakes state: one `EpochVoters` plus one
+/// `LiveVoters` per `BlockPool` slot. Not `extern` — a container of
+/// already-`extern` pieces.
 ///
-/// **Temporary shape.** The rest of v2 exposes shared state as one
-/// top-level region per collection (`BlockPool`, `TransactionPool`,
-/// `ExecReqResponse`), each with its own mmap and passed around as
-/// its own pointer. `ReplayStakes` bundles two such regions
-/// (`epoch_voters`, `live_voters`) for now; the expected end state
-/// is to split them into standalone top-level regions matching
-/// that convention. `epoch_voters` and `live_voters` themselves are
-/// durable — only the wrapping is provisional.
-///
-/// Not `extern` — a container of already-`extern` pieces; no
-/// cross-process consumer maps `ReplayStakes` itself.
+/// TODO: split `epoch_voters` and `live_voters` into their own
+/// top-level regions, matching the convention used by `BlockPool`,
+/// `TransactionPool`, `ExecReqResponse`.
 pub const ReplayStakes = struct {
     epoch_voters: EpochVoters,
     /// Indexed by `BlockRef` position within the `BlockPool`. Cloned
-    /// from a parent block's slot at `onBlockCreate`. The root
-    /// block's slot is filled by `reset()` at boot.
+    /// from a parent block's slot at `onBlockCreate`.
     live_voters: [replay.BlockPool.capacity]LiveVoters,
-    /// **Provisional.** Hangs the epoch-boundary hard-stop off a
-    /// single field. Once boundary derivation lands and replay
-    /// tracks `current` / `t_minus_1` / `t_minus_2` rotation slots,
-    /// the epoch of any given slot is derivable from the rotation
-    /// state and this field is deleted.
+    /// Epoch the snapshot was taken in. Used by `ensureSlotInBootEpoch`
+    /// as the hard-stop for the not-yet-implemented boundary path.
+    /// TODO: remove once replay tracks rotation state and can derive
+    /// the epoch of any slot from it.
     boot_epoch: Epoch,
-    /// **Provisional.** First slot of the epoch immediately after
-    /// `boot_epoch`. Slots at or beyond this trip
-    /// `ensureSlotInBootEpoch` — the hard-stop for the
-    /// not-yet-implemented boundary path. Cached at boot so the
-    /// hot exec path avoids a per-slot `getEpoch` division.
-    /// Deleted with `boot_epoch`.
+    /// First slot of the epoch after `boot_epoch`; cached so the hot
+    /// exec path avoids a per-slot `getEpoch` division.
+    /// TODO: remove with `boot_epoch`.
     first_slot_of_next_epoch: Slot,
 
-    /// Zero-init the struct to a well-defined empty state. Actual
-    /// data is populated by the snapshot boot loader and by the
-    /// root-block setup path.
+    /// Zero-init to a well-defined empty state; the snapshot boot
+    /// loader fills the real data.
     pub fn init(self: *ReplayStakes) void {
         self.epoch_voters.init();
         for (&self.live_voters) |*lv| lv.reset();
@@ -482,16 +430,12 @@ pub const ReplayStakes = struct {
         try self.epoch_voters.loadFromVersionedEpochStakes(entry, memory_base);
     }
 
-    /// Called by replay whenever a fresh `BlockRef` is allocated
-    /// from the `BlockPool` for a genuine new-block event (either a
-    /// slot boundary or a fork within a slot). Byte-copies the
-    /// parent block's `LiveVoters` row into the child slot so the
-    /// child starts from an exact snapshot of the parent's fork
-    /// state.
-    ///
-    /// Not called for same-slot canonical extensions — those reuse
-    /// the parent's `BlockRef` unchanged (see
-    /// `replay.setChildBlockRef`).
+    /// Byte-copy the parent block's `LiveVoters` row into the child
+    /// slot so the child starts from an exact snapshot of the parent's
+    /// fork state. Called from `replay.setChildBlockRef` whenever a
+    /// fresh `BlockRef` is allocated for a slot boundary or an
+    /// intra-slot fork; not called for same-slot canonical extensions
+    /// (those reuse the parent's `BlockRef` unchanged).
     pub fn onBlockCreate(
         self: *ReplayStakes,
         parent: replay.BlockRef,
@@ -506,12 +450,9 @@ pub const ReplayStakes = struct {
         );
     }
 
-    /// Hard-stop guard for the not-yet-implemented boundary path.
-    /// Called from replay at every new-slot event; returns
-    /// `error.EpochBoundaryNotYetImplemented` when a fork tries to
-    /// enter the epoch after `boot_epoch`.
-    ///
-    /// Deleted when boundary derivation lands.
+    /// Hard-stop guard for the not-yet-implemented boundary path:
+    /// returns `error.EpochBoundaryNotYetImplemented` for any slot at
+    /// or beyond `first_slot_of_next_epoch`.
     pub fn ensureSlotInBootEpoch(self: *const ReplayStakes, slot: Slot) !void {
         if (slot >= self.first_slot_of_next_epoch) {
             return error.EpochBoundaryNotYetImplemented;
