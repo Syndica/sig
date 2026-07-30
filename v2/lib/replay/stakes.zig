@@ -713,6 +713,106 @@ pub const ReplayStakes = struct {
     }
 };
 
+/// Fold a landed stake-ix upsert into `block`'s delta chain and
+/// running `stake_aggregates` triple.
+///
+/// - `delegator_pk`: the stake account whose delegation changed.
+/// - `post_delegation`: the delegator's new state after the ix.
+/// - `pre_contribution`: what the delegator contributed to
+///   `(effective, activating, deactivating)` immediately before
+///   this ix on this block's view. Zero for a newly-created stake
+///   account.
+/// - `post_contribution`: what the delegator contributes after
+///   this ix. Both are computed by the exec tile from the
+///   pre/post `StakeStateV2` + current epoch + stake_history —
+///   the primitive is pure with respect to that computation.
+///
+/// The `next` link on the arena node points at the previous head
+/// of `block`'s chain, so ancestor deltas remain reachable via
+/// the block-tree parent walk (they live under other blocks'
+/// heads).
+///
+/// Errors:
+/// - `error.OutOfSpace` if the arena is exhausted. Treat as
+///   fatal per `stakes-v2-proposal-v2.md` §11.3.
+///
+/// Not yet reachable at runtime — the exec tile grows a stake
+/// program next; this is the sink the committer will call once
+/// per landed stake-account write.
+pub fn foldStakeIxUpsert(
+    stakes: *ReplayStakes,
+    block: replay.BlockRef,
+    delegator_pk: Pubkey,
+    post_delegation: StakeDelegation,
+    pre_contribution: StakeAggregates,
+    post_contribution: StakeAggregates,
+) !void {
+    const id = try stakes.stake_delta_arena.createId();
+    stakes.stake_delta_arena.indexToPtr(id).* = .{
+        .delegator_pk = delegator_pk,
+        .delegation = post_delegation,
+        .kind = .upsert,
+        .next = stakes.stake_delta_head[block.index()],
+    };
+    stakes.stake_delta_head[block.index()] = .init(id);
+
+    applyAggregateDelta(
+        &stakes.stake_aggregates[block.index()],
+        pre_contribution,
+        post_contribution,
+    );
+}
+
+/// Fold a landed stake-account closure into `block`'s delta chain
+/// and running aggregates. Post state is implicitly zero — the
+/// account no longer exists on this block.
+///
+/// `delegation_at_close` is stashed on the arena node purely for
+/// debug / audit; the fold-into-root path only reads `.kind` for
+/// tombstones and treats `delegation` as undefined. See
+/// `stakes-v2-proposal-v2.md` §6.
+///
+/// Errors: `error.OutOfSpace` on arena exhaustion.
+pub fn foldStakeIxTombstone(
+    stakes: *ReplayStakes,
+    block: replay.BlockRef,
+    delegator_pk: Pubkey,
+    delegation_at_close: StakeDelegation,
+    pre_contribution: StakeAggregates,
+) !void {
+    const id = try stakes.stake_delta_arena.createId();
+    stakes.stake_delta_arena.indexToPtr(id).* = .{
+        .delegator_pk = delegator_pk,
+        .delegation = delegation_at_close,
+        .kind = .tombstone,
+        .next = stakes.stake_delta_head[block.index()],
+    };
+    stakes.stake_delta_head[block.index()] = .init(id);
+
+    applyAggregateDelta(
+        &stakes.stake_aggregates[block.index()],
+        pre_contribution,
+        StakeAggregates.ZERO,
+    );
+}
+
+/// `agg += post - pre`, applied field-wise with wrapping
+/// arithmetic. The true totals across a block's aggregate history
+/// are non-negative by construction (the sum of `post_contribution`
+/// terms across every stake-ix and every delegator on the block's
+/// ancestor chain), so wrapping is safe: intermediate values may
+/// wrap when a single ix's `pre > post`, but the cumulative
+/// running sum matches the mathematically-correct total.
+fn applyAggregateDelta(
+    agg: *StakeAggregates,
+    pre: StakeAggregates,
+    post: StakeAggregates,
+) void {
+    agg.effective +%= post.effective -% pre.effective;
+    agg.activating +%= post.activating -% pre.activating;
+    agg.deactivating +%= post.deactivating -% pre.deactivating;
+}
+
 test "EpochVoters init empties the map and clears len" {
     var ev: EpochVoters = undefined;
     ev.init();
@@ -1169,6 +1269,182 @@ test "ensureSlotInBootEpoch rejects slots at/beyond the boundary" {
     // Boundary and beyond trip.
     try std.testing.expectError(error.EpochBoundaryNotYetImplemented, stakes.ensureSlotInBootEpoch(600));
     try std.testing.expectError(error.EpochBoundaryNotYetImplemented, stakes.ensureSlotInBootEpoch(1_000_000));
+}
+
+test "foldStakeIxUpsert: new delegation on empty block" {
+    const stakes = try std.heap.page_allocator.create(ReplayStakes);
+    defer std.heap.page_allocator.destroy(stakes);
+    stakes.init();
+
+    const b: replay.BlockRef = @enumFromInt(3);
+    var dpk: Pubkey = .{ .data = .{0} ** 32 };
+    dpk.data[0] = 0xD1;
+    var vpk: Pubkey = .{ .data = .{0} ** 32 };
+    vpk.data[0] = 0xE1;
+
+    const post: StakeDelegation = .{
+        .voter_pk = vpk,
+        .stake = 1_000,
+        .activation_epoch = 5,
+        .deactivation_epoch = std.math.maxInt(Epoch),
+        .credits_observed = 0,
+    };
+
+    try foldStakeIxUpsert(
+        stakes,
+        b,
+        dpk,
+        post,
+        StakeAggregates.ZERO,
+        .{ .effective = 0, .activating = 1_000, .deactivating = 0 },
+    );
+
+    const head = stakes.stake_delta_head[b.index()].opt().?;
+    const node = stakes.stake_delta_arena.indexToConstPtr(head);
+    try std.testing.expectEqual(StakeDeltaNode.Kind.upsert, node.kind);
+    try std.testing.expectEqual(dpk.data, node.delegator_pk.data);
+    try std.testing.expectEqual(vpk.data, node.delegation.voter_pk.data);
+    try std.testing.expectEqual(@as(u64, 1_000), node.delegation.stake);
+    try std.testing.expectEqual(@as(?StakeDeltaArena.Id, null), node.next.opt());
+
+    try std.testing.expectEqual(@as(u64, 0), stakes.stake_aggregates[b.index()].effective);
+    try std.testing.expectEqual(@as(u64, 1_000), stakes.stake_aggregates[b.index()].activating);
+    try std.testing.expectEqual(@as(u64, 0), stakes.stake_aggregates[b.index()].deactivating);
+}
+
+test "foldStakeIxUpsert: chains newest-first, ancestor node reachable via .next" {
+    const stakes = try std.heap.page_allocator.create(ReplayStakes);
+    defer std.heap.page_allocator.destroy(stakes);
+    stakes.init();
+
+    const b: replay.BlockRef = @enumFromInt(7);
+    var dpk_a: Pubkey = .{ .data = .{0} ** 32 };
+    dpk_a.data[0] = 0xA0;
+    var dpk_b: Pubkey = .{ .data = .{0} ** 32 };
+    dpk_b.data[0] = 0xB0;
+    var vpk: Pubkey = .{ .data = .{0} ** 32 };
+    vpk.data[0] = 0xE1;
+
+    const post_a: StakeDelegation = .{
+        .voter_pk = vpk,
+        .stake = 100,
+        .activation_epoch = 5,
+        .deactivation_epoch = std.math.maxInt(Epoch),
+        .credits_observed = 0,
+    };
+    const post_b: StakeDelegation = .{
+        .voter_pk = vpk,
+        .stake = 300,
+        .activation_epoch = 5,
+        .deactivation_epoch = std.math.maxInt(Epoch),
+        .credits_observed = 0,
+    };
+
+    try foldStakeIxUpsert(stakes, b, dpk_a, post_a, StakeAggregates.ZERO, .{
+        .effective = 100,
+        .activating = 0,
+        .deactivating = 0,
+    });
+    try foldStakeIxUpsert(stakes, b, dpk_b, post_b, StakeAggregates.ZERO, .{
+        .effective = 300,
+        .activating = 0,
+        .deactivating = 0,
+    });
+
+    // Newest-first: head is b, its next is a.
+    const head = stakes.stake_delta_head[b.index()].opt().?;
+    const head_node = stakes.stake_delta_arena.indexToConstPtr(head);
+    try std.testing.expectEqual(dpk_b.data, head_node.delegator_pk.data);
+
+    const next = head_node.next.opt().?;
+    const next_node = stakes.stake_delta_arena.indexToConstPtr(next);
+    try std.testing.expectEqual(dpk_a.data, next_node.delegator_pk.data);
+    try std.testing.expectEqual(@as(?StakeDeltaArena.Id, null), next_node.next.opt());
+
+    try std.testing.expectEqual(@as(u64, 400), stakes.stake_aggregates[b.index()].effective);
+}
+
+test "foldStakeIxTombstone: aggregate subtracts pre-contribution" {
+    const stakes = try std.heap.page_allocator.create(ReplayStakes);
+    defer std.heap.page_allocator.destroy(stakes);
+    stakes.init();
+
+    const b: replay.BlockRef = @enumFromInt(4);
+    var dpk: Pubkey = .{ .data = .{0} ** 32 };
+    dpk.data[0] = 0xD2;
+    var vpk: Pubkey = .{ .data = .{0} ** 32 };
+    vpk.data[0] = 0xE2;
+
+    // Seed the block's aggregate as if a prior upsert had contributed
+    // 500 effective + 100 activating.
+    stakes.stake_aggregates[b.index()] = .{
+        .effective = 500,
+        .activating = 100,
+        .deactivating = 0,
+    };
+
+    const at_close: StakeDelegation = .{
+        .voter_pk = vpk,
+        .stake = 500,
+        .activation_epoch = 3,
+        .deactivation_epoch = std.math.maxInt(Epoch),
+        .credits_observed = 99,
+    };
+    try foldStakeIxTombstone(stakes, b, dpk, at_close, .{
+        .effective = 500,
+        .activating = 100,
+        .deactivating = 0,
+    });
+
+    const head = stakes.stake_delta_head[b.index()].opt().?;
+    const node = stakes.stake_delta_arena.indexToConstPtr(head);
+    try std.testing.expectEqual(StakeDeltaNode.Kind.tombstone, node.kind);
+    try std.testing.expectEqual(dpk.data, node.delegator_pk.data);
+
+    try std.testing.expectEqual(@as(u64, 0), stakes.stake_aggregates[b.index()].effective);
+    try std.testing.expectEqual(@as(u64, 0), stakes.stake_aggregates[b.index()].activating);
+    try std.testing.expectEqual(@as(u64, 0), stakes.stake_aggregates[b.index()].deactivating);
+}
+
+test "foldStakeIxUpsert: aggregate handles negative net change via wrapping" {
+    // Delegator D shrinks stake from 1000 -> 400. pre.effective=1000,
+    // post.effective=400 => the block's aggregate delta is -600.
+    // Wrapping u64 subtraction produces the same running total as a
+    // signed model.
+    const stakes = try std.heap.page_allocator.create(ReplayStakes);
+    defer std.heap.page_allocator.destroy(stakes);
+    stakes.init();
+
+    const b: replay.BlockRef = @enumFromInt(9);
+    var dpk: Pubkey = .{ .data = .{0} ** 32 };
+    dpk.data[0] = 0xD3;
+    var vpk: Pubkey = .{ .data = .{0} ** 32 };
+    vpk.data[0] = 0xE3;
+
+    // Seed as if 1000 effective was already credited.
+    stakes.stake_aggregates[b.index()] = .{
+        .effective = 1_000,
+        .activating = 0,
+        .deactivating = 0,
+    };
+
+    const post: StakeDelegation = .{
+        .voter_pk = vpk,
+        .stake = 400,
+        .activation_epoch = 3,
+        .deactivation_epoch = std.math.maxInt(Epoch),
+        .credits_observed = 0,
+    };
+    try foldStakeIxUpsert(
+        stakes,
+        b,
+        dpk,
+        post,
+        .{ .effective = 1_000, .activating = 0, .deactivating = 0 },
+        .{ .effective = 400, .activating = 0, .deactivating = 0 },
+    );
+
+    try std.testing.expectEqual(@as(u64, 400), stakes.stake_aggregates[b.index()].effective);
 }
 
 // ---------------------------------------------------------------------------
