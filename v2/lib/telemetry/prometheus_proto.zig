@@ -301,9 +301,9 @@ fn classicHistogramWriter(
     return .{ .gpa = gpa, .snap = snap };
 }
 
-/// Renders a float `Histogram` snapshot as a classic protobuf `Histogram`: explicit finite `bucket`
-/// list plus `sample_sum`/`sample_count`. There is no explicit `+Inf` bucket — Prometheus derives it
-/// from `sample_count`. (`LatencyHistogram`s always render native; see `NativeHistogramWriter`.)
+/// Writes a float `Histogram` snapshot as a classic protobuf `Histogram`: a finite `bucket` list,
+/// `sample_sum`, and `sample_count`. There is no `+Inf` bucket, because Prometheus derives it from
+/// `sample_count`. A `LatencyHistogram` always goes out as native; see `NativeHistogramWriter`.
 fn ClassicHistogramWriter(comptime SnapPtr: type) type {
     return struct {
         gpa: std.mem.Allocator,
@@ -372,9 +372,9 @@ const NativeHistogramWriter = struct {
         try writeVarintField(hw, Histogram.sample_count, total_count);
         try writeDoubleField(hw, Histogram.sample_sum, @floatFromInt(sum_ns));
 
-        // Populated range [first, last] over the positive buckets, which start at storage index 1 —
-        // index 0 went out as the zero bucket above. Native buckets are sparse, so a single span
-        // with interior zero-deltas is the simplest faithful encoding.
+        // Populated range [first, last] over the positive buckets. The positive buckets start at
+        // storage index 1, because index 0 went out as the zero bucket above. Native buckets are
+        // sparse, so one span with interior zero-deltas is the simplest correct encoding.
         var first: ?usize = null;
         var last: usize = 0;
         for (counts[1..], 1..) |c, k| {
@@ -400,9 +400,9 @@ const NativeHistogramWriter = struct {
                 prev = cur;
             }
         } else {
-            // No positive bucket is populated — everything observed, if anything, sits in the zero
-            // bucket. Still emit the no-op span (offset=0, length=0) so the message reads as a
-            // native histogram rather than an empty classic one.
+            // No positive bucket holds a count. Each observation, if the histogram has any, sits
+            // in the zero bucket. Write the no-op span (offset=0, length=0) anyway, so the
+            // message reads as a native histogram and not as an empty classic one.
             try writeSint32Field(&span.writer, BucketSpan.offset, 0);
             try writeVarintField(&span.writer, BucketSpan.length, 0);
             try writeBytesField(hw, Histogram.positive_span, span.written());

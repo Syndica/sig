@@ -689,11 +689,12 @@ pub const Metrics = struct {
             .prefix = "snapshot",
         };
         for (@typeInfo(Metrics).@"struct".fields) |field| {
-            if (std.mem.eql(u8, field.name, "io_latency_ns")) @field(config.fields, field.name) = .{ .layout = .{
-                .min_upper_bound_ns = IO_LATENCY_MIN_BOUND,
-                .max_upper_bound_ns = IO_LATENCY_MAX_BOUND,
-                .bounds_per_doubling = 2,
-            } };
+            if (std.mem.eql(u8, field.name, "io_latency_ns"))
+                @field(config.fields, field.name) = .{ .layout = .{
+                    .min_upper_bound_ns = IO_LATENCY_MIN_BOUND,
+                    .max_upper_bound_ns = IO_LATENCY_MAX_BOUND,
+                    .bounds_per_doubling = 2,
+                } };
         }
         break :blk config;
     };

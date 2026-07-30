@@ -18,7 +18,7 @@ pub const std_options = start.options;
 pub const ReadOnly = services.telemetry.ReadOnly;
 pub const ReadWrite = services.telemetry.ReadWrite;
 
-/// `Content-Type` for the Prometheus protobuf exposition (the format that carries native histograms).
+/// `Content-Type` for the Prometheus protobuf exposition. This format carries native histograms.
 const proto_content_type =
     "application/vnd.google.protobuf; proto=io.prometheus.client.MetricFamily; encoding=delimited";
 
@@ -217,9 +217,11 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     }
 }
 
-/// Whether the request's `Accept` header negotiates the Prometheus protobuf exposition format.
-/// A Prometheus server sends `application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;
-/// encoding=delimited` when `scrape_native_histograms` (or a protobuf `scrape_protocols`) is enabled.
+/// Tells if the `Accept` header of the request negotiates the Prometheus protobuf exposition
+/// format. A Prometheus server sends this `Accept` value when `scrape_native_histograms`, or a
+/// protobuf entry in `scrape_protocols`, is enabled:
+///
+///     application/vnd.google.protobuf;proto=io.prometheus.client.MetricFamily;encoding=delimited
 fn acceptsProtobuf(request: *std.http.Server.Request) bool {
     var it = request.iterateHeaders();
     while (it.next()) |header| {

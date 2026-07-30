@@ -863,10 +863,10 @@ fn nativeBoundsTable(comptime schema: u4) [@as(usize, 1) << schema]f64 {
 
 /// Smallest index `k` with `bounds[k] >= frac` (like Go's `sort.SearchFloat64s`), in `0..len`.
 ///
-/// `len` is always `2^schema`, so the range halves cleanly and the search unrolls to a fixed
-/// `log2(len) + 1` compares — the same count the loop form needs — with each comparison folded into
-/// `base` as an integer rather than a jump. That leaves no branches at all, not just no
-/// data-dependent ones. Relies on `bounds` being sorted, which `nativeBoundsTable` builds it to be.
+/// `len` is always `2^schema`. The range halves exactly, so the search unrolls to
+/// `log2(len) + 1` compares, the same count the loop form needs. Each compare adds into `base`
+/// as an integer instead of a jump, so no branch remains at all. `bounds` must be sorted;
+/// `nativeBoundsTable` builds it that way.
 fn searchFloat(comptime len: usize, bounds: *const [len]f64, frac: f64) i64 {
     comptime std.debug.assert(std.math.isPowerOfTwo(len));
     var base: usize = 0;
@@ -921,9 +921,10 @@ fn nativeBound(schema: u4, index: i64) f64 {
 
 pub const LatencyHistogram = struct {
     layout: Layout,
-    /// `layout.baseIndex()`, resolved once here rather than per observation. It is a pure function
-    /// of `layout` and so never changes, but computing it is a full `nativeBucketIndex` — a `frexp`
-    /// and a table search — which `bucketIndex` would otherwise repeat on every `observe`.
+    /// `layout.baseIndex()`, resolved once here and not at each observation. The value is a pure
+    /// function of `layout`, so it never changes. A `baseIndex` call runs a full
+    /// `nativeBucketIndex`: one `frexp` and one table search. `bucketIndex` would repeat that
+    /// work at each `observe`.
     base_index: i64,
     /// Used to ensure reads and writes occur on separate shards.
     /// Atomic representation of `ShardSync`.
@@ -985,15 +986,16 @@ pub const LatencyHistogram = struct {
         /// it reports the saturating bucket's bound, so crossing it is a signal, not a reading.
         max_upper_bound_ns: u64,
         /// How many upper bounds fall in each doubling — each `x` to `2x` range. Power of two in
-        /// 1..256. Each bound is `2^(1 / bounds_per_doubling)` times the one below it: 4 leaves them
-        /// 18.9% apart, 8 -> 9.1%, 16 -> 4.4%.
+        /// 1..256. Each bound is `2^(1 / bounds_per_doubling)` times the bound below it. A value
+        /// of 4 puts the bounds 18.9% apart, 8 gives 9.1%, and 16 gives 4.4%.
         bounds_per_doubling: u16 = 4,
 
-        /// Backstop on the share of the fixed histogram region a single metric may claim. Not a
-        /// budget — a layout anywhere near this is a typo, not a decision. At the ceiling one metric
-        /// costs `header_words + 1 + 2 * (2 + 512)` = 1032 u64 words, ~8 KiB. It is also what bounds
-        /// `bounds_per_doubling` against window width: the two trade directly, so at 256 bounds per
-        /// doubling one doubling fits (257 buckets) and two do not (513).
+        /// Limit on the share of the fixed histogram region that one metric can claim. This is
+        /// not a budget: a layout near this limit is a typo, not a decision. At the limit, one
+        /// metric costs `header_words + 1 + 2 * (2 + 512)` = 1032 u64 words, about 8 KiB. The
+        /// limit also holds `bounds_per_doubling` against the width of the window. The two trade
+        /// directly: at 256 bounds per doubling, one doubling fits (257 buckets) and two do not
+        /// (513).
         pub const max_bucket_count: u64 = 512;
 
         /// Hard ceiling on `max_upper_bound_ns`, and what keeps `upperBoundNs`'s `exp2` -> `u64`
@@ -1001,9 +1003,9 @@ pub const LatencyHistogram = struct {
         /// the arithmetic rather than on anything a latency metric could observe.
         const max_upper_bound_limit: u64 = 1 << 62;
 
-        /// Number of leading `u64` words (at `Detail.index`) encoding `layout` —
-        /// `[bounds_per_doubling, min_upper_bound_ns, max_upper_bound_ns]` — before the `Raw` shard
-        /// elements.
+        /// Number of leading `u64` words (at `Detail.index`) that hold `layout` as
+        /// `[bounds_per_doubling, min_upper_bound_ns, max_upper_bound_ns]`. These words come
+        /// before the `Raw` shard elements.
         pub const header_words: u32 = 3;
 
         pub fn initFromHeader(src: []const u64) Layout {
@@ -1013,12 +1015,12 @@ pub const LatencyHistogram = struct {
                 .min_upper_bound_ns = src[1],
                 .max_upper_bound_ns = src[2],
             };
-            // Everything reaching here was written by `writeHeader` from a `comptimeValidate`-checked
-            // layout, and `signalReady` orders that write ahead of any read. A torn or zeroed header
-            // is the one bad layout no `comptime` can reach — these words cross a region boundary —
-            // and it is worth catching here because a `bounds_per_doubling` that is not a power of
-            // two fails silently: `@ctz` just reads it as a smaller schema. Every accessor below
-            // assumes either these checks or `comptimeValidate` has run.
+            // `writeHeader` wrote these words from a layout that `comptimeValidate` checked, and
+            // `signalReady` orders that write before any read. A torn or zeroed header is the one
+            // bad layout that no `comptime` check can reach, because these words cross a region
+            // boundary. Catch it here: a `bounds_per_doubling` that is not a power of two fails
+            // silently, because `@ctz` reads it as a smaller schema. Each accessor below assumes
+            // that these checks or `comptimeValidate` ran.
             std.debug.assert(layout.bounds_per_doubling != 0 and
                 layout.bounds_per_doubling <= 256 and
                 std.math.isPowerOfTwo(layout.bounds_per_doubling));
@@ -1039,10 +1041,10 @@ pub const LatencyHistogram = struct {
             dst[2] = self.max_upper_bound_ns;
         }
 
-        /// Note the `@popCount`/`@clz` builtins throughout, and that the `Layout` helpers this leans
-        /// on are `inline fn`: a plain call to a non-`inline` helper yields a runtime-known value
-        /// even here, which would leave every `@compileError` branch live and fire them all
-        /// unconditionally. The remaining `comptime` prefixes mark the calls into `std` and into
+        /// This function uses the `@popCount` and `@clz` builtins, and the `Layout` helpers that
+        /// it calls are `inline fn`. A call to a helper that is not `inline` gives a
+        /// runtime-known value even here. Then each `@compileError` branch stays live, and all of
+        /// them fire. The remaining `comptime` prefixes mark the calls into `std` and into
         /// `upperBoundNs`, which are not `inline`.
         pub fn comptimeValidate(comptime self: Layout) void {
             if (self.bounds_per_doubling == 0 or self.bounds_per_doubling > 256 or
@@ -1070,8 +1072,8 @@ pub const LatencyHistogram = struct {
             if (ratio * self.min_upper_bound_ns != self.max_upper_bound_ns or
                 @popCount(ratio) != 1)
             {
-                // `ratio` floors to 1 for any `max` inside the first doubling, and `min` itself is
-                // not a legal `max` — so the pair to name there is the first two rungs, not `min`.
+                // `ratio` floors to 1 for any `max` inside the first doubling, and `min` itself
+                // is not a legal `max`. Name the first two rungs there, not `min`.
                 const lower: comptime_int = if (ratio < 2)
                     @as(comptime_int, self.min_upper_bound_ns) * 2
                 else
@@ -1103,12 +1105,12 @@ pub const LatencyHistogram = struct {
                 ));
             }
 
-            // `upperBoundNs` rounds to an integer, so a ladder fine enough relative to its floor
-            // rounds two adjacent bounds onto the same `le` — at `min = 1, bpd = 16` the first two
-            // are 1 and 1.04, both emitted as `le="1"`. That would put two `_bucket` series with
-            // the same `le` in one text-exposition histogram, which no consumer can read back as
-            // two distinct buckets. Bounds are geometric so the gap only widens: checking the
-            // first pair settles every pair.
+            // `upperBoundNs` rounds to an integer. If the ladder is too fine for its floor, two
+            // adjacent bounds round onto the same `le`. At `min = 1, bpd = 16` the first two
+            // bounds are 1 and 1.04, and both go out as `le="1"`. That puts two `_bucket` series
+            // with the same `le` in one text-exposition histogram, which no consumer can read
+            // back as two buckets. The bounds are geometric, so the gap only widens. A check of
+            // the first pair settles every pair.
             if (comptime self.upperBoundNs(1) <= self.upperBoundNs(0)) {
                 // Smallest floor whose first gap survives rounding, at this resolution.
                 const fits_min = comptime blk: {
@@ -1176,13 +1178,13 @@ pub const LatencyHistogram = struct {
         /// ladder, which is what makes the zero bucket `[-t, +t]` and the first positive bucket
         /// `(t, next]` tile with no gap or overlap.
         ///
-        /// Neither of the two nearby values works here. `min_upper_bound_ns` is what the caller
-        /// asked for, which `baseIndex` rounds *up* onto the ladder — a `min` of 1000 bins against
-        /// 1024, so a threshold of 1000 would leave `(1000, 1024]` claimed by no bucket on the wire
-        /// while `zero_count` holds those observations anyway. `upperBoundNs(0)` is that same bound
-        /// floored to an integer `le` label, which leaves the sub-1ns remainder `(floor(b), b]`
-        /// in the same position. The threshold is a `double` on the wire, so it can carry the
-        /// boundary `bucketIndex` actually bins against, exactly.
+        /// The two nearby values do not work here. `min_upper_bound_ns` is the value the caller
+        /// asked for, and `baseIndex` rounds it *up* onto the ladder: a `min` of 1000 bins
+        /// against 1024. A threshold of 1000 leaves `(1000, 1024]` with no bucket on the wire,
+        /// but `zero_count` still holds those observations. `upperBoundNs(0)` is that same bound
+        /// floored to an integer `le` label, which puts the sub-1ns remainder `(floor(b), b]` in
+        /// the same position. The threshold is a `double` on the wire, so it can carry the exact
+        /// boundary that `bucketIndex` bins against.
         pub fn zeroThreshold(self: Layout) f64 {
             return nativeBound(self.schema(), self.baseIndex());
         }
@@ -1298,7 +1300,8 @@ pub const LatencyHistogram = struct {
 
     /// Writes an observed latency (in nanoseconds) into the histogram.
     pub fn observe(self: *const LatencyHistogram, ns: u64) void {
-        const shard_sync: ShardSync = @bitCast(self.shard_sync.fetchAdd(1, .acquire)); // acquires lock; must be first
+        // This `fetchAdd` takes the lock; it must be first.
+        const shard_sync: ShardSync = @bitCast(self.shard_sync.fetchAdd(1, .acquire));
         const shard = &self.shards[shard_sync.shard];
         // Values past `max_upper_bound_ns` saturate into the final bucket rather than being
         // dropped, which is what keeps `count` equal to the sum of the buckets — the invariant a
@@ -1414,7 +1417,10 @@ pub const LatencyHistogram = struct {
             }
             defer self.current_bucket_index += 1;
 
-            const upper_bound = self.layout.upperBoundNsAt(self.base_index, self.current_bucket_index);
+            const upper_bound = self.layout.upperBoundNsAt(
+                self.base_index,
+                self.current_bucket_index,
+            );
             const cold_bucket = &self.cold_shard_buckets[self.current_bucket_index];
             const hot_bucket = &self.hot_shard_buckets[self.current_bucket_index];
 
@@ -1510,10 +1516,10 @@ pub fn VariantHistogram(comptime V: type, comptime kind: metric.HistogramKind) t
             self.get(tag).observe(value);
         }
 
-        /// Starts a span timer that records its elapsed nanoseconds into the histogram for whichever
-        /// tag `.observe(tag)` is given at the end of the span, usually with `defer`. For
-        /// `kind == .standard` the registered `upper_bounds` must be in nanoseconds; see the unit
-        /// contract on `LatencyObserver`.
+        /// Starts a span timer. At the end of the span, call `.observe(tag)` on the result,
+        /// usually with `defer`. The timer records the elapsed nanoseconds into the histogram for
+        /// `tag`. For `kind == .standard`, the registered `upper_bounds` must be in nanoseconds;
+        /// see the unit contract on `LatencyObserver`.
         pub fn observer(self: *const VariantHistogramSelf) LatencyObserver(kind, Value) {
             return .init(self);
         }
@@ -1903,10 +1909,11 @@ test "latency histogram: bins geometrically" {
     const gpa = std.testing.allocator;
     const Layout = LatencyHistogram.Layout;
 
-    // [512, 1024] at 4 bounds per doubling -> 5 buckets. Both endpoints are doubling boundaries and
-    // both are observed, exercising the fp-safe `frexp` binning; 513/700 are mid-doubling; 861 stays
-    // empty, so an interior bucket holds the running cumulative; 2000 is above the window and
-    // saturates into the final bucket (le=1217, a rung past the 1024 top).
+    // [512, 1024] at 4 bounds per doubling gives 5 buckets. Both endpoints are doubling
+    // boundaries, and the test observes both, which tests the fp-safe `frexp` binning. 513 and
+    // 700 are mid-doubling. 861 stays empty, so an interior bucket holds the cumulative count.
+    // 2000 is above the window and saturates into the final bucket (le=1217, one rung past the
+    // 1024 top).
     const layout: Layout = .{
         .min_upper_bound_ns = 512,
         .max_upper_bound_ns = 1024,
@@ -1969,10 +1976,10 @@ test "latency histogram: every bound is emitted on every snapshot" {
 test "latency histogram: a bound bins into the bucket that names it" {
     const Layout = LatencyHistogram.Layout;
 
-    // `upperBoundNs` and `bucketIndex` have to agree exactly, or a value sitting on a boundary is
-    // reported under an `le` below itself. They do because both route through the same per-octave
-    // table — `nativeBound` is the inverse of `nativeBucketIndex`, not an `exp2` that lands within
-    // a ulp of it. Every bound of every shipped-shape layout, checked against the binning.
+    // `upperBoundNs` and `bucketIndex` must agree exactly. If they do not, a value on a boundary
+    // goes out under an `le` below itself. They agree because both go through the same per-octave
+    // table: `nativeBound` is the inverse of `nativeBucketIndex`, not an `exp2` that lands within
+    // a ulp of it. This test checks every bound of every shipped layout shape against the binning.
     //
     // Floors here are all coarse enough that no two bounds round together; `comptimeValidate`
     // rejects the ones that would (see its `le` collision check).

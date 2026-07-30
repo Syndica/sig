@@ -111,18 +111,20 @@ pub fn writeLatencyHistogramBody(
     try writeHistogramSnapshot(&snapshot_reader, metric_id, resolved, w);
 }
 
-/// Shared body of `writeHistogramBody` and `writeLatencyHistogramBody`: drains an already-swapped
-/// `snapshot_reader` and renders it as prometheus `_bucket` / `_sum` / `_count` lines.
-/// `snapshot_reader` is a mutable pointer to either histogram kind's `SnapshotReader` — both
-/// expose `nextBucket()`, `count`, and `sum`. `metric_id.name` is emitted verbatim — a
-/// `LatencyHistogram` carries its `_ns` unit suffix in the name itself. The unit-carrying values —
-/// the bucket `le` bounds and `_sum` — render via `numberFmt`, which handles both kinds as-is
-/// (`Histogram`'s floats, `LatencyHistogram`'s raw-nanosecond integers); the dimensionless integer
-/// counts (`cumulative_count`, `_count`) always render as `{d}`.
+/// Shared body of `writeHistogramBody` and `writeLatencyHistogramBody`. It drains a
+/// `snapshot_reader` that the caller already swapped, and writes prometheus `_bucket`, `_sum`, and
+/// `_count` lines. `snapshot_reader` is a mutable pointer to the `SnapshotReader` of either
+/// histogram kind; both give `nextBucket()`, `count`, and `sum`. This function writes
+/// `metric_id.name` without a change, because a `LatencyHistogram` carries its `_ns` unit suffix
+/// in the name.
 ///
-/// `bucket_limit` caps how many of the reader's buckets get an `le` line; the rest are left to the
-/// caller's `release()` and counted only by `+Inf`. `null` emits every bucket, which is what the
-/// float `Histogram` wants — see `writeLatencyHistogramBody` for the kind that does not.
+/// The bucket `le` bounds and `_sum` carry a unit, so they go through `numberFmt`, which takes the
+/// floats of `Histogram` and the raw nanosecond integers of `LatencyHistogram` as they are. The
+/// counts (`cumulative_count`, `_count`) have no unit and always go out as `{d}`.
+///
+/// `bucket_limit` limits how many buckets get an `le` line. The caller's `release()` drains the
+/// rest, and only `+Inf` counts them. A `null` limit writes every bucket, which the float
+/// `Histogram` needs. See `writeLatencyHistogramBody` for the kind that does not.
 fn writeHistogramSnapshot(
     snapshot_reader: anytype,
     metric_id: tel.metric.Id,
