@@ -1,7 +1,7 @@
 const std = @import("std");
 const lib = @import("lib");
 const tracy = @import("tracy");
-const api = @import("api");
+const api = @import("accounts_db_api");
 const component = @import("component.zig");
 
 const tel = lib.telemetry;

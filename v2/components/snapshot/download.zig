@@ -1,6 +1,6 @@
 const std = @import("std");
 const lib = @import("lib");
-const api = @import("api");
+const api = @import("snapshot_api");
 const tel = lib.telemetry;
 
 const Address = lib.net.Address;
