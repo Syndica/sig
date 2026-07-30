@@ -608,6 +608,12 @@ pub const ReplayStakes = struct {
     /// parent → child at `onBlockCreate`; maintained incrementally
     /// by the committer on each stake-ix.
     stake_aggregates: [replay.BlockPool.capacity]StakeAggregates,
+    /// Dedup scratch used by `applyRootedFold`. Sized to cover the
+    /// worst case where every arena node references a distinct
+    /// delegator pubkey (`FixedPubkeyMap` needs ≥ 2× occupancy).
+    /// Reset at the start of every fold. Not read outside
+    /// `applyRootedFold`. ~8 MB inline.
+    fold_scratch: FoldScratch,
     /// **Provisional.** Hangs the epoch-boundary hard-stop off a
     /// single field. Once boundary derivation lands and replay
     /// tracks `current` / `t_minus_1` / `t_minus_2` rotation slots,
@@ -622,6 +628,8 @@ pub const ReplayStakes = struct {
     /// Deleted with `boot_epoch`.
     first_slot_of_next_epoch: Slot,
 
+    pub const FoldScratch = collections.FixedPubkeyMap(void, MAX_STAKE_DELTA_NODES * 2);
+
     /// Zero-init the struct to a well-defined empty state. Actual
     /// data is populated by the snapshot boot loader and by the
     /// root-block setup path.
@@ -632,6 +640,7 @@ pub const ReplayStakes = struct {
         self.stake_delta_arena.init();
         for (&self.stake_delta_head) |*h| h.* = .null;
         for (&self.stake_aggregates) |*a| a.* = StakeAggregates.ZERO;
+        self.fold_scratch.init();
         self.boot_epoch = 0;
         self.first_slot_of_next_epoch = 0;
     }
@@ -811,6 +820,101 @@ fn applyAggregateDelta(
     agg.effective +%= post.effective -% pre.effective;
     agg.activating +%= post.activating -% pre.activating;
     agg.deactivating +%= post.deactivating -% pre.deactivating;
+}
+
+/// Fold the winning fork's ancestor delta chain into
+/// `stake_delegations_root`, advancing the rooted view from
+/// `old_root` to `new_root`.
+///
+/// Invariants the caller must ensure:
+/// - `new_root` is a descendant of `old_root` via the block-tree
+///   `Node.parent` links (i.e. the winning fork's path).
+/// - `old_root` has already been folded (its delta head is
+///   `.null`). Boot satisfies this trivially; every subsequent
+///   call maintains it.
+/// - No concurrent writer touches `stake_delta_head[..]`,
+///   `stake_delta_arena`, or `stake_delegations_root` during the
+///   fold — replay is the sole writer.
+///
+/// Algorithm: walk `new_root` up the parent chain, stopping
+/// before `old_root`. For each block on the path, iterate its
+/// delta list newest-first. `fold_scratch` deduplicates by
+/// delegator pubkey so only the most-recent delta per delegator
+/// hits the rooted table; older shadowed nodes are freed silently.
+///
+/// Cost: O(sum of delta counts on the path) time,
+/// O(distinct delegators seen) additional space in `fold_scratch`
+/// (which is pre-sized for the worst case).
+///
+/// Rooted `stake_aggregates` follow implicitly: the invariant
+/// `stake_aggregates[B] = sum of contributions viewed from B` is
+/// maintained through fold and prune, so
+/// `stake_aggregates[new_root]` is already the new rooted total
+/// on return.
+pub fn applyRootedFold(
+    stakes: *ReplayStakes,
+    block_pool: *const replay.BlockPool,
+    old_root: replay.BlockRef,
+    new_root: replay.BlockRef,
+) void {
+    if (old_root == new_root) return;
+
+    stakes.fold_scratch.init();
+
+    var cur = new_root;
+    while (cur != old_root) {
+        var link = stakes.stake_delta_head[cur.index()];
+        while (link.opt()) |id| {
+            const node = stakes.stake_delta_arena.indexToPtr(id);
+            const next = node.next;
+            const delegator_pk = node.delegator_pk;
+
+            // First occurrence wins — we walk newest to oldest, so
+            // the first delta for each delegator is the effective
+            // one on this fork.
+            if (stakes.fold_scratch.getPtrConst(delegator_pk) == null) {
+                stakes.fold_scratch.insert(delegator_pk, {}) catch unreachable;
+                switch (node.kind) {
+                    .upsert => stakes.stake_delegations_root.insert(
+                        delegator_pk,
+                        node.delegation,
+                    ) catch unreachable,
+                    .tombstone => _ = stakes.stake_delegations_root.remove(delegator_pk),
+                }
+            }
+            stakes.stake_delta_arena.destroyId(id);
+            link = next;
+        }
+        stakes.stake_delta_head[cur.index()] = .null;
+
+        // Ascend. Parent must exist because `new_root` is a
+        // descendant of `old_root`; anything else means the caller
+        // has violated the invariant.
+        cur = block_pool.indexToConstPtr(cur).parent.opt() orelse
+            @panic("applyRootedFold: new_root has no path to old_root");
+    }
+}
+
+/// Free every arena node hanging off `block`'s delta head, then
+/// clear the head. Called by replay when pruning a losing sibling
+/// — the block is being evicted from the `BlockPool` and its
+/// deltas will never be folded.
+///
+/// Safe to call on a block whose head is already `.null` (no-op).
+///
+/// Each arena node belongs to exactly one block by construction
+/// (children start with `.null` head, not a copy of parent's head),
+/// so this is a straightforward walk with no shared-reference
+/// concern.
+pub fn pruneStakeDeltas(stakes: *ReplayStakes, block: replay.BlockRef) void {
+    var link = stakes.stake_delta_head[block.index()];
+    while (link.opt()) |id| {
+        const node = stakes.stake_delta_arena.indexToPtr(id);
+        const next = node.next;
+        stakes.stake_delta_arena.destroyId(id);
+        link = next;
+    }
+    stakes.stake_delta_head[block.index()] = .null;
 }
 
 test "EpochVoters init empties the map and clears len" {
@@ -1445,6 +1549,286 @@ test "foldStakeIxUpsert: aggregate handles negative net change via wrapping" {
     );
 
     try std.testing.expectEqual(@as(u64, 400), stakes.stake_aggregates[b.index()].effective);
+}
+
+// Small test helper: build a linear chain of blocks
+// root <- a <- b <- c in `pool` and return their refs.
+fn allocLinearChain(
+    pool: *replay.BlockPool,
+    n: usize,
+) ![]replay.BlockRef {
+    const S = struct { var refs: [8]replay.BlockRef = undefined; };
+    std.debug.assert(n <= S.refs.len);
+
+    for (0..n) |i| {
+        S.refs[i] = try pool.createId();
+        const node = pool.indexToPtr(S.refs[i]);
+        node.* = .{
+            .parent = if (i == 0) .null else .init(S.refs[i - 1]),
+            .child = .null,
+            .sibling = .null,
+            .slot = .init(@as(Slot, @intCast(i))),
+        };
+    }
+    return S.refs[0..n];
+}
+
+test "applyRootedFold: no-op when new_root == old_root" {
+    var pool_buf: [replay.BlockPool.size()]u8 align(@alignOf(replay.BlockPool)) = undefined;
+    const pool: *replay.BlockPool = @ptrCast(&pool_buf);
+    pool.init();
+
+    const stakes = try std.heap.page_allocator.create(ReplayStakes);
+    defer std.heap.page_allocator.destroy(stakes);
+    stakes.init();
+
+    const refs = try allocLinearChain(pool, 1);
+    const root = refs[0];
+
+    // Push a delta on root — must not be touched by a no-op fold.
+    var dpk: Pubkey = .{ .data = .{0} ** 32 };
+    dpk.data[0] = 0xD0;
+    var vpk: Pubkey = .{ .data = .{0} ** 32 };
+    vpk.data[0] = 0xE0;
+    try foldStakeIxUpsert(stakes, root, dpk, .{
+        .voter_pk = vpk,
+        .stake = 1,
+        .activation_epoch = 0,
+        .deactivation_epoch = std.math.maxInt(Epoch),
+        .credits_observed = 0,
+    }, StakeAggregates.ZERO, .{ .effective = 1, .activating = 0, .deactivating = 0 });
+
+    applyRootedFold(stakes, pool, root, root);
+
+    // Delta head should still point at the delta node.
+    try std.testing.expect(stakes.stake_delta_head[root.index()].opt() != null);
+    // Root map should not have received the upsert.
+    try std.testing.expect(stakes.stake_delegations_root.getPtrConst(dpk) == null);
+}
+
+test "applyRootedFold: upsert on single descendant lands in root" {
+    var pool_buf: [replay.BlockPool.size()]u8 align(@alignOf(replay.BlockPool)) = undefined;
+    const pool: *replay.BlockPool = @ptrCast(&pool_buf);
+    pool.init();
+
+    const stakes = try std.heap.page_allocator.create(ReplayStakes);
+    defer std.heap.page_allocator.destroy(stakes);
+    stakes.init();
+
+    const refs = try allocLinearChain(pool, 2);
+    const root = refs[0];
+    const a = refs[1];
+
+    var dpk: Pubkey = .{ .data = .{0} ** 32 };
+    dpk.data[0] = 0xD1;
+    var vpk: Pubkey = .{ .data = .{0} ** 32 };
+    vpk.data[0] = 0xE1;
+    const dgn: StakeDelegation = .{
+        .voter_pk = vpk,
+        .stake = 500,
+        .activation_epoch = 3,
+        .deactivation_epoch = std.math.maxInt(Epoch),
+        .credits_observed = 7,
+    };
+    try foldStakeIxUpsert(stakes, a, dpk, dgn, StakeAggregates.ZERO, .{
+        .effective = 500,
+        .activating = 0,
+        .deactivating = 0,
+    });
+
+    applyRootedFold(stakes, pool, root, a);
+
+    // Delta chain drained.
+    try std.testing.expectEqual(@as(?StakeDeltaArena.Id, null), stakes.stake_delta_head[a.index()].opt());
+    // Root has the upsert.
+    const got = stakes.stake_delegations_root.getPtrConst(dpk) orelse return error.NotFound;
+    try std.testing.expectEqual(@as(u64, 500), got.stake);
+    try std.testing.expectEqual(@as(u64, 7), got.credits_observed);
+}
+
+test "applyRootedFold: newest delta wins across ancestor chain" {
+    var pool_buf: [replay.BlockPool.size()]u8 align(@alignOf(replay.BlockPool)) = undefined;
+    const pool: *replay.BlockPool = @ptrCast(&pool_buf);
+    pool.init();
+
+    const stakes = try std.heap.page_allocator.create(ReplayStakes);
+    defer std.heap.page_allocator.destroy(stakes);
+    stakes.init();
+
+    // root <- a <- b <- c
+    const refs = try allocLinearChain(pool, 4);
+    const root = refs[0];
+    const a = refs[1];
+    const b = refs[2];
+    const c = refs[3];
+
+    var dpk: Pubkey = .{ .data = .{0} ** 32 };
+    dpk.data[0] = 0xD2;
+    var vpk: Pubkey = .{ .data = .{0} ** 32 };
+    vpk.data[0] = 0xE2;
+
+    // Ancestor a: stake=100.
+    try foldStakeIxUpsert(stakes, a, dpk, .{
+        .voter_pk = vpk,
+        .stake = 100,
+        .activation_epoch = 3,
+        .deactivation_epoch = std.math.maxInt(Epoch),
+        .credits_observed = 0,
+    }, StakeAggregates.ZERO, .{ .effective = 100, .activating = 0, .deactivating = 0 });
+
+    // Ancestor b: stake=200 (updates same delegator).
+    try foldStakeIxUpsert(stakes, b, dpk, .{
+        .voter_pk = vpk,
+        .stake = 200,
+        .activation_epoch = 3,
+        .deactivation_epoch = std.math.maxInt(Epoch),
+        .credits_observed = 0,
+    }, .{ .effective = 100, .activating = 0, .deactivating = 0 }, .{
+        .effective = 200,
+        .activating = 0,
+        .deactivating = 0,
+    });
+
+    // Tip c: stake=300 (updates same delegator again).
+    try foldStakeIxUpsert(stakes, c, dpk, .{
+        .voter_pk = vpk,
+        .stake = 300,
+        .activation_epoch = 3,
+        .deactivation_epoch = std.math.maxInt(Epoch),
+        .credits_observed = 0,
+    }, .{ .effective = 200, .activating = 0, .deactivating = 0 }, .{
+        .effective = 300,
+        .activating = 0,
+        .deactivating = 0,
+    });
+
+    applyRootedFold(stakes, pool, root, c);
+
+    // Every block on the path drained.
+    try std.testing.expectEqual(@as(?StakeDeltaArena.Id, null), stakes.stake_delta_head[a.index()].opt());
+    try std.testing.expectEqual(@as(?StakeDeltaArena.Id, null), stakes.stake_delta_head[b.index()].opt());
+    try std.testing.expectEqual(@as(?StakeDeltaArena.Id, null), stakes.stake_delta_head[c.index()].opt());
+
+    // Root has c's version (newest wins).
+    const got = stakes.stake_delegations_root.getPtrConst(dpk) orelse return error.NotFound;
+    try std.testing.expectEqual(@as(u64, 300), got.stake);
+}
+
+test "applyRootedFold: tombstone erases pre-existing rooted row" {
+    var pool_buf: [replay.BlockPool.size()]u8 align(@alignOf(replay.BlockPool)) = undefined;
+    const pool: *replay.BlockPool = @ptrCast(&pool_buf);
+    pool.init();
+
+    const stakes = try std.heap.page_allocator.create(ReplayStakes);
+    defer std.heap.page_allocator.destroy(stakes);
+    stakes.init();
+
+    // Seed the rooted table.
+    var dpk: Pubkey = .{ .data = .{0} ** 32 };
+    dpk.data[0] = 0xD3;
+    var vpk: Pubkey = .{ .data = .{0} ** 32 };
+    vpk.data[0] = 0xE3;
+    try stakes.stake_delegations_root.insert(dpk, .{
+        .voter_pk = vpk,
+        .stake = 500,
+        .activation_epoch = 3,
+        .deactivation_epoch = std.math.maxInt(Epoch),
+        .credits_observed = 42,
+    });
+
+    const refs = try allocLinearChain(pool, 2);
+    const root = refs[0];
+    const a = refs[1];
+
+    try foldStakeIxTombstone(stakes, a, dpk, .{
+        .voter_pk = vpk,
+        .stake = 500,
+        .activation_epoch = 3,
+        .deactivation_epoch = std.math.maxInt(Epoch),
+        .credits_observed = 42,
+    }, .{ .effective = 500, .activating = 0, .deactivating = 0 });
+
+    applyRootedFold(stakes, pool, root, a);
+
+    try std.testing.expect(stakes.stake_delegations_root.getPtrConst(dpk) == null);
+}
+
+test "applyRootedFold: releases arena nodes back to free list" {
+    var pool_buf: [replay.BlockPool.size()]u8 align(@alignOf(replay.BlockPool)) = undefined;
+    const pool: *replay.BlockPool = @ptrCast(&pool_buf);
+    pool.init();
+
+    const stakes = try std.heap.page_allocator.create(ReplayStakes);
+    defer std.heap.page_allocator.destroy(stakes);
+    stakes.init();
+
+    const refs = try allocLinearChain(pool, 2);
+    const root = refs[0];
+    const a = refs[1];
+
+    // Capture the very-first free arena id, exhaust a few, then fold
+    // and re-allocate — should hand back the same ids (LIFO free list).
+    var dpk: Pubkey = .{ .data = .{0} ** 32 };
+    dpk.data[0] = 0xD4;
+    var vpk: Pubkey = .{ .data = .{0} ** 32 };
+    vpk.data[0] = 0xE4;
+
+    const alloc_pre = stakes.stake_delta_arena.free_head;
+
+    for (0..5) |i| {
+        var dpk_i = dpk;
+        dpk_i.data[1] = @intCast(i);
+        try foldStakeIxUpsert(stakes, a, dpk_i, .{
+            .voter_pk = vpk,
+            .stake = 1,
+            .activation_epoch = 0,
+            .deactivation_epoch = std.math.maxInt(Epoch),
+            .credits_observed = 0,
+        }, StakeAggregates.ZERO, .{ .effective = 1, .activating = 0, .deactivating = 0 });
+    }
+
+    // Arena consumed 5 slots — free_head moved.
+    try std.testing.expect(stakes.stake_delta_arena.free_head.opt() != alloc_pre.opt());
+
+    applyRootedFold(stakes, pool, root, a);
+
+    // After fold, allocating one node should hand back the LIFO-most-
+    // recently freed slot from the fold — a specific arena id, but
+    // more importantly, the arena is not exhausted.
+    const id = try stakes.stake_delta_arena.createId();
+    stakes.stake_delta_arena.destroyId(id);
+}
+
+test "pruneStakeDeltas: frees the block's chain and clears head" {
+    const stakes = try std.heap.page_allocator.create(ReplayStakes);
+    defer std.heap.page_allocator.destroy(stakes);
+    stakes.init();
+
+    const b: replay.BlockRef = @enumFromInt(2);
+    var dpk: Pubkey = .{ .data = .{0} ** 32 };
+    dpk.data[0] = 0xD5;
+    var vpk: Pubkey = .{ .data = .{0} ** 32 };
+    vpk.data[0] = 0xE5;
+
+    for (0..3) |i| {
+        var dpk_i = dpk;
+        dpk_i.data[1] = @intCast(i);
+        try foldStakeIxUpsert(stakes, b, dpk_i, .{
+            .voter_pk = vpk,
+            .stake = @as(u64, i) + 1,
+            .activation_epoch = 0,
+            .deactivation_epoch = std.math.maxInt(Epoch),
+            .credits_observed = 0,
+        }, StakeAggregates.ZERO, .{ .effective = @as(u64, i) + 1, .activating = 0, .deactivating = 0 });
+    }
+
+    try std.testing.expect(stakes.stake_delta_head[b.index()].opt() != null);
+
+    pruneStakeDeltas(stakes, b);
+
+    try std.testing.expectEqual(@as(?StakeDeltaArena.Id, null), stakes.stake_delta_head[b.index()].opt());
+    // Idempotent — safe to call again.
+    pruneStakeDeltas(stakes, b);
 }
 
 // ---------------------------------------------------------------------------
