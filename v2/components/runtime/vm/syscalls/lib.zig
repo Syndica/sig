@@ -101,7 +101,7 @@ pub const Syscall = enum {
     /// the value. This makes lookups O(N) relative to the number of syscalls, however this
     /// shouldn't be a huge problem. The hashmap approach we had before only slightly reduced the
     /// lookup times, all of which was wiped out by the cost of allocating it. So this is the
-    /// prefered approach for now.
+    /// preferred approach for now.
     ///
     /// TODO: perhaps we can look into a PHF based approach here, although I imagine it'll just
     /// end up being keyed by murmur and truncated to unique bits.
