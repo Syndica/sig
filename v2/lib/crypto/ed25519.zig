@@ -6,8 +6,11 @@ const build_options = @import("build-options");
 const Signature = lib.solana.Signature;
 const Pubkey = lib.solana.Pubkey;
 
+pub const avx512 = @import("ed25519/avx512.zig");
 pub const pippenger = @import("ed25519/pippenger.zig");
 pub const straus = @import("ed25519/straus.zig");
+pub const generic = @import("ed25519/generic.zig");
+pub const wycheproof = @import("ed25519/wycheproof.zig");
 
 pub const mul = straus.mul;
 pub const mulManyWithSameScalar = straus.mulManyWithSameScalar;
@@ -18,8 +21,6 @@ const convention: std.builtin.CallingConvention = switch (builtin.mode) {
     else => .auto,
 };
 
-const generic = @import("ed25519/generic.zig");
-const avx512 = @import("ed25519/avx512.zig");
 const has_avx512 = builtin.cpu.arch == .x86_64 and
     std.Target.x86.featureSetHas(builtin.cpu.features, .avx512ifma) and
     std.Target.x86.featureSetHas(builtin.cpu.features, .avx512vl);
@@ -65,8 +66,8 @@ const CompressedScalar = [32]u8;
 /// catch certain types of invalid signatures, incorrectly allowing them, thus breaking consensus
 /// with the rest of the network.
 ///
-/// Perhaps in the future we can move Solana over to using ed25519-zebra or move from a `verify_strict`
-/// loop to a `verify` one, allowing batched verification.
+/// Perhaps in the future we can move Solana over to using ed25519-zebra or move from a
+/// `verify_strict` loop to a `verify` one, allowing batched verification.
 pub fn verifyBatchOverSingleMessage(
     max: comptime_int,
     signatures: []const Signature,
@@ -169,6 +170,7 @@ pub fn affineEqual(a: Edwards25519, b: Edwards25519) bool {
 /// assumption that `a.Z == 1`.
 ///
 /// There are 8 points with an order <= 8:
+/// sig fmt: off
 /// Order | Point                   | Serialize Point
 /// 1       (0,         1)            0100000000000000000000000000000000000000000000000000000000000000
 /// 2       (0,         2^255 - 20)   ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f
@@ -178,6 +180,7 @@ pub fn affineEqual(a: Edwards25519, b: Edwards25519) bool {
 /// 8       ...                       c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa
 /// 8       ...                       26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc05
 /// 8       ...                       26e8958fc2b227b045c3f489f2ef98f0d5dfac05d3c63339b13802886d53fc85
+/// sig fmt: on
 ///
 /// Since in this function we know that Z will be 1, we don't need to perform any
 /// normalization to cancel out the projective denominator, instead just directly performing
