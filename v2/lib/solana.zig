@@ -1,5 +1,6 @@
 comptime {
     if (@import("builtin").is_test) {
+        _ = @import("solana/account_lookup_table.zig");
         _ = @import("solana/bincode.zig");
         _ = @import("solana/cluster.zig");
         _ = @import("solana/epoch_schedule.zig");
@@ -22,6 +23,7 @@ pub const features = @import("solana/features.zig");
 pub const snapshot = @import("solana/snapshot.zig");
 pub const transaction = @import("solana/transaction.zig");
 pub const verify_ticks = @import("solana/verify_ticks.zig");
+pub const account_lookup_table = @import("solana/account_lookup_table.zig");
 
 pub const Hash = @import("solana/hash.zig").Hash;
 pub const Pubkey = @import("solana/pubkey.zig").Pubkey;

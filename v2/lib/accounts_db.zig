@@ -9,13 +9,17 @@ comptime {
     }
 }
 
+const rooted = @import("accounts_db/rooted.zig");
+
 const Pubkey = lib.solana.Pubkey;
 const Hash = lib.solana.Hash;
 const Slot = lib.solana.Slot;
 
 pub const AccountPool = @import("accounts_db/pool.zig").AccountPool;
-pub const Rooted = @import("accounts_db/rooted.zig").Rooted;
+pub const Rooted = rooted.Rooted;
 pub const Table = @import("accounts_db/table.zig").Table;
+
+pub const RootedTestState = rooted.RootedTestState;
 
 pub const RootedConfig = extern struct {
     file_len: u32,
@@ -26,11 +30,24 @@ pub const RootedConfig = extern struct {
 };
 
 pub const AccountLookups = extern struct {
-    in: lib.ipc.Ring(256, Request),
-    out: lib.ipc.Ring(256, Result),
+    pub const capacity = 256;
 
-    pub const Request = Pubkey;
+    in: lib.ipc.Ring(capacity, Request),
+    out: lib.ipc.Ring(capacity, Result),
+
+    /// Request-supplied id to match responses to requests.
+    /// Opaque to accounts_db service, so it's usage is up to the callers.
+    pub const RequestUserData = u32;
+
+    pub const Request = extern struct {
+        /// Opaque to accounts_db service, so it's usage is up to the callers.
+        req_user_data: RequestUserData,
+        pubkey: Pubkey,
+    };
+
     pub const Result = extern struct {
+        /// Matches the `req_user_data` field of the Request that this Result is responding to.
+        req_user_data: RequestUserData,
         pubkey: Pubkey,
         account_index: AccountPool.AccountRef, // .invalid if not found
     };

@@ -415,6 +415,18 @@ pub const VersionedTransaction = struct {
             return ptr[0..count];
         }
 
+        pub fn pubkeyAtByteOffset(
+            self: View,
+            byte_offset: u16,
+        ) *const Pubkey {
+            const offset: usize = byte_offset;
+
+            std.debug.assert(offset <= self.payload.len);
+            std.debug.assert(Pubkey.SIZE <= self.payload.len - offset);
+
+            return @ptrCast(self.payload[offset..].ptr);
+        }
+
         pub fn recentBlockhash(self: View) *const Hash {
             const offset: usize = self.layout.recent_blockhash_off;
 
@@ -486,6 +498,7 @@ pub const VersionedTransaction = struct {
             remaining: u8,
 
             pub const Item = struct {
+                pubkey_byte_offset: u16,
                 account_key: *const Pubkey,
                 writable_indexes: []const u8,
                 readonly_indexes: []const u8,
@@ -509,9 +522,15 @@ pub const VersionedTransaction = struct {
                 const readonly_indexes =
                     try self.reader.takeBytes(readonly_count);
 
+                const pubkey_byte_offset =
+                    account_key_bytes.ptr - self.reader.bytes.ptr;
+
+                std.debug.assert(pubkey_byte_offset <= std.math.maxInt(u16));
+
                 self.remaining -= 1;
 
                 return .{
+                    .pubkey_byte_offset = @intCast(pubkey_byte_offset),
                     .account_key = account_key,
                     .writable_indexes = writable_indexes,
                     .readonly_indexes = readonly_indexes,
