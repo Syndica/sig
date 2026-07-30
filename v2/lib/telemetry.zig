@@ -46,6 +46,10 @@ pub const Region = extern struct {
     pub const Info = extern struct {
         /// The port to listen on for the prometheus client.
         port: u16,
+        /// The most verbose level enabled by any filter in `log_filters_encoded`.
+        /// Writers gate on this; the exact (service, scope) filter is still applied
+        /// by the telemetry service in `log.streamLogs`.
+        max_log_level: log.Level,
         /// The length of the encoded log filters byte string.
         log_filters_len: u32,
 
@@ -64,6 +68,19 @@ pub const Region = extern struct {
         /// Number of `u64` elements available for histogram backing storage.
         /// A histogram with N buckets consumes `3 * N + 6` elements.
         histogram_data_len: u32,
+
+        /// The padded size of the region header, with no trailing allocations.
+        /// Only the `*_len` and `service_count` fields affect layout. `port` and
+        /// `max_log_level` are configuration, and arbitrary here.
+        const header_padded_size = Info.regionSize(.{
+            .port = 0,
+            .max_log_level = .trace,
+            .log_filters_len = 0,
+            .service_count = 0,
+            .id_mem_len = 0,
+            .gauges_len = 0,
+            .histogram_data_len = 0,
+        });
 
         /// NOTE: keep in sync with `Region.getSlices`.
         pub fn regionSize(self: Info) usize {
@@ -112,6 +129,7 @@ pub const Region = extern struct {
         pub fn info(self: InitParams) Info {
             return .{
                 .port = self.port,
+                .max_log_level = log.maxLevelEncoded(self.log_filters_encoded),
                 .log_filters_len = @intCast(self.log_filters_encoded.len),
 
                 .service_count = self.service_count,
@@ -153,15 +171,7 @@ pub const Region = extern struct {
         const buf: []align(@alignOf(u64)) u8 = trailing: {
             const ptr: [*]align(@alignOf(u64)) u8 = @ptrCast(self);
             const full: []align(@alignOf(u64)) u8 = ptr[0..self.info.regionSize()];
-            const header_padded_size = comptime Info.regionSize(.{
-                .port = 0,
-                .log_filters_len = 0,
-                .service_count = 0,
-                .id_mem_len = 0,
-                .gauges_len = 0,
-                .histogram_data_len = 0,
-            });
-            break :trailing full[header_padded_size..];
+            break :trailing full[Info.header_padded_size..];
         };
         var seek: usize = 0;
         const log_filters =
@@ -218,7 +228,10 @@ pub const Region = extern struct {
 
         std.debug.assert(name.len <= log.MessageStream.Name.MAX_LEN); // see `stream.name.init`
         stream.name.init(name);
-        return .{ .sink = .{ .swap_buffer = &stream.swap_buffer } };
+        return .{
+            .sink = .{ .swap_buffer = &stream.swap_buffer },
+            .max_level = self.info.max_log_level,
+        };
     }
 
     /// Low-level helper for registering metrics.
@@ -240,11 +253,15 @@ pub const Region = extern struct {
 pub fn Logger(comptime scope_str: []const u8) type {
     return struct {
         sink: log.MessageSink,
+        /// See `Region.Info.max_log_level`. Scope-independent, so it survives
+        /// `withScope`/`from` unchanged.
+        max_level: log.Level,
+
         const LoggerSelf = @This();
 
         pub const scope = scope_str;
 
-        pub const noop: LoggerSelf = .{ .sink = .noop };
+        pub const noop: LoggerSelf = .{ .sink = .noop, .max_level = .trace };
 
         pub fn from(logger: anytype) LoggerSelf {
             const LoggerOther = Logger(@TypeOf(logger).scope);
@@ -255,7 +272,7 @@ pub fn Logger(comptime scope_str: []const u8) type {
             self: LoggerSelf,
             comptime new_scope: []const u8,
         ) Logger(new_scope) {
-            return .{ .sink = self.sink };
+            return .{ .sink = self.sink, .max_level = self.max_level };
         }
 
         pub fn fatal(self: LoggerSelf) Entry(0) {
@@ -393,6 +410,13 @@ pub fn Logger(comptime scope_str: []const u8) type {
                     comptime fmt_str: []const u8,
                     args: anytype,
                 ) void {
+                    // `max_level` bounds what any filter in this process can enable, so
+                    // `streamLogs` would drop this message regardless of service/scope.
+                    // Bailing here avoids rendering it three times (twice to count length
+                    // in `computeHeader`, once in `Message.write`) and avoids spending
+                    // swap buffer on bytes nobody reads.
+                    if (self.level.order(self.logger.max_level) == .gt) return;
+
                     switch (self.level) {
                         inline else => |ilevel| {
                             tracy.print(@tagName(ilevel) ++ ": " ++ fmt_str, args);
@@ -458,6 +482,69 @@ pub fn Logger(comptime scope_str: []const u8) type {
             };
         }
     };
+}
+
+test "logf drops entries more verbose than max_level" {
+    var buf: [4096]u8 = undefined;
+
+    for (std.enums.values(log.Level)) |max_level| {
+        for (std.enums.values(log.Level)) |level| {
+            var fbw: std.Io.Writer = .fixed(&buf);
+            const logger: Logger("gate") = .{
+                .sink = .{ .writer = &fbw },
+                .max_level = max_level,
+            };
+            logger.entry(level).log("message");
+
+            if (level.order(max_level) == .gt) {
+                // Nothing may reach the sink; `streamLogs` would have dropped it anyway.
+                try std.testing.expectEqual(0, fbw.buffered().len);
+                continue;
+            }
+
+            // Everything at or below `max_level` is written whole and unaltered.
+            var fbr: std.Io.Reader = .fixed(fbw.buffered());
+            const header = try fbr.takeStruct(log.Message.Header, endian);
+            const slices = header.getSlicesFromFixedBuffer(&fbr) orelse
+                return error.TestExpectedNonNull;
+            try std.testing.expectEqual(.valid, header.magic);
+            try std.testing.expectEqual(level, header.level);
+            try std.testing.expectEqualStrings("gate", slices.scope);
+            try std.testing.expectEqualStrings("message", slices.msg);
+            try std.testing.expectEqual(0, fbr.bufferedLen());
+        }
+    }
+}
+
+test "max_level survives withScope and from" {
+    const base: Logger("base") = .{ .sink = .noop, .max_level = .debug };
+    try std.testing.expectEqual(.debug, base.withScope("scoped").max_level);
+    try std.testing.expectEqual(.debug, Logger("other").from(base).max_level);
+}
+
+test "acquireLogger takes max_level from the region's filters" {
+    const gpa = std.testing.allocator;
+
+    // `.warn` rather than the most verbose level, so that a logger which never consulted
+    // the region's filters would not pass.
+    const params: Region.InitParams = .{
+        .port = 0,
+        .log_filters_encoded = log.Filter.parseListStrLitIntoBinary(.warn, "").?,
+        .service_count = 1,
+        .id_mem_len = 0,
+        .gauges_len = 0,
+        .histogram_data_len = 0,
+    };
+    try std.testing.expectEqual(.warn, params.info().max_log_level);
+
+    // NOTE: dominated by the single `log.MessageStream`'s swap buffer; only the name
+    // and the encoded filters are ever touched here.
+    const region_buf = try gpa.alignedAlloc(u8, .of(u64), params.info().regionSize());
+    defer gpa.free(region_buf);
+
+    const region: *Region = @ptrCast(region_buf.ptr);
+    region.init(params);
+    try std.testing.expectEqual(.warn, region.acquireLogger("service", "scope").max_level);
 }
 
 pub const Counter = struct {

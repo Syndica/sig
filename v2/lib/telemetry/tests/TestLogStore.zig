@@ -244,7 +244,7 @@ pub fn deinit(self: *TestLogStore) void {
 
 /// Returns a logger that writes records into this store.
 pub fn logger(self: *TestLogStore, comptime scope: []const u8) tel.Logger(scope) {
-    return .{ .sink = .{ .writer = &self.state.writer } };
+    return .{ .sink = .{ .writer = &self.state.writer }, .max_level = .trace };
 }
 
 /// Returned records and iterators are invalidated by the next log, reset, or deinit.

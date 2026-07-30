@@ -565,6 +565,29 @@ pub const Filter = struct {
         }
     };
 
+    /// Iterates over a byte string written by `parseListAndWriteBinary`.
+    pub const Iterator = struct {
+        fbr: std.Io.Reader,
+
+        pub fn init(encoded: []const u8) Iterator {
+            return .{ .fbr = .fixed(encoded) };
+        }
+
+        pub const NextError = error{InvalidFilter};
+
+        /// Returns `null` once `encoded` has been fully consumed. The `service` & `scope`
+        /// of the returned filter point into `encoded`.
+        ///
+        /// Returns `error.InvalidFilter` for a truncated header, or a header whose
+        /// service/scope bytes are missing; the iterator should not be used afterwards.
+        pub fn next(self: *Iterator) NextError!?Filter {
+            if (self.fbr.bufferedLen() == 0) return null;
+            const header = self.fbr.takeStruct(Header, tel.endian) catch
+                return error.InvalidFilter;
+            return header.getFilterFromFixedReader(&self.fbr) orelse return error.InvalidFilter;
+        }
+    };
+
     pub fn format(self: Filter, w: *std.Io.Writer) std.Io.Writer.Error!void {
         if (self.service) |service| try w.writeAll(service);
         if (self.scope) |scope| {
@@ -797,6 +820,92 @@ test EntryValueFmt {
     try std.testing.expectFmt("\"\\u0000\\u000f\\u0010\\u001f\\u007f\"", "{f}", .{
         EntryValueFmt.fromValue("{s}", &"\x00\x0f\x10\x1f\x7f"),
     });
+}
+
+/// The most verbose level that any filter in `encoded` can enable, across every
+/// service and scope. `streamLogs` is guaranteed to drop anything more verbose
+/// than this, so writers may skip encoding such messages entirely.
+///
+/// Returns `.trace` (gate fully open) for empty or malformed input, leaving the
+/// diagnostic to the telemetry service, which rejects both explicitly.
+pub fn maxLevelEncoded(encoded: []const u8) Level {
+    // NOTE: load-bearing; without it an empty list would fall through to `.fatal`,
+    // which is the strictest gate rather than the most open one.
+    if (encoded.len == 0) return .trace;
+    var max: Level = .fatal;
+    var filters: Filter.Iterator = .init(encoded);
+    while (filters.next() catch return .trace) |filter| {
+        if (filter.level.order(max) == .gt) max = filter.level;
+    }
+    return max;
+}
+
+test maxLevelEncoded {
+    @setEvalBranchQuota(16000); // encoding the filter lists below runs at comptime
+
+    // No filters at all leaves the gate open; the telemetry service is what rejects this.
+    try std.testing.expectEqual(.trace, maxLevelEncoded(""));
+
+    // The default filter counts towards the maximum.
+    try std.testing.expectEqual(.debug, maxLevelEncoded(
+        comptime Filter.parseListStrLitIntoBinary(.debug, "replay=error").?,
+    ));
+
+    // So does any other filter, whichever position it holds in the list.
+    try std.testing.expectEqual(.trace, maxLevelEncoded(
+        comptime Filter.parseListStrLitIntoBinary(.fatal, "replay:main=trace,gossip=error").?,
+    ));
+    try std.testing.expectEqual(.trace, maxLevelEncoded(
+        comptime Filter.parseListStrLitIntoBinary(.fatal, "gossip=error,replay:main=trace").?,
+    ));
+
+    // Truncated input keeps the gate open rather than silently dropping messages, for both
+    // a partial header and a header whose service/scope bytes are missing.
+    {
+        const encoded = comptime Filter.parseListStrLitIntoBinary(.err, "replay:main=warn").?;
+        try std.testing.expectEqual(.warn, maxLevelEncoded(encoded));
+        try std.testing.expectEqual(.trace, maxLevelEncoded(encoded[0 .. encoded.len - 1]));
+        try std.testing.expectEqual(
+            .trace,
+            maxLevelEncoded(encoded[0 .. @sizeOf(Filter.Header) + 1]),
+        );
+    }
+
+    // The invariant all of the above serves: the result must bound every level `streamLogs`
+    // can select, otherwise the writer-side gate drops messages that it was going to emit,
+    // and they disappear with no diagnostic.
+    {
+        const encoded = comptime Filter.parseListStrLitIntoBinary(
+            .err,
+            "replay:main=trace,replay=debug,gossip:pull=info,accountsdb=warn",
+        ).?;
+        const max = maxLevelEncoded(encoded);
+
+        // Decode into the sorted list `streamLogs` is given; see `services/telemetry.zig`.
+        var filters_buffer: [8]Filter = undefined;
+        var filters: std.ArrayList(Filter) = .initBuffer(&filters_buffer);
+        var iter: Filter.Iterator = .init(encoded);
+        while (try iter.next()) |filter| try filters.appendBounded(filter);
+        std.sort.block(Filter, filters.items, {}, Filter.sortLessThanInverted);
+
+        // Every service & scope named by the list, plus pairs that fall through to a
+        // broader filter or to the default.
+        for ([_][2][]const u8{
+            .{ "replay", "main" },
+            .{ "replay", "other" },
+            .{ "gossip", "pull" },
+            .{ "gossip", "push" },
+            .{ "accountsdb", "manager" },
+            .{ "unlisted", "scope" },
+        }) |pair| {
+            const index = Filter.findClosestFilter(.{
+                .filters = filters.items,
+                .service = pair[0],
+                .scope = pair[1],
+            });
+            try std.testing.expect(filters.items[index].level.order(max) != .gt);
+        }
+    }
 }
 
 pub fn streamLogs(
