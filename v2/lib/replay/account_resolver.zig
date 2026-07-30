@@ -8,6 +8,7 @@ const BlockPool = lib.replay.BlockPool;
 const BlockRef = lib.replay.BlockRef;
 const TransactionPool = lib.replay.TransactionPool;
 const VersionedTransaction = lib.solana.transaction.VersionedTransaction;
+const AccountRef = AccountPool.AccountRef;
 
 const TransactionRef = TransactionPool.ItemId;
 
@@ -50,11 +51,13 @@ pub const AccountResolver = struct {
         /// First work item not accepted by AccountFetcher (due to backpressure).
         next_submit: u16,
 
-        /// Used by completion processing.
-        // TODO: document this better
+        /// Number of completed fetch requests (completions that have
+        /// been processed by the AccountResolver)
         completed: u16,
 
         work: [MAX_FETCH_WORK]FetchWork,
+
+        account_refs: [VersionedTransaction.MAX_ACCOUNT_KEYS]AccountRef,
 
         //Lowest descriptor index failure observed.
         // lookup_failure: ?LookupFailure,
@@ -126,6 +129,7 @@ pub const AccountResolver = struct {
             .next_submit = 0,
             .completed = 0,
             .work = undefined,
+            .account_refs = @splat(.invalid),
         };
 
         for (0..static_keys.len) |i| {
@@ -190,11 +194,83 @@ pub const AccountResolver = struct {
         return made_progress;
     }
 
-    pub fn pollResolvedTransactions(self: *Self) void {
-        _ = self;
+    fn processFetchCompletion(
+        self: *Self,
+        completion: AccountFetcher.Completion,
+    ) void {
+        const ticket: FetchTicket = @bitCast(completion.user_data);
+        const resolution_id = ResolutionId.fromInt(@intCast(ticket.resolution_index));
 
-        // TODO: drain AccountFetcher completions.
-        // TODO: advance transaction resolution state
-        // TODO: return resolved transactions to the caller
+        const pending = resolution_id.ptr(&self.pending_pool);
+
+        std.debug.assert(ticket.work_index < pending.next_submit);
+        std.debug.assert(ticket.work_index < pending.work_len);
+
+        const work = pending.work[ticket.work_index];
+
+        switch (work) {
+            .static => |account_index| {
+                std.debug.assert(pending.account_refs[account_index] == .invalid);
+
+                // NOTE: `.invalid` is a valid result for a missing transaction account.
+                pending.account_refs[account_index] = completion.account_ref;
+
+                // TODO: verify completion.pubkey against the expected static transaction key.
+            },
+            .lut => |pubkey_byte_offset| {
+                self.processLookupTableCompletion(
+                    pending,
+                    pubkey_byte_offset,
+                    completion.account_ref,
+                );
+            },
+        }
+
+        pending.completed += 1;
+    }
+
+    fn processLookupTableCompletion(
+        self: *Self,
+        pending: *PendingTransaction,
+        pubkey_byte_offset: u16,
+        account_ref: AccountRef,
+    ) void {
+        _ = pending;
+        _ = pubkey_byte_offset;
+
+        defer self.releaseAccount(account_ref);
+
+        // TODO: reject a missing lookup-table account.
+        // TODO: validate the lookup-table owner.
+        // TODO: deserialize the lookup table.
+        // TODO: append loaded-account work.
+    }
+
+    fn releaseAccount(
+        self: *Self,
+        account_ref: AccountRef,
+    ) void {
+        if (account_ref == .invalid) return;
+        const account = self.account_pool.getAccount(account_ref);
+        if (account.unref()) self.account_pool.free(account_ref);
+    }
+
+    pub fn pollResolvedTransactions(self: *Self) void {
+        var completion_buf: [64]AccountFetcher.Completion = undefined;
+
+        while (true) {
+            const completions = self.fetcher.pollCompletions(&completion_buf);
+
+            for (completions) |completion| {
+                self.processFetchCompletion(completion);
+            }
+
+            // Completions may have released fetcher capacity.
+            const submitted = self.submitWork();
+
+            // Newly submitted unrooted hits are immediately
+            // available on the next iteration.
+            if (completions.len == 0 and !submitted) break;
+        }
     }
 };
