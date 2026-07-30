@@ -2361,7 +2361,7 @@ pub const VoteStateV3 = struct {
         // provided by the vote instruction contents, but instead is computed from the actual
         // latency of the vote instruction. This prevents other validators from manipulating their
         // own vote latencies within their vote states and forcing the rest of the cluster to
-        // accept these possibly fraudulent latency values.  If the timly_vote_credits feature is
+        // accept these possibly fraudulent latency values.  If the timely_vote_credits feature is
         // not enabled then vote latency is set to 0 for new votes.
         //
         // For any slot that is in both the new state and the current state, the vote latency of
