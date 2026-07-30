@@ -118,7 +118,8 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     // first packet arrives, these variables are never touched again).
     // See issue #1746.
     const bootstrap_start_ns = lib.clock.monotonic(.ns);
-    var awaiting_gate: lib.telemetry.ThrottledLogger = .init(10 * std.time.ns_per_s, bootstrap_start_ns);
+    var awaiting_gate: lib.telemetry.ThrottledLogger =
+        .init(10 * std.time.ns_per_s, bootstrap_start_ns);
     const warn_after_ns = 60 * std.time.ns_per_s;
     var first_packet_received = false;
 
