@@ -9,6 +9,12 @@ const test_install_dir: Build.Step.InstallArtifact.Options.Dir = .{
     .override = .{ .custom = "bin/tests" },
 };
 
+/// Tests open their fixtures at paths relative to the build root, so their run steps pin
+/// the working directory here rather than inheriting the directory `zig build` ran in.
+fn buildRootDir(b: *Build) Build.LazyPath {
+    return b.path(".");
+}
+
 pub fn build(b: *Build) !void {
     // -- Inputs ----------------------------
 
@@ -737,6 +743,7 @@ const Tools = struct {
                 }),
                 .use_llvm = config.use_llvm,
             }, .{ .dest_dir = test_install_dir });
+            if (exe.run) |run| run.setCwd(buildRootDir(b));
 
             for (description.services) |service_name| {
                 exe.compile.linkLibrary(for (sig.service_libs) |entry| {
@@ -805,7 +812,11 @@ const UnitTests = struct {
                 .dest_sub_path = name,
                 .dest_dir = test_install_dir,
             }) else null,
-            .run = if (self.exe_config.run) self.build.addRunArtifact(unit_test) else null,
+            .run = if (self.exe_config.run) run: {
+                const run = self.build.addRunArtifact(unit_test);
+                run.setCwd(buildRootDir(self.build));
+                break :run run;
+            } else null,
         }) catch @panic("oom");
         if (self.kcov) |kcov| {
             const kcov_run = self.build.addSystemCommand(&.{
@@ -814,6 +825,7 @@ const UnitTests = struct {
                 "--include-pattern=v2/",
                 "--exclude-pattern=.cache",
             });
+            kcov_run.setCwd(buildRootDir(self.build));
             const output_dir = kcov_run.addOutputDirectoryArg("output");
             kcov_run.addArtifactArg(unit_test);
             kcov_run.has_side_effects = true;
