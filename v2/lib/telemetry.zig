@@ -840,91 +840,16 @@ pub const Histogram = struct {
     }
 };
 
-/// Largest `schema` the tables below are built for. `Layout.schema()` is `log2` of
-/// `bounds_per_doubling`, which validation caps at 256, so no layout reaches past this.
-const max_schema: u4 = 8;
-
-/// Prometheus native-histogram bucket boundaries within one mantissa octave for a given `schema`:
-/// `bounds[k] = 0.5 * 2^(k / 2^schema)` for `k in 0..2^schema`. Used to bin the `frexp` fraction
-/// (which lies in `[0.5, 1)`) into a sub-octave bucket.
-fn nativeBoundsTable(comptime schema: u4) [@as(usize, 1) << schema]f64 {
-    // Two comptime backwards branches per entry: the loop iteration, and one inside `exp2`. The
-    // count accumulates across a whole evaluation and the `inline` switches below build every
-    // table in one, so budget for all of them: `sum(2^s for s in 0...max_schema)` entries, times
-    // 2 branches, times 4 for slack.
-    @setEvalBranchQuota(8 * ((@as(u32, 2) << max_schema) - 1));
-    var arr: [@as(usize, 1) << schema]f64 = undefined;
-    const per_octave: f64 = @floatFromInt(@as(u64, 1) << schema);
-    inline for (&arr, 0..) |*b, k| {
-        b.* = 0.5 * std.math.exp2(@as(f64, @floatFromInt(k)) / per_octave);
-    }
-    return arr;
-}
-
-/// Smallest index `k` with `bounds[k] >= frac` (like Go's `sort.SearchFloat64s`), in `0..len`.
-///
-/// `len` is always `2^schema`. The range halves exactly, so the search unrolls to
-/// `log2(len) + 1` compares, the same count the loop form needs. Each compare adds into `base`
-/// as an integer instead of a jump, so no branch remains at all. `bounds` must be sorted;
-/// `nativeBoundsTable` builds it that way.
-fn searchFloat(comptime len: usize, bounds: *const [len]f64, frac: f64) i64 {
-    comptime std.debug.assert(std.math.isPowerOfTwo(len));
-    var base: usize = 0;
-    inline for (0..comptime std.math.log2_int(usize, len)) |i| {
-        const half = len >> @intCast(1 + i);
-        base += half * @intFromBool(bounds[base + half - 1] < frac);
-    }
-    // A NaN `frac` makes every compare false and lands on 0, matching the loop form.
-    return @intCast(base + @intFromBool(bounds[base] < frac));
-}
-
-/// The global Prometheus native-histogram bucket index for `ns` at `schema`. Splits `ns` with
-/// `frexp` and bins the fraction via a per-schema boundary table, so the result is exact at octave
-/// boundaries (mirrors `prometheus/client_golang`) and avoids the off-by-one a naive
-/// `ceil(2^schema * log2(ns))` suffers from floating-point error. Assumes `ns >= 1`.
-fn nativeBucketIndex(schema: u4, ns: u64) i64 {
-    const fv: f64 = @floatFromInt(ns);
-    const r = std.math.frexp(fv);
-    const per_octave: i64 = @as(i64, 1) << @as(u6, schema);
-    const s: i64 = switch (schema) {
-        inline 0...max_schema => |sc| blk: {
-            const table = comptime nativeBoundsTable(sc);
-            break :blk searchFloat(table.len, &table, r.significand);
-        },
-        else => unreachable,
-    };
-    return (@as(i64, r.exponent) - 1) * per_octave + s;
-}
-
-/// The inclusive upper bound of global native bucket `index` at `schema`: `2^(index / 2^schema)`.
-/// Built by splitting `index` into an octave and a sub-octave remainder and reading the same table
-/// `nativeBucketIndex` bins against, rather than by `exp2`-ing the quotient, which makes the two
-/// exact inverses: `nativeBucketIndex(schema, nativeBound(schema, i)) == i`. A bound derived any
-/// other way can land a ulp off and rounding it would name a value in the neighbouring bucket.
-fn nativeBound(schema: u4, index: i64) f64 {
-    const per_octave: i64 = @as(i64, 1) << @as(u6, schema);
-    // Floor division, so a negative `index` (a bound below 1ns) splits the same way as a positive
-    // one; `rem` is then always in `0..per_octave`.
-    const octave = @divFloor(index, per_octave);
-    const rem: usize = @intCast(index - octave * per_octave);
-    const frac: f64 = switch (schema) {
-        inline 0...max_schema => |sc| blk: {
-            const table = comptime nativeBoundsTable(sc);
-            break :blk table[rem];
-        },
-        else => unreachable,
-    };
-    // `table` holds `0.5 * 2^(rem / 2^schema)`, i.e. the bound already halved into `frexp`'s
-    // `[0.5, 1)`, hence the `+ 1` on the exponent.
-    return std.math.ldexp(frac, @intCast(octave + 1));
-}
-
+/// A latency histogram over the bucket geometry a `Layout` describes. Two shards, so a reader can
+/// swap one out and drain it while writers carry on in the other — see `swapOutSnapshot`. Built
+/// over region storage with `fromRaw`; the shard fields are pointers into that storage, so a copy
+/// of the handle writes to the same counters.
 pub const LatencyHistogram = struct {
     layout: Layout,
     /// `layout.baseIndex()`, resolved once here and not at each observation. The value is a pure
     /// function of `layout`, so it never changes. A `baseIndex` call runs a full
-    /// `nativeBucketIndex`: one `frexp` and one table search. `bucketIndex` would repeat that
-    /// work at each `observe`.
+    /// `nativeBucketIndex`: one `frexp` and two table loads. `bucketIndex` would repeat that work
+    /// at each `observe`.
     base_index: i64,
     /// Used to ensure reads and writes occur on separate shards.
     /// Atomic representation of `ShardSync`.
@@ -932,8 +857,9 @@ pub const LatencyHistogram = struct {
     /// One hot shard for writing, one cold shard for reading.
     shards: [2]Shard,
 
-    /// A windowed histogram with geometric (log-exponential) bucket bounds. Bucket `i`'s upper
-    /// bound is `2^((base_index + i) / bounds_per_doubling)` ns, where `base_index = baseIndex()`.
+    /// The bucket geometry of a `LatencyHistogram`: a window of geometric (log-exponential)
+    /// bounds. Bucket `i`'s upper bound is `2^((base_index + i) / bounds_per_doubling)` ns, where
+    /// `base_index = baseIndex()`.
     ///
     /// Two expositions render the same storage, and the bounds being geometric is what lets one
     /// layout serve both:
@@ -1008,6 +934,7 @@ pub const LatencyHistogram = struct {
         /// before the `Raw` shard elements.
         pub const header_words: u32 = 3;
 
+        /// Reads back a layout that `writeHeader` serialized.
         pub fn initFromHeader(src: []const u64) Layout {
             std.debug.assert(src.len == header_words);
             const layout: Layout = .{
@@ -1041,12 +968,15 @@ pub const LatencyHistogram = struct {
             dst[2] = self.max_upper_bound_ns;
         }
 
-        /// This function uses the `@popCount` and `@clz` builtins, and the `Layout` helpers that
-        /// it calls are `inline fn`. A call to a helper that is not `inline` gives a
-        /// runtime-known value even here. Then each `@compileError` branch stays live, and all of
-        /// them fire. The remaining `comptime` prefixes mark the calls into `std` and into
-        /// `upperBoundNs`, which are not `inline`.
+        /// Rejects an unusable layout at compile time, naming the nearest legal value in each
+        /// message. Every accessor below assumes this ran; `initFromHeader` re-asserts the checks
+        /// that a round trip through a region header can break.
         pub fn comptimeValidate(comptime self: Layout) void {
+            // Each condition below has to fold to a comptime-known value, or its `@compileError`
+            // branch stays live and every message fires at once. That holds because `@popCount`
+            // and `@clz` are builtins and the `Layout` helpers called here are `inline fn` — a
+            // call to one that is not would be runtime-known even in this context. The `comptime`
+            // prefixes mark the calls into `std` and into `upperBoundNs`, which are not `inline`.
             if (self.bounds_per_doubling == 0 or self.bounds_per_doubling > 256 or
                 @popCount(self.bounds_per_doubling) != 1)
                 @compileError(std.fmt.comptimePrint(
@@ -1163,6 +1093,8 @@ pub const LatencyHistogram = struct {
             return self.resolvedBucketCount() + 1;
         }
 
+        /// `u64` words the shard storage occupies, following the `header_words`: one
+        /// `shard_sync`, then two shards of `sum`, `count`, and one word per bucket.
         pub inline fn elementsFromBucketCount(self: Layout) u32 {
             return @intCast(1 + 2 * (2 + self.bucketCount()));
         }
@@ -1220,6 +1152,167 @@ pub const LatencyHistogram = struct {
         }
     };
 
+    /// Largest `schema` the tables below are built for. `Layout.schema()` is `log2` of
+    /// `bounds_per_doubling`, which validation caps at 256, so no layout reaches past this.
+    const max_schema: u4 = 8;
+
+    /// Comptime branch budgets for the two table builders below, derived from one cost model so
+    /// the pair cannot drift apart.
+    ///
+    /// Each budget covers the whole schema ladder rather than a single schema:
+    /// `@setEvalBranchQuota` raises one counter for a whole analysis, and the `inline` switches in
+    /// `nativeBucketIndex` and `nativeBound` instantiate every schema within one.
+    const quotas = struct {
+        /// `sum(2^s for s in 0...max_schema)`. A table at schema `s` holds `2^s + 1` entries, so a
+        /// total across the ladder is this plus `schema_count`.
+        const schema_entry_sum: u32 = (@as(u32, 2) << max_schema) - 1;
+        const schema_count: u32 = @as(u32, max_schema) + 1;
+
+        /// Backwards branches to build `nativeBoundsTable` for every schema: two per entry — the
+        /// loop iteration, and one inside `exp2`.
+        const bounds_branches: u32 = 2 * (schema_entry_sum + schema_count);
+
+        /// Backwards branches to build `nativeSlotTable` for every schema; the bounds table it
+        /// indexes is the caller's, and counted once above. The `while` scanning `bounds` costs
+        /// only the iterations it takes — a condition that fails on entry is not a backwards
+        /// branch — so `k` advancing is counted once per table, not once per slot.
+        const slot_branches: u32 =
+            2 * schema_entry_sum + // `2^(s + 1)` slot-loop iterations per schema
+            (schema_entry_sum + schema_count); // `k` advancing, `2^s + 1` per table
+
+        /// Budget for `nativeBound`'s `inline` switch, which builds the bounds tables and never
+        /// reaches `nativeSlotTable`. Kept apart from `table_branch` so that path is held to its
+        /// own cost rather than to the pair's.
+        const bounds_branch: u32 = 2 * bounds_branches;
+
+        /// Budget for `nativeBucketIndex`'s `inline` switch, which builds a bounds table per
+        /// schema and the slot table that indexes it. Safe to pair with the smaller budget above
+        /// in either order: `@setEvalBranchQuota` only ever raises the counter, never lowers it.
+        ///
+        /// Both are doubled. The model tracks the real cost — 1040 against 1057 measured for the
+        /// bounds tables alone, 2582 against 2627 for the pair, on Zig 0.15.2 — but cannot match
+        /// it, since the branches inside `exp2` are std's to change. Overshooting only delays the
+        /// runaway-loop backstop a quota exists to be; undershooting fails the build loudly, so
+        /// the slack costs nothing.
+        const table_branch: u32 = 2 * (bounds_branches + slot_branches);
+    };
+
+    /// Prometheus native-histogram bucket boundaries within one mantissa octave for a given
+    /// `schema`: `bounds[k] = 0.5 * 2^(k / 2^schema)` for `k in 0...2^schema`. Used to bin the
+    /// `frexp` fraction (which lies in `[0.5, 1)`) into a sub-octave bucket.
+    ///
+    /// The range is inclusive at both ends, so the last entry is the octave's own top, `1.0`, which
+    /// no fraction ever reaches. It is there so `nativeBucketIndex` can run its correction compare
+    /// unconditionally: `nativeSlotTable` may name the bound above the ladder, and that index has
+    /// to land on an entry rather than on a bounds check.
+    fn nativeBoundsTable(comptime schema: u4) [(@as(usize, 1) << schema) + 1]f64 {
+        @setEvalBranchQuota(quotas.bounds_branch);
+        var arr: [(@as(usize, 1) << schema) + 1]f64 = undefined;
+        const per_octave: f64 = @floatFromInt(@as(u64, 1) << schema);
+        inline for (&arr, 0..) |*b, k| {
+            b.* = 0.5 * std.math.exp2(@as(f64, @floatFromInt(k)) / per_octave);
+        }
+        return arr;
+    }
+
+    /// Mantissa bits of the `frexp` fraction that `nativeSlotTable` is indexed by. A slot spans a
+    /// relative width of `2^-bits` while adjacent bounds sit a factor `2^(1 / 2^schema)` apart, so
+    /// `schema + 1` is the smallest count that keeps at most one bound inside any one slot — the
+    /// property the single correction compare rests on. `nativeSlotTable` proves it per slot rather
+    /// than leaving it to the algebra here.
+    fn nativeSlotBits(comptime schema: u4) u6 {
+        return schema + 1;
+    }
+
+    /// Maps a slot of the `frexp` fraction to the sub-octave bucket its *bottom* falls in: entry
+    /// `slot` is the smallest `k` with `bounds[k] >= 0.5 * (1 + slot / 2^nativeSlotBits)`.
+    ///
+    /// This is what replaces a binary search over `bounds`. Because a slot holds at most one
+    /// bound, every fraction in it lands in either that `k` or `k + 1`, and one compare against
+    /// `bounds[k]` settles which. That compare is against the same `f64` entry the last step of a
+    /// search would have reached, so this bins identically to searching rather than approximately
+    /// — which it has to, since `nativeBound` reads the same table and the two are required to be
+    /// exact inverses.
+    ///
+    /// A search costs `log2(2^schema) + 1` dependent loads, growing with the ladder's resolution.
+    /// This costs two, at every schema.
+    fn nativeSlotTable(
+        comptime schema: u4,
+        comptime bounds: [(@as(usize, 1) << schema) + 1]f64,
+    ) [@as(usize, 1) << nativeSlotBits(schema)]u16 {
+        @setEvalBranchQuota(quotas.table_branch);
+        var table: [@as(usize, 1) << nativeSlotBits(schema)]u16 = undefined;
+        const width: f64 = @floatFromInt(table.len);
+        // Slot bottoms climb with `slot` and `bounds` ascends, so the answer never moves backwards:
+        // `k` carries across iterations and crosses `bounds` once for the whole table, rather than
+        // being re-sought per slot. `slot / width` is a dyadic fraction and exact in `f64`, so the
+        // bottoms really are strictly increasing and not merely nearly so.
+        var k: usize = 0;
+        inline for (&table, 0..) |*entry, slot| {
+            const lo = 0.5 * (1.0 + @as(f64, @floatFromInt(slot)) / width);
+            const hi = 0.5 * (1.0 + @as(f64, @floatFromInt(slot + 1)) / width);
+            // Terminates inside the table: `lo` is always below 1.0, which the final entry holds.
+            inline while (bounds[k] < lo) k += 1;
+            entry.* = @intCast(k);
+            // The correction `nativeBucketIndex` applies is a single `+1`, so a slot holding a
+            // second bound would silently bin everything past it one bucket low.
+            if (k + 1 < bounds.len and bounds[k + 1] < hi) @compileError(std.fmt.comptimePrint(
+                "slot {d} of schema {d} spans two bounds; raise nativeSlotBits.",
+                .{ slot, schema },
+            ));
+        }
+        return table;
+    }
+
+    /// The global Prometheus native-histogram bucket index for `ns` at `schema`. Splits `ns` with
+    /// `frexp` and bins the fraction against a per-schema boundary table, so the result is exact at
+    /// octave boundaries (mirrors `prometheus/client_golang`) and avoids the off-by-one a naive
+    /// `ceil(2^schema * log2(ns))` suffers from floating-point error. Assumes `ns >= 1`.
+    fn nativeBucketIndex(schema: u4, ns: u64) i64 {
+        const fv: f64 = @floatFromInt(ns);
+        const r = std.math.frexp(fv);
+        const per_octave: i64 = @as(i64, 1) << @as(u6, schema);
+        const s: i64 = switch (schema) {
+            inline 0...max_schema => |sc| blk: {
+                const bounds = comptime nativeBoundsTable(sc);
+                const slots = comptime nativeSlotTable(sc, bounds);
+                // Every fraction shares one exponent field, so the top `nativeSlotBits` mantissa
+                // bits name the slot on their own, with no compare to get there.
+                const mantissa: u64 = @bitCast(r.significand);
+                const shift = comptime 52 - nativeSlotBits(sc);
+                const slot: usize = @intCast((mantissa >> shift) & (slots.len - 1));
+                const k = slots[slot];
+                break :blk @as(i64, k) + @intFromBool(bounds[k] < r.significand);
+            },
+            else => unreachable,
+        };
+        return (@as(i64, r.exponent) - 1) * per_octave + s;
+    }
+
+    /// The inclusive upper bound of global native bucket `index` at `schema`:
+    /// `2^(index / 2^schema)`. Built by splitting `index` into an octave and a sub-octave
+    /// remainder and reading the same table `nativeBucketIndex` bins against, rather than by
+    /// `exp2`-ing the quotient, which makes the two exact inverses:
+    /// `nativeBucketIndex(schema, nativeBound(schema, i)) == i`. A bound derived any other way can
+    /// land a ulp off and rounding it would name a value in the neighbouring bucket.
+    fn nativeBound(schema: u4, index: i64) f64 {
+        const per_octave: i64 = @as(i64, 1) << @as(u6, schema);
+        // Floor division, so a negative `index` (a bound below 1ns) splits the same way as a
+        // positive one; `rem` is then always in `0..per_octave`.
+        const octave = @divFloor(index, per_octave);
+        const rem: usize = @intCast(index - octave * per_octave);
+        const frac: f64 = switch (schema) {
+            inline 0...max_schema => |sc| blk: {
+                const table = comptime nativeBoundsTable(sc);
+                break :blk table[rem];
+            },
+            else => unreachable,
+        };
+        // `table` holds `0.5 * 2^(rem / 2^schema)`, i.e. the bound already halved into `frexp`'s
+        // `[0.5, 1)`, hence the `+ 1` on the exponent.
+        return std.math.ldexp(frac, @intCast(octave + 1));
+    }
+
     const ShardSync = Histogram.ShardSync;
 
     pub const Shard = struct {
@@ -1230,8 +1323,9 @@ pub const LatencyHistogram = struct {
         /// Cumulative counts for each upper bound.
         buckets: []std.atomic.Value(u64),
 
-        /// For when `elems` does not already represent a valid shard, see `Shard.init`.
-        /// Assumes `elems.len >= 2`.
+        /// Reinterprets `elems` in place as a shard's fields; it does not initialize them. Call
+        /// `initZeroes` on the result when `elems` does not already hold a valid shard. Assumes
+        /// `elems.len >= 2`.
         pub fn fromElements(elems: []u64) Shard {
             return .{
                 .sum = @ptrCast(&elems[0]),
@@ -1240,9 +1334,8 @@ pub const LatencyHistogram = struct {
             };
         }
 
-        /// XXX: Not an atomic operation. This method overwrites all pointed-to data directly
-        /// Assumes `self.buckets.len == init_data.buckets.len`.
-        /// Sets all pointed-to data to zero.
+        /// XXX: Not an atomic operation. Zeroes `sum`, `count`, and every bucket by writing
+        /// through the pointers directly, so no other thread may be touching the shard.
         pub fn initZeroes(self: Shard) void {
             self.sum.* = .init(0);
             self.count.* = .init(0);
@@ -1275,6 +1368,7 @@ pub const LatencyHistogram = struct {
         }
     };
 
+    /// Builds a histogram handle over `raw`'s storage, which must have been sized from `layout`.
     pub fn fromRaw(layout: Layout, raw: Raw) LatencyHistogram {
         const shards = raw.shards();
         // `bucketIndex` bounds observations against `layout`, not against the slice, so a `raw`
@@ -1333,7 +1427,7 @@ pub const LatencyHistogram = struct {
     }
 
     /// Swaps the hot and cold shards, then returns a reader over a consistent snapshot of the
-    /// now-cold shard. Mirrors `LatencyHistogram.swapOutSnapshot`.
+    /// now-cold shard. Mirrors `Histogram.swapOutSnapshot`.
     pub fn swapOutSnapshot(self: *const LatencyHistogram) SnapshotReader {
         // Make the hot shard cold. Some writers may still be writing to it, but no new ones will.
         const shard_sync = self.flipShard(.acq_rel);
@@ -1369,8 +1463,8 @@ pub const LatencyHistogram = struct {
     }
 
     /// Iterates a cold-shard snapshot as cumulative prometheus buckets, folding each bucket back
-    /// into the hot shard as it goes. Mirrors `LatencyHistogram.SnapshotReader`, except bucket
-    /// bounds are derived from `layout` via `upperBoundNs` rather than a stored slice.
+    /// into the hot shard as it goes. Mirrors `Histogram.SnapshotReader`, except bucket bounds are
+    /// derived from `layout` via `upperBoundNs` rather than a stored slice.
     pub const SnapshotReader = struct {
         /// Total number of events observed by the histogram.
         count: u63,
@@ -1383,7 +1477,7 @@ pub const LatencyHistogram = struct {
         /// `Layout.upperBoundNsAt`.
         base_index: i64,
         cold_shard_buckets: []std.atomic.Value(u64),
-        /// See the NOTE on `LatencyHistogram.SnapshotReader.hot_shard_buckets`.
+        /// See the NOTE on `Histogram.SnapshotReader.hot_shard_buckets`.
         hot_shard_buckets: []std.atomic.Value(u64),
         hot_shard: *const Shard,
 
@@ -1435,7 +1529,8 @@ pub const LatencyHistogram = struct {
         }
     };
 
-    /// Used to initialize a latency histogram in-place, backed by a heap allocation.
+    /// Allocates shard storage sized for `layout` and returns a handle over it. Pair with
+    /// `deinitForTest`.
     pub fn initForTest(
         gpa: std.mem.Allocator,
         layout: Layout,
@@ -1491,7 +1586,7 @@ pub const LatencyHistogram = struct {
 /// (e.g. `method_elapsed_seconds`) carrying a series per tag under a `variant="<tag>"` label, so
 /// variants can be summed together or filtered apart in Prometheus/Grafana. `kind` selects the
 /// backing histogram: `.latency` for ns-native `LatencyHistogram`, `.standard` for `Histogram`
-/// with explicit bounds. Every variant shares one `Kind`, so the series aggregate cleanly; the
+/// with explicit bounds. Every variant shares one `kind`, so the series aggregate cleanly; the
 /// bucket layout itself is still supplied once by the appender.
 pub fn VariantHistogram(comptime V: type, comptime kind: metric.HistogramKind) type {
     const Hist = kind.StructType();
@@ -1545,28 +1640,28 @@ pub fn VariantHistogram(comptime V: type, comptime kind: metric.HistogramKind) t
     };
 }
 
-/// A timer for one span. `init` reads the monotonic clock; `observe` reads it again and records the
-/// elapsed nanoseconds into the histogram.
+/// A timer for one span. `init` reads the monotonic clock; `observe` reads it again and records
+/// the elapsed nanoseconds into the histogram.
 ///
-/// `V` selects the shape. `null` gives a plain `Histogram` or `LatencyHistogram` and an `observe()`
-/// taking no argument. A `VariantHistogram`'s value type gives `observe(tag)`, which selects the
-/// series at the end of the span, after an outcome such as an error tag is known. `tag` must be
-/// comptime-known; dispatch a runtime one with
+/// `V` selects the shape. `null` gives a plain `Histogram` or `LatencyHistogram` and an
+/// `observe()` taking no argument. A `VariantHistogram`'s value type gives `observe(tag)`, which
+/// selects the series at the end of the span, once an outcome such as an error tag is known.
+/// `tag` must be comptime-known; dispatch a runtime one with
 /// `switch (tag) { inline else => |t| obs.observe(t) }`.
 ///
-/// The recorded value is always in nanoseconds, so the histogram's bounds must be in nanoseconds
-/// too. A `LatencyHistogram` derives its bounds from a `Layout`, which already is. A
+/// The recorded value is always in nanoseconds, so the histogram's bounds must be too. A
+/// `LatencyHistogram` derives them from a `Layout`, which is already in nanoseconds; a
 /// `kind == .standard` histogram uses whatever `upper_bounds` it was registered with. Nothing
 /// checks the unit, and bounds in another unit mislabel every bucket.
 ///
 /// Holds a pointer to the histogram handle, which the caller must keep alive. Call `observe` once
 /// per observer: it does not stop or reset the timer, so a second call records a second span.
 ///
-/// `defer obs.observe()` records on every exit from the enclosing scope, including `break`,
-/// `continue`, and error returns — there is no way to disarm an observer. Only use it where every
-/// exit ends a span worth recording. A scope that can leave without completing one, such as a drain
-/// loop that breaks on `error.WouldBlock`, must instead call `observe` on the success path; a
-/// `defer` there records the failed operation as if it had succeeded.
+/// `defer obs.observe()` records on every exit from the enclosing scope (`break`, `continue`, and
+/// error returns included) and there is no way to disarm an observer. Only use it where every
+/// exit ends a span worth recording. A scope that can leave without completing one, such as a
+/// drain loop that breaks on `error.WouldBlock`, must call `observe` on the success path instead;
+/// a `defer` there records the failed operation as if it had succeeded.
 pub fn LatencyObserver(comptime kind: metric.HistogramKind, comptime V: ?type) type {
     // `V` is the variant histogram's value type, not its `Tag`. The two differ for a tagged union,
     // whose `Tag` is the union's tag type, so reconstructing from `Tag` would name a different
