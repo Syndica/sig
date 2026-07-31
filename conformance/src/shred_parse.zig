@@ -380,7 +380,6 @@ fn executeShredParse(
             // no trace in `MerkleForest`, so record its slot here for
             // `buildProtoEffects` to fold into the dead-slots set.
             error.MerkleRootConflict,
-            error.MismatchedMerkleRoot,
             error.MismatchedChainedMerkleRoot,
             error.VariantMismatchFromFecSet,
             error.RecoveredShredMalformed,

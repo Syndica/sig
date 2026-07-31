@@ -175,54 +175,30 @@ pub const Receiver = struct {
         var shred_merkle_root: Hash = undefined;
         try shred.merkleRoot(&shred_merkle_root);
 
-        // Two-tier lookup: signature fast-path (31/64 shreds hit here),
-        // then `(slot, fec_set_idx)` fallback for shreds that arrived
-        // under a different signature but the same erasure set. See
-        // `InProgressSets.id_map`.
-        const resolved: ?*FecSetCtx = resolve: {
-            if (state.in_progress.getFecSetCtx(&shred.signature)) |ctx| {
-                if (state.in_progress.fecSetIdOf(ctx).eql(&fec_set_id))
-                    break :resolve ctx;
-            }
-            break :resolve state.in_progress.getCtxById(fec_set_id);
-        };
-
-        const fec_set_ctx = if (resolved) |fec_set_ctx| existing_set: {
-            // fec set is already being built.
-
-            // variant should match that of the first recorded shred in the fec set
-            if ((shred.variant.isData() and !shred.variant.eql(fec_set_ctx.data_variant)) or
-                (shred.variant.isCode() and !shred.variant.eql(fec_set_ctx.code_variant)))
+        // Root-primary lookup. Same-root shreds collapse to one ctx
+        // naturally (agave-parity: `check_merkle_root_consistency` is
+        // signature-blind). Mismatched-root shreds at the same
+        // `(slot, fec_set_idx)` are rejected below via `id_map`.
+        const fec_set_ctx = if (state.in_progress.getCtxByRoot(&shred_merkle_root)) |ctx| existing_set: {
+            if ((shred.variant.isData() and !shred.variant.eql(ctx.data_variant)) or
+                (shred.variant.isCode() and !shred.variant.eql(ctx.code_variant)))
             {
                 return error.VariantMismatchFromFecSet;
             }
-
-            // Matching root admits into the merged ctx; mismatch rejects.
-            // In production, a sig-map hit implies a matching root (the
-            // signature covers it); this branch only rejects via the
-            // id-map fallback or when signature verification is disabled.
-            if (!shred_merkle_root.eql(&fec_set_ctx.merkle_root))
-                return error.MismatchedMerkleRoot;
-            if (!shred.chainedMerkleRoot().eql(&fec_set_ctx.chained_merkle_root))
+            if (!shred.chainedMerkleRoot().eql(&ctx.chained_merkle_root))
                 return error.MismatchedChainedMerkleRoot;
 
-            break :existing_set fec_set_ctx;
+            break :existing_set ctx;
         } else new_set: {
-            // No in-progress ctx at this signature or fec_set_id.
+            // Case-B rejection at ingest: a live ctx already claims this
+            // erasure-set slot under a different root.
+            if (state.in_progress.containsId(fec_set_id))
+                return error.MerkleRootConflict;
 
-            switch (state.done.lookupStatus(fec_set_id, &shred.signature)) {
-                // fec set isn't finished, this is a new set
-                .missing => {},
-                // fec set was finished already, let's ignore it
-                .matching_signature => return .fec_set_already_finished,
-                // Set completed under a different signature. Admit if
-                // the merkle roots agree; reject otherwise.
-                .mismatching_signature => {
-                    const roots = state.done.getRoots(fec_set_id).?;
-                    if (roots.merkle_root.eql(&shred_merkle_root))
-                        return .fec_set_already_finished;
-                    return error.MerkleRootConflict;
-                },
+            if (state.done.getRoots(fec_set_id)) |roots| {
+                if (roots.merkle_root.eql(&shred_merkle_root))
+                    return .fec_set_already_finished;
+                return error.MerkleRootConflict;
             }
 
             // This is the first shred of a new in-progress fec set.
