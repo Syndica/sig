@@ -237,7 +237,11 @@ pub const Receiver = struct {
                 ) catch return error.SignatureVerificationFailed;
             }
 
-            const fec_set_ctx = try state.in_progress.createFecSetCtx(fec_set_id, &shred.signature);
+            const fec_set_ctx = try state.in_progress.createFecSetCtx(
+                fec_set_id,
+                &shred.signature,
+                &shred_merkle_root,
+            );
 
             fec_set_ctx.* = .{
                 // we will check against these for equality in later received shreds
@@ -592,6 +596,11 @@ const InProgressSets = struct {
     ///    of which signature they carry.
     ///  - Sig-verify-off fuzz: unrelated ctxs can collide on a signature.
     id_map: IdMap,
+    /// Being introduced as the future authoritative primary keyed by merkle
+    /// root. Populated and evicted in lockstep with `id_map` today, but not
+    /// yet consulted by `processPacket` — that switch happens in the next
+    /// commit. See `assertCounts` for the lockstep invariant.
+    root_map: RootMap,
     eviction: Eviction,
 
     const Eviction = std.PriorityQueue(Pool.ItemId, QueueContext, QueueContext.order);
@@ -601,6 +610,7 @@ const InProgressSets = struct {
     // have to compute it.
     const SignatureMap = std.ArrayHashMapUnmanaged(void, *FecSetCtx, SignatureContext, true);
     const IdMap = std.AutoHashMapUnmanaged(FecSetId, *FecSetCtx);
+    const RootMap = std.AutoHashMapUnmanaged(Hash, *FecSetCtx);
 
     fn init(allocator: std.mem.Allocator, capacity: u32) !InProgressSets {
         const buf = try allocator.alloc(FecSetCtx, capacity);
@@ -622,6 +632,10 @@ const InProgressSets = struct {
         errdefer id_map.deinit(allocator);
         try id_map.ensureTotalCapacity(allocator, capacity);
 
+        var root_map: RootMap = .empty;
+        errdefer root_map.deinit(allocator);
+        try root_map.ensureTotalCapacity(allocator, capacity);
+
         var eviction: Eviction = .init(allocator, .{ .ids = ids });
         errdefer eviction.deinit();
         try eviction.ensureTotalCapacity(capacity);
@@ -633,6 +647,7 @@ const InProgressSets = struct {
             .signatures = signatures,
             .signature_map = signature_map,
             .id_map = id_map,
+            .root_map = root_map,
             .eviction = eviction,
         };
     }
@@ -643,6 +658,7 @@ const InProgressSets = struct {
         allocator.free(self.signatures);
         self.signature_map.deinit(allocator);
         self.id_map.deinit(allocator);
+        self.root_map.deinit(allocator);
 
         self.eviction.allocator = allocator;
         self.eviction.deinit();
@@ -655,6 +671,7 @@ const InProgressSets = struct {
         self.ctx_pool.reset();
         self.signature_map.clearRetainingCapacity();
         self.id_map.clearRetainingCapacity();
+        self.root_map.clearRetainingCapacity();
         self.eviction.items.len = 0;
     }
 
@@ -663,11 +680,16 @@ const InProgressSets = struct {
         return self.signature_map.getAdapted(signature, map_ctx);
     }
 
+    fn getCtxByRoot(self: *const InProgressSets, root: *const Hash) ?*FecSetCtx {
+        return self.root_map.get(root.*);
+    }
+
     // returns undefined memory, which must be immediately set by the caller
     fn createFecSetCtx(
         self: *InProgressSets,
         id: FecSetId,
         signature: *const Signature,
+        root: *const Hash,
     ) !*FecSetCtx {
         const map_ctx = self.mapContext();
 
@@ -697,6 +719,10 @@ const InProgressSets = struct {
         const id_result = self.id_map.getOrPutAssumeCapacity(id);
         if (id_result.found_existing) unreachable; // `new_set` in processPacket only fires when this id is unoccupied
         id_result.value_ptr.* = node;
+
+        const root_result = self.root_map.getOrPutAssumeCapacity(root.*);
+        if (root_result.found_existing) unreachable; // same guard as id_map: `new_set` fires only when the root is unoccupied
+        root_result.value_ptr.* = node;
 
         return node;
     }
@@ -736,6 +762,7 @@ const InProgressSets = struct {
         const evicted_sig: *Signature = &self.signatures[evicted_idx];
         const evicted_id: FecSetId = self.ids[evicted_idx];
         const evicted_ptr: *FecSetCtx = self.ctx_pool.indexToPtr(evicted_pool_idx);
+        const evicted_root: Hash = evicted_ptr.merkle_root;
         // const node: *FecSetCtx = @ptrCast(&self.ctx_pool.buf[evicted_idx]);
         self.ids[evicted_idx] =
             // an impossible FecSetID which can never be matched with
@@ -757,6 +784,8 @@ const InProgressSets = struct {
         }
         const id_removed = self.id_map.remove(evicted_id);
         std.debug.assert(id_removed);
+        const root_removed = self.root_map.remove(evicted_root);
+        std.debug.assert(root_removed);
 
         evicted_sig.* = undefined;
 
@@ -785,6 +814,7 @@ const InProgressSets = struct {
         // (newer ctx claims the slot in `createFecSetCtx`).
         std.debug.assert(self.id_map.count() == self.eviction.items.len);
         std.debug.assert(self.signature_map.count() <= self.eviction.items.len);
+        std.debug.assert(self.root_map.count() == self.eviction.items.len);
         tracy.plot(u32, "in-progress FEC sets", @intCast(self.eviction.items.len));
     }
 
@@ -997,6 +1027,7 @@ test "InProgressSets basic usage" {
     const allocator = std.testing.allocator;
     const set_signature: Signature = .ZEROES;
     const set_id: FecSetId = .{ .slot = 123, .fec_set_idx = 32 };
+    const set_root: Hash = .{ .data = @splat(0xAB) };
 
     var in_progress: InProgressSets = try .init(allocator, 16);
     defer in_progress.deinit(allocator);
@@ -1005,15 +1036,20 @@ test "InProgressSets basic usage" {
     try std.testing.expect(!in_progress.containsId(set_id));
     try std.testing.expectEqual(null, in_progress.getFecSetCtx(&Signature.ZEROES));
     try std.testing.expectEqual(null, in_progress.getCtxById(set_id));
+    try std.testing.expectEqual(null, in_progress.getCtxByRoot(&set_root));
 
     // add set
-    const ctx = try in_progress.createFecSetCtx(set_id, &set_signature);
+    const ctx = try in_progress.createFecSetCtx(set_id, &set_signature, &set_root);
+    // ctx state is undefined; set the fields root_map / eviction read.
+    ctx.merkle_root = set_root;
+    ctx.id = set_id;
 
     // find set
     const found_ctx = in_progress.getFecSetCtx(&set_signature) orelse unreachable;
     try std.testing.expectEqual(ctx, found_ctx);
     try std.testing.expect(in_progress.containsId(set_id));
     try std.testing.expectEqual(ctx, in_progress.getCtxById(set_id));
+    try std.testing.expectEqual(ctx, in_progress.getCtxByRoot(&set_root));
 
     // context is evicted
     {
@@ -1024,6 +1060,7 @@ test "InProgressSets basic usage" {
     // can't find set
     try std.testing.expectEqual(null, in_progress.getFecSetCtx(&set_signature));
     try std.testing.expect(!in_progress.containsId(set_id));
+    try std.testing.expectEqual(null, in_progress.getCtxByRoot(&set_root));
 }
 
 const DoneSets = struct {
