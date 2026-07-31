@@ -34,7 +34,6 @@ jobs:
           cache-key: kcov-${{ hashFiles('build.zig', 'build.zig.zon', 'v1/build.zig', 'v1/build.zig.zon') }}
 
       - name: Pre-download zig dependencies
-        if: false # TEMP(hamza/fix-flaky-v2-kcov): revert before merge — only v2 kcov is being verified
         run: |
           ./tools/fetch-zig-deps.py
           ./tools/fetch-zig-deps.py v1/build.zig.zon
@@ -47,32 +46,20 @@ jobs:
           echo "$PWD/kcov-v43-bin-linux-x86_64/bin" >> "$GITHUB_PATH"
 
       - name: Build
-        if: false # TEMP(hamza/fix-flaky-v2-kcov): revert before merge — only v2 kcov is being verified
         run: |
           cd v1
           zig build test -Dno-run -Dlong-tests -Dtarget=x86_64-linux-gnu.2.36 -Denable-tsan=false -Dno-network-tests -Dallow-no-sha -Dallow-no-avx512 --summary all
 
       - name: Collect v1 coverage
-        if: false # TEMP(hamza/fix-flaky-v2-kcov): revert before merge — only v2 kcov is being verified
         run: |
           cd v1
           bash scripts/kcov_ci.sh
 
-      - name: Collect v2 coverage (looped 20x) # TEMP(hamza/fix-flaky-v2-kcov): restore single run before merge
+      - name: Collect v2 coverage
         run: |
-          for i in $(seq 1 20); do
-            echo "=== kcov run $i/20 ==="
-            if ! zig build test -Dkcov --summary all; then
-              echo "FAILED on run $i"
-              exit 1
-            fi
-            echo "PASSED run $i"
-            # Clean kcov output between runs to avoid stale state
-            rm -rf zig-out .zig-cache/o/*/output
-          done
+          zig build test -Dkcov --summary all
 
       - name: Debug coverage reports
-        if: false # TEMP(hamza/fix-flaky-v2-kcov): revert before merge — only v2 kcov is being verified
         run: |
           echo "=== v1 report ==="
           head -15 v1/kcov-merged/kcov-merged/cobertura.xml
@@ -87,7 +74,7 @@ jobs:
           grep 'filename=' zig-out/kcov/kcov-merged/cobertura.xml | head -3
 
       - name: Generate local coverage report
-        if: false # TEMP(hamza/fix-flaky-v2-kcov): revert before merge — original condition: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request'
         run: |
           pip install --quiet diff-cover==10.3.0
           # Determine the base branch to diff against
@@ -111,7 +98,7 @@ jobs:
           fi
 
       - name: Upload coverage to Codecov
-        if: false # TEMP(hamza/fix-flaky-v2-kcov): revert before merge — original condition: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -144,7 +131,6 @@ jobs:
             --commit-sha "$UPLOAD_SHA"
 
   gossip_and_fuzz:
-    if: false # TEMP(hamza/fix-flaky-v2-kcov): revert before merge — only v2 kcov is being verified
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -180,7 +166,6 @@ jobs:
         run: workspace/zig-out-release/bin/fuzz --seed 19 ledger 10000
 
   build_and_test_linux:
-    if: false # TEMP(hamza/fix-flaky-v2-kcov): revert before merge — only v2 kcov is being verified
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -212,7 +197,6 @@ jobs:
           zig-out/bin/test 2>&1 | cat
 
   linux_misc_checks:
-    if: false # TEMP(hamza/fix-flaky-v2-kcov): revert before merge — only v2 kcov is being verified
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -282,7 +266,6 @@ jobs:
           ./check
 
   solana_conformance:
-    if: false # TEMP(hamza/fix-flaky-v2-kcov): revert before merge — only v2 kcov is being verified
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -325,7 +308,6 @@ jobs:
         run: conformance/scripts/ci-run.sh
 
   feature_compat_conformance:
-    if: false # TEMP(hamza/fix-flaky-v2-kcov): revert before merge — only v2 kcov is being verified
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
