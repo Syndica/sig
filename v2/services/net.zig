@@ -29,6 +29,13 @@ pub fn serviceMain(
     const metric_appender = rw.tel.metricAppender();
     const metrics = metric_appender.appendFields(Metrics, .{
         .prefix = @tagName(name),
+        .fields = .{
+            .packet_latency_ns = .{ .layout = .{
+                .min_upper_bound_ns = std.math.floorPowerOfTwo(u64, 2 * std.time.ns_per_us),
+                .max_upper_bound_ns = std.math.floorPowerOfTwo(u64, 3 * std.time.ns_per_ms),
+                .bounds_per_doubling = 4,
+            } },
+        },
     });
     rw.tel.signalReady();
 
@@ -41,11 +48,9 @@ pub fn serviceMain(
 }
 
 const Metrics = struct {
-    recv_packets: tel.Counter,
-    send_packets: tel.Counter,
+    packet_latency_ns: tel.VariantHistogram(PacketLatencyKind, .latency),
 
-    recv_latency: tel.Gauge,
-    send_latency: tel.Gauge,
+    const PacketLatencyKind = enum { recv, send };
 };
 
 const MAX_SOCKETS = 10;
@@ -81,7 +86,6 @@ fn mainInner(
         sockets_len += 1;
     }
 
-    var timer: lib.time.Timer = .start();
     while (true) {
         // send
         for (pairs, sockets[0..sockets_len]) |pair, sock| {
@@ -90,7 +94,7 @@ fn mainInner(
 
             // TODO: use std.os.linux.sendmmsg
             while (it.next()) |p| {
-                timer.reset();
+                const obs = metrics.packet_latency_ns.observer();
                 const bytes = try std.posix.sendto(
                     sock,
                     p.data[0..p.len],
@@ -98,9 +102,8 @@ fn mainInner(
                     &p.addr.any,
                     p.addr.getOsSockLen(),
                 );
+                obs.observe(.send);
                 std.debug.assert(bytes == p.len);
-                metrics.send_packets.increment(1);
-                metrics.send_latency.set(timer.read());
             }
         }
 
@@ -111,8 +114,8 @@ fn mainInner(
 
             // TODO: use std.os.linux.recvmmsg
             while (it.peek()) |ptr| {
-                timer.reset();
                 var addr_len: std.posix.socklen_t = @sizeOf(std.net.Address);
+                const obs = metrics.packet_latency_ns.observer();
                 ptr.len = @intCast(std.posix.recvfrom(
                     sock,
                     &ptr.data,
@@ -123,9 +126,8 @@ fn mainInner(
                     error.WouldBlock => break,
                     else => |e| return e,
                 });
+                obs.observe(.recv);
                 _ = it.next();
-                metrics.recv_packets.increment(1);
-                metrics.recv_latency.set(timer.read());
             }
         }
     }

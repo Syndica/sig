@@ -1,6 +1,6 @@
 services:
   prometheus:
-    image: prom/prometheus:v3.1.0
+    image: prom/prometheus:v3.13.0
     container_name: prometheus
     restart: unless-stopped
     ports:
@@ -24,7 +24,7 @@ services:
     restart: unless-stopped
 
   grafana:
-    image: grafana/grafana:11.4.0
+    image: grafana/grafana:13.1.0
     container_name: grafana
     ports:
       - 3000:3000

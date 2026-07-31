@@ -677,47 +677,10 @@ pub const Metrics = struct {
     io_uring_cqe_batch_fulls_total: tel.Counter,
 
     // TODO: likely remove these, mostly used for debugging.
-    io_latency_probe_connect: tel.Histogram,
-    io_latency_probe_send: tel.Histogram,
-    io_latency_probe_recv: tel.Histogram,
-    io_latency_download_connect: tel.Histogram,
-    io_latency_download_send: tel.Histogram,
-    io_latency_download_recv_headers: tel.Histogram,
-    io_latency_download_write_extra: tel.Histogram,
-    io_latency_download_poll_in: tel.Histogram,
-    io_latency_download_splice_in: tel.Histogram,
-    io_latency_download_splice_out: tel.Histogram,
-    io_latency_download_fsync: tel.Histogram,
+    io_latency_ns: tel.VariantHistogram(Op, .latency),
 
-    fn getHistogram(self: *const Metrics, op: Op) *const tel.Histogram {
-        return switch (op) {
-            .probe_connect => &self.io_latency_probe_connect,
-            .probe_send => &self.io_latency_probe_send,
-            .probe_recv => &self.io_latency_probe_recv,
-            .download_connect => &self.io_latency_download_connect,
-            .download_send => &self.io_latency_download_send,
-            .download_recv_headers => &self.io_latency_download_recv_headers,
-            .download_write_extra => &self.io_latency_download_write_extra,
-            .download_poll_in => &self.io_latency_download_poll_in,
-            .download_splice_in => &self.io_latency_download_splice_in,
-            .download_splice_out => &self.io_latency_download_splice_out,
-            .download_fsync => &self.io_latency_download_fsync,
-        };
-    }
-
-    const IO_LATENCY_BOUNDS = &[_]f64{
-        10 * std.time.ns_per_us, // 10us
-        100 * std.time.ns_per_us, // 0.1ms
-        500 * std.time.ns_per_us, // 0.5ms
-        1 * std.time.ns_per_ms, // 1ms
-        5 * std.time.ns_per_ms, // 5ms
-        10 * std.time.ns_per_ms, // 10ms
-        50 * std.time.ns_per_ms, // 50ms
-        100 * std.time.ns_per_ms, // 100ms
-        500 * std.time.ns_per_ms, // 500ms
-        1 * std.time.ns_per_s, // 1s
-        3 * std.time.ns_per_s, // 3s
-    };
+    const IO_LATENCY_MIN_BOUND = std.math.floorPowerOfTwo(u64, 11 * std.time.ns_per_us);
+    const IO_LATENCY_MAX_BOUND = std.math.floorPowerOfTwo(u64, 4 * std.time.ns_per_s);
 
     // TODO: This was to not have a big fat anon. struct with the same
     // fields repeated. But perhaps there's a better way?
@@ -726,12 +689,12 @@ pub const Metrics = struct {
             .prefix = "snapshot",
         };
         for (@typeInfo(Metrics).@"struct".fields) |field| {
-            if (field.type == tel.Histogram) {
-                @field(config.fields, field.name) = .{
-                    .id_override = null,
-                    .upper_bounds = IO_LATENCY_BOUNDS,
-                };
-            }
+            if (std.mem.eql(u8, field.name, "io_latency_ns"))
+                @field(config.fields, field.name) = .{ .layout = .{
+                    .min_upper_bound_ns = IO_LATENCY_MIN_BOUND,
+                    .max_upper_bound_ns = IO_LATENCY_MAX_BOUND,
+                    .bounds_per_doubling = 2,
+                } };
         }
         break :blk config;
     };
@@ -2718,9 +2681,11 @@ pub const Downloader = struct {
         self.metrics.io_uring_timeouts_total.increment(1);
     }
 
-    fn onOpComplete(self: *Downloader, op: Op, op_start: u64) void {
-        const elapsed_ns: f64 = @floatFromInt(lib.clock.monotonic(.ns) -| op_start);
-        self.metrics.getHistogram(op).observe(elapsed_ns);
+    fn onOpComplete(self: *Downloader, comptime op: Op, op_start: u64) void {
+        self.metrics.io_latency_ns.observe(
+            op,
+            lib.clock.monotonic(.ns) -| op_start,
+        );
     }
 };
 

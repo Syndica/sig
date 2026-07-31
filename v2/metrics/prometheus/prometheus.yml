@@ -10,7 +10,16 @@ alerting:
       api_version: v2
 scrape_configs:
   - job_name: prometheus
+    # Negotiate the protobuf exposition (PrometheusProto) with the target, which the sig telemetry
+    # service serves. Every LatencyHistogram is emitted there as a standard exponential native
+    # histogram, so no server-side conversion is involved — see `prometheus_proto`. No scrapeable
+    # text format carries native histograms, which is why this has to be on.
+    scrape_native_histograms: true
     static_configs:
       - targets:
           - host.docker.internal:9110 # sig prometheus general
+
+  - job_name: node-exporter
+    static_configs:
+      - targets:
           - node-exporter:9100 # node exporter
