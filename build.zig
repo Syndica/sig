@@ -387,7 +387,9 @@ const Sig = struct {
                 .{ .name = "tracy", .module = deps.tracy },
             },
         });
-        unit_tests.add("topology", topology);
+        // topology.zig has no `test` blocks; skip kcov to avoid the
+        // fast-exit ptrace race described on UnitTests.AddOptions.kcov.
+        unit_tests.addWithOptions("topology", topology, .{ .kcov = false });
 
         const start_service = b.createModule(.{
             .root_source_file = b.path("v2/init/start_service.zig"),
@@ -399,7 +401,9 @@ const Sig = struct {
                 .{ .name = "tracy", .module = deps.tracy },
             },
         });
-        unit_tests.add("start_service", start_service);
+        // start_service.zig has no `test` blocks; skip kcov to avoid the
+        // fast-exit ptrace race described on UnitTests.AddOptions.kcov.
+        unit_tests.addWithOptions("start_service", start_service, .{ .kcov = false });
 
         const services_mod = b.createModule(.{
             .root_source_file = b.path("v2/services.zig"),
@@ -467,7 +471,12 @@ const Sig = struct {
                     service_component_imports,
                 }),
             });
-            unit_tests.add(service_name, service_mod);
+            // Only replay.zig currently has `test` blocks; the other
+            // service root modules produce zero-test binaries that race
+            // kcov's ptrace attach (see UnitTests.AddOptions.kcov).
+            unit_tests.addWithOptions(service_name, service_mod, .{
+                .kcov = comptime std.mem.eql(u8, service.name, "replay"),
+            });
 
             const service_lib = b.addLibrary(.{
                 .name = service_name,
@@ -799,7 +808,29 @@ const UnitTests = struct {
         };
     }
 
+    pub const AddOptions = struct {
+        /// Whether to add a kcov coverage-collection step for this test binary.
+        ///
+        /// Set to `false` when the test binary's root module contains no
+        /// `test` blocks (transitively). kcov attaches via `ptrace` and races
+        /// the child's exit: a test binary with zero tests exits in ~10 ms,
+        /// and kcov intermittently returns a non-zero exit code with no
+        /// stderr, producing a flaky CI failure that reports a different
+        /// binary each time (issue #1710, tracked in #1755). Skipping these
+        /// binaries loses no coverage because they run no tests.
+        kcov: bool = true,
+    };
+
     pub fn add(self: *UnitTests, name: []const u8, module: *Build.Module) void {
+        self.addWithOptions(name, module, .{});
+    }
+
+    pub fn addWithOptions(
+        self: *UnitTests,
+        name: []const u8,
+        module: *Build.Module,
+        opts: AddOptions,
+    ) void {
         const unit_test = self.build.addTest(.{
             .name = name,
             .root_module = module,
@@ -818,7 +849,7 @@ const UnitTests = struct {
                 break :run run;
             } else null,
         }) catch @panic("oom");
-        if (self.kcov) |kcov| {
+        if (opts.kcov) if (self.kcov) |kcov| {
             const kcov_run = self.build.addSystemCommand(&.{
                 "kcov",
                 "--collect-only",
@@ -831,7 +862,7 @@ const UnitTests = struct {
             kcov_run.has_side_effects = true;
             kcov.merge_run.step.dependOn(&kcov_run.step);
             kcov.merge_run.addDirectoryArg(output_dir);
-        }
+        };
     }
 };
 
