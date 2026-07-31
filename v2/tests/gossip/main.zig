@@ -14,12 +14,10 @@ const Topology = struct {
     telemetry: topology.ServiceRegions(.from(services.telemetry)),
 };
 
+/// Verifies gossip ping/pong behavior through sandboxed services and shared-memory rings.
 pub fn main() !void {
-    var dba_state: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = dba_state.deinit();
-    const gpa = dba_state.allocator();
-
     const gossip_port = 8001;
+    const remote_address = std.net.Address.initIp4(.{ 127, 0, 0, 1 }, 9001);
     const self_kp: lib.crypto.KeyPair = .fromKeyPair(try .generateDeterministic(@splat(1)));
     const ext_kp: lib.crypto.KeyPair = .fromKeyPair(try .generateDeterministic(@splat(2)));
 
@@ -81,6 +79,7 @@ pub fn main() !void {
             },
         };
         const packet = iter.next().?;
+        packet.addr = remote_address;
         var fbw: std.Io.Writer = .fixed(&packet.data);
         try gossip.bincode.write(&fbw, gm);
         packet.len = @intCast(fbw.end);
@@ -115,33 +114,38 @@ pub fn main() !void {
 
     // -- Verify outgoing messages -- //
 
-    var msgs: std.ArrayList(gossip.GossipMessage) = .empty;
-    defer msgs.deinit(gpa);
-
-    var msg_buf: [16 * 1024]u8 align(16) = undefined;
-    var msg_fba: std.heap.FixedBufferAllocator = .init(&msg_buf);
-
+    var messages_len: usize = 0;
+    var found_ping = false;
+    var found_pong = false;
     var iter = net_pair.send.get(.reader);
     defer iter.markUsed();
     while (iter.next()) |packet| {
-        var fbr: std.Io.Reader = .fixed(packet.data[0..packet.len]);
-        const gm = try gossip.bincode.read(&msg_fba, &fbr, gossip.GossipMessage);
-        try msgs.append(gpa, gm);
+        messages_len += 1;
+        try std.testing.expect(remote_address.eql(packet.addr));
+        var message_memory: [16 * 1024]u8 = undefined;
+        var message_allocator: std.heap.FixedBufferAllocator = .init(&message_memory);
+        var message_reader: std.Io.Reader = .fixed(packet.data[0..packet.len]);
+        const message = try gossip.bincode.read(
+            &message_allocator,
+            &message_reader,
+            gossip.GossipMessage,
+        );
+        switch (message) {
+            .ping_message => |ping| {
+                if (!ping.from.equals(&self_kp.pubkey)) continue;
+                try ping.signature.verify(&ping.from, &ping.token);
+                found_ping = true;
+            },
+            .pong_message => |pong| {
+                if (!pong.from.equals(&self_kp.pubkey)) continue;
+                try std.testing.expect(pong.hash.eql(&ping_token_hash));
+                try pong.signature.verify(&pong.from, &pong.hash.data);
+                found_pong = true;
+            },
+            else => {},
+        }
     }
-
-    try std.testing.expectEqual(2, msgs.items.len);
-    const ping_message_gm, const pong_message_gm = switch (msgs.items[0]) {
-        .ping_message => .{ msgs.items[0], msgs.items[1] },
-        else => .{ msgs.items[1], msgs.items[0] },
-    };
-    try std.testing.expectEqual(.ping_message, std.meta.activeTag(ping_message_gm));
-    try std.testing.expectEqual(.pong_message, std.meta.activeTag(pong_message_gm));
-
-    const ping_message = ping_message_gm.ping_message;
-    const pong_message = pong_message_gm.pong_message;
-
-    try std.testing.expectEqual(self_kp.pubkey, ping_message.from);
-    try std.testing.expectEqual(self_kp.pubkey, pong_message.from);
-
-    try std.testing.expectEqual(ping_token_hash, pong_message.hash);
+    try std.testing.expectEqual(2, messages_len);
+    try std.testing.expect(found_ping);
+    try std.testing.expect(found_pong);
 }

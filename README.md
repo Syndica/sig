@@ -121,6 +121,18 @@ zig build bb-test    # black-box integration tests
 zig build test       # both
 ```
 
+Filter unit and component tests with:
+
+```sh
+zig build unit-test -Dfilter=ping
+```
+
+Run the built-in Zig fuzz targets with:
+
+```sh
+zig build unit-test --fuzz -Dfilter=fuzz
+```
+
 This runs all tests and validations of the entire v2 project, and is the process used for validations in CI:
 ```
 zig build ci

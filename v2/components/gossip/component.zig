@@ -1,8 +1,8 @@
 comptime {
     if (@import("builtin").is_test) {
         _ = @import("Metrics.zig");
-        _ = @import("bincode.zig");
         _ = @import("node.zig");
+        _ = @import("tests.zig");
     }
 }
 
