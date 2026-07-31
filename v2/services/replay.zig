@@ -275,6 +275,27 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     }
 }
 
+// Warn threshold sits past the realistic tail of mainnet snapshot loading
+// so operators aren't paged during normal startup. See issue #1746.
+const RUNTIME_METADATA_WAIT_INTERVAL_NS: u64 = 10 * std.time.ns_per_s;
+const RUNTIME_METADATA_WAIT_WARN_AFTER_NS: u64 = 15 * 60 * std.time.ns_per_s;
+
+fn waitForBlockhashes(
+    blockhashes_in: anytype,
+    runner: lib.runner.Connection,
+    logger: tel.Logger("main"),
+    wait_state: *tel.BootstrapWait,
+) ![]const Hash {
+    return tel.waitForBufferWithAwaitingLog(
+        blockhashes_in,
+        runner,
+        wait_state,
+        logger,
+        "replay: awaiting runtime metadata from accounts_db ({d}s)",
+        "replay: receiving runtime metadata",
+    );
+}
+
 /// Reads all the RuntimeMetadata provided by accountsdb from the snapshot or
 /// its internal state. This bootstraps replay with information about its
 /// starting root slot, and some older info like the history of blockhashes.
@@ -299,6 +320,13 @@ fn bootstrap(
     exec_states: *BlockExecStates,
     blockhash_states: *BlockHashStates,
 ) !void {
+    const now_ns = lib.clock.monotonic(.ns);
+    var wait_state: tel.BootstrapWait = .init(
+        RUNTIME_METADATA_WAIT_INTERVAL_NS,
+        RUNTIME_METADATA_WAIT_WARN_AFTER_NS,
+        now_ns,
+    );
+
     var num_hashes: usize = 0;
     // Drain the blockhash queue into the block tree. accountsdb writes into
     // this ring blocks waiting for the reader (us).
@@ -307,7 +335,7 @@ fn bootstrap(
         defer blockhashes_in.close();
         var last_block: ?api.BlockRef = null;
         while (true) {
-            const hashes = try blockhashes_in.getBufferBlocking(runner);
+            const hashes = try waitForBlockhashes(&blockhashes_in, runner, logger, &wait_state);
             if (hashes.len == 0) break; // blockhashes_out closed their end
             for (hashes) |*hash| {
                 const block = try block_pool.createId();

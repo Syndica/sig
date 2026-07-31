@@ -453,6 +453,394 @@ pub const Gauge = struct {
     }
 };
 
+/// Emits at most one log per `interval_ns`. Callers own the `escalated` flag
+/// to promote the log level exactly once. Takes `now_ns` from a monotonic
+/// clock to keep the state machine testable.
+pub const ThrottledLogger = struct {
+    interval_ns: u64,
+    last_ns: u64,
+    escalated: bool = false,
+
+    pub fn init(interval_ns: u64, start_ns: u64) ThrottledLogger {
+        return .{ .interval_ns = interval_ns, .last_ns = start_ns };
+    }
+
+    pub fn tick(self: *ThrottledLogger, now_ns: u64) bool {
+        // Saturating subtract guards against a hypothetical clock regression.
+        if (now_ns -| self.last_ns >= self.interval_ns) {
+            self.last_ns = now_ns;
+            return true;
+        }
+        return false;
+    }
+};
+
+test "ThrottledLogger: does not fire until interval has elapsed" {
+    var t: ThrottledLogger = .init(1_000, 0);
+    try std.testing.expect(!t.tick(0));
+    try std.testing.expect(!t.tick(1));
+    try std.testing.expect(!t.tick(999));
+    try std.testing.expect(t.tick(1_000));
+}
+
+test "ThrottledLogger: subsequent ticks respect the interval" {
+    var t: ThrottledLogger = .init(1_000, 0);
+    try std.testing.expect(t.tick(1_000));
+    try std.testing.expect(!t.tick(1_500));
+    try std.testing.expect(t.tick(2_001));
+    try std.testing.expect(!t.tick(2_500));
+    try std.testing.expect(t.tick(3_500));
+}
+
+test "ThrottledLogger: escalated flag is caller-owned and starts false" {
+    var t: ThrottledLogger = .init(1_000, 0);
+    try std.testing.expect(!t.escalated);
+    t.escalated = true;
+    try std.testing.expect(t.escalated);
+    try std.testing.expect(t.tick(2_000));
+}
+
+test "ThrottledLogger: start_ns suppresses early ticks" {
+    var t: ThrottledLogger = .init(1_000, 50_000);
+    try std.testing.expect(!t.tick(50_000));
+    try std.testing.expect(!t.tick(50_500));
+    try std.testing.expect(t.tick(51_000));
+}
+
+/// Throttled awaiting-log + one-shot warn escalation + one-shot ready log,
+/// used by v2 bootstrap services blocked on an upstream signal. See #1746.
+pub const BootstrapWait = struct {
+    gate: ThrottledLogger,
+    start_ns: u64,
+    warn_after_ns: u64,
+    logged_awaiting: bool = false,
+    logged_ready: bool = false,
+
+    pub const Action = union(enum) {
+        none,
+        info: u64,
+        /// Returned at most once; subsequent overdue ticks return `.info`.
+        warn: u64,
+    };
+
+    pub fn init(interval_ns: u64, warn_after_ns: u64, start_ns: u64) BootstrapWait {
+        return .{
+            .gate = .init(interval_ns, start_ns),
+            .start_ns = start_ns,
+            .warn_after_ns = warn_after_ns,
+        };
+    }
+
+    pub fn tick(self: *BootstrapWait, now_ns: u64) Action {
+        if (!self.gate.tick(now_ns)) return .none;
+        self.logged_awaiting = true;
+        const elapsed_ns = now_ns -| self.start_ns;
+        const elapsed_s = elapsed_ns / std.time.ns_per_s;
+        if (!self.gate.escalated and elapsed_ns >= self.warn_after_ns) {
+            self.gate.escalated = true;
+            return .{ .warn = elapsed_s };
+        }
+        return .{ .info = elapsed_s };
+    }
+
+    /// Returns true exactly once, and only if a prior `tick` fired.
+    pub fn markReady(self: *BootstrapWait) bool {
+        if (self.logged_awaiting and !self.logged_ready) {
+            self.logged_ready = true;
+            return true;
+        }
+        return false;
+    }
+
+    /// `tick` + emit. `fmt` must end with `({d}s)`; elapsed_s is appended last.
+    pub fn logAwaiting(
+        self: *BootstrapWait,
+        now_ns: u64,
+        logger: anytype,
+        comptime fmt: []const u8,
+        args: anytype,
+    ) void {
+        switch (self.tick(now_ns)) {
+            .none => {},
+            .info => |s| logger.info().logf(fmt, args ++ .{s}),
+            .warn => |s| logger.warn().logf(fmt, args ++ .{s}),
+        }
+    }
+
+    pub fn logReady(
+        self: *BootstrapWait,
+        logger: anytype,
+        comptime msg: []const u8,
+    ) void {
+        if (self.markReady()) logger.info().log(msg);
+    }
+};
+
+/// `View.getBufferBlocking(runner)` with bootstrap-awaiting logs woven in.
+/// Skips the ready log on empty-slice EOF (see `v2/lib/ipc/ring.zig:60-64`).
+pub fn waitForBufferWithAwaitingLog(
+    view: anytype,
+    runner: anytype,
+    wait: *BootstrapWait,
+    logger: anytype,
+    comptime awaiting_fmt: []const u8,
+    comptime ready_msg: []const u8,
+) !@typeInfo(@TypeOf(view.getBuffer())).optional.child {
+    if (view.getBuffer()) |buf| {
+        if (buf.len != 0) wait.logReady(logger, ready_msg);
+        return buf;
+    }
+    const buf = while (true) {
+        wait.logAwaiting(clock.monotonic(.ns), logger, awaiting_fmt, .{});
+        try runner.activity.signalIdleSpinning();
+        if (view.getBuffer()) |b| break b;
+    };
+    try runner.activity.signalActive();
+    if (buf.len != 0) wait.logReady(logger, ready_msg);
+    return buf;
+}
+
+test "BootstrapWait: no tick fires before interval elapses" {
+    var w: BootstrapWait = .init(10 * std.time.ns_per_s, 60 * std.time.ns_per_s, 0);
+    try std.testing.expectEqual(BootstrapWait.Action.none, w.tick(0));
+    try std.testing.expectEqual(BootstrapWait.Action.none, w.tick(9 * std.time.ns_per_s));
+    try std.testing.expect(!w.logged_awaiting);
+}
+
+test "BootstrapWait: first tick after interval returns .info" {
+    var w: BootstrapWait = .init(10 * std.time.ns_per_s, 60 * std.time.ns_per_s, 0);
+    const action = w.tick(10 * std.time.ns_per_s);
+    try std.testing.expectEqual(@as(u64, 10), action.info);
+    try std.testing.expect(w.logged_awaiting);
+    try std.testing.expect(!w.gate.escalated);
+}
+
+test "BootstrapWait: escalates to .warn exactly once at warn_after_ns" {
+    var w: BootstrapWait = .init(10 * std.time.ns_per_s, 60 * std.time.ns_per_s, 0);
+    try std.testing.expectEqual(BootstrapWait.Action{ .info = 10 }, w.tick(10 * std.time.ns_per_s));
+    try std.testing.expectEqual(BootstrapWait.Action{ .info = 30 }, w.tick(30 * std.time.ns_per_s));
+    try std.testing.expectEqual(BootstrapWait.Action{ .warn = 60 }, w.tick(60 * std.time.ns_per_s));
+    try std.testing.expect(w.gate.escalated);
+    try std.testing.expectEqual(
+        BootstrapWait.Action{ .info = 90 },
+        w.tick(90 * std.time.ns_per_s),
+    );
+    try std.testing.expectEqual(
+        BootstrapWait.Action{ .info = 120 },
+        w.tick(120 * std.time.ns_per_s),
+    );
+}
+
+test "BootstrapWait: throttle applies between ticks" {
+    var w: BootstrapWait = .init(10 * std.time.ns_per_s, 600 * std.time.ns_per_s, 0);
+    try std.testing.expectEqual(BootstrapWait.Action{ .info = 10 }, w.tick(10 * std.time.ns_per_s));
+    try std.testing.expectEqual(BootstrapWait.Action.none, w.tick(15 * std.time.ns_per_s));
+    try std.testing.expectEqual(BootstrapWait.Action.none, w.tick(19 * std.time.ns_per_s));
+    try std.testing.expectEqual(BootstrapWait.Action{ .info = 20 }, w.tick(20 * std.time.ns_per_s));
+}
+
+test "BootstrapWait: escalation deadline before first interval still triggers .warn on first fire" {
+    var w: BootstrapWait = .init(10 * std.time.ns_per_s, 1 * std.time.ns_per_s, 0);
+    try std.testing.expectEqual(BootstrapWait.Action{ .warn = 10 }, w.tick(10 * std.time.ns_per_s));
+    try std.testing.expect(w.gate.escalated);
+}
+
+test "BootstrapWait: markReady returns false when awaiting never logged" {
+    var w: BootstrapWait = .init(10 * std.time.ns_per_s, 60 * std.time.ns_per_s, 0);
+    try std.testing.expect(!w.markReady());
+    _ = w.tick(5 * std.time.ns_per_s);
+    try std.testing.expect(!w.markReady());
+}
+
+test "BootstrapWait: markReady returns true once after tick fired" {
+    var w: BootstrapWait = .init(10 * std.time.ns_per_s, 60 * std.time.ns_per_s, 0);
+    _ = w.tick(10 * std.time.ns_per_s);
+    try std.testing.expect(w.markReady());
+    try std.testing.expect(!w.markReady());
+    try std.testing.expect(!w.markReady());
+}
+
+test "BootstrapWait: markReady still gated by logged_awaiting after later ticks" {
+    const start_ns = 100 * std.time.ns_per_s;
+    var w: BootstrapWait = .init(10 * std.time.ns_per_s, 60 * std.time.ns_per_s, start_ns);
+    _ = w.tick(start_ns);
+    try std.testing.expect(!w.markReady());
+    _ = w.tick(start_ns + 11 * std.time.ns_per_s);
+    try std.testing.expect(w.markReady());
+    try std.testing.expect(!w.markReady());
+}
+
+test "BootstrapWait: saturating subtract survives clock regression" {
+    const start_ns = 100 * std.time.ns_per_s;
+    var w: BootstrapWait = .init(10 * std.time.ns_per_s, 60 * std.time.ns_per_s, start_ns);
+    try std.testing.expectEqual(BootstrapWait.Action.none, w.tick(50 * std.time.ns_per_s));
+    try std.testing.expectEqual(BootstrapWait.Action.none, w.tick(start_ns - 1));
+    try std.testing.expectEqual(
+        BootstrapWait.Action{ .info = 10 },
+        w.tick(start_ns + 10 * std.time.ns_per_s),
+    );
+}
+
+test "BootstrapWait: logAwaiting dispatches all three branches through a noop logger" {
+    const logger = Logger("test").noop;
+    var w: BootstrapWait = .init(10 * std.time.ns_per_s, 60 * std.time.ns_per_s, 0);
+
+    w.logAwaiting(5 * std.time.ns_per_s, logger, "test: waiting ({d}s)", .{});
+    try std.testing.expect(!w.logged_awaiting);
+
+    w.logAwaiting(10 * std.time.ns_per_s, logger, "test: waiting ({d}s)", .{});
+    try std.testing.expect(w.logged_awaiting);
+    try std.testing.expect(!w.gate.escalated);
+
+    w.logAwaiting(60 * std.time.ns_per_s, logger, "test: waiting ({d}s)", .{});
+    try std.testing.expect(w.gate.escalated);
+
+    w.logAwaiting(90 * std.time.ns_per_s, logger, "test: waiting ({d}s)", .{});
+    try std.testing.expect(w.gate.escalated);
+}
+
+test "BootstrapWait: logAwaiting appends elapsed_s to arbitrary leading args" {
+    const logger = Logger("test").noop;
+    var w: BootstrapWait = .init(10 * std.time.ns_per_s, 60 * std.time.ns_per_s, 0);
+    const peers_seen: usize = 3;
+    const active_probes: u8 = 2;
+    w.logAwaiting(
+        10 * std.time.ns_per_s,
+        logger,
+        "test: no usable peers (received={d}, active_probes={d}, {d}s)",
+        .{ peers_seen, active_probes },
+    );
+    try std.testing.expect(w.logged_awaiting);
+}
+
+test "BootstrapWait: logReady is a no-op when awaiting was never logged" {
+    const logger = Logger("test").noop;
+    var w: BootstrapWait = .init(10 * std.time.ns_per_s, 60 * std.time.ns_per_s, 0);
+    w.logReady(logger, "test: ready");
+    try std.testing.expect(!w.logged_ready);
+}
+
+test "BootstrapWait: logReady emits exactly once after a prior awaiting log" {
+    const logger = Logger("test").noop;
+    var w: BootstrapWait = .init(10 * std.time.ns_per_s, 60 * std.time.ns_per_s, 0);
+    w.logAwaiting(10 * std.time.ns_per_s, logger, "test: waiting ({d}s)", .{});
+    w.logReady(logger, "test: ready");
+    try std.testing.expect(w.logged_ready);
+    w.logReady(logger, "test: ready");
+    try std.testing.expect(w.logged_ready);
+}
+
+const TestMocks = struct {
+    const View = struct {
+        script: []const ?[]const u8,
+        cursor: usize = 0,
+        pub fn getBuffer(self: *View) ?[]const u8 {
+            const i = self.cursor;
+            self.cursor += 1;
+            return if (i < self.script.len) self.script[i] else null;
+        }
+    };
+    const Activity = struct {
+        idle_calls: u32 = 0,
+        active_calls: u32 = 0,
+        fail_after: ?u32 = null,
+        pub fn signalIdleSpinning(self: *Activity) !void {
+            if (self.fail_after) |n| if (self.idle_calls >= n) return error.Canceled;
+            self.idle_calls += 1;
+        }
+        pub fn signalActive(self: *Activity) !void {
+            self.active_calls += 1;
+        }
+    };
+    const Runner = struct {
+        activity: *Activity,
+    };
+};
+
+test "waitForBufferWithAwaitingLog: fast path returns immediately without signaling" {
+    var view: TestMocks.View = .{ .script = &.{"hello"} };
+    var activity: TestMocks.Activity = .{};
+    const runner: TestMocks.Runner = .{ .activity = &activity };
+    var wait: BootstrapWait = .init(10 * std.time.ns_per_s, 60 * std.time.ns_per_s, 0);
+    const logger = Logger("test").noop;
+
+    const buf = try waitForBufferWithAwaitingLog(
+        &view,
+        runner,
+        &wait,
+        logger,
+        "test: awaiting ({d}s)",
+        "test: ready",
+    );
+
+    try std.testing.expectEqualStrings("hello", buf);
+    try std.testing.expectEqual(@as(u32, 0), activity.idle_calls);
+    try std.testing.expectEqual(@as(u32, 0), activity.active_calls);
+    try std.testing.expect(!wait.logged_awaiting);
+    try std.testing.expect(!wait.logged_ready);
+}
+
+test "waitForBufferWithAwaitingLog: slow path signals idle then active, emits ready log" {
+    var view: TestMocks.View = .{ .script = &.{ null, null, null, "delayed" } };
+    var activity: TestMocks.Activity = .{};
+    const runner: TestMocks.Runner = .{ .activity = &activity };
+    var wait: BootstrapWait = .init(10 * std.time.ns_per_s, 60 * std.time.ns_per_s, 0);
+    const logger = Logger("test").noop;
+
+    const buf = try waitForBufferWithAwaitingLog(
+        &view,
+        runner,
+        &wait,
+        logger,
+        "test: awaiting ({d}s)",
+        "test: ready",
+    );
+
+    try std.testing.expectEqualStrings("delayed", buf);
+    try std.testing.expect(activity.idle_calls >= 1);
+    try std.testing.expectEqual(@as(u32, 1), activity.active_calls);
+}
+
+test "waitForBufferWithAwaitingLog: empty-slice EOF does not trigger ready log" {
+    const empty: []const u8 = &.{};
+    var view: TestMocks.View = .{ .script = &.{empty} };
+    var activity: TestMocks.Activity = .{};
+    const runner: TestMocks.Runner = .{ .activity = &activity };
+    var wait: BootstrapWait = .init(10 * std.time.ns_per_s, 60 * std.time.ns_per_s, 0);
+    wait.logAwaiting(10 * std.time.ns_per_s, Logger("test").noop, "test: awaiting ({d}s)", .{});
+
+    const buf = try waitForBufferWithAwaitingLog(
+        &view,
+        runner,
+        &wait,
+        Logger("test").noop,
+        "test: awaiting ({d}s)",
+        "test: ready",
+    );
+
+    try std.testing.expectEqual(@as(usize, 0), buf.len);
+    try std.testing.expect(!wait.logged_ready);
+}
+
+test "waitForBufferWithAwaitingLog: signalIdleSpinning error propagates" {
+    var view: TestMocks.View = .{ .script = &.{null} };
+    var activity: TestMocks.Activity = .{ .fail_after = 0 };
+    const runner: TestMocks.Runner = .{ .activity = &activity };
+    var wait: BootstrapWait = .init(10 * std.time.ns_per_s, 60 * std.time.ns_per_s, 0);
+    const logger = Logger("test").noop;
+
+    const result = waitForBufferWithAwaitingLog(
+        &view,
+        runner,
+        &wait,
+        logger,
+        "test: awaiting ({d}s)",
+        "test: ready",
+    );
+
+    try std.testing.expectError(error.Canceled, result);
+}
+
 /// Can be used as a counter or a gauge.
 pub fn Variant(comptime V: type) type {
     return struct {

@@ -112,6 +112,16 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     });
 
     var it = rw.net_pair.recv.get(.reader);
+
+    // See issue #1746.
+    const bootstrap_start_ns = lib.clock.monotonic(.ns);
+    var wait_state: lib.telemetry.BootstrapWait = .init(
+        10 * std.time.ns_per_s,
+        60 * std.time.ns_per_s,
+        bootstrap_start_ns,
+    );
+    var first_packet_received = false;
+
     while (true) {
         now = lib.clock.wallclock(.ms);
         try gossip_node.poll(.from(logger), now);
@@ -122,10 +132,33 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
             // For now this should work fine, but in theory there's a very slim chance
             // of a race condition (it should be basically impossible to manifest
             // in the one black-box test that currently exists for this).
+
+            if (!first_packet_received) {
+                wait_state.logAwaiting(
+                    lib.clock.monotonic(.ns),
+                    logger,
+                    "gossip has received no packets from cluster ({d}s)",
+                    .{},
+                );
+            }
+
             try runner.activity.signalIdleSpinning();
             continue;
         };
         try runner.activity.signalActive();
+
+        if (!first_packet_received) {
+            first_packet_received = true;
+            // Milestone log fires unconditionally; ignore markReady's gate.
+            _ = wait_state.markReady();
+            const elapsed_s =
+                (lib.clock.monotonic(.ns) -| bootstrap_start_ns) / std.time.ns_per_s;
+            logger.info().logf(
+                "gossip received first packets from cluster ({d}s)",
+                .{elapsed_s},
+            );
+        }
+
         gossip_node.processPacket(.from(logger), now, packet);
         it.markUsed();
     }

@@ -929,6 +929,12 @@ pub const Downloader = struct {
     metrics: Metrics,
     logger: tel.Logger("snapshot"),
 
+    // See issue #1746.
+    await_state: tel.BootstrapWait,
+
+    const AWAITING_LOG_INTERVAL_NS: u64 = 10 * std.time.ns_per_s;
+    const AWAITING_WARN_AFTER_NS: u64 = 60 * std.time.ns_per_s;
+
     pub fn init(
         gossip_to_snapshot: *SnapshotSourceRing,
         known_validators: KnownValidators,
@@ -936,6 +942,7 @@ pub const Downloader = struct {
         metrics: Metrics,
         logger: tel.Logger("snapshot"),
     ) !Downloader {
+        const now_ns = lib.clock.monotonic(.ns);
         return .{
             .ring = try IoUring.init(IO_URING_ENTRIES, 0),
             .gossip_iter = gossip_to_snapshot.get(.reader),
@@ -950,6 +957,7 @@ pub const Downloader = struct {
             .run_result = null,
             .metrics = metrics,
             .logger = logger,
+            .await_state = .init(AWAITING_LOG_INTERVAL_NS, AWAITING_WARN_AFTER_NS, now_ns),
         };
     }
 
@@ -974,6 +982,7 @@ pub const Downloader = struct {
 
         while (true) {
             try self.drainGossip();
+            self.maybeLogAwaitingPeers();
 
             _ = try self.ring.submit_and_wait(0);
             const n = try self.ring.copy_cqes(&cqes, 0);
@@ -2663,6 +2672,35 @@ pub const Downloader = struct {
             .time = now,
             .bytes_written = state.bytes_written,
         };
+    }
+
+    /// See issue #1746.
+    fn maybeLogAwaitingPeers(self: *Downloader) void {
+        if (self.download_race.phase != .idle) {
+            self.await_state.logReady(
+                self.logger,
+                "snapshot: found usable peer, starting download",
+            );
+            return;
+        }
+
+        const now_ns = lib.clock.monotonic(.ns);
+        const peers_seen = self.dedupe_map.len;
+        if (peers_seen == 0) {
+            self.await_state.logAwaiting(
+                now_ns,
+                self.logger,
+                "snapshot: awaiting peers from gossip ({d}s, none received)",
+                .{},
+            );
+        } else {
+            self.await_state.logAwaiting(
+                now_ns,
+                self.logger,
+                "snapshot: no usable peers so far (received={d}, active_probes={d}, {d}s)",
+                .{ peers_seen, self.active_probes },
+            );
+        }
     }
 
     /// Retires all active download connections except the one at `keep_index`.

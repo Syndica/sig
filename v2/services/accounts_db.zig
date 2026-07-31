@@ -20,6 +20,11 @@ pub const std_options = start.options;
 pub const ReadOnly = services.accounts_db.ReadOnly;
 pub const ReadWrite = services.accounts_db.ReadWrite;
 
+const ServiceLogger = lib.telemetry.Logger("main");
+
+const SNAPSHOT_WAIT_INTERVAL_NS: u64 = 10 * std.time.ns_per_s;
+const SNAPSHOT_WAIT_WARN_AFTER_NS: u64 = 5 * 60 * std.time.ns_per_s;
+
 pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !noreturn {
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
     rw.tel.signalReady();
@@ -30,6 +35,8 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     const Global = struct {
         var fba_memory: [32 * 1024 * 1024]u8 = undefined;
         var rooted: Rooted = undefined;
+        // Held by pointer on `SnapshotBufReader` to survive pass-by-value copies.
+        var wait_state: lib.telemetry.BootstrapWait = undefined;
     };
 
     const rooted = &Global.rooted;
@@ -50,20 +57,34 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     if (rooted.table.count() == 0) {
         logger.info().log("no existing rooted db. reading from snapshot");
 
+        const now_ns = lib.clock.monotonic(.ns);
+        Global.wait_state = .init(
+            SNAPSHOT_WAIT_INTERVAL_NS,
+            SNAPSHOT_WAIT_WARN_AFTER_NS,
+            now_ns,
+        );
+
         const SnapshotDataRingReader = @TypeOf(in);
         const SnapshotBufReader = struct {
             in_: *SnapshotDataRingReader,
             runner_: lib.runner.Connection,
             completion_: *std.atomic.Value(f64),
+            wait_: *lib.telemetry.BootstrapWait,
+            logger_: ServiceLogger,
 
             pub fn percentCompleted(self: @This()) f64 {
                 return self.completion_.load(.monotonic);
             }
 
             pub fn getBuffer(self: @This()) []const u8 {
-                return self.in_.getBufferBlocking(self.runner_) catch |err| switch (err) {
-                    error.Canceled => return &.{}, // cancel -> EOF
-                };
+                return lib.telemetry.waitForBufferWithAwaitingLog(
+                    self.in_,
+                    self.runner_,
+                    self.wait_,
+                    self.logger_,
+                    "accounts_db: awaiting snapshot bytes from snapshot service ({d}s)",
+                    "accounts_db: receiving snapshot bytes",
+                ) catch return &.{};
             }
 
             pub fn advance(self: @This(), n: usize) void {
@@ -76,6 +97,8 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             .in_ = &in,
             .runner_ = runner,
             .completion_ = &rw.ready_snapshot_in.completion,
+            .wait_ = &Global.wait_state,
+            .logger_ = logger,
         });
 
         logger.info().log("reading snapshot accounts");
