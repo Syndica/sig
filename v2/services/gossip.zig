@@ -113,10 +113,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
 
     var it = rw.net_pair.recv.get(.reader);
 
-    // Bootstrap-blocked observability (issue #1746). Emits periodic logs
-    // while gossip has not yet received any inbound packet, and escalates
-    // to warn once after 60s. On the healthy path (first packet arrives
-    // before the first tick fires) the operator sees nothing.
+    // See issue #1746.
     const bootstrap_start_ns = lib.clock.monotonic(.ns);
     var wait_state: lib.telemetry.BootstrapWait = .init(
         10 * std.time.ns_per_s,
@@ -137,17 +134,12 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
             // in the one black-box test that currently exists for this).
 
             if (!first_packet_received) {
-                switch (wait_state.tick(lib.clock.monotonic(.ns))) {
-                    .none => {},
-                    .info => |s| logger.info().logf(
-                        "gossip has received no packets from cluster ({d}s)",
-                        .{s},
-                    ),
-                    .warn => |s| logger.warn().logf(
-                        "gossip has received no packets from cluster ({d}s)",
-                        .{s},
-                    ),
-                }
+                wait_state.logAwaiting(
+                    lib.clock.monotonic(.ns),
+                    logger,
+                    "gossip has received no packets from cluster ({d}s)",
+                    .{},
+                );
             }
 
             try runner.activity.signalIdleSpinning();
@@ -157,8 +149,7 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
 
         if (!first_packet_received) {
             first_packet_received = true;
-            // `markReady` returns true only if an "awaiting" log was ever emitted;
-            // we ignore it and always emit the milestone log for gossip.
+            // Milestone log fires unconditionally; ignore markReady's gate.
             _ = wait_state.markReady();
             const elapsed_s =
                 (lib.clock.monotonic(.ns) -| bootstrap_start_ns) / std.time.ns_per_s;

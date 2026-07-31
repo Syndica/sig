@@ -275,53 +275,25 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     }
 }
 
-/// Bootstrap-blocked observability thresholds for replay's wait on runtime
-/// metadata (blockhash queue + root slot) from accounts_db. See issue #1746.
-///
-/// accounts_db loading a mainnet snapshot can take longer than 10 minutes;
-/// the warn threshold is set well past that realistic tail so we don't page
-/// operators during normal startup.
+// Warn threshold sits past the realistic tail of mainnet snapshot loading
+// so operators aren't paged during normal startup. See issue #1746.
 const RUNTIME_METADATA_WAIT_INTERVAL_NS: u64 = 10 * std.time.ns_per_s;
 const RUNTIME_METADATA_WAIT_WARN_AFTER_NS: u64 = 15 * 60 * std.time.ns_per_s;
 
-/// Non-blocking + throttled-logging wrapper around
-/// `blockhashes_in.getBufferBlocking(runner)`. Mirrors the idle/active signaling
-/// of `getBufferBlocking` and additionally emits periodic "still awaiting" logs
-/// while the reader has nothing to return (issue #1746).
 fn waitForBlockhashes(
     blockhashes_in: anytype,
     runner: lib.runner.Connection,
     logger: tel.Logger("main"),
     wait_state: *tel.BootstrapWait,
 ) ![]const Hash {
-    if (blockhashes_in.getBuffer()) |buf| {
-        // Only mark ready on real data, not on empty-slice EOF
-        // (see v2/lib/ipc/ring.zig:60-64).
-        if (buf.len != 0 and wait_state.markReady()) {
-            logger.info().log("replay: receiving runtime metadata");
-        }
-        return buf;
-    }
-    const buf = while (true) {
-        switch (wait_state.tick(lib.clock.monotonic(.ns))) {
-            .none => {},
-            .info => |s| logger.info().logf(
-                "replay: awaiting runtime metadata from accounts_db ({d}s)",
-                .{s},
-            ),
-            .warn => |s| logger.warn().logf(
-                "replay: awaiting runtime metadata from accounts_db ({d}s)",
-                .{s},
-            ),
-        }
-        try runner.activity.signalIdleSpinning();
-        if (blockhashes_in.getBuffer()) |b| break b;
-    };
-    try runner.activity.signalActive();
-    if (buf.len != 0 and wait_state.markReady()) {
-        logger.info().log("replay: receiving runtime metadata");
-    }
-    return buf;
+    return tel.waitForBufferWithAwaitingLog(
+        blockhashes_in,
+        runner,
+        wait_state,
+        logger,
+        "replay: awaiting runtime metadata from accounts_db ({d}s)",
+        "replay: receiving runtime metadata",
+    );
 }
 
 /// Reads all the RuntimeMetadata provided by accountsdb from the snapshot or
@@ -348,10 +320,6 @@ fn bootstrap(
     exec_states: *BlockExecStates,
     blockhash_states: *BlockHashStates,
 ) !void {
-    // Bootstrap-blocked observability (issue #1746). Emits a periodic info log
-    // while replay has not yet received any runtime-metadata bytes from
-    // accounts_db, and escalates to warn after 15 minutes. Silent on the
-    // healthy path where the first chunk is already available.
     const now_ns = lib.clock.monotonic(.ns);
     var wait_state: tel.BootstrapWait = .init(
         RUNTIME_METADATA_WAIT_INTERVAL_NS,

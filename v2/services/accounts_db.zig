@@ -22,9 +22,6 @@ pub const ReadWrite = services.accounts_db.ReadWrite;
 
 const ServiceLogger = lib.telemetry.Logger("main");
 
-/// Bootstrap-blocked observability thresholds for the snapshot-bytes wait.
-/// See issue #1746. Kept as file-scope constants so they're trivially editable
-/// without touching call-site logic.
 const SNAPSHOT_WAIT_INTERVAL_NS: u64 = 10 * std.time.ns_per_s;
 const SNAPSHOT_WAIT_WARN_AFTER_NS: u64 = 5 * 60 * std.time.ns_per_s;
 
@@ -38,8 +35,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     const Global = struct {
         var fba_memory: [32 * 1024 * 1024]u8 = undefined;
         var rooted: Rooted = undefined;
-        // Held by pointer on the `SnapshotBufReader` so it survives across
-        // pass-by-value copies of the reader.
+        // Held by pointer on `SnapshotBufReader` to survive pass-by-value copies.
         var wait_state: lib.telemetry.BootstrapWait = undefined;
     };
 
@@ -81,39 +77,14 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             }
 
             pub fn getBuffer(self: @This()) []const u8 {
-                // Fast path: bytes already available, no waiting.
-                if (self.in_.getBuffer()) |buf| {
-                    // Only mark ready on real data, not on empty-slice EOF
-                    // (see v2/lib/ipc/ring.zig:60-64).
-                    if (buf.len != 0 and self.wait_.markReady()) {
-                        self.logger_.info().log("accounts_db: receiving snapshot bytes");
-                    }
-                    return buf;
-                }
-
-                // Slow path: mirror `getBufferBlocking`'s idle/active signaling,
-                // and additionally emit throttled "still awaiting" logs so an
-                // operator can tell the service is blocked upstream (see #1746).
-                const buf = while (true) {
-                    switch (self.wait_.tick(lib.clock.monotonic(.ns))) {
-                        .none => {},
-                        .info => |s| self.logger_.info().logf(
-                            "accounts_db: awaiting snapshot bytes from snapshot service ({d}s)",
-                            .{s},
-                        ),
-                        .warn => |s| self.logger_.warn().logf(
-                            "accounts_db: awaiting snapshot bytes from snapshot service ({d}s)",
-                            .{s},
-                        ),
-                    }
-                    self.runner_.activity.signalIdleSpinning() catch return &.{};
-                    if (self.in_.getBuffer()) |b| break b;
-                };
-                self.runner_.activity.signalActive() catch return &.{};
-                if (buf.len != 0 and self.wait_.markReady()) {
-                    self.logger_.info().log("accounts_db: receiving snapshot bytes");
-                }
-                return buf;
+                return lib.telemetry.waitForBufferWithAwaitingLog(
+                    self.in_,
+                    self.runner_,
+                    self.wait_,
+                    self.logger_,
+                    "accounts_db: awaiting snapshot bytes from snapshot service ({d}s)",
+                    "accounts_db: receiving snapshot bytes",
+                ) catch return &.{};
             }
 
             pub fn advance(self: @This(), n: usize) void {

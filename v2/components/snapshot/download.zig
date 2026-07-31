@@ -929,9 +929,7 @@ pub const Downloader = struct {
     metrics: Metrics,
     logger: tel.Logger("snapshot"),
 
-    // Bootstrap-blocked observability (issue #1746). Emits a periodic info log
-    // while the downloader has no candidates, escalates to warn once after
-    // 60s, and emits a one-shot info log when a usable peer is found.
+    // See issue #1746.
     await_state: tel.BootstrapWait,
 
     const AWAITING_LOG_INTERVAL_NS: u64 = 10 * std.time.ns_per_s;
@@ -2676,49 +2674,32 @@ pub const Downloader = struct {
         };
     }
 
-    /// Bootstrap observability: log at most once per 10s while we have no
-    /// download candidates from gossip. Distinguishes between "no peers arrived
-    /// at all" and "peers arrived but none are usable". Once a candidate has
-    /// begun racing (or a winner is picked), emits a one-shot "ready" info log
-    /// if we previously logged that we were waiting.
-    ///
     /// See issue #1746.
     fn maybeLogAwaitingPeers(self: *Downloader) void {
-        // We only care about the pre-race window. Once `.racing` starts, we
-        // may still transition through failures, but the "awaiting peers"
-        // phase is over — the download-side already logs failures.
         if (self.download_race.phase != .idle) {
-            if (self.await_state.markReady()) {
-                self.logger.info().log(
-                    "snapshot: found usable peer, starting download",
-                );
-            }
+            self.await_state.logReady(
+                self.logger,
+                "snapshot: found usable peer, starting download",
+            );
             return;
         }
 
+        const now_ns = lib.clock.monotonic(.ns);
         const peers_seen = self.dedupe_map.len;
-        switch (self.await_state.tick(lib.clock.monotonic(.ns))) {
-            .none => {},
-            .info => |s| if (peers_seen == 0)
-                self.logger.info().logf(
-                    "snapshot: awaiting peers from gossip ({d}s, none received)",
-                    .{s},
-                )
-            else
-                self.logger.info().logf(
-                    "snapshot: no usable peers so far ({d}s, received={d}, active_probes={d})",
-                    .{ s, peers_seen, self.active_probes },
-                ),
-            .warn => |s| if (peers_seen == 0)
-                self.logger.warn().logf(
-                    "snapshot: awaiting peers from gossip ({d}s, none received)",
-                    .{s},
-                )
-            else
-                self.logger.warn().logf(
-                    "snapshot: no usable peers so far ({d}s, received={d}, active_probes={d})",
-                    .{ s, peers_seen, self.active_probes },
-                ),
+        if (peers_seen == 0) {
+            self.await_state.logAwaiting(
+                now_ns,
+                self.logger,
+                "snapshot: awaiting peers from gossip ({d}s, none received)",
+                .{},
+            );
+        } else {
+            self.await_state.logAwaiting(
+                now_ns,
+                self.logger,
+                "snapshot: no usable peers so far (received={d}, active_probes={d}, {d}s)",
+                .{ peers_seen, self.active_probes },
+            );
         }
     }
 
