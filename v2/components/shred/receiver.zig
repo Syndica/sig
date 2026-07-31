@@ -421,7 +421,6 @@ pub const Receiver = struct {
         }
 
         state.done.setDone(
-            &shred.signature,
             fec_set_id,
             &fec_set_ctx.merkle_root,
             &fec_set_ctx.chained_merkle_root,
@@ -1084,11 +1083,10 @@ const DoneSets = struct {
         self.eviction.items.len = 0;
     }
 
-    // This signature+id must not be inside DoneSet already - any shred inside DoneSets should be
-    // dropped early, so setDone should be unreachable in this case.
+    // This id must not be inside DoneSet already - any shred inside DoneSets
+    // should be dropped early, so setDone should be unreachable in this case.
     fn setDone(
         self: *DoneSets,
-        signature: *const Signature,
         id: FecSetId,
         merkle_root: *const Hash,
         chained_merkle_root: *const Hash,
@@ -1117,7 +1115,6 @@ const DoneSets = struct {
         const new_done: *DoneItem = self.done_pool.indexToPtr(new_pool_id);
         new_done.* = .{
             .id = id,
-            .signature_hashed = hashSignature(signature),
             .merkle_root = merkle_root.*,
             .chained_merkle_root = chained_merkle_root.*,
         };
@@ -1125,21 +1122,6 @@ const DoneSets = struct {
         const entry = self.done_map.getOrPutAssumeCapacityAdapted(&id, done_ctx);
         std.debug.assert(!entry.found_existing);
         entry.value_ptr.* = new_done;
-    }
-
-    fn lookupStatus(
-        self: *const DoneSets,
-        id: FecSetId,
-        signature: *const Signature,
-    ) enum { missing, matching_signature, mismatching_signature } {
-        const done_ctx: DoneContext = .{ .done_map = &self.done_map };
-        const entry = self.done_map.getAdapted(&id, done_ctx) orelse return .missing;
-        const hashed = hashSignature(signature);
-
-        return if (hashed == entry.signature_hashed)
-            .matching_signature
-        else
-            .mismatching_signature;
     }
 
     /// Roots pinned for a completed FEC set, or null if `id` is unknown.
@@ -1158,7 +1140,6 @@ const DoneSets = struct {
     }
 
     const DoneItem = extern struct {
-        signature_hashed: u32,
         id: FecSetId,
         merkle_root: Hash,
         chained_merkle_root: Hash,
@@ -1196,37 +1177,32 @@ test "DoneSets basic usage" {
     var done_sets: DoneSets = try .init(allocator, 2);
     defer done_sets.deinit(allocator);
 
-    const sig_1: Signature = .parse(
-        \\3NyXqg7XjPBX5eW2zpExpAJTdXCHpVt4RR2uPPc6XUzTCVeAphwzpNBxHtYPpipE1gne2NW6ELW6HVdaB7oV9DEn
-    );
-    const sig_2: Signature = .parse(
-        \\2RUa9Sv3T2vwxeubSwJUS63W7N2wT9RaMcaoGJS6a28zGmSvpdArZMcDe7n3JTeBtuh1BkSgaJ8eN3WF7TBMjkG6
-    );
-    const sig_3: Signature = .parse(
-        \\pfj5CrTzHZ69ynRVXfzitUoSWSNqFJVkUzy17FWiC72FE1nw4nHLR2EWFipRnkp6NoeaPyn7uRt5HXZPngz6wsW
-    );
+    const root_1: Hash = .{ .data = @splat(0x11) };
+    const root_2: Hash = .{ .data = @splat(0x22) };
+    const root_3: Hash = .{ .data = @splat(0x33) };
+    const chained: Hash = .ZEROES;
 
     const id_1: FecSetId = .{ .slot = 1, .fec_set_idx = 0 };
     const id_2: FecSetId = .{ .slot = 2, .fec_set_idx = 0 };
     const id_3: FecSetId = .{ .slot = 3, .fec_set_idx = 0 };
 
-    done_sets.setDone(&sig_1, id_1, &Hash.ZEROES, &Hash.ZEROES);
+    done_sets.setDone(id_1, &root_1, &chained);
 
-    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_1, &sig_1));
-    try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_2, &sig_2));
-    try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_3, &sig_3));
+    try std.testing.expect(done_sets.getRoots(id_1).?.merkle_root.eql(&root_1));
+    try std.testing.expectEqual(null, done_sets.getRoots(id_2));
+    try std.testing.expectEqual(null, done_sets.getRoots(id_3));
 
-    done_sets.setDone(&sig_2, id_2, &Hash.ZEROES, &Hash.ZEROES);
+    done_sets.setDone(id_2, &root_2, &chained);
 
-    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_1, &sig_1));
-    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
-    try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_3, &sig_3));
+    try std.testing.expect(done_sets.getRoots(id_1).?.merkle_root.eql(&root_1));
+    try std.testing.expect(done_sets.getRoots(id_2).?.merkle_root.eql(&root_2));
+    try std.testing.expectEqual(null, done_sets.getRoots(id_3));
 
-    done_sets.setDone(&sig_3, id_3, &Hash.ZEROES, &Hash.ZEROES);
+    done_sets.setDone(id_3, &root_3, &chained);
 
-    try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_1, &sig_1)); // 1 was evicted
-    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
-    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_3, &sig_3));
+    try std.testing.expectEqual(null, done_sets.getRoots(id_1)); // 1 was evicted
+    try std.testing.expect(done_sets.getRoots(id_2).?.merkle_root.eql(&root_2));
+    try std.testing.expect(done_sets.getRoots(id_3).?.merkle_root.eql(&root_3));
 }
 
 test "DoneSets reset clears state without freeing" {
@@ -1235,33 +1211,30 @@ test "DoneSets reset clears state without freeing" {
     var done_sets: DoneSets = try .init(allocator, 2);
     defer done_sets.deinit(allocator);
 
-    const sig_1: Signature = .parse(
-        \\3NyXqg7XjPBX5eW2zpExpAJTdXCHpVt4RR2uPPc6XUzTCVeAphwzpNBxHtYPpipE1gne2NW6ELW6HVdaB7oV9DEn
-    );
-    const sig_2: Signature = .parse(
-        \\2RUa9Sv3T2vwxeubSwJUS63W7N2wT9RaMcaoGJS6a28zGmSvpdArZMcDe7n3JTeBtuh1BkSgaJ8eN3WF7TBMjkG6
-    );
+    const root_1: Hash = .{ .data = @splat(0x11) };
+    const root_2: Hash = .{ .data = @splat(0x22) };
+    const chained: Hash = .ZEROES;
 
     const id_1: FecSetId = .{ .slot = 1, .fec_set_idx = 0 };
     const id_2: FecSetId = .{ .slot = 2, .fec_set_idx = 0 };
 
-    done_sets.setDone(&sig_1, id_1, &Hash.ZEROES, &Hash.ZEROES);
-    done_sets.setDone(&sig_2, id_2, &Hash.ZEROES, &Hash.ZEROES);
-    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_1, &sig_1));
-    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
+    done_sets.setDone(id_1, &root_1, &chained);
+    done_sets.setDone(id_2, &root_2, &chained);
+    try std.testing.expect(done_sets.getRoots(id_1) != null);
+    try std.testing.expect(done_sets.getRoots(id_2) != null);
 
     done_sets.reset();
 
     // After reset both lookups must miss.
-    try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_1, &sig_1));
-    try std.testing.expectEqual(.missing, done_sets.lookupStatus(id_2, &sig_2));
+    try std.testing.expectEqual(null, done_sets.getRoots(id_1));
+    try std.testing.expectEqual(null, done_sets.getRoots(id_2));
 
     // Capacity is retained — refilling to the original size must not allocate
     // (eviction.allocator is the testing failing allocator after init).
-    done_sets.setDone(&sig_1, id_1, &Hash.ZEROES, &Hash.ZEROES);
-    done_sets.setDone(&sig_2, id_2, &Hash.ZEROES, &Hash.ZEROES);
-    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_1, &sig_1));
-    try std.testing.expectEqual(.matching_signature, done_sets.lookupStatus(id_2, &sig_2));
+    done_sets.setDone(id_1, &root_1, &chained);
+    done_sets.setDone(id_2, &root_2, &chained);
+    try std.testing.expect(done_sets.getRoots(id_1) != null);
+    try std.testing.expect(done_sets.getRoots(id_2) != null);
 }
 
 test "DoneSets.getRoots returns the pinned roots" {
@@ -1270,7 +1243,6 @@ test "DoneSets.getRoots returns the pinned roots" {
     var done_sets: DoneSets = try .init(allocator, 4);
     defer done_sets.deinit(allocator);
 
-    const sig_1: Signature = .ZEROES;
     const id_1: FecSetId = .{ .slot = 7, .fec_set_idx = 0 };
 
     const merkle: Hash = .{ .data = @splat(0xAA) };
@@ -1278,7 +1250,7 @@ test "DoneSets.getRoots returns the pinned roots" {
 
     try std.testing.expectEqual(null, done_sets.getRoots(id_1));
 
-    done_sets.setDone(&sig_1, id_1, &merkle, &chained);
+    done_sets.setDone(id_1, &merkle, &chained);
 
     const got = done_sets.getRoots(id_1) orelse return error.TestUnexpectedNull;
     try std.testing.expect(got.merkle_root.eql(&merkle));
