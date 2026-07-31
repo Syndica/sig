@@ -522,6 +522,176 @@ test "ThrottledLogger: start_ns suppresses early ticks" {
     try std.testing.expect(t.tick(51_000)); // exactly one interval later
 }
 
+/// Bootstrap-blocked observability state machine (issue #1746).
+///
+/// Encapsulates the "throttled awaiting log, escalate to warn once, emit a
+/// one-shot ready log when the wait ends" pattern used by v2 bootstrap
+/// services (gossip, snapshot downloader, accounts_db, replay).
+///
+/// The state machine is pure — callers pass a monotonic timestamp into
+/// `tick`. Tests exercise every branch without any wall-clock dependency.
+///
+/// Usage:
+/// ```
+/// var wait: BootstrapWait = .init(10 * ns_per_s, 60 * ns_per_s, start_ns);
+/// // While the upstream signal is still missing:
+/// switch (wait.tick(lib.clock.monotonic(.ns))) {
+///     .none => {},
+///     .info => |elapsed_s| logger.info().logf("still waiting ({d}s)", .{elapsed_s}),
+///     .warn => |elapsed_s| logger.warn().logf("still waiting ({d}s)", .{elapsed_s}),
+/// }
+/// // On the transition to ready:
+/// if (wait.markReady()) logger.info().log("got it");
+/// ```
+pub const BootstrapWait = struct {
+    gate: ThrottledLogger,
+    start_ns: u64,
+    /// Duration after which `tick` returns `.warn` exactly once instead of `.info`.
+    warn_after_ns: u64,
+    /// Whether `tick` has ever returned `.info` or `.warn`. Gates `markReady`.
+    logged_awaiting: bool = false,
+    /// Whether `markReady` has ever returned true. One-shot.
+    logged_ready: bool = false,
+
+    pub const Action = union(enum) {
+        /// The throttle interval has not elapsed; the caller should not log.
+        none,
+        /// Emit an info-level "still awaiting" log with the given elapsed seconds.
+        info: u64,
+        /// Emit a warn-level "still awaiting" log with the given elapsed seconds.
+        /// Only returned once per BootstrapWait; subsequent overdue ticks
+        /// return `.info` again.
+        warn: u64,
+    };
+
+    pub fn init(interval_ns: u64, warn_after_ns: u64, start_ns: u64) BootstrapWait {
+        return .{
+            .gate = .init(interval_ns, start_ns),
+            .start_ns = start_ns,
+            .warn_after_ns = warn_after_ns,
+        };
+    }
+
+    /// Call while the upstream signal is still missing. Returns which log
+    /// action (if any) the caller should emit at this instant.
+    pub fn tick(self: *BootstrapWait, now_ns: u64) Action {
+        if (!self.gate.tick(now_ns)) return .none;
+        self.logged_awaiting = true;
+        const elapsed_ns = now_ns -| self.start_ns;
+        const elapsed_s = elapsed_ns / std.time.ns_per_s;
+        if (!self.gate.escalated and elapsed_ns >= self.warn_after_ns) {
+            self.gate.escalated = true;
+            return .{ .warn = elapsed_s };
+        }
+        return .{ .info = elapsed_s };
+    }
+
+    /// Call on the transition to "ready" (upstream signal arrived). Returns
+    /// true exactly once, and only if a preceding `tick` ever returned
+    /// `.info` or `.warn`. Callers use this to gate a one-shot info log so
+    /// the healthy-startup path stays silent.
+    pub fn markReady(self: *BootstrapWait) bool {
+        if (self.logged_awaiting and !self.logged_ready) {
+            self.logged_ready = true;
+            return true;
+        }
+        return false;
+    }
+};
+
+test "BootstrapWait: no tick fires before interval elapses" {
+    var w: BootstrapWait = .init(10 * std.time.ns_per_s, 60 * std.time.ns_per_s, 0);
+    try std.testing.expectEqual(BootstrapWait.Action.none, w.tick(0));
+    try std.testing.expectEqual(BootstrapWait.Action.none, w.tick(9 * std.time.ns_per_s));
+    try std.testing.expect(!w.logged_awaiting);
+}
+
+test "BootstrapWait: first tick after interval returns .info" {
+    var w: BootstrapWait = .init(10 * std.time.ns_per_s, 60 * std.time.ns_per_s, 0);
+    const action = w.tick(10 * std.time.ns_per_s);
+    try std.testing.expectEqual(@as(u64, 10), action.info);
+    try std.testing.expect(w.logged_awaiting);
+    try std.testing.expect(!w.gate.escalated);
+}
+
+test "BootstrapWait: escalates to .warn exactly once at warn_after_ns" {
+    var w: BootstrapWait = .init(10 * std.time.ns_per_s, 60 * std.time.ns_per_s, 0);
+    // Ticks below warn_after_ns stay at .info.
+    try std.testing.expectEqual(BootstrapWait.Action{ .info = 10 }, w.tick(10 * std.time.ns_per_s));
+    try std.testing.expectEqual(BootstrapWait.Action{ .info = 30 }, w.tick(30 * std.time.ns_per_s));
+    // First tick past the escalation threshold returns .warn.
+    try std.testing.expectEqual(BootstrapWait.Action{ .warn = 60 }, w.tick(60 * std.time.ns_per_s));
+    try std.testing.expect(w.gate.escalated);
+    // Subsequent ticks return .info again (warn is one-shot).
+    try std.testing.expectEqual(
+        BootstrapWait.Action{ .info = 90 },
+        w.tick(90 * std.time.ns_per_s),
+    );
+    try std.testing.expectEqual(
+        BootstrapWait.Action{ .info = 120 },
+        w.tick(120 * std.time.ns_per_s),
+    );
+}
+
+test "BootstrapWait: throttle applies between ticks" {
+    var w: BootstrapWait = .init(10 * std.time.ns_per_s, 600 * std.time.ns_per_s, 0);
+    try std.testing.expectEqual(BootstrapWait.Action{ .info = 10 }, w.tick(10 * std.time.ns_per_s));
+    // Within one interval of the last successful tick.
+    try std.testing.expectEqual(BootstrapWait.Action.none, w.tick(15 * std.time.ns_per_s));
+    try std.testing.expectEqual(BootstrapWait.Action.none, w.tick(19 * std.time.ns_per_s));
+    // Exactly one interval later.
+    try std.testing.expectEqual(BootstrapWait.Action{ .info = 20 }, w.tick(20 * std.time.ns_per_s));
+}
+
+test "BootstrapWait: escalation deadline before first interval still triggers .warn on first fire" {
+    // warn_after_ns < interval_ns: the very first log should be at warn level.
+    var w: BootstrapWait = .init(10 * std.time.ns_per_s, 1 * std.time.ns_per_s, 0);
+    try std.testing.expectEqual(BootstrapWait.Action{ .warn = 10 }, w.tick(10 * std.time.ns_per_s));
+    try std.testing.expect(w.gate.escalated);
+}
+
+test "BootstrapWait: markReady returns false when awaiting never logged" {
+    var w: BootstrapWait = .init(10 * std.time.ns_per_s, 60 * std.time.ns_per_s, 0);
+    try std.testing.expect(!w.markReady());
+    // Even after ticks that returned .none.
+    _ = w.tick(5 * std.time.ns_per_s);
+    try std.testing.expect(!w.markReady());
+}
+
+test "BootstrapWait: markReady returns true once after tick fired" {
+    var w: BootstrapWait = .init(10 * std.time.ns_per_s, 60 * std.time.ns_per_s, 0);
+    _ = w.tick(10 * std.time.ns_per_s); // first .info tick sets logged_awaiting
+    try std.testing.expect(w.markReady());
+    // Second call is a no-op.
+    try std.testing.expect(!w.markReady());
+    try std.testing.expect(!w.markReady());
+}
+
+test "BootstrapWait: markReady still gated by logged_awaiting after later ticks" {
+    const start_ns = 100 * std.time.ns_per_s;
+    var w: BootstrapWait = .init(10 * std.time.ns_per_s, 60 * std.time.ns_per_s, start_ns);
+    // start_ns=100s means the first tick at now=start_ns does not fire.
+    _ = w.tick(start_ns);
+    try std.testing.expect(!w.markReady());
+    // Time advances past interval; tick fires; markReady now works.
+    _ = w.tick(start_ns + 11 * std.time.ns_per_s);
+    try std.testing.expect(w.markReady());
+    try std.testing.expect(!w.markReady());
+}
+
+test "BootstrapWait: saturating subtract survives clock regression" {
+    const start_ns = 100 * std.time.ns_per_s;
+    var w: BootstrapWait = .init(10 * std.time.ns_per_s, 60 * std.time.ns_per_s, start_ns);
+    // now_ns lower than start_ns — elapsed should saturate to 0, no tick.
+    try std.testing.expectEqual(BootstrapWait.Action.none, w.tick(50 * std.time.ns_per_s));
+    try std.testing.expectEqual(BootstrapWait.Action.none, w.tick(start_ns - 1));
+    // Normal progression from start_ns still works.
+    try std.testing.expectEqual(
+        BootstrapWait.Action{ .info = 10 },
+        w.tick(start_ns + 10 * std.time.ns_per_s),
+    );
+}
+
 /// Can be used as a counter or a gauge.
 pub fn Variant(comptime V: type) type {
     return struct {

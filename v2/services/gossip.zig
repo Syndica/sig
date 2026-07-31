@@ -113,14 +113,16 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
 
     var it = rw.net_pair.recv.get(.reader);
 
-    // Bootstrap-blocked observability: emit periodic logs while gossip has not
-    // yet received any inbound packet. Silent on the healthy path (after the
-    // first packet arrives, these variables are never touched again).
-    // See issue #1746.
+    // Bootstrap-blocked observability (issue #1746). Emits periodic logs
+    // while gossip has not yet received any inbound packet, and escalates
+    // to warn once after 60s. On the healthy path (first packet arrives
+    // before the first tick fires) the operator sees nothing.
     const bootstrap_start_ns = lib.clock.monotonic(.ns);
-    var awaiting_gate: lib.telemetry.ThrottledLogger =
-        .init(10 * std.time.ns_per_s, bootstrap_start_ns);
-    const warn_after_ns = 60 * std.time.ns_per_s;
+    var wait_state: lib.telemetry.BootstrapWait = .init(
+        10 * std.time.ns_per_s,
+        60 * std.time.ns_per_s,
+        bootstrap_start_ns,
+    );
     var first_packet_received = false;
 
     while (true) {
@@ -135,23 +137,16 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
             // in the one black-box test that currently exists for this).
 
             if (!first_packet_received) {
-                const now_ns = lib.clock.monotonic(.ns);
-                if (awaiting_gate.tick(now_ns)) {
-                    const elapsed_s = (now_ns -| bootstrap_start_ns) / std.time.ns_per_s;
-                    if (!awaiting_gate.escalated and
-                        now_ns -| bootstrap_start_ns >= warn_after_ns)
-                    {
-                        awaiting_gate.escalated = true;
-                        logger.warn().logf(
-                            "gossip has received no packets from cluster ({d}s)",
-                            .{elapsed_s},
-                        );
-                    } else {
-                        logger.info().logf(
-                            "gossip has received no packets from cluster ({d}s)",
-                            .{elapsed_s},
-                        );
-                    }
+                switch (wait_state.tick(lib.clock.monotonic(.ns))) {
+                    .none => {},
+                    .info => |s| logger.info().logf(
+                        "gossip has received no packets from cluster ({d}s)",
+                        .{s},
+                    ),
+                    .warn => |s| logger.warn().logf(
+                        "gossip has received no packets from cluster ({d}s)",
+                        .{s},
+                    ),
                 }
             }
 
@@ -162,6 +157,9 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
 
         if (!first_packet_received) {
             first_packet_received = true;
+            // `markReady` returns true only if an "awaiting" log was ever emitted;
+            // we ignore it and always emit the milestone log for gossip.
+            _ = wait_state.markReady();
             const elapsed_s =
                 (lib.clock.monotonic(.ns) -| bootstrap_start_ns) / std.time.ns_per_s;
             logger.info().logf(
