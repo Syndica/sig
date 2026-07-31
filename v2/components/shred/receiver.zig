@@ -251,6 +251,8 @@ pub const Receiver = struct {
                 else
                     shred.variant.swapType(),
 
+                .id = fec_set_id,
+
                 .merkle_root = shred_merkle_root,
                 .chained_merkle_root = shred.chainedMerkleRoot().*,
 
@@ -483,6 +485,8 @@ pub const FecSetCtx = extern struct {
     // used to make sure that all code and data shreds have the same variant as eachother
     data_variant: Shred.Variant,
     code_variant: Shred.Variant,
+
+    id: FecSetId,
 
     // we store the first seen, and make sure later shreds have the same one
     merkle_root: Hash,
