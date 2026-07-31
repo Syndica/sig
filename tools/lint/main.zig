@@ -38,9 +38,7 @@ const test_inclusion_static_roots = [_][]const u8{
 
 // File-level rules (line_length, unused_declarations) are skipped for files
 // under these path prefixes.
-const file_level_lint_exclusions = [_][]const u8{
-    "v2/components/runtime/", // TODO(1747): conform runtime to the lints
-};
+const file_level_lint_exclusions = [_][]const u8{};
 
 /// Runs v2 lint and exits with 0 for no diagnostics, 1 for diagnostics, and 2 for CLI or internal
 /// errors (lint didn't run at all or failed to finish).

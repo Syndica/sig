@@ -18,10 +18,6 @@ const Edwards25519 = std.crypto.ecc.Edwards25519;
 const Ristretto255 = std.crypto.ecc.Ristretto255;
 const ed25519 = sig.crypto.ed25519;
 
-const Keccak256 = std.crypto.hash.sha3.Keccak256;
-const Secp256k1 = std.crypto.ecc.Secp256k1;
-const Ecdsa = std.crypto.sign.ecdsa.Ecdsa(Secp256k1, Keccak256);
-
 pub const CurveId = enum(u64) {
     edwards = 0,
     ristretto = 1,
@@ -244,10 +240,10 @@ pub fn curveGroupOp(
                                 registers.set(.r0, 1);
                                 return;
                             };
-                            // NOTE: We write the operation result into a temporary buffer `result`
-                            // before copying it in. It's important to perform the operation before
-                            // the result memory access, as the former is a soft-error while the latter
-                            // will hard-error.
+                            // NOTE: We write the operation result into a temporary buffer
+                            // `result` before copying it in. It's important to perform the
+                            // operation before the result memory access, as the former is a
+                            // soft-error while the latter will hard-error.
                             const result_ptr = try memory_map.translateType(
                                 [right_size]u8,
                                 .mutable,
@@ -492,7 +488,8 @@ pub fn altBn128GroupOp(
         return SyscallError.InvalidAttribute;
     }
 
-    // We've generalized the ID system, but this abstraction leaks one bit-pattern (degree == g2 && op == pairing).
+    // We've generalized the ID system, but this abstraction leaks one bit-pattern
+    // (degree == g2 && op == pairing).
     // We simply catch it here, although we must be mindful of any future extensions, it may be
     // simpler to rewrite this to use a singular enum for all of the variants.
     if (group_op.op == .pairing and group_op.degree == .g2) {
@@ -2037,11 +2034,11 @@ test "secp256k1_recover" {
     try std.testing.expectEqualSlices(
         u8,
         &.{
-            0x42, 0xcd, 0x27, 0xe4, 0x0f, 0xdf, 0x7c, 0x97, 0x0a, 0xa2, 0xca, 0x0b, 0x88, 0x5b, 0x96,
-            0x0f, 0x8b, 0x62, 0x8a, 0x41, 0xa1, 0x81, 0xe7, 0xe6, 0x8e, 0x03, 0xea, 0x0b, 0x84, 0x20,
-            0x58, 0x9b, 0x32, 0x06, 0xbd, 0x66, 0x2f, 0x75, 0x65, 0xd6, 0x9d, 0xbd, 0x1d, 0x34, 0x29,
-            0x6a, 0xd9, 0x35, 0x38, 0xed, 0x86, 0x9e, 0x99, 0x20, 0x43, 0xc3, 0xeb, 0xad, 0x65, 0x50,
-            0xa0, 0x11, 0x6e, 0x5d,
+            0x42, 0xcd, 0x27, 0xe4, 0x0f, 0xdf, 0x7c, 0x97, 0x0a, 0xa2, 0xca, 0x0b, 0x88, 0x5b,
+            0x96, 0x0f, 0x8b, 0x62, 0x8a, 0x41, 0xa1, 0x81, 0xe7, 0xe6, 0x8e, 0x03, 0xea, 0x0b,
+            0x84, 0x20, 0x58, 0x9b, 0x32, 0x06, 0xbd, 0x66, 0x2f, 0x75, 0x65, 0xd6, 0x9d, 0xbd,
+            0x1d, 0x34, 0x29, 0x6a, 0xd9, 0x35, 0x38, 0xed, 0x86, 0x9e, 0x99, 0x20, 0x43, 0xc3,
+            0xeb, 0xad, 0x65, 0x50, 0xa0, 0x11, 0x6e, 0x5d,
         },
         &result_point,
     );

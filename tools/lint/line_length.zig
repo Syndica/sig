@@ -26,6 +26,7 @@ const max_line_length = 100;
 
 // Generated and data-heavy files with intentional long lines.
 const excluded_paths = [_][]const u8{
+    "v2/components/runtime/crypto/bn254/bn254_64.zig",
     "v2/lib/crypto/ed25519/wycheproof.zig",
 };
 

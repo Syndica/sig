@@ -1,4 +1,3 @@
-const builtin = @import("builtin");
 const std = @import("std");
 const solana = @import("lib").solana;
 

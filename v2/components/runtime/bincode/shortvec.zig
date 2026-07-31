@@ -81,7 +81,11 @@ pub fn sliceConfig(comptime Slice: type) bincode.FieldConfig(Slice) {
             }
         }
 
-        pub fn deserialize(limit_allocator: *bincode.LimitAllocator, reader: anytype, params: bincode.Params) !Slice {
+        pub fn deserialize(
+            limit_allocator: *bincode.LimitAllocator,
+            reader: anytype,
+            params: bincode.Params,
+        ) !Slice {
             const len = try readShortU16(reader);
 
             const allocator = limit_allocator.allocator();
@@ -119,11 +123,17 @@ pub fn arrayListConfig(comptime Child: type) bincode.FieldConfig(std.array_list.
             }
         }
 
-        pub fn deserialize(limit_allocator: *bincode.LimitAllocator, reader: anytype, params: bincode.Params) !std.array_list.Managed(Child) {
+        pub fn deserialize(
+            limit_allocator: *bincode.LimitAllocator,
+            reader: anytype,
+            params: bincode.Params,
+        ) !std.array_list.Managed(Child) {
             const len = try readShortU16(reader);
 
-            var list =
-                try std.array_list.Managed(Child).initCapacity(limit_allocator.allocator(), @as(usize, len));
+            var list = try std.array_list.Managed(Child).initCapacity(
+                limit_allocator.allocator(),
+                @as(usize, len),
+            );
             errdefer list.deinit();
 
             for (0..len) |_| {

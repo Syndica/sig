@@ -65,7 +65,8 @@ pub fn Proof(comptime bit_size: u64) type {
             .{ .label = "n", .type = .u64 },
         } ++ (&triple) ** logn;
 
-        /// Modifies the mutable array pointers in undefined ways, so do not rely on the value of them after `init`.
+        /// Modifies the mutable array pointers in undefined ways, so do not rely on the value
+        /// of them after `init`.
         pub fn init(
             Q: Ristretto255,
             G_factors: *const [bit_size]Scalar,

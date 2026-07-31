@@ -41,7 +41,8 @@ pub fn entrypoint(
 
 pub const ComputeBudgetInstructionDetails = struct {
     // compute-budget instruction details:
-    // the first field in tuple is instruction index, second field is the unsanitized value set by user
+    // the first field in tuple is instruction index, second field is the unsanitized value set by
+    // user
     requested_compute_unit_limit: ?struct { u8, u32 } = null,
     requested_compute_unit_price: ?struct { u8, u64 } = null,
     requested_heap_size: ?struct { u8, u32 } = null,
@@ -257,7 +258,9 @@ pub fn execute(msg: *const Message) TransactionResult(ComputeBudgetInstructionDe
             continue;
         }
 
-        const invalid_instruction_data_error: TransactionResult(ComputeBudgetInstructionDetails) = .{
+        const invalid_instruction_data_error: TransactionResult(
+            ComputeBudgetInstructionDetails,
+        ) = .{
             .err = .{ .InstructionError = .{ @intCast(index), .InvalidInstructionData } },
         };
         const duplicate_instruction_error: TransactionResult(ComputeBudgetInstructionDetails) = .{
@@ -360,7 +363,8 @@ pub fn sanitize(
     else
         0;
 
-    // Requested loaded accounts data size limit greater than max results in max loaded accounts data size limit
+    // Requested loaded accounts data size limit greater than max results in max loaded accounts
+    // data size limit
     const loaded_accounts_bytes = blk: {
         if (details.requested_loaded_accounts_data_size_limit) |max_size| {
             if (max_size[1] == 0) return .{ .err = .InvalidLoadedAccountsDataSizeLimit };

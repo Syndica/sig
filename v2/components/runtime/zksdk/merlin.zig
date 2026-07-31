@@ -214,11 +214,6 @@ pub const Transcript = struct {
         @"batched-grouped-ciphertext-validity-3-handles-instruction",
     };
 
-    const TranscriptInput = struct {
-        label: []const u8,
-        message: Message,
-    };
-
     const Message = union(enum) {
         bytes: []const u8,
 
@@ -469,10 +464,11 @@ pub const Transcript = struct {
 
         pub inline fn finish(comptime self: *Session) void {
             // For performance, we have certain computations (specifically in `init` functions)
-            // which skip the last parts of transcript when they aren't needed (i.e ciphertext_ciphertext proof).
+            // which skip the last parts of transcript when they aren't needed (i.e
+            // ciphertext_ciphertext proof).
             //
-            // By performing this check, we still ensure that they do those extra computations when in Debug mode,
-            // but are allowed to skip them in a release build.
+            // By performing this check, we still ensure that they do those extra computations
+            // when in Debug mode, but are allowed to skip them in a release build.
             if (builtin.mode == .Debug and !self.err and self.i != self.contract.len) {
                 @compileError("contract unfulfilled");
             }

@@ -5,7 +5,8 @@
 //!
 //! Similar to the ElGamal encryption scheme, twisted ElGamal encodes messages directly as
 //! a Pedersen commitment. Since the messages (scalars) are encrypted as scalar elements for
-//! Curve25519, you'd need to solve the discrete log problem to recover the original encrypted value.
+//! Curve25519, you'd need to solve the discrete log problem to recover the original encrypted
+//! value.
 //!
 //! (Taken from Agave comment):
 //! A twisted ElGamal ciphertext consists of two components:

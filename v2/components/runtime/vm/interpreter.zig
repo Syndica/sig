@@ -343,6 +343,9 @@ pub const Vm = struct {
             self.registers.set(.pc, pc + 1);
         }
 
+        // Dispatched via `@hasDecl(v2, field.name)` when building the jump table (see below).
+        // The linter can't see this indirect use, so opt out of the unused-declaration check.
+        // lint: allow_unused
         fn hor64_imm(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
             defer self.registers.set(.pc, pc + 1);
             const lhs = self.registers.getPtrConst(inst.dst).*;
@@ -968,7 +971,8 @@ pub const Vm = struct {
 
     /// Returns `true` when the instruction executed stops the VM.
     ///
-    /// NOTE: no `inline`, since we tail call. But looking at the codegen, it does inline the tail call.
+    /// NOTE: no `inline`, since we tail call. But looking at the codegen, it does inline the tail
+    /// call.
     fn step(self: *Vm, inst: Instruction, pc: u64) DispatchError!void {
         return @call(
             // self-hosted x86_64 backend does not support .always_tail

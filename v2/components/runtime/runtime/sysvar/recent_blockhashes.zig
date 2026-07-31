@@ -71,8 +71,12 @@ test "serialize and deserialize" {
         const serialized = try bincode.writeAlloc(allocator, blockhashes, .{});
         defer allocator.free(serialized);
 
-        const deserialized =
-            try bincode.readFromSlice(allocator, RecentBlockhashes, serialized, .{});
+        const deserialized = try bincode.readFromSlice(
+            allocator,
+            RecentBlockhashes,
+            serialized,
+            .{},
+        );
 
         try std.testing.expectEqualSlices(
             RecentBlockhashes.Entry,

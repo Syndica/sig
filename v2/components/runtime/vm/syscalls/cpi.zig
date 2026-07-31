@@ -39,7 +39,8 @@ const BPF_ALIGN_OF_U128 = serialize.BPF_ALIGN_OF_U128;
 /// Also doubles as the maximum possible size of any instruction.
 pub const MAX_DATA_LEN = 10_240;
 
-/// SIMD-0339 based calculation of AccountInfo translation byte size. Fixed size of **80 bytes** for each AccountInfo broken down as:
+/// SIMD-0339 based calculation of AccountInfo translation byte size. Fixed size of **80 bytes**
+/// for each AccountInfo broken down as:
 /// - 32 bytes for account address
 /// - 32 bytes for owner address
 /// - 8 bytes for lamport balance
@@ -973,40 +974,6 @@ fn translateSigners(
     return signers;
 }
 
-fn accountDataRegion(
-    memory_map: *const MemoryMap,
-    vm_data_addr: u64,
-    original_data_len: usize,
-) !(?*memory.Region) {
-    if (original_data_len == 0) {
-        return null;
-    }
-
-    const region = try memory_map.region(.constant, vm_data_addr);
-    std.debug.assert(region.vm_addr_start == vm_data_addr);
-    return region;
-}
-
-fn accountReallocRegion(
-    memory_map: *const MemoryMap,
-    vm_data_addr: u64,
-    original_data_len: usize,
-    is_loader_deprecated: bool,
-) !(?*memory.Region) {
-    if (is_loader_deprecated) {
-        return null;
-    }
-
-    const addr = vm_data_addr +| original_data_len;
-    const region = try memory_map.region(.constant, addr);
-    std.debug.assert(region.vm_addr_start == addr);
-    std.debug.assert(
-        region.constSlice().len >= MAX_PERMITTED_DATA_INCREASE and
-            region.constSlice().len < MAX_PERMITTED_DATA_INCREASE +| BPF_ALIGN_OF_U128,
-    );
-    return region;
-}
-
 /// Update the given account after executing CPI.
 ///
 /// caller_account and callee_account describe to the same account. At CPI exit
@@ -1187,7 +1154,9 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
             // changes.
             if (syscall_parameter_address_restrictions) {
                 for (accounts.slice()) |*translated| {
-                    var callee_account = try ic.borrowInstructionAccount(translated.index_in_caller);
+                    var callee_account = try ic.borrowInstructionAccount(
+                        translated.index_in_caller,
+                    );
                     defer callee_account.release();
                     const update_caller = try updateCalleeAccount(
                         allocator,
@@ -1267,11 +1236,17 @@ pub fn invokeSigned(AccountInfo: type) sig.vm.SyscallFn {
                                 else
                                     switch (region.host_memory) {
                                         // TODO: Fix this!!
-                                        // After `virtual_address_space_adjustments` memory regions may be switched between writable/non-writable
-                                        // during CPI. Given our current MemoryState and HostMemory couples the writability of a region to the slice type
-                                        // we are unable to promote a constant region to a mutable region. In practice during runtime all region host memory
-                                        // is allocated so constCast should okay however this is not something we should rely on. We need to rework our
-                                        // HostMemory and MemoryState implementation to decouple the writability of a region from the slice type.
+                                        // After `virtual_address_space_adjustments` memory
+                                        // regions may be switched between writable/non-writable
+                                        // during CPI. Given our current MemoryState and
+                                        // HostMemory couples the writability of a region to the
+                                        // slice type we are unable to promote a constant region
+                                        // to a mutable region. In practice during runtime all
+                                        // region host memory is allocated so constCast should be
+                                        // okay; however this is not something we should rely on.
+                                        // We need to rework our HostMemory and MemoryState
+                                        // implementation to decouple the writability of a region
+                                        // from the slice type.
                                         .constant => |slice| @constCast(slice),
                                         .mutable => |slice| slice,
                                     }[0..callee_account.account.data.len];
@@ -1504,8 +1479,12 @@ test "CallerAccount.fromAccountInfoRust" {
     const account = ctx.getAccount();
     const vm_addr = MM_INPUT_START;
 
-    const buffer, const serialized_metadata =
-        try account.intoAccountInfo(allocator, AccountInfoRust, vm_addr, null);
+    const buffer, const serialized_metadata = try account.intoAccountInfo(
+        allocator,
+        AccountInfoRust,
+        vm_addr,
+        null,
+    );
     defer allocator.free(buffer);
 
     const memory_map = try MemoryMap.init(
@@ -1645,8 +1624,12 @@ test "translateAccounts" {
     const account = ctx.getAccount();
     const vm_addr = MM_INPUT_START;
 
-    const buffer, const serialized_metadata =
-        try account.intoAccountInfo(allocator, AccountInfoRust, vm_addr, null);
+    const buffer, const serialized_metadata = try account.intoAccountInfo(
+        allocator,
+        AccountInfoRust,
+        vm_addr,
+        null,
+    );
     defer allocator.free(buffer);
 
     const memory_map = try MemoryMap.init(

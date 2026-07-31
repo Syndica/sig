@@ -56,9 +56,9 @@ pub const SysvarCache = struct {
         comptime T: type,
     ) error{UnsupportedSysvar}!T {
         // NOTE: No allocations are actually performed here, we require the allocator purely
-        // for bincode compatibility so we use a failing allocator. Clock, EpochSchedule, EpochRewards,
-        // Rent, LastRestartSlot, and Fees have comptime known sizes. SlotHashes, StakeHistory, and
-        // RecentBlockhashes are allocated on insertion to the sysvar cache.
+        // for bincode compatibility so we use a failing allocator. Clock, EpochSchedule,
+        // EpochRewards, Rent, LastRestartSlot, and Fees have comptime known sizes. SlotHashes,
+        // StakeHistory, and RecentBlockhashes are allocated on insertion to the sysvar cache.
         const allocator = std.testing.failing_allocator;
         return switch (T) {
             Clock => self.deserialize(allocator, Clock),

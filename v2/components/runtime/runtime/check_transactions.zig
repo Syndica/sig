@@ -64,7 +64,8 @@ pub fn checkFeePayer(
     var payer_account = try accounts.get(allocator, fee_payer_key) orelse
         return .{ .err = .AccountNotFound };
     // [agave] https://github.com/anza-xyz/agave/commit/d5757e29aa - formalize_loaded_transaction_data_size hardcoded
-    const payer_loaded_size = account_loader.TRANSACTION_ACCOUNT_BASE_SIZE +| payer_account.data.len;
+    const payer_loaded_size =
+        account_loader.TRANSACTION_ACCOUNT_BASE_SIZE +| payer_account.data.len;
     errdefer payer_account.deinit(allocator);
 
     const fee_payer_loaded_rent_epoch = payer_account.rent_epoch;
@@ -341,12 +342,11 @@ pub fn checkLoadAndAdvanceMessageNonceAccount(
 ) AccountLoadError!?struct { LoadedAccount, u64 } {
     if (transaction.recent_blockhash.eql(next_durable_nonce)) return null;
 
-    const address, var nonce_account, const nonce_data =
-        try loadMessageNonceAccount(
-            allocator,
-            transaction,
-            account_reader,
-        ) orelse return null;
+    const address, var nonce_account, const nonce_data = try loadMessageNonceAccount(
+        allocator,
+        transaction,
+        account_reader,
+    ) orelse return null;
 
     const previous_lamports_per_signature = nonce_data.lamports_per_signature;
     const next_nonce_state = NonceVersions{

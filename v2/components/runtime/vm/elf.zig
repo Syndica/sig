@@ -360,7 +360,8 @@ const Elf64 = struct {
     bytes: []const u8,
     header: elf.Elf64_Ehdr,
 
-    // The following fields are align(1) because there's no guarantee of alignment inside of the ELF sections.
+    // The following fields are align(1) because there's no guarantee of alignment inside of the
+    // ELF sections.
     shdrs: []align(1) const elf.Elf64_Shdr,
     phdrs: []align(1) const elf.Elf64_Phdr,
 
@@ -724,7 +725,8 @@ const Elf64 = struct {
         var writable_err = false;
         var oob_err = false;
         for (self.shdrs, 0..) |shdr, i| {
-            // This can't actually fail, as we've already iterated through the names of sections in `parse`.
+            // This can't actually fail, as we've already iterated through the names of sections
+            // in `parse`.
             const name = try getStringInSection(
                 self.bytes,
                 section_names_shdr,
@@ -782,7 +784,8 @@ const Elf64 = struct {
     }
 
     /// Perform relocations on the ELF file provided in `bytes`.
-    /// The provided `bytes` must match be a mutable copy of the original bytes used to construct `self`.
+    /// The provided `bytes` must match be a mutable copy of the original bytes used to construct
+    /// `self`.
     /// [sbpf] https://github.com/anza-xyz/sbpf/blob/58c47586d70b3d2f1da6c4ff25dd0a3f53a979b6/src/elf.rs#L966-L967
     fn relocate(
         self: *const Elf64,
@@ -849,9 +852,9 @@ const Elf64 = struct {
                         addr +|= memory.REGION_SIZE;
                     }
 
-                    // This is a LDDW instruction, which takes up the space of two regular instructions.
-                    // We need to split up the address into two 32-bit chunks, and write to each of the
-                    // slot's immediate field.
+                    // This is a LDDW instruction, which takes up the space of two regular
+                    // instructions. We need to split up the address into two 32-bit chunks, and
+                    // write to each of the slot's immediate field.
                     {
                         const imm_low_offset = imm_offset;
                         const imm_slice = try safeSlice(bytes, imm_low_offset, 4);
@@ -1182,29 +1185,6 @@ test "elf load" {
     var loader: SyscallMap = .ALL_DISABLED;
     var parsed = try load(allocator, bytes, &loader, .{});
     defer parsed.deinit(allocator);
-}
-
-fn newSection(
-    sh_addr: elf.Elf64_Addr,
-    sh_size: elf.Elf64_Xword,
-    sh_name: elf.Word,
-) elf.Elf64_Shdr {
-    return .{
-        .sh_name = sh_name,
-        .sh_addr = sh_addr,
-        .sh_size = sh_size,
-        .sh_offset = std.math.sub(
-            u64,
-            sh_addr,
-            memory.RODATA_START,
-        ) catch sh_addr,
-        .sh_flags = 0,
-        .sh_link = 0,
-        .sh_info = 0,
-        .sh_addralign = 0,
-        .sh_entsize = 0,
-        .sh_type = 0,
-    };
 }
 
 test "SHT_DYNAMIC fallback" {

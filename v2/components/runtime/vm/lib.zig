@@ -394,7 +394,9 @@ pub fn instructionErrorFromExecutionError(err: ExecutionError) InstructionError 
         error.MaxAccountsDataAllocationsExceeded => error.MaxAccountsDataAllocationsExceeded,
         error.MaxAccountsExceeded => error.MaxAccountsExceeded,
         error.MaxInstructionTraceLengthExceeded => error.MaxInstructionTraceLengthExceeded,
-        error.BuiltinProgramsMustConsumeComputeUnits => error.BuiltinProgramsMustConsumeComputeUnits,
+        error.BuiltinProgramsMustConsumeComputeUnits => blk: {
+            break :blk error.BuiltinProgramsMustConsumeComputeUnits;
+        },
         else => std.debug.panic(
             "Cannot convert error to InstructionError: {s}\n",
             .{@errorName(err)},

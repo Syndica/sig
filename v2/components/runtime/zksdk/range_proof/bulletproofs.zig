@@ -478,7 +478,9 @@ pub fn Proof(bit_size: comptime_int) type {
             }
         }
 
+        /// sig fmt: off
         /// Compute \delta(y,z) = (z - z^{2}) \langle \mathbf{1}, {\mathbf{y}}^{n \cdot m} \rangle - \sum_{j=0}^{m-1} z^{j+3} \cdot \langle \mathbf{1}, {\mathbf{2}}^{n \cdot m} \rangle
+        /// sig fmt: on
         fn delta(bit_lengths: []const u64, y: Scalar, z: Scalar) Scalar {
             const sum_y = sumOfPowers(bit_size, y);
             const zz = z.mul(z);

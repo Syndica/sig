@@ -58,12 +58,22 @@ pub fn sizeOf(data: anytype, params: bincode.Params) usize {
     return @intCast(stream.bytes_written);
 }
 
-pub fn readFromSlice(allocator: std.mem.Allocator, comptime T: type, slice: []const u8, params: bincode.Params) !T {
+pub fn readFromSlice(
+    allocator: std.mem.Allocator,
+    comptime T: type,
+    slice: []const u8,
+    params: bincode.Params,
+) !T {
     var stream = std.io.fixedBufferStream(slice);
     return bincode.read(allocator, T, stream.reader(), params);
 }
 
-pub fn readFromSliceWithLimit(limit_allocator: *LimitAllocator, comptime T: type, slice: []const u8, params: bincode.Params) !T {
+pub fn readFromSliceWithLimit(
+    limit_allocator: *LimitAllocator,
+    comptime T: type,
+    slice: []const u8,
+    params: bincode.Params,
+) !T {
     var stream = std.io.fixedBufferStream(slice);
     return bincode.readWithLimit(limit_allocator, T, stream.reader(), params);
 }
@@ -153,8 +163,12 @@ pub fn readWithConfigAndLimit(
                 if (raw_tag == @field(tag_type, field.name)) {
                     // https://github.com/ziglang/zig/issues/7866
                     if (field.type == void) return @unionInit(T, field.name, {});
-                    const payload =
-                        try bincode.readWithLimit(limit_allocator, field.type, reader, params);
+                    const payload = try bincode.readWithLimit(
+                        limit_allocator,
+                        field.type,
+                        reader,
+                        params,
+                    );
                     return @unionInit(T, field.name, payload);
                 }
             }
@@ -172,22 +186,32 @@ pub fn readWithConfigAndLimit(
 
                 if (field.is_comptime) continue;
                 const field_config: FieldConfig(field.type) = getFieldConfig(T, field) orelse {
-                    // // if we dont want print statements when our tests run we need to comment this out :(
+                    // // if we dont want print statements when our tests run we need to comment
+                    // // this out :(
                     // // specifically, the geyser test fail bincode deser and then recover from it
                     // errdefer {
-                    //     // TODO(x19): maybe use a logger instead? (sometimes we can recover from this
-                    //     // and so we don't want to print)
+                    //     // TODO(x19): maybe use a logger instead? (sometimes we can recover from
+                    //     // this and so we don't want to print)
                     //     if (builtin.mode == .Debug) {
                     //         std.debug.print("failed to deserialize field {s}\n", .{field.name});
                     //     }
                     // }
-                    @field(data, field.name) =
-                        try bincode.readWithLimit(limit_allocator, field.type, reader, params);
+                    @field(data, field.name) = try bincode.readWithLimit(
+                        limit_allocator,
+                        field.type,
+                        reader,
+                        params,
+                    );
                     continue;
                 };
 
-                @field(data, field.name) =
-                    try readFieldWithConfig(limit_allocator, reader, params, field, field_config);
+                @field(data, field.name) = try readFieldWithConfig(
+                    limit_allocator,
+                    reader,
+                    params,
+                    field,
+                    field_config,
+                );
             }
 
             // TODO: improve implementation of post deserialise method
@@ -211,7 +235,12 @@ pub fn readWithConfigAndLimit(
         .array => |info| {
             var data: T = undefined;
             if (params.include_fixed_array_length) {
-                const fixed_array_len = try bincode.readWithLimit(limit_allocator, u64, reader, params);
+                const fixed_array_len = try bincode.readWithLimit(
+                    limit_allocator,
+                    u64,
+                    reader,
+                    params,
+                );
                 if (fixed_array_len != info.len) {
                     return error.UnexpectedFixedArrayLen;
                 }
@@ -224,7 +253,12 @@ pub fn readWithConfigAndLimit(
         .vector => |info| {
             var data: T = undefined;
             if (params.include_fixed_array_length) {
-                const fixed_array_len = try bincode.readWithLimit(limit_allocator, u64, reader, params);
+                const fixed_array_len = try bincode.readWithLimit(
+                    limit_allocator,
+                    u64,
+                    reader,
+                    params,
+                );
                 if (fixed_array_len != info.len) {
                     return error.UnexpectedFixedArrayVectorLen;
                 }
@@ -244,11 +278,21 @@ pub fn readWithConfigAndLimit(
                     return data;
                 },
                 .slice => {
-                    const num_entries = try bincode.readWithLimit(limit_allocator, usize, reader, params);
+                    const num_entries = try bincode.readWithLimit(
+                        limit_allocator,
+                        usize,
+                        reader,
+                        params,
+                    );
                     const entries = try allocator.alloc(info.child, num_entries);
                     errdefer allocator.free(entries);
                     for (entries) |*entry| {
-                        entry.* = try bincode.readWithLimit(limit_allocator, info.child, reader, params);
+                        entry.* = try bincode.readWithLimit(
+                            limit_allocator,
+                            info.child,
+                            reader,
+                            params,
+                        );
                     }
                     return entries;
                 },
@@ -258,7 +302,10 @@ pub fn readWithConfigAndLimit(
         .comptime_float => return bincode.readWithLimit(limit_allocator, f64, reader, params),
         .float => |info| {
             if (info.bits != 32 and info.bits != 64) {
-                @compileError("Only f{32, 64} floating-point integers may be serialized, but attempted to serialize " ++ @typeName(T) ++ ".");
+                @compileError(
+                    "Only f{32, 64} floating-point integers may be serialized," ++
+                        " but attempted to serialize " ++ @typeName(T) ++ ".",
+                );
             }
             const bytes = try reader.readBytesNoEof((info.bits + 7) / 8);
             return @as(T, @bitCast(bytes));
@@ -280,7 +327,10 @@ pub fn readInt(comptime U: type, reader: anytype, params: bincode.Params) !U {
 
     const info = @typeInfo(T).int;
     if ((info.bits & (info.bits - 1)) != 0 or info.bits < 8 or info.bits > 256) {
-        @compileError("Only i{8, 16, 32, 64, 128, 256}, u{8, 16, 32, 64, 128, 256} integers may be deserialized, but attempted to deserialize " ++ @typeName(T) ++ ".");
+        @compileError(
+            "Only i{8, 16, 32, 64, 128, 256}, u{8, 16, 32, 64, 128, 256} integers may be" ++
+                " deserialized, but attempted to deserialize " ++ @typeName(T) ++ ".",
+        );
     }
 
     switch (params.int_encoding) {
@@ -293,7 +343,10 @@ pub fn readInt(comptime U: type, reader: anytype, params: bincode.Params) !U {
                         if (b % 2 == 0) {
                             break :zigzag @as(T, @intCast(b / 2));
                         } else {
-                            break :zigzag ~@as(T, @bitCast(@as(std.meta.Int(.unsigned, info.bits), b / 2)));
+                            break :zigzag ~@as(
+                                T,
+                                @bitCast(@as(std.meta.Int(.unsigned, info.bits), b / 2)),
+                            );
                         }
                     },
                 };
@@ -306,9 +359,11 @@ pub fn readInt(comptime U: type, reader: anytype, params: bincode.Params) !U {
                     .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
                     .signed => zigzag: {
                         if (z % 2 == 0) {
-                            break :zigzag std.math.cast(T, z / 2) orelse return error.FailedToCastZZ;
+                            break :zigzag std.math.cast(T, z / 2) orelse
+                                return error.FailedToCastZZ;
                         } else {
-                            break :zigzag ~(std.math.cast(T, z / 2) orelse return error.FailedToCastZZ);
+                            break :zigzag ~(std.math.cast(T, z / 2) orelse
+                                return error.FailedToCastZZ);
                         }
                     },
                 };
@@ -321,9 +376,11 @@ pub fn readInt(comptime U: type, reader: anytype, params: bincode.Params) !U {
                     .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
                     .signed => zigzag: {
                         if (z % 2 == 0) {
-                            break :zigzag std.math.cast(T, z / 2) orelse return error.FailedToCastZZ;
+                            break :zigzag std.math.cast(T, z / 2) orelse
+                                return error.FailedToCastZZ;
                         } else {
-                            break :zigzag ~(std.math.cast(T, z / 2) orelse return error.FailedToCastZZ);
+                            break :zigzag ~(std.math.cast(T, z / 2) orelse
+                                return error.FailedToCastZZ);
                         }
                     },
                 };
@@ -336,9 +393,11 @@ pub fn readInt(comptime U: type, reader: anytype, params: bincode.Params) !U {
                     .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
                     .signed => zigzag: {
                         if (z % 2 == 0) {
-                            break :zigzag std.math.cast(T, z / 2) orelse return error.FailedToCastZZ;
+                            break :zigzag std.math.cast(T, z / 2) orelse
+                                return error.FailedToCastZZ;
                         } else {
-                            break :zigzag ~(std.math.cast(T, z / 2) orelse return error.FailedToCastZZ);
+                            break :zigzag ~(std.math.cast(T, z / 2) orelse
+                                return error.FailedToCastZZ);
                         }
                     },
                 };
@@ -351,9 +410,11 @@ pub fn readInt(comptime U: type, reader: anytype, params: bincode.Params) !U {
                     .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
                     .signed => zigzag: {
                         if (z % 2 == 0) {
-                            break :zigzag std.math.cast(T, z / 2) orelse return error.FailedToCastZZ;
+                            break :zigzag std.math.cast(T, z / 2) orelse
+                                return error.FailedToCastZZ;
                         } else {
-                            break :zigzag ~(std.math.cast(T, z / 2) orelse return error.FailedToCastZZ);
+                            break :zigzag ~(std.math.cast(T, z / 2) orelse
+                                return error.FailedToCastZZ);
                         }
                     },
                 };
@@ -366,9 +427,11 @@ pub fn readInt(comptime U: type, reader: anytype, params: bincode.Params) !U {
                     .unsigned => std.math.cast(T, z) orelse return error.FailedToCastZZ,
                     .signed => zigzag: {
                         if (z % 2 == 0) {
-                            break :zigzag std.math.cast(T, z / 2) orelse return error.FailedToCastZZ;
+                            break :zigzag std.math.cast(T, z / 2) orelse
+                                return error.FailedToCastZZ;
                         } else {
-                            break :zigzag ~(std.math.cast(T, z / 2) orelse return error.FailedToCastZZ);
+                            break :zigzag ~(std.math.cast(T, z / 2) orelse
+                                return error.FailedToCastZZ);
                         }
                     },
                 };
@@ -456,7 +519,16 @@ pub fn writeWithConfig(
     }
 
     switch (@typeInfo(T)) {
-        .type, .void, .noreturn, .undefined, .null, .@"fn", .@"opaque", .frame, .@"anyframe" => return,
+        .type,
+        .void,
+        .noreturn,
+        .undefined,
+        .null,
+        .@"fn",
+        .@"opaque",
+        .frame,
+        .@"anyframe",
+        => return,
         .bool => return writer.writeByte(@intFromBool(data)),
         .@"enum" => |_| {
             comptime var SerializedSize = u32;
@@ -477,7 +549,13 @@ pub fn writeWithConfig(
         },
         .@"struct" => |info| {
             inline for (info.fields) |field| {
-                try writeFieldWithConfig(field, getFieldConfig(T, field), writer, @field(data, field.name), params);
+                try writeFieldWithConfig(
+                    field,
+                    getFieldConfig(T, field),
+                    writer,
+                    @field(data, field.name),
+                    params,
+                );
             }
             return;
         },
@@ -492,7 +570,11 @@ pub fn writeWithConfig(
         },
         .array, .vector => {
             if (params.include_fixed_array_length) {
-                try bincode.write(writer, std.math.cast(u64, data.len) orelse return error.DataTooLarge, params);
+                try bincode.write(
+                    writer,
+                    std.math.cast(u64, data.len) orelse return error.DataTooLarge,
+                    params,
+                );
             }
             for (data) |element| {
                 try bincode.write(writer, element, params);
@@ -501,7 +583,7 @@ pub fn writeWithConfig(
         },
         .pointer => |info| {
             switch (info.size) {
-                .one => return bincode.write(writer, data.*, params), // TODO: wouldn't this panic if null?
+                .one => return bincode.write(writer, data.*, params), // TODO: panic if null?
                 .many => return bincode.write(writer, std.mem.span(data), params),
                 .slice => {
                     try bincode.write(writer, @as(u64, data.len), params);
@@ -516,7 +598,10 @@ pub fn writeWithConfig(
         .comptime_float => return bincode.write(writer, @as(f64, data), params),
         .float => |info| {
             if (info.bits != 32 and info.bits != 64) {
-                @compileError("Only f{32, 64} floating-point integers may be serialized, but attempted to serialize " ++ @typeName(T) ++ ".");
+                @compileError(
+                    "Only f{32, 64} floating-point integers may be serialized," ++
+                        " but attempted to serialize " ++ @typeName(T) ++ ".",
+                );
             }
             return writer.writeAll(std.mem.asBytes(&data));
         },
@@ -528,7 +613,10 @@ pub fn writeWithConfig(
         },
         .int => |info| {
             if ((info.bits & (info.bits - 1)) != 0 or info.bits < 8 or info.bits > 256) {
-                @compileError("Only i{8, 16, 32, 64, 128, 256}, u{8, 16, 32, 64, 128, 256} integers may be serialized, but attempted to serialize " ++ @typeName(T) ++ ".");
+                @compileError(
+                    "Only i{8, 16, 32, 64, 128, 256}, u{8, 16, 32, 64, 128, 256} integers may" ++
+                        " be serialized, but attempted to serialize " ++ @typeName(T) ++ ".",
+                );
             }
 
             switch (params.int_encoding) {
@@ -537,9 +625,15 @@ pub fn writeWithConfig(
                         .unsigned => data,
                         .signed => zigzag: {
                             if (data < 0) {
-                                break :zigzag ~@as(std.meta.Int(.unsigned, info.bits), @bitCast(data)) * 2 + 1;
+                                break :zigzag ~@as(
+                                    std.meta.Int(.unsigned, info.bits),
+                                    @bitCast(data),
+                                ) * 2 + 1;
                             } else {
-                                break :zigzag @as(std.meta.Int(.unsigned, info.bits), @intCast(data)) * 2;
+                                break :zigzag @as(
+                                    std.meta.Int(.unsigned, info.bits),
+                                    @intCast(data),
+                                ) * 2;
                             }
                         },
                     };
@@ -688,7 +782,11 @@ pub fn VarIntConfig(comptime T: type) bincode.FieldConfig(T) {
 
 pub fn FieldConfig(comptime T: type) type {
     return struct {
-        deserializer: ?fn (limit_allocator: *LimitAllocator, reader: anytype, params: Params) anyerror!T = null,
+        deserializer: ?fn (
+            limit_allocator: *LimitAllocator,
+            reader: anytype,
+            params: Params,
+        ) anyerror!T = null,
         serializer: ?fn (writer: anytype, data: anytype, params: Params) anyerror!void = null,
         free: ?fn (allocator: std.mem.Allocator, data: anytype) void = null,
         skip: bool = false,
@@ -730,7 +828,10 @@ pub fn getConfig(comptime T: type) ?FieldConfig(T) {
         null;
 }
 
-pub fn getFieldConfig(comptime struct_type: type, comptime field: std.builtin.Type.StructField) ?FieldConfig(field.type) {
+pub fn getFieldConfig(
+    comptime struct_type: type,
+    comptime field: std.builtin.Type.StructField,
+) ?FieldConfig(field.type) {
     const bincode_field = "!bincode-config:" ++ field.name;
     if (@hasDecl(struct_type, bincode_field)) {
         return @field(struct_type, bincode_field);
@@ -738,7 +839,10 @@ pub fn getFieldConfig(comptime struct_type: type, comptime field: std.builtin.Ty
     return null;
 }
 
-pub inline fn shouldUseDefaultValue(comptime field: std.builtin.Type.StructField, comptime field_config: FieldConfig(field.type)) ?field.type {
+pub inline fn shouldUseDefaultValue(
+    comptime field: std.builtin.Type.StructField,
+    comptime field_config: FieldConfig(field.type),
+) ?field.type {
     if (field_config.skip) {
         // NOTE: this is **bincode specific** default value
         // eg, a: ?u8 ... @!"bincode-config:a" = { skip = true, default_value = 5 }
@@ -755,7 +859,10 @@ pub inline fn shouldUseDefaultValue(comptime field: std.builtin.Type.StructField
         );
     } else {
         if (field_config.default_value != null) {
-            @compileError("┓\n|\n|--> Invalid config: default value is only allowed when 'skip' is set to true\n\n");
+            @compileError(
+                "┓\n|\n|--> Invalid config: default value is only allowed" ++
+                    " when 'skip' is set to true\n\n",
+            );
         }
         return null;
     }
@@ -766,7 +873,11 @@ pub fn getSerializedSizeWithSlice(slice: []u8, data: anytype, params: Params) !u
     return ser_slice.len;
 }
 
-pub fn writeToArray(allocator: std.mem.Allocator, data: anytype, params: Params) !std.array_list.Managed(u8) {
+pub fn writeToArray(
+    allocator: std.mem.Allocator,
+    data: anytype,
+    params: Params,
+) !std.array_list.Managed(u8) {
     var array_buf = try std.array_list.Managed(u8).initCapacity(allocator, 2048);
     try bincode.write(array_buf.writer(), data, params);
 
@@ -776,7 +887,11 @@ pub fn writeToArray(allocator: std.mem.Allocator, data: anytype, params: Params)
 // ** Tests **//
 fn TestSliceConfig(comptime Child: type) FieldConfig([]Child) {
     const S = struct {
-        fn deserializeTestSlice(limit_allocator: *bincode.LimitAllocator, reader: anytype, params: Params) ![]Child {
+        fn deserializeTestSlice(
+            limit_allocator: *bincode.LimitAllocator,
+            reader: anytype,
+            params: Params,
+        ) ![]Child {
             const len = try bincode.readWithLimit(limit_allocator, u16, reader, params);
 
             const allocator = limit_allocator.allocator();
@@ -853,7 +968,8 @@ test "bincode: default on eof" {
     const Foo = struct {
         value: u8 = 0,
         accounts: std.array_list.Managed(u64),
-        pub const @"!bincode-config:accounts" = arraylist.defaultOnEofConfig(std.array_list.Managed(u64));
+        pub const @"!bincode-config:accounts" =
+            arraylist.defaultOnEofConfig(std.array_list.Managed(u64));
         pub const @"!bincode-config:value" = int.defaultOnEof(u8, 0);
     };
 
@@ -1120,7 +1236,12 @@ test "bincode: serialize and deserialize" {
         }) |expected| {
             try bincode.write(buffer.writer(), expected, params);
 
-            const actual = try bincode.readFromSlice(testing.allocator, @TypeOf(expected), buffer.items, params);
+            const actual = try bincode.readFromSlice(
+                testing.allocator,
+                @TypeOf(expected),
+                buffer.items,
+                params,
+            );
             defer bincode.free(testing.allocator, actual);
 
             try testing.expectEqual(expected, actual);
@@ -1139,7 +1260,12 @@ test "bincode: serialize and deserialize" {
         }) |expected| {
             try bincode.write(buffer.writer(), expected, params);
 
-            const actual = try bincode.readFromSlice(testing.allocator, @TypeOf(expected), buffer.items, params);
+            const actual = try bincode.readFromSlice(
+                testing.allocator,
+                @TypeOf(expected),
+                buffer.items,
+                params,
+            );
             defer bincode.free(testing.allocator, actual);
 
             try testing.expectEqualSlices(std.meta.Elem(@TypeOf(expected)), expected, actual);

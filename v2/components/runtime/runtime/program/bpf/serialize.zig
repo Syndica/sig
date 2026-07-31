@@ -25,7 +25,8 @@ const INPUT_START = sig.vm.memory.INPUT_START;
 pub const BPF_ALIGN_OF_U128: usize = 8;
 
 /// [agave] https://github.com/anza-xyz/agave/blob/108fcb4ff0f3cb2e7739ca163e6ead04e377e567/program-runtime/src/serialization.rs#L29
-/// Alignment of the host memory buffer. Agave uses `AlignedMemory::<HOST_ALIGN>` with HOST_ALIGN=16.
+/// Alignment of the host memory buffer. Agave uses `AlignedMemory::<HOST_ALIGN>` with
+/// HOST_ALIGN=16.
 pub const HOST_ALIGN: std.mem.Alignment = .@"16"; // 16 bytes
 
 /// [agave] https://github.com/anza-xyz/solana-sdk/blob/e1554f4067329a0dcf5035120ec6a06275d3b9ec/account-info/src/lib.rs#L17-L18

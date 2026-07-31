@@ -32,15 +32,19 @@ pub const Transaction = struct {
     /// MAX_ACCOUNTS is the maximum number of accounts that can be loaded by a transaction.
     pub const MAX_ACCOUNTS: u16 = 128;
 
-    /// MAX_INSTRUCTIONS is the maximum number of instructions that can be executed by a transaction.
+    /// MAX_INSTRUCTIONS is the maximum number of instructions that can be executed by a
+    /// transaction.
     pub const MAX_INSTRUCTIONS: u8 = 64;
 
-    /// MAX_ADDRESS_LOOKUP_TABLES is the maximum number of address lookup tables that can be used by a transaction.
+    /// MAX_ADDRESS_LOOKUP_TABLES is the maximum number of address lookup tables that can be used
+    /// by a transaction.
     pub const MAX_ADDRESS_LOOKUP_TABLES: u16 = 127;
 
-    /// VERSION_PREFIX is used to differentiate between legacy and versioned transactions. If the first byte after the
-    /// signatures has its high bit set, then the transaction is versioned and the remaining bits represent the version.
-    /// Otherwise, the transaction is legacy and the first byte after the signatures is the first byte of the message.
+    /// VERSION_PREFIX is used to differentiate between legacy and versioned transactions. If the
+    /// first byte after the signatures has its high bit set, then the transaction is versioned
+    /// and the remaining bits represent the version.
+    /// Otherwise, the transaction is legacy and the first byte after the signatures is the first
+    /// byte of the message.
     pub const VERSION_PREFIX: u8 = 0x80;
 
     pub const @"!bincode-config": sig.bincode.FieldConfig(Transaction) = .{
@@ -149,7 +153,8 @@ pub const Transaction = struct {
         const signatures = try allocator.alloc(Signature, message.signature_count);
         errdefer allocator.free(signatures);
 
-        // NOTE: The current only usecase is when we send votes, which *does* sign the same message twice.
+        // NOTE: The current only usecase is when we send votes, which *does* sign the same
+        // message twice.
         const signing_keys = message.account_keys[0..message.signature_count];
         for (signing_keys, 0..) |key, i| {
             for (keypairs) |kp| {
@@ -174,7 +179,11 @@ pub const Transaction = struct {
         try data.msg.serialize(writer, data.version);
     }
 
-    pub fn deserialize(limit_allocator: *sig.bincode.LimitAllocator, reader: anytype, _: sig.bincode.Params) !Transaction {
+    pub fn deserialize(
+        limit_allocator: *sig.bincode.LimitAllocator,
+        reader: anytype,
+        _: sig.bincode.Params,
+    ) !Transaction {
         const allocator = limit_allocator.allocator();
         const signatures = try allocator.alloc(Signature, try readShortU16(reader));
         errdefer allocator.free(signatures);
@@ -233,7 +242,8 @@ pub const Transaction = struct {
         ) catch return error.SignatureVerificationFailed;
     }
 
-    /// Count the number of accounts in the slice of transactions, including accounts from lookup tables
+    /// Count the number of accounts in the slice of transactions, including accounts from lookup
+    /// tables
     pub fn numAccounts(transactions: []const Transaction) usize {
         var total_accounts: usize = 0;
         for (transactions) |transaction| {
@@ -246,7 +256,8 @@ pub const Transaction = struct {
         return total_accounts;
     }
 
-    /// Run some sanity checks on the signature counts and message to ensure the internal data has consistency.
+    /// Run some sanity checks on the signature counts and message to ensure the internal data has
+    /// consistency.
     ///
     /// Does *not* verify signatures. Call `verify` to verify signatures.
     /// [agave] https://github.com/anza-xyz/solana-sdk/blob/42711325c40b314dafe3d5a41eb5b19af49cf1dc/transaction/src/versioned/mod.rs#L120
@@ -480,7 +491,11 @@ pub const Message = struct {
         }
     }
 
-    pub fn deserialize(limit_allocator: *sig.bincode.LimitAllocator, reader: anytype, version: Version) !Message {
+    pub fn deserialize(
+        limit_allocator: *sig.bincode.LimitAllocator,
+        reader: anytype,
+        version: Version,
+    ) !Message {
         const allocator = limit_allocator.allocator();
         const signature_count = try reader.readByte();
         const readonly_signed_count = try reader.readByte();
@@ -930,8 +945,14 @@ test "clone transaction" {
     try std.testing.expectEqual(transaction.signatures.len, clone.signatures.len);
     try std.testing.expectEqual(transaction.version, clone.version);
     try std.testing.expectEqual(transaction.msg.signature_count, clone.msg.signature_count);
-    try std.testing.expectEqual(transaction.msg.readonly_signed_count, clone.msg.readonly_signed_count);
-    try std.testing.expectEqual(transaction.msg.readonly_unsigned_count, clone.msg.readonly_unsigned_count);
+    try std.testing.expectEqual(
+        transaction.msg.readonly_signed_count,
+        clone.msg.readonly_signed_count,
+    );
+    try std.testing.expectEqual(
+        transaction.msg.readonly_unsigned_count,
+        clone.msg.readonly_unsigned_count,
+    );
     try std.testing.expectEqual(transaction.msg.account_keys.len, clone.msg.account_keys.len);
     try std.testing.expectEqual(transaction.msg.recent_blockhash, clone.msg.recent_blockhash);
     try std.testing.expectEqual(transaction.msg.instructions.len, clone.msg.instructions.len);
@@ -1154,8 +1175,9 @@ test "parse v0" {
 }
 
 pub const transaction_legacy_example = struct {
-    var signatures: [1]Signature =
-        .{.parse("Z2hT7E85gqWWVKEsZXxJ184u7rXdRnB6EKz2PHAUajx6jHrUZhN5WkE7tPw6PrUA3XzeZRjoE7xJDtQzshZm1Pk")};
+    var signatures: [1]Signature = .{.parse(
+        "Z2hT7E85gqWWVKEsZXxJ184u7rXdRnB6EKz2PHAUajx6jHrUZhN5WkE7tPw6PrUA3XzeZRjoE7xJDtQzshZm1Pk",
+    )};
 
     pub const as_struct = Transaction{
         .signatures = &signatures,
@@ -1197,9 +1219,13 @@ pub const transaction_legacy_example = struct {
 };
 
 pub const transaction_v0_example = struct {
+    const sig_str_0 =
+        "2cxn1LdtB7GcpeLEnHe5eA7LymTXKkqGF6UvmBM2EtttZEeqBREDaAD7LCagDFHyuc3xXxyDkMPiy3CpK5m6Uskw";
+    const sig_str_1 =
+        "4gr9L7K3bALKjPRiRSk4JDB3jYmNaauf6rewNV3XFubX5EHxBn98gqBGhbwmZAB9DJ2pv8GWE1sLoYqhhLbTZcLj";
     var signatures = [_]Signature{
-        .parse("2cxn1LdtB7GcpeLEnHe5eA7LymTXKkqGF6UvmBM2EtttZEeqBREDaAD7LCagDFHyuc3xXxyDkMPiy3CpK5m6Uskw"),
-        .parse("4gr9L7K3bALKjPRiRSk4JDB3jYmNaauf6rewNV3XFubX5EHxBn98gqBGhbwmZAB9DJ2pv8GWE1sLoYqhhLbTZcLj"),
+        .parse(sig_str_0),
+        .parse(sig_str_1),
     };
 
     pub const as_struct: Transaction = .{
