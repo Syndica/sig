@@ -810,8 +810,7 @@ fn deriveBlockParseResult(
     var pin_ctx_it = receiver.in_progress.id_map.valueIterator();
     while (pin_ctx_it.next()) |ctx_ptr| {
         const ctx = ctx_ptr.*;
-        const id = receiver.in_progress.fecSetIdOf(ctx);
-        const gop = try pins.getOrPut(scratch_allocator, id);
+        const gop = try pins.getOrPut(scratch_allocator, ctx.id);
         if (!gop.found_existing) gop.value_ptr.* = .{
             .merkle_root = ctx.merkle_root,
             .chained_merkle_root = ctx.chained_merkle_root,
