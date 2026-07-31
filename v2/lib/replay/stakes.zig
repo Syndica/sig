@@ -1099,7 +1099,8 @@ test "solGetEpochStake matches SIMD-0133 semantics (null / hit / miss)" {
     try std.testing.expectEqual(@as(u64, 777), solGetEpochStake(ev, &pk_hit));
 
     // miss -> 0.
-    try std.testing.expectEqual(@as(u64, 0), solGetEpochStake(ev, &pk_miss));}
+    try std.testing.expectEqual(@as(u64, 0), solGetEpochStake(ev, &pk_miss));
+}
 
 test "stakeWeightedTimestamp returns null when no voter has stake" {
     const ev = try std.testing.allocator.create(EpochVoters);
@@ -1433,7 +1434,9 @@ fn allocLinearChain(
     pool: *replay.BlockPool,
     n: usize,
 ) ![]replay.BlockRef {
-    const S = struct { var refs: [8]replay.BlockRef = undefined; };
+    const S = struct {
+        var refs: [8]replay.BlockRef = undefined;
+    };
     std.debug.assert(n <= S.refs.len);
 
     for (0..n) |i| {
