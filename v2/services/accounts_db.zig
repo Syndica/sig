@@ -80,6 +80,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
 
         logger.info().log("reading snapshot accounts");
         try rooted.loadSnapshot(
+            SnapshotBufReader,
             .from(logger),
             runner,
             &snapshot_iter,
