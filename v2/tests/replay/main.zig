@@ -70,11 +70,10 @@ pub fn main() !void {
         bhq.last_hash = .ZEROES;
     }
     {
-        // Minimal VersionedEpochStakes so replay's stakes boot loader
-        // finds an entry for the derived boot epoch. Entry epoch must
-        // match the epoch derived from `parent_slot` under
-        // `EpochSchedule.INIT`; empty vote_accounts keeps downstream
-        // reads no-ops until fixtures grow real stakes data.
+        // Minimal VersionedEpochStakes so the boot loader finds an
+        // entry for the derived boot epoch. Empty vote_accounts
+        // keeps downstream reads no-ops until fixtures grow real
+        // stakes data.
         const VES = lib.solana.snapshot.ExtraFields.VersionedEpochStakes;
         const boot_epoch = snapshot_metadata.ptr().manifest.bank_fields
             .epoch_schedule.getEpoch(fixture.manifest.shreds.parent_slot);

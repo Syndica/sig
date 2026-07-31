@@ -561,9 +561,9 @@ pub const ExtraFields = extern struct {
         pub const VoteAccountEntry = extern struct {
             pubkey: Pubkey,
             stake: u64,
-            /// Extracted from the vote-account data blob during snapshot
-            /// parsing; kept here because the Versioned entry cannot look
-            /// up past/future-epoch VoteAccount data at read time.
+            /// Extracted from the vote-account data blob at parse
+            /// time — the Versioned entry has no way to look up
+            /// past/future-epoch vote-account data later.
             commission_bps: u16,
             _pad: [6]u8 = @splat(0),
         };
@@ -605,11 +605,8 @@ pub const ExtraFields = extern struct {
                 } = undefined;
                 try r.readSliceAll(std.mem.asBytes(&header));
 
-                // Peek the prefix of the vote-account data blob so the
-                // commission field is captured here rather than by a
-                // second pass over accounts_db at boot. The prefix bound
-                // covers the largest known VoteStateVersions layout up
-                // to the commission field (v4, offset 132 + u16).
+                // Peek the commission prefix here to avoid a second
+                // pass over accounts_db at boot.
                 var vs_prefix: [VOTE_STATE_COMMISSION_PREFIX_LEN]u8 = @splat(0);
                 const to_read = @min(header.data_len, vs_prefix.len);
                 try r.readSliceAll(vs_prefix[0..to_read]);

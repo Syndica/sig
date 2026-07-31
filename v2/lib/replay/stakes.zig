@@ -1,14 +1,20 @@
-//! Replay-owned stakes state, scoped to what replay itself reads while
-//! executing transactions within a single epoch:
+//! Replay-owned stakes state. All buffers are compile-time-sized
+//! and inline in `ReplayStakes`; nothing allocates after `init`.
+//!
 //!   - `EpochVoters` — the frozen per-epoch set of admitted voters
-//!     (vote-pubkey, stake, commission) plus a derived side index
-//!     for O(1) sol_get_epoch_stake lookup.
-//!   - `LiveVoter` / `LiveVoters` — dense per-block live vote-account
-//!     state (last-vote slot + timestamp), indexed in lockstep with
-//!     `EpochVoters.entries` so per-slot sysvar updates scan them
-//!     as parallel arrays.
-//!   - `ReplayStakes` — the owner struct: one `EpochVoters` plus one
-//!     `LiveVoters` per `BlockPool` slot.
+//!     (vote-pubkey, stake, commission) + `by_vote_pk` side index.
+//!   - `LiveVoter` / `LiveVoters` — dense per-block vote-timestamp
+//!     state, indexed in lockstep with `EpochVoters.entries` so per-
+//!     slot sysvar updates scan them as parallel arrays.
+//!   - `StakeDelegation` / `StakeDelegationsRoot` — the rooted
+//!     delegator → delegation table.
+//!   - `StakeDeltaNode` / `StakeDeltaArena` — shared arena of
+//!     per-block delta chains. Ancestor deltas are reached by
+//!     walking `replay.Node.parent`, not by copy.
+//!   - `StakeAggregates` — per-block running
+//!     (effective, activating, deactivating) triple for the
+//!     `StakeHistory` sysvar.
+//!   - `ReplayStakes` — owner struct.
 
 const std = @import("std");
 
@@ -26,21 +32,20 @@ const Epoch = solana.Epoch;
 /// this is a comfortable bound in both regimes.
 pub const MAX_ALPENGLOW_VOTE_ACCOUNTS: u16 = 2000;
 
-/// `FixedPubkeyMap` requires a power-of-two capacity and callers size to
-/// >= 2x expected occupancy. ceil2(2 * 2000) = 4096.
+/// `ceil_pow2(2 * MAX_ALPENGLOW_VOTE_ACCOUNTS) = 4096`, satisfying
+/// `FixedPubkeyMap`'s pow2 / 2x-occupancy invariants.
 pub const EPOCH_VOTERS_INDEX_CAP: usize = 4096;
 
 const EpochVotersIndex = collections.FixedPubkeyMap(u16, EPOCH_VOTERS_INDEX_CAP);
 
 /// Frozen per-epoch snapshot of admitted voters.
 ///
-/// `entries` is the source of truth. `by_vote_pk` and `total_stake`
-/// are derived from `entries` and refreshed atomically with it — only
-/// at snapshot boot today; at each epoch-boundary crossing once
-/// boundary derivation is wired in.
+/// `entries` is the source of truth; `by_vote_pk` and `total_stake`
+/// are derived from it and refreshed atomically with it.
 ///
-/// Layout is `extern` so the struct can be persisted or shared as-is;
-/// downstream consumers may map it directly.
+/// TODO(boundary): refresh at each epoch-boundary crossing once
+/// boundary derivation is wired. Currently only populated at
+/// snapshot boot.
 pub const EpochVoters = extern struct {
     len: u16,
     _pad0: [6]u8 = @splat(0),
@@ -48,9 +53,9 @@ pub const EpochVoters = extern struct {
     by_vote_pk: EpochVotersIndex,
     total_stake: u64,
 
-    /// One admitted voter. Positional row — the index of an entry in
-    /// `entries[]` is the identity used by all sibling arrays (e.g.
-    /// `LiveVoters.entries`). Sorted by `stake` desc at build time.
+    /// The index of an entry in `entries[]` is the identity used by
+    /// all sibling arrays (e.g. `LiveVoters.entries`). Sorted by
+    /// `stake` desc at build time.
     pub const Entry = extern struct {
         vote_pk: Pubkey, //           32
         stake: u64, //                 8
@@ -62,55 +67,38 @@ pub const EpochVoters = extern struct {
         std.debug.assert(@sizeOf(Entry) == 48);
     }
 
-    /// Zero the struct and reset the map to empty. Call before
-    /// building.
     pub fn init(self: *EpochVoters) void {
         self.len = 0;
         self._pad0 = @splat(0);
-        // `entries` intentionally left undefined; only slots
-        // 0..len are read.
+        // `entries` intentionally left undefined; only slots 0..len are read.
         self.by_vote_pk.init();
         self.total_stake = 0;
     }
 
-    /// O(1) lookup of a voter's stake by vote pubkey. Miss returns 0
-    /// (agave / firedancer parity with sol_get_epoch_stake).
+    /// Miss returns 0, matching SIMD-0133 `sol_get_epoch_stake`.
     pub fn stakeOf(self: *const EpochVoters, vote_pk: Pubkey) u64 {
         const idx_ptr = self.by_vote_pk.getPtrConst(vote_pk) orelse return 0;
         return self.entries[idx_ptr.*].stake;
     }
 
-    /// Populate from a single `VersionedEpochStakes` entry sourced
-    /// from the snapshot manifest.
+    /// Populate from one `VersionedEpochStakes` entry sourced from the
+    /// snapshot manifest. `memory_base` is the base pointer used to
+    /// resolve `RelativeSlice` fields (typically
+    /// `snapshot_metadata.getMemory()`).
     ///
-    /// `memory_base` is the base pointer used to resolve the entry's
-    /// `RelativeSlice` fields (typically `snapshot_metadata.getMemory()`).
+    /// Sorts by stake desc so index 0 is highest-staked — gives a
+    /// canonical ordering for the sibling `LiveVoters` arrays.
     ///
-    /// Sorts `entries` by stake desc so positional index 0 is the
-    /// highest-staked voter — matches SIMD-0357's post-Alpenglow
-    /// admitted-set ordering, and gives a canonical index for the
-    /// sibling `LiveVoters` arrays.
-    ///
-    /// `commission_bps` is carried across from
-    /// `VersionedEpochStakes.VoteAccountEntry.commission_bps`, which
-    /// the snapshot parser extracts from each vote-account data
-    /// blob during `VersionedEpochStakes.read`.
-    ///
-    /// `total_stake` is summed from `entries[]`. Agave's
-    /// authoritative total is accumulated unconditionally over the
-    /// full vote-accounts map (including zero-stake rows) in
-    /// `parse_epoch_vote_accounts`
-    /// (https://github.com/anza-xyz/agave/blob/802264fcc093dc041a991e07d3196a96254b912e/runtime/src/epoch_stakes.rs#L337-L371)
-    /// and serialized as `entry.total_stake`; the two agree when the
-    /// snapshot's `vote_accounts` slice enumerates every summed row.
+    /// `total_stake` is recomputed from the loaded entries rather
+    /// than trusting `entry.total_stake`: the two disagree if the
+    /// snapshot's `vote_accounts` slice is a filtered subset. See
+    /// [agave `parse_epoch_vote_accounts`](https://github.com/anza-xyz/agave/blob/802264fcc093dc041a991e07d3196a96254b912e/runtime/src/epoch_stakes.rs#L337-L371).
     ///
     /// Errors:
     /// - `error.TooManyVoters` if the entry exceeds
-    ///   `MAX_ALPENGLOW_VOTE_ACCOUNTS`. Refuses to boot rather than
-    ///   silently truncate; loosen when the snapshot producers are
-    ///   confirmed to enforce the SIMD-0357 cap.
-    /// - `error.MapFull` from the derived side index — should not
-    ///   occur given the pow-2 / 2x-occupancy invariants.
+    ///   `MAX_ALPENGLOW_VOTE_ACCOUNTS`.
+    /// - `error.MapFull` from the side index — unreachable under
+    ///   the pow-2 / 2x-occupancy invariants.
     pub fn loadFromVersionedEpochStakes(
         self: *EpochVoters,
         entry: *const solana.snapshot.ExtraFields.VersionedEpochStakes,
@@ -145,21 +133,16 @@ pub const EpochVoters = extern struct {
 /// Pure implementation of the `sol_get_epoch_stake` SVM syscall
 /// semantic (SIMD-0133).
 ///
+/// - `null` → total active stake for the current epoch.
+/// - non-null → stake delegated to the vote account at that
+///   address, or 0 if the address is not in the admitted set.
+///
 /// Callers in the SVM layer are responsible for compute-meter
 /// charging and for translating the pubkey argument out of VM
 /// memory; this function assumes a validated optional pointer.
 ///
-/// Semantics:
-/// - `null` → total active stake for the current epoch.
-/// - non-null → stake delegated to the vote account at that
-///   address, or 0 if the address does not correspond to an
-///   admitted voter (SIMD-0357 top-2000 post-Alpenglow; the full
-///   admitted set pre-Alpenglow).
-///
-/// Not yet reachable at runtime — v2 has no SVM interpreter. Once
-/// the exec tile grows one, register this as the handler for
-/// `sol_get_epoch_stake` with the current epoch's `EpochVoters`
-/// bound on the invoke context.
+/// TODO(svm): wire as the `sol_get_epoch_stake` handler once the
+/// exec tile grows an SVM interpreter.
 pub fn solGetEpochStake(
     epoch_voters: *const EpochVoters,
     maybe_vote_pk: ?*const Pubkey,
@@ -170,8 +153,8 @@ pub fn solGetEpochStake(
 
 /// Drift bounds for the stake-weighted timestamp median, expressed
 /// as percentages of the poh estimate offset since the epoch start.
-/// Post-Alpenglow defaults match agave's `MAX_ALLOWABLE_DRIFT_PERCENTAGE_FAST`
-/// and `MAX_ALLOWABLE_DRIFT_PERCENTAGE_SLOW_V2`.
+/// `DEFAULT` matches agave's `MAX_ALLOWABLE_DRIFT_PERCENTAGE_FAST`
+/// / `MAX_ALLOWABLE_DRIFT_PERCENTAGE_SLOW_V2`.
 pub const TimestampDrift = extern struct {
     fast_pct: u32,
     slow_pct: u32,
@@ -188,26 +171,24 @@ pub const EpochStartTimestamp = extern struct {
 
 /// Pure stake-weighted median timestamp computed over `EpochVoters`
 /// (stake weights) and one fork's `LiveVoters` (live vote
-/// timestamps). Matches agave's `calculate_stake_weighted_timestamp`
-/// semantic and is the value the per-slot clock sysvar update writes
-/// into `Clock.unix_timestamp`.
+/// timestamps). This is the value the per-slot clock sysvar update
+/// writes into `Clock.unix_timestamp`.
 ///
-/// Not yet reachable at runtime — v2 has no per-slot sysvar update
-/// path. Once one exists it calls this function once per slot with
-/// the current fork's `LiveVoters` and the epoch's `EpochVoters`.
-///
-/// Algorithm (per SIMD / agave):
+/// Algorithm:
 /// 1. For each voter whose live row is `.update`, project the vote
 ///    timestamp to `current_slot` as
 ///    `last_vote_timestamp + elapsed_secs(last_vote_slot -> current_slot)`.
 /// 2. Sort projections asc; walk while accumulating stake; return
 ///    the projection at which cumulative stake first exceeds
-///    `total_live_stake / 2` — the stake-weighted median.
+///    `total_live_stake / 2`.
 /// 3. If `epoch_start` is provided, bound the median against the
 ///    poh estimate offset by `drift.fast_pct` / `drift.slow_pct`.
 ///
 /// Returns null iff no voter has a live `.update` row with non-zero
-/// stake (no signal to aggregate).
+/// stake.
+///
+/// TODO(sysvar-update): call once per slot from the clock-sysvar
+/// update path once v2 has one.
 pub fn stakeWeightedTimestamp(
     epoch_voters: *const EpochVoters,
     live_voters: *const LiveVoters,
@@ -262,8 +243,8 @@ const Pair = struct {
     }
 };
 
-/// `(to_slot - from_slot) * slot_duration_ns / 1e9`, saturating and
-/// truncating to whole seconds.
+/// Saturating `(to_slot - from_slot) * slot_duration_ns`, truncated
+/// to whole seconds.
 fn elapsedSecs(from_slot: Slot, to_slot: Slot, slot_duration_ns: u64) i64 {
     const slots: u128 = to_slot -| from_slot;
     const ns: u128 = slots *| @as(u128, slot_duration_ns);
@@ -285,11 +266,9 @@ fn clampDrift(
     const slow_bound = @divTrunc(poh_off_secs *| @as(i64, @intCast(drift.slow_pct)), 100);
 
     if (est_off_secs > poh_off_secs and est_off_secs - poh_off_secs > slow_bound) {
-        // Slower than poh by more than the slow bound: clamp forward.
         return epoch_start.timestamp +| poh_off_secs +| slow_bound;
     }
     if (est_off_secs < poh_off_secs and poh_off_secs - est_off_secs > fast_bound) {
-        // Faster than poh by more than the fast bound: clamp back.
         return epoch_start.timestamp +| poh_off_secs -| fast_bound;
     }
     return estimate;
@@ -297,22 +276,16 @@ fn clampDrift(
 
 /// Fold a landed vote into the fork's `LiveVoters`. Overwrites the
 /// admitted voter's row with the new `.update` state; no-op if the
-/// vote account isn't in the admitted set (miss on `by_vote_pk`).
+/// vote account isn't in the admitted set.
 ///
-/// Miss semantics: post-Alpenglow (SIMD-0357) only the top-2000
-/// admitted voters have positional slots. A vote tx from a non-
-/// admitted vote account lands successfully at the tx level but
-/// contributes nothing to the timestamp aggregate. Pre-Alpenglow
-/// every vote account is admitted, so misses shouldn't happen in
-/// practice.
+/// Miss case: post-Alpenglow only the SIMD-0357 top-2000 vote
+/// accounts have positional slots. A vote tx from a non-admitted
+/// account lands successfully but contributes nothing to the
+/// timestamp aggregate. Pre-Alpenglow every vote account is
+/// admitted, so misses shouldn't happen in practice.
 ///
-/// Not yet reachable at runtime — v2 has no vote-program execution.
-/// When the exec tile grows one, the committer path decodes each
-/// landed vote ix and calls this with the extracted
-/// `(vote_pk, last_vote_slot, last_vote_timestamp)`.
-///
-/// Vote-account deletion (the `.invalidate` transition) is not
-/// modelled.
+/// TODO(exec-tile): call from the committer per landed vote ix.
+/// TODO(vote-close): the `.invalidate` transition isn't modelled.
 pub fn foldLandedVote(
     epoch_voters: *const EpochVoters,
     live_voters: *LiveVoters,
@@ -362,16 +335,13 @@ pub const LiveVoter = extern struct {
 pub const LiveVoters = extern struct {
     entries: [MAX_ALPENGLOW_VOTE_ACCOUNTS]LiveVoter,
 
-    /// Zero out every row to `.unpopulated`. Used for the root block
-    /// at snapshot boot, and as a defensive scrub before a
-    /// `BlockPool` slot is re-issued.
+    /// Zero every row to `.unpopulated`.
     pub fn reset(self: *LiveVoters) void {
         @memset(&self.entries, LiveVoter.UNPOPULATED);
     }
 };
 
 comptime {
-    // Sanity: keeps memory budgeting honest.
     std.debug.assert(@sizeOf(LiveVoters) == MAX_ALPENGLOW_VOTE_ACCOUNTS * 24);
 }
 
@@ -383,24 +353,21 @@ pub const MAX_STAKE_DELEGATIONS_ROOT_CAP: usize = 1 << 20;
 
 /// Shared delta arena capacity. Bounds the total number of
 /// stake-delegation mutations coexisting across all unrooted forks
-/// between root advances. Sized with ~40× headroom over the
-/// largest single-boundary redelegation cascade seen on mainnet
-/// (~5k mutations); a full arena at 131k nodes represents ~433
-/// slots of continuous churn at the historical peak of ~300
-/// mutations/slot, well past any plausible unrooted depth.
+/// between root advances. ~40x headroom over the largest single-
+/// boundary redelegation cascade seen on mainnet (~5k mutations);
+/// a full arena represents ~433 slots of continuous churn at the
+/// historical peak of ~300 mutations/slot.
 ///
-/// See `stakes-v2-proposal-v2.md` §11.3 for why this is a hard
-/// cap: OOM is treated as fatal, since it implies replay's
-/// root-advance schedule is falling further behind than any
-/// realistic consensus event can produce.
+/// Hard cap: `error.OutOfSpace` from `StakeDeltaArena.createId` is
+/// fatal — exhaustion implies root advance has fallen further
+/// behind than any realistic consensus event can produce.
 pub const MAX_STAKE_DELTA_NODES: usize = 1 << 17;
 
-/// One delegator's current delegation state. Populated at boot
+/// One delegator's current delegation state, populated at boot
 /// from each stake account's `StakeStateV2::Stake` variant.
 ///
-/// `credits_observed` is carried alongside the delegation so
-/// partitioned-rewards paths can attribute earnings without a
-/// second accounts_db read at reward time.
+/// `credits_observed` is carried in-row so partitioned rewards
+/// don't need a second accounts_db read per delegator.
 pub const StakeDelegation = extern struct {
     voter_pk: Pubkey, //             32
     stake: u64, //                    8
@@ -413,20 +380,10 @@ comptime {
     std.debug.assert(@sizeOf(StakeDelegation) == 64);
 }
 
-/// Rooted delegator → delegation table.
-///
-/// Populated once at boot (walking every stake account through
-/// accounts_db) and mutated in place afterwards:
-/// - At every root advance, the winning fork's ancestor chain of
-///   `StakeDeltaNode`s is folded in (upserts / tombstones).
-/// - During partitioned reward distribution at epoch start,
-///   `credits_observed` is bumped in-row on each affected
-///   delegation without any accounts_db round-trip.
-///
-/// A `FixedPubkeyMap` value of a 64 B `StakeDelegation` — the
-/// table backing storage is `keys[cap] + values[cap]`, i.e.
-/// `cap * 96 B` per instance (~96 MB at
-/// `MAX_STAKE_DELEGATIONS_ROOT_CAP`).
+/// Rooted delegator → delegation table. Populated once at boot;
+/// mutated at every root advance (fold of the winning fork's
+/// ancestor delta chain via `applyRootedFold`) and during
+/// partitioned reward distribution (`credits_observed` bumps).
 pub const StakeDelegationsRoot = collections.FixedPubkeyMap(
     StakeDelegation,
     MAX_STAKE_DELEGATIONS_ROOT_CAP,
@@ -443,14 +400,10 @@ pub const StakeDelegationsRoot = collections.FixedPubkeyMap(
 /// rooted block. No node is ever shared across two blocks, so
 /// prune of a losing fork just walks and frees its own head chain.
 ///
-/// The `next` field serves dual duty via `StakeDeltaArena`'s
-/// intrusive free list: when the node is allocated, `next`
-/// chain-links siblings on the same block; when freed, `next`
-/// links the node into the arena's free list. Callers should
-/// treat all other fields as undefined when the node is on the
-/// free list.
-///
-/// See `stakes-v2-proposal-v2.md` §6.
+/// The `next` field is dual-use: while allocated it chain-links
+/// siblings on the same block; while freed it links the node
+/// into the arena's free list. All other fields are undefined
+/// on the free list.
 pub const StakeDeltaNode = extern struct {
     delegator_pk: Pubkey, //                              32
     delegation: StakeDelegation, //                       64
@@ -459,11 +412,10 @@ pub const StakeDeltaNode = extern struct {
     next: StakeDeltaArena.Id.Optional, //                  4
 
     pub const Kind = enum(u8) {
-        /// Delegator's row was created or updated on this block.
         /// `delegation` holds the post-tx state.
         upsert = 0,
-        /// Delegator's account was closed on this block.
-        /// `delegation` is undefined.
+        /// `delegation` is undefined; the account was closed on
+        /// this block.
         tombstone = 1,
     };
 }; //                                                    104 B
@@ -473,13 +425,8 @@ comptime {
 }
 
 /// Shared arena of `StakeDeltaNode`s. Every delta node lives here,
-/// referenced by `stake_delta_head[block]` chains. Inline
-/// extern struct so it can be embedded directly in
-/// `ReplayStakes` without a separate backing region.
-///
-/// Uses an intrusive free list on `StakeDeltaNode.next`: freed
-/// nodes' `next` points to the previous free-head; the head
-/// itself is the arena's `free_head`.
+/// referenced by `stake_delta_head[block]` chains. Free-list head
+/// is on the arena; intrusive `.next` links per node.
 pub const StakeDeltaArena = extern struct {
     nodes: [MAX_STAKE_DELTA_NODES]StakeDeltaNode,
     /// Head of the free list. `.null` iff the arena is exhausted.
@@ -499,8 +446,7 @@ pub const StakeDeltaArena = extern struct {
         std.debug.assert(MAX_STAKE_DELTA_NODES < std.math.maxInt(u32));
     }
 
-    /// Initialise the arena to fully-empty state: every node on
-    /// the free list, chained 0 → 1 → ... → cap-1 → null.
+    /// Every node on the free list, chained 0 → 1 → ... → cap-1 → null.
     pub fn init(self: *StakeDeltaArena) void {
         for (self.nodes[0 .. MAX_STAKE_DELTA_NODES - 1], 0..) |*n, i| {
             n.* = undefined;
@@ -511,18 +457,16 @@ pub const StakeDeltaArena = extern struct {
         self.free_head = .init(@enumFromInt(0));
     }
 
-    /// Allocate a node. Caller populates every field.
-    /// `error.OutOfSpace` iff the arena is full — treat as fatal
-    /// per `stakes-v2-proposal-v2.md` §11.3.
+    /// Allocate a node. Caller populates every field. Fatal on
+    /// `error.OutOfSpace` — see `MAX_STAKE_DELTA_NODES`.
     pub fn createId(self: *StakeDeltaArena) !Id {
         const head = self.free_head.opt() orelse return error.OutOfSpace;
         self.free_head = self.nodes[head.index()].next;
         return head;
     }
 
-    /// Return a node to the free list. `id` must have been
-    /// obtained from a matching `createId` call and not already
-    /// destroyed.
+    /// Return a node to the free list. `id` must have been obtained
+    /// from `createId` and not already destroyed.
     pub fn destroyId(self: *StakeDeltaArena, id: Id) void {
         self.nodes[id.index()] = undefined;
         self.nodes[id.index()].next = self.free_head;
@@ -539,17 +483,13 @@ pub const StakeDeltaArena = extern struct {
 };
 
 /// Per-block running `(effective, activating, deactivating)`
-/// triple used by the `StakeHistory` sysvar update path.
+/// triple for the `StakeHistory` sysvar. Copied parent → child at
+/// `onBlockCreate`; maintained incrementally by the committer on
+/// each stake-ix.
 ///
-/// Copied parent → child at `onBlockCreate`; maintained
-/// incrementally by the committer as each stake-ix lands (the
-/// exec tile has the pre-state in hand, so the delta is a
-/// three-way subtract with no fork-aware cache read).
-///
-/// See `stakes-v2-proposal-v2.md` §6.2 / §11.4 for the
-/// snapshot-at-boundary semantics: these three values are exact
-/// for the epoch they were computed in; boundary derivation
-/// recomputes them against the new epoch's activation state.
+/// Values are exact for the epoch they were computed in. Boundary
+/// derivation recomputes them against the new epoch's activation
+/// state.
 pub const StakeAggregates = extern struct {
     effective: u64, //    8
     activating: u64, //   8
@@ -566,73 +506,49 @@ comptime {
     std.debug.assert(@sizeOf(StakeAggregates) == 24);
 }
 
-/// Provisional owner struct for replay's stakes state.
+/// Owner struct for replay's stakes state. Plain (non-`extern`)
+/// container of already-`extern` pieces; no cross-process consumer
+/// maps `ReplayStakes` itself.
 ///
-/// **Temporary shape.** The rest of v2 exposes shared state as one
-/// top-level region per collection (`BlockPool`, `TransactionPool`,
-/// `ExecReqResponse`), each with its own mmap and passed around as
-/// its own pointer. `ReplayStakes` bundles two such regions
-/// (`epoch_voters`, `live_voters`) for now; the expected end state
-/// is to split them into standalone top-level regions matching
-/// that convention. `epoch_voters` and `live_voters` themselves are
-/// durable — only the wrapping is provisional.
-///
-/// Not `extern` — a container of already-`extern` pieces; no
-/// cross-process consumer maps `ReplayStakes` itself.
+/// TODO(regionize): split `epoch_voters`, `live_voters`, and the
+/// delegations pool into standalone top-level regions to match the
+/// `BlockPool` / `TransactionPool` / `ExecReqResponse` convention.
 pub const ReplayStakes = struct {
     epoch_voters: EpochVoters,
-    /// Indexed by `BlockRef` position within the `BlockPool`. Cloned
-    /// from a parent block's slot at `onBlockCreate`. The root
-    /// block's slot is filled by `reset()` at boot.
+    /// Cloned from parent at `onBlockCreate`. The root block's slot
+    /// is filled by `init()` at boot.
     live_voters: [replay.BlockPool.capacity]LiveVoters,
-    /// Rooted delegator → delegation table. Populated once at boot
-    /// from accounts_db and mutated at each root advance (fold of
-    /// the winning fork's ancestor delta chain) and during
-    /// partitioned reward distribution (`credits_observed` bumps).
+    /// Rooted delegator → delegation table. Mutated only at root
+    /// advance and during partitioned rewards.
     stake_delegations_root: StakeDelegationsRoot,
-    /// Shared arena of `StakeDeltaNode`s. All in-flight
-    /// stake-delegation mutations across all unrooted forks share
-    /// this pool; each node is chained onto exactly one block's
-    /// `stake_delta_head` entry, freed on that block's fold-into-
-    /// root or on that block's prune.
+    /// All in-flight stake-delegation mutations across all unrooted
+    /// forks share this pool. Each node is chained onto exactly one
+    /// block's `stake_delta_head`, freed by fold-into-root on the
+    /// winning path or by `pruneStakeDeltas` on losing siblings.
     stake_delta_arena: StakeDeltaArena,
     /// Per-block head of the arena chain owned by that block.
-    /// `.null` means "no stake-ix landed on this block yet". Reads
-    /// walk this head, then follow `replay.Node.parent` up the
-    /// block tree to reach ancestor deltas. Zeroed to `.null` at
-    /// `onBlockCreate` — deltas are per-block, never shared across
-    /// parent/child.
+    /// `.null` means no stake-ix landed on this block yet. Ancestor
+    /// deltas are reached by walking `replay.Node.parent`, not by
+    /// copy — children start with `.null` head.
     stake_delta_head: [replay.BlockPool.capacity]StakeDeltaArena.Id.Optional,
-    /// Per-block running `(effective, activating, deactivating)`
-    /// triple for the `StakeHistory` sysvar. Byte-copied
-    /// parent → child at `onBlockCreate`; maintained incrementally
-    /// by the committer on each stake-ix.
+    /// Per-block running triple for the `StakeHistory` sysvar.
+    /// Byte-copied parent → child at `onBlockCreate`.
     stake_aggregates: [replay.BlockPool.capacity]StakeAggregates,
-    /// Dedup scratch used by `applyRootedFold`. Sized to cover the
-    /// worst case where every arena node references a distinct
-    /// delegator pubkey (`FixedPubkeyMap` needs ≥ 2× occupancy).
-    /// Reset at the start of every fold. Not read outside
-    /// `applyRootedFold`. ~8 MB inline.
+    /// Dedup scratch used by `applyRootedFold`. Sized 2x
+    /// `MAX_STAKE_DELTA_NODES` for `FixedPubkeyMap`'s occupancy
+    /// invariant. ~8 MB inline; reset at the start of every fold.
     fold_scratch: FoldScratch,
-    /// **Provisional.** Hangs the epoch-boundary hard-stop off a
-    /// single field. Once boundary derivation lands and replay
-    /// tracks `current` / `t_minus_1` / `t_minus_2` rotation slots,
-    /// the epoch of any given slot is derivable from the rotation
-    /// state and this field is deleted.
+    /// TODO(boundary): delete once `current`/`t_minus_1`/
+    /// `t_minus_2` rotation makes the epoch of any given slot
+    /// derivable from the rotation state.
     boot_epoch: Epoch,
-    /// **Provisional.** First slot of the epoch immediately after
-    /// `boot_epoch`. Slots at or beyond this trip
-    /// `ensureSlotInBootEpoch` — the hard-stop for the
-    /// not-yet-implemented boundary path. Cached at boot so the
-    /// hot exec path avoids a per-slot `getEpoch` division.
-    /// Deleted with `boot_epoch`.
+    /// First slot of the epoch immediately after `boot_epoch`.
+    /// Cached at boot so `ensureSlotInBootEpoch` avoids a per-slot
+    /// `getEpoch` division. Deleted with `boot_epoch`.
     first_slot_of_next_epoch: Slot,
 
     pub const FoldScratch = collections.FixedPubkeyMap(void, MAX_STAKE_DELTA_NODES * 2);
 
-    /// Zero-init the struct to a well-defined empty state. Actual
-    /// data is populated by the snapshot boot loader and by the
-    /// root-block setup path.
     pub fn init(self: *ReplayStakes) void {
         self.epoch_voters.init();
         for (&self.live_voters) |*lv| lv.reset();
@@ -646,19 +562,16 @@ pub const ReplayStakes = struct {
     }
 
     /// Populate `epoch_voters` and `boot_epoch` from the snapshot
-    /// manifest. `live_voters` is left in its `init()` state (all
-    /// `.unpopulated`) — the root block has no parent to clone from.
+    /// manifest. `root_slot` is the slot the snapshot was taken at;
+    /// `memory_base` resolves `RelativeSlice` values in `manifest`
+    /// (typically `snapshot_metadata.getMemory()`).
     ///
-    /// `root_slot` is the slot the snapshot was taken at (i.e. the
-    /// root block's slot). `memory_base` is the base pointer used to
-    /// resolve `RelativeSlice` values in `manifest`, typically
-    /// `snapshot_metadata.getMemory()`.
+    /// `live_voters` is left in its `init()` state — the root block
+    /// has no parent to clone from.
     ///
     /// Errors:
-    /// - `error.MissingEpochStakesForCurrentEpoch` if the manifest
-    ///   has no `VersionedEpochStakes` entry for the boot epoch.
-    ///   Post-Alpenglow this should always be present; on older
-    ///   snapshots it may not be.
+    /// - `error.MissingEpochStakesForCurrentEpoch` if no
+    ///   `VersionedEpochStakes` entry matches the boot epoch.
     /// - Propagates errors from `EpochVoters.loadFromVersionedEpochStakes`.
     pub fn loadFromSnapshot(
         self: *ReplayStakes,
@@ -681,14 +594,10 @@ pub const ReplayStakes = struct {
         try self.epoch_voters.loadFromVersionedEpochStakes(entry, memory_base);
     }
 
-    /// Called by replay whenever a fresh `BlockRef` is allocated
-    /// from the `BlockPool` for a genuine new-block event (either a
-    /// slot boundary or a fork within a slot).
-    ///
-    /// Copies the parent's `LiveVoters` and `stake_aggregates`
-    /// slots into the child, and resets the child's
-    /// `stake_delta_head` to `.null` — ancestor deltas are reached
-    /// by walking `replay.Node.parent`, not by copy.
+    /// Called by replay whenever a fresh `BlockRef` is allocated for
+    /// a genuine new-block event (slot boundary or fork within a
+    /// slot). Copies parent's `LiveVoters` + `stake_aggregates` into
+    /// the child; resets the child's `stake_delta_head` to `.null`.
     ///
     /// Not called for same-slot canonical extensions — those reuse
     /// the parent's `BlockRef` unchanged (see
@@ -709,12 +618,9 @@ pub const ReplayStakes = struct {
         self.stake_delta_head[child.index()] = .null;
     }
 
-    /// Hard-stop guard for the not-yet-implemented boundary path.
-    /// Called from replay at every new-slot event; returns
-    /// `error.EpochBoundaryNotYetImplemented` when a fork tries to
-    /// enter the epoch after `boot_epoch`.
-    ///
-    /// Deleted when boundary derivation lands.
+    /// TODO(boundary): delete when boundary derivation lands.
+    /// Returns `error.EpochBoundaryNotYetImplemented` for slots in
+    /// or beyond the epoch after `boot_epoch`.
     pub fn ensureSlotInBootEpoch(self: *const ReplayStakes, slot: Slot) !void {
         if (slot >= self.first_slot_of_next_epoch) {
             return error.EpochBoundaryNotYetImplemented;
@@ -725,29 +631,20 @@ pub const ReplayStakes = struct {
 /// Fold a landed stake-ix upsert into `block`'s delta chain and
 /// running `stake_aggregates` triple.
 ///
-/// - `delegator_pk`: the stake account whose delegation changed.
 /// - `post_delegation`: the delegator's new state after the ix.
-/// - `pre_contribution`: what the delegator contributed to
-///   `(effective, activating, deactivating)` immediately before
-///   this ix on this block's view. Zero for a newly-created stake
-///   account.
-/// - `post_contribution`: what the delegator contributes after
-///   this ix. Both are computed by the exec tile from the
-///   pre/post `StakeStateV2` + current epoch + stake_history —
-///   the primitive is pure with respect to that computation.
+/// - `pre_contribution` / `post_contribution`: what the delegator
+///   contributes to `(effective, activating, deactivating)` before
+///   and after the ix on this block's view. Zero pre for a newly-
+///   created stake account. Computed by the exec tile from the
+///   pre/post `StakeStateV2` + current epoch + stake_history.
 ///
-/// The `next` link on the arena node points at the previous head
-/// of `block`'s chain, so ancestor deltas remain reachable via
-/// the block-tree parent walk (they live under other blocks'
-/// heads).
+/// The arena node's `next` links onto the previous head of
+/// `block`'s chain; ancestor deltas remain reachable via the
+/// block-tree parent walk.
 ///
-/// Errors:
-/// - `error.OutOfSpace` if the arena is exhausted. Treat as
-///   fatal per `stakes-v2-proposal-v2.md` §11.3.
+/// Fatal on `error.OutOfSpace` — see `MAX_STAKE_DELTA_NODES`.
 ///
-/// Not yet reachable at runtime — the exec tile grows a stake
-/// program next; this is the sink the committer will call once
-/// per landed stake-account write.
+/// TODO(exec-tile): call from the committer per landed stake ix.
 pub fn foldStakeIxUpsert(
     stakes: *ReplayStakes,
     block: replay.BlockRef,
@@ -773,15 +670,13 @@ pub fn foldStakeIxUpsert(
 }
 
 /// Fold a landed stake-account closure into `block`'s delta chain
-/// and running aggregates. Post state is implicitly zero — the
-/// account no longer exists on this block.
+/// and running aggregates. Post state is implicitly zero.
 ///
-/// `delegation_at_close` is stashed on the arena node purely for
-/// debug / audit; the fold-into-root path only reads `.kind` for
-/// tombstones and treats `delegation` as undefined. See
-/// `stakes-v2-proposal-v2.md` §6.
+/// `delegation_at_close` is stashed for debug / audit only; the
+/// fold-into-root path treats it as undefined for tombstones and
+/// only reads `.kind`.
 ///
-/// Errors: `error.OutOfSpace` on arena exhaustion.
+/// Fatal on `error.OutOfSpace`.
 pub fn foldStakeIxTombstone(
     stakes: *ReplayStakes,
     block: replay.BlockRef,
@@ -805,13 +700,11 @@ pub fn foldStakeIxTombstone(
     );
 }
 
-/// `agg += post - pre`, applied field-wise with wrapping
-/// arithmetic. The true totals across a block's aggregate history
-/// are non-negative by construction (the sum of `post_contribution`
-/// terms across every stake-ix and every delegator on the block's
-/// ancestor chain), so wrapping is safe: intermediate values may
-/// wrap when a single ix's `pre > post`, but the cumulative
-/// running sum matches the mathematically-correct total.
+/// `agg += post - pre`, field-wise, wrapping. The cumulative sum
+/// across a block's delta chain always equals the mathematically-
+/// correct total because it reduces to `sum(post_contribution)`
+/// across every delta; individual (pre > post) shrinks may
+/// underflow intermediate values but the running total is exact.
 fn applyAggregateDelta(
     agg: *StakeAggregates,
     pre: StakeAggregates,
@@ -826,31 +719,23 @@ fn applyAggregateDelta(
 /// `stake_delegations_root`, advancing the rooted view from
 /// `old_root` to `new_root`.
 ///
-/// Invariants the caller must ensure:
-/// - `new_root` is a descendant of `old_root` via the block-tree
-///   `Node.parent` links (i.e. the winning fork's path).
-/// - `old_root` has already been folded (its delta head is
-///   `.null`). Boot satisfies this trivially; every subsequent
-///   call maintains it.
-/// - No concurrent writer touches `stake_delta_head[..]`,
-///   `stake_delta_arena`, or `stake_delegations_root` during the
-///   fold — replay is the sole writer.
+/// Caller invariants:
+/// - `new_root` is a descendant of `old_root` via `Node.parent`.
+/// - `old_root` has already been folded (`stake_delta_head` is
+///   `.null`). Boot satisfies this trivially.
+/// - Replay is the sole writer to the arena, heads, and root map
+///   for the duration of the call.
 ///
-/// Algorithm: walk `new_root` up the parent chain, stopping
-/// before `old_root`. For each block on the path, iterate its
-/// delta list newest-first. `fold_scratch` deduplicates by
-/// delegator pubkey so only the most-recent delta per delegator
-/// hits the rooted table; older shadowed nodes are freed silently.
+/// Walks `new_root` up the parent chain, stopping before
+/// `old_root`. On each block, iterates its delta list newest-first;
+/// `fold_scratch` deduplicates by delegator pubkey so only the
+/// most-recent delta hits root. Shadowed nodes are freed silently.
+/// Cost: O(sum of delta counts on the path).
 ///
-/// Cost: O(sum of delta counts on the path) time,
-/// O(distinct delegators seen) additional space in `fold_scratch`
-/// (which is pre-sized for the worst case).
-///
-/// Rooted `stake_aggregates` follow implicitly: the invariant
-/// `stake_aggregates[B] = sum of contributions viewed from B` is
-/// maintained through fold and prune, so
-/// `stake_aggregates[new_root]` is already the new rooted total
-/// on return.
+/// Rooted `stake_aggregates` need no explicit maintenance: the
+/// invariant `stake_aggregates[B] = sum of contributions viewed
+/// from B` is preserved by fold and prune, so
+/// `stake_aggregates[new_root]` is already the new rooted total.
 pub fn applyRootedFold(
     stakes: *ReplayStakes,
     block_pool: *const replay.BlockPool,
@@ -869,9 +754,8 @@ pub fn applyRootedFold(
             const next = node.next;
             const delegator_pk = node.delegator_pk;
 
-            // First occurrence wins — we walk newest to oldest, so
-            // the first delta for each delegator is the effective
-            // one on this fork.
+            // Newest-to-oldest walk order + first-write-wins in `seen`
+            // gives most-recent-per-delegator semantics.
             if (stakes.fold_scratch.getPtrConst(delegator_pk) == null) {
                 stakes.fold_scratch.insert(delegator_pk, {}) catch unreachable;
                 switch (node.kind) {
@@ -887,25 +771,18 @@ pub fn applyRootedFold(
         }
         stakes.stake_delta_head[cur.index()] = .null;
 
-        // Ascend. Parent must exist because `new_root` is a
-        // descendant of `old_root`; anything else means the caller
-        // has violated the invariant.
+        // Parent must exist because `new_root` is a descendant of
+        // `old_root`.
         cur = block_pool.indexToConstPtr(cur).parent.opt() orelse
             @panic("applyRootedFold: new_root has no path to old_root");
     }
 }
 
 /// Free every arena node hanging off `block`'s delta head, then
-/// clear the head. Called by replay when pruning a losing sibling
-/// — the block is being evicted from the `BlockPool` and its
-/// deltas will never be folded.
-///
-/// Safe to call on a block whose head is already `.null` (no-op).
-///
-/// Each arena node belongs to exactly one block by construction
-/// (children start with `.null` head, not a copy of parent's head),
-/// so this is a straightforward walk with no shared-reference
-/// concern.
+/// clear the head. Called by replay when pruning a losing sibling.
+/// Idempotent (safe on already-`.null` heads). Safe because each
+/// arena node belongs to exactly one block — children never share
+/// a head with their parent.
 pub fn pruneStakeDeltas(stakes: *ReplayStakes, block: replay.BlockRef) void {
     var link = stakes.stake_delta_head[block.index()];
     while (link.opt()) |id| {
@@ -1087,7 +964,7 @@ test "EpochVoters.loadFromVersionedEpochStakes sorts desc, builds index, sums to
     try std.testing.expectEqual(@as(u64, 500), ev.stakeOf(pk_b));
     try std.testing.expectEqual(@as(u64, 300), ev.stakeOf(pk_c));
 
-    // Commission_bps zero-filled (see doc comment).
+    // Commission_bps in the input is zero, so all entries end up zero.
     for (ev.entries[0..ev.len]) |e| {
         try std.testing.expectEqual(@as(u16, 0), e.commission_bps);
     }
@@ -1222,8 +1099,7 @@ test "solGetEpochStake matches SIMD-0133 semantics (null / hit / miss)" {
     try std.testing.expectEqual(@as(u64, 777), solGetEpochStake(ev, &pk_hit));
 
     // miss -> 0.
-    try std.testing.expectEqual(@as(u64, 0), solGetEpochStake(ev, &pk_miss));
-}
+    try std.testing.expectEqual(@as(u64, 0), solGetEpochStake(ev, &pk_miss));}
 
 test "stakeWeightedTimestamp returns null when no voter has stake" {
     const ev = try std.testing.allocator.create(EpochVoters);
