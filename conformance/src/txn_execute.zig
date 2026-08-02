@@ -110,6 +110,7 @@ const Rent = sig.runtime.sysvar.Rent;
 const SysvarCache = sig.runtime.SysvarCache;
 const RuntimeTransaction = transaction_execution.RuntimeTransaction;
 const TransactionExecutionEnvironment = transaction_execution.TransactionExecutionEnvironment;
+const LAMPORTS_PER_SIGNATURE = sig.runtime.check_transactions.LAMPORTS_PER_SIGNATURE;
 const ProcessedTransaction = transaction_execution.ProcessedTransaction;
 const TransactionResult = transaction_execution.TransactionResult;
 
@@ -702,7 +703,7 @@ fn executeTxnContext(
         // juggles the many different versions of lamports_per_signature.
         .next_lamports_per_signature = last_lamports_per_signature,
         .last_lamports_per_signature = last_lamports_per_signature,
-        .lamports_per_signature = 5000,
+        .lamports_per_signature = LAMPORTS_PER_SIGNATURE,
     };
 
     var failed_accounts = sig.runtime.account_loader.LoadedTransactionAccounts.Accounts{};
