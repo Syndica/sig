@@ -1625,8 +1625,7 @@ test "MerkleForest tree put" {
     };
 
     var pool_buf: [api.BlockPool.size()]u8 align(@alignOf(api.BlockPool)) = undefined;
-    const pool: *api.BlockPool = @ptrCast(&pool_buf);
-    pool.init();
+    const pool = api.BlockPool.initInBuffer(&pool_buf);
 
     const logger = tel.Logger("main").noop;
 
@@ -1705,8 +1704,7 @@ test "bootstrap creates root block and chains blockhashes" {
     metadata.populateSlot(root_slot);
 
     var pool_buf: [api.BlockPool.size()]u8 align(@alignOf(api.BlockPool)) = undefined;
-    const pool: *api.BlockPool = @ptrCast(&pool_buf);
-    pool.init();
+    const pool = api.BlockPool.initInBuffer(&pool_buf);
 
     var forest: MerkleForest = try .init(allocator);
     defer forest.deinit(allocator);
