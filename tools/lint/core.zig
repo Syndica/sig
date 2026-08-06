@@ -77,6 +77,9 @@ pub const SourceFile = struct {
 pub const SourceFiles = struct {
     items: std.ArrayList(SourceFile),
 
+    /// Overlapping roots (`tools` and `tools/lint`, or the same root twice) reach the same
+    /// files, so paths are deduplicated before reading. Without this the same file would be
+    /// linted twice, producing duplicate diagnostics and duplicate fix mode writes.
     pub fn collectAndReadRecursive(
         arena: Allocator,
         root_paths: []const []const u8,
@@ -84,10 +87,11 @@ pub const SourceFiles = struct {
         var collected: std.ArrayList([]const u8) = .empty;
         for (root_paths) |path| try collectPathRecursive(arena, path, &collected);
         sortStrings(collected.items);
+        const unique_paths = dedupeSortedStrings(collected.items);
 
         var files: SourceFiles = .{ .items = .empty };
 
-        for (collected.items) |path| {
+        for (unique_paths) |path| {
             const file = SourceFile.readAndParse(arena, path) catch |e| {
                 log("{} reading file {s}\n", .{ e, path });
                 return e;
@@ -195,12 +199,51 @@ fn collectPathRecursive(
             var it = dir.iterate();
             while (try it.next()) |entry| {
                 if (entry.kind == .directory and isSkippedDir(entry.name)) continue;
-                const child = try std.fs.path.join(arena, &.{ path, entry.name });
+                const child = try joinDirAndName(arena, path, entry.name);
                 try collectPathRecursive(arena, child, paths);
             }
         },
         else => {},
     }
+}
+
+/// Joins a directory with one of its entries. The repository root is spelled ".", which is
+/// dropped so collected paths keep the same repository relative form as every other root.
+fn joinDirAndName(arena: Allocator, dir: []const u8, name: []const u8) ![]u8 {
+    if (std.mem.eql(u8, dir, ".")) return arena.dupe(u8, name);
+    return std.fs.path.join(arena, &.{ dir, name });
+}
+
+/// Collapses runs of equal strings in an already sorted slice, returning the unique prefix.
+fn dedupeSortedStrings(strings: [][]const u8) [][]const u8 {
+    if (strings.len == 0) return strings;
+    var unique: usize = 1;
+    for (strings[1..]) |candidate| {
+        if (std.mem.eql(u8, candidate, strings[unique - 1])) continue;
+        strings[unique] = candidate;
+        unique += 1;
+    }
+    return strings[0..unique];
+}
+
+/// Returns true when the lint path `root` selects `path`. Both are repository relative paths
+/// spelled with forward slashes. A directory root selects everything beneath it, a file root
+/// selects only itself, and "." selects the whole repository. Matching is separator aware, so
+/// `v2/libx` does not select `v2/lib/lib.zig`.
+pub fn pathSelects(root: []const u8, path: []const u8) bool {
+    if (std.mem.eql(u8, root, ".")) return true;
+    if (std.mem.eql(u8, root, path)) return true;
+    return path.len > root.len and
+        std.mem.startsWith(u8, path, root) and
+        path[root.len] == '/';
+}
+
+/// Returns true when any of `roots` selects `path`.
+pub fn pathSelectsAny(roots: []const []const u8, path: []const u8) bool {
+    for (roots) |root| {
+        if (pathSelects(root, path)) return true;
+    }
+    return false;
 }
 
 fn isSkippedDir(name: []const u8) bool {
@@ -309,6 +352,63 @@ test "collectAndReadRecursive fails when root path is missing" {
     );
 }
 
+test "path selection respects separator boundaries" {
+    try std.testing.expect(pathSelects("tools", "tools/lint/main.zig"));
+    try std.testing.expect(pathSelects("tools/lint", "tools/lint/main.zig"));
+    try std.testing.expect(pathSelects("tools/lint/main.zig", "tools/lint/main.zig"));
+    try std.testing.expect(!pathSelects("tools/lint/cli.zig", "tools/lint/main.zig"));
+    try std.testing.expect(pathSelects("v2/lib", "v2/lib/lib.zig"));
+    try std.testing.expect(!pathSelects("v2/lib/crypto", "v2/lib/lib.zig"));
+    try std.testing.expect(!pathSelects("v2/libx", "v2/lib/lib.zig"));
+    try std.testing.expect(pathSelects(".", "v2/lib/lib.zig"));
+
+    const roots = [_][]const u8{ "tools/lint", "v2/lib" };
+    try std.testing.expect(pathSelectsAny(&roots, "v2/lib/lib.zig"));
+    try std.testing.expect(pathSelectsAny(&roots, "tools/lint/cli.zig"));
+    try std.testing.expect(!pathSelectsAny(&roots, "v2/components/gossip/api.zig"));
+    try std.testing.expect(!pathSelectsAny(&.{}, "v2/lib/lib.zig"));
+}
+
+test "collect deduplicates overlapping roots" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const baseline = try SourceFiles.collectAndReadRecursive(arena, &.{"tools/lint"});
+    try std.testing.expect(baseline.items.items.len > 1);
+
+    // The same root listed twice.
+    const repeated = try SourceFiles.collectAndReadRecursive(
+        arena,
+        &.{ "tools/lint", "tools/lint" },
+    );
+    try std.testing.expectEqual(baseline.items.items.len, repeated.items.items.len);
+
+    // A directory plus a file it already contains.
+    const with_contained_file = try SourceFiles.collectAndReadRecursive(
+        arena,
+        &.{ "tools/lint", "tools/lint/cli.zig" },
+    );
+    try std.testing.expectEqual(baseline.items.items.len, with_contained_file.items.items.len);
+
+    // A directory plus a subdirectory it already contains.
+    const lib = try SourceFiles.collectAndReadRecursive(arena, &.{"v2/lib"});
+    const with_contained_dir = try SourceFiles.collectAndReadRecursive(
+        arena,
+        &.{ "v2/lib", "v2/lib/crypto" },
+    );
+    try std.testing.expectEqual(lib.items.items.len, with_contained_dir.items.items.len);
+
+    // Distinct files that share a prefix must both survive.
+    const siblings = try SourceFiles.collectAndReadRecursive(
+        arena,
+        &.{ "tools/lint/cli.zig", "tools/lint/core.zig" },
+    );
+    try std.testing.expectEqual(2, siblings.items.items.len);
+    try std.testing.expectEqualStrings("tools/lint/cli.zig", siblings.items.items[0].path);
+    try std.testing.expectEqualStrings("tools/lint/core.zig", siblings.items.items[1].path);
+}
+
 test "line helpers clamp offsets and include newline" {
     const source = "abc\ndef\nxyz";
 
@@ -334,7 +434,8 @@ test "line helpers clamp offsets and include newline" {
     try std.testing.expectEqual(source.len, lineEndIncludingNewline(source, source.len + 10));
 }
 
-var should_log_in_test = true;
+/// Lets tests that assert on error paths keep the test output clean.
+pub var should_log_in_test = true;
 
 pub fn log(comptime fmt: []const u8, args: anytype) void {
     if (!@import("builtin").is_test or should_log_in_test) std.debug.print(fmt, args);

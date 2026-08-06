@@ -9,8 +9,9 @@ const test_install_dir: Build.Step.InstallArtifact.Options.Dir = .{
     .override = .{ .custom = "bin/tests" },
 };
 
-/// Tests open their fixtures at paths relative to the build root, so their run steps pin
-/// the working directory here rather than inheriting the directory `zig build` ran in.
+/// Tests open their fixtures, and the linter walks its paths, relative to the build root, so
+/// their run steps pin the working directory here rather than inheriting the directory
+/// `zig build` ran in.
 fn buildRootDir(b: *Build) Build.LazyPath {
     return b.path(".");
 }
@@ -661,6 +662,7 @@ const Tools = struct {
                 .optimize = .ReleaseSafe,
             }),
         }, .{});
+        if (lint_exe.run) |run| run.setCwd(buildRootDir(b));
         unit_tests.add("lint-tests", b.createModule(.{
             .root_source_file = b.path("tools/lint/main.zig"),
             .target = b.graph.host,
