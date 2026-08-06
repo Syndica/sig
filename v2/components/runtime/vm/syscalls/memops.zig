@@ -105,6 +105,13 @@ pub fn memcmp(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
     const check_aligned = tc.getCheckAligned();
     const s1 = try memory_map.translateSlice(u8, .constant, a_addr, len, check_aligned);
     const s2 = try memory_map.translateSlice(u8, .constant, b_addr, len, check_aligned);
+
+    const result = for (s1, s2) |a, b| {
+        if (a != b) {
+            break @as(i32, a) -| @as(i32, b);
+        }
+    } else 0;
+
     const cmp_result = try memory_map.translateType(
         i32,
         .mutable,
@@ -112,12 +119,7 @@ pub fn memcmp(tc: *TransactionContext, memory_map: *MemoryMap, registers: *Regis
         check_aligned,
     );
 
-    for (s1, s2) |a, b| {
-        if (a != b) {
-            cmp_result.* = @as(i32, a) -| @as(i32, b);
-            break;
-        }
-    } else cmp_result.* = 0;
+    cmp_result.* = result;
 }
 
 /// [agave] https://github.com/anza-xyz/agave/blob/v3.1.4/syscalls/src/mem_ops.rs#L113-L135
@@ -292,4 +294,68 @@ test "memmove syscall" {
         }.verify,
         .{},
     );
+}
+
+test "memcmp check wrong result if account growth triggered" {
+    const allocator = std.testing.allocator;
+    const input_addr = memory.INPUT_START;
+    const expected_addr = memory.HEAP_START;
+
+    var old: [8]u8 align(8) = .{ 0x11, 0x22, 0x33, 0x44, 0, 0, 0, 0 };
+    var new: [12]u8 align(8) = @splat(0);
+    const expected = [_]u8{ 0x11, 0x22, 0x33, 0x44 };
+
+    const Grow = struct {
+        old: *[8]u8,
+        new: *[12]u8,
+
+        fn handle(
+            raw: *anyopaque,
+            region: *memory.Region,
+            _: u64,
+            _: memory.MemoryState,
+            _: u64,
+            _: u64,
+        ) void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            @memcpy(self.new[0..self.old.len], self.old);
+            @memset(self.old, 0xaa);
+            region.host_memory = .{ .mutable = self.new };
+            region.vm_addr_end = region.vm_addr_start + self.new.len;
+        }
+    };
+    var grow = Grow{ .old = &old, .new = &new };
+
+    var map = try MemoryMap.init(
+        allocator,
+        &.{
+            memory.Region.init(.constant, &expected, expected_addr),
+            memory.Region.init(.mutable, &old, input_addr),
+        },
+        .v2,
+        .{ .aligned_memory_mapping = false, .virtual_address_space_adjustments = true },
+    );
+    defer map.deinit(allocator);
+    map.setAccessViolationHandler(.{ .ctx = &grow, .call = Grow.handle });
+
+    var prng = std.Random.DefaultPrng.init(0);
+    var cache, var tc = try sig.runtime.testing.createTransactionContext(
+        allocator,
+        prng.random(),
+        .{ .compute_meter = 10_000 },
+    );
+    defer {
+        sig.runtime.testing.deinitTransactionContext(allocator, &tc);
+        cache.deinit(allocator);
+    }
+
+    var registers = RegisterMap.initFill(0);
+    registers.set(.r1, input_addr);
+    registers.set(.r2, expected_addr);
+    registers.set(.r3, 4);
+    registers.set(.r4, input_addr + 8); // result translation triggers growth
+    try memcmp(&tc, &map, &registers);
+
+    const observed = std.mem.readInt(i32, new[8..12], .little);
+    try std.testing.expectEqual(@as(i32, 0), observed);
 }
