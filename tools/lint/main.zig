@@ -17,6 +17,7 @@ comptime {
 }
 
 // Paths the linter walks, relative to the repo root (where sig-lint is invoked from).
+// Used when no paths are requested with `--path`.
 const project_paths = [_][]const u8{
     "build.zig",
     "v2/main.zig",
@@ -35,6 +36,12 @@ const test_inclusion_static_roots = [_][]const u8{
     "v2/lib/lib.zig",
     "tools/lint/main.zig",
 };
+
+/// Directory searched for the component test inclusion roots named by `component_root_files`.
+const components_dir_path = "v2/components";
+
+/// The companion files that jointly cover a component directory.
+const component_root_files = [_][]const u8{ "api.zig", "component.zig" };
 
 // File-level rules (line_length, unused_declarations) are skipped for files
 // under these path prefixes.
@@ -74,6 +81,8 @@ pub fn main() u8 {
                     .{},
                 );
             },
+            // resolveLintPaths already explained which path was rejected and why.
+            error.InvalidLintPath => {},
             else => {
                 std.debug.print("lint internal error: {s}\n", .{@errorName(err)});
                 if (@errorReturnTrace()) |trace| std.debug.dumpStackTrace(trace.*);
@@ -94,40 +103,22 @@ pub fn main() u8 {
 fn run(ctx: *core.Context) !void {
     try ensureFixModeCleanAtPath(ctx, ".");
 
-    var files = try core.SourceFiles.collectAndReadRecursive(ctx.arena, &project_paths);
+    const lint_paths = try resolveLintPaths(ctx.arena, ctx.config.paths);
+
+    var files = try core.SourceFiles.collectAndReadRecursive(ctx.arena, lint_paths.all);
 
     if (ctx.config.verbose) {
         std.debug.print("linting {d} files\n", .{files.items.items.len});
     }
 
-    try line_length.lintExcludedPathsExist(ctx, &files);
+    try line_length.lintExcludedPathsExist(ctx, lint_paths.all, &files);
 
     for (files.items.items) |*file| {
         try lintFileLevelRules(ctx, file);
     }
 
-    // Walk `v2/components/` and add each subdir's `{api,component}.zig`
-    // as a joint pair of roots.
-    var test_inclusion_roots: std.ArrayList([]const u8) = .empty;
-    try test_inclusion_roots.appendSlice(ctx.arena, &test_inclusion_static_roots);
-    var components_dir = try std.fs.cwd().openDir("v2/components", .{ .iterate = true });
-    defer components_dir.close();
-    var it = components_dir.iterate();
-    while (try it.next()) |entry| {
-        if (entry.kind != .directory) continue;
-        if (std.mem.eql(u8, entry.name, "runtime")) continue;
-        try test_inclusion_roots.append(ctx.arena, try std.fmt.allocPrint(
-            ctx.arena,
-            "v2/components/{s}/api.zig",
-            .{entry.name},
-        ));
-        try test_inclusion_roots.append(ctx.arena, try std.fmt.allocPrint(
-            ctx.arena,
-            "v2/components/{s}/component.zig",
-            .{entry.name},
-        ));
-    }
-    try test_inclusion.lint(ctx, test_inclusion_roots.items, &files);
+    const test_inclusion_roots = try collectTestInclusionRoots(ctx.arena, lint_paths.directories);
+    try test_inclusion.lint(ctx, test_inclusion_roots, &files);
 
     if (ctx.config.mode == .fix) {
         for (files.items.items) |*file| {
@@ -141,6 +132,340 @@ fn run(ctx: *core.Context) !void {
             try core.runZigFmt(ctx.arena, file.path);
         }
     }
+}
+
+const NormalizeLintPathError = error{
+    LintPathEmpty,
+    LintPathAbsolute,
+    LintPathEscapesRepository,
+    OutOfMemory,
+};
+
+const is_windows = @import("builtin").os.tag == .windows;
+
+/// `\` only separates path components on Windows; on POSIX it is a legal filename character.
+const path_separators = if (is_windows) "/\\" else "/";
+
+/// A drive designator resolves against a drive rather than the repository root, whether it is
+/// drive absolute (`C:\foo`) or drive relative (`C:foo`).
+fn hasWindowsDriveDesignator(path: []const u8) bool {
+    return path.len >= 2 and path[1] == ':' and std.ascii.isAlphabetic(path[0]);
+}
+
+/// Normalizes a requested lint path into the repository relative, forward slash form the rest
+/// of the linter compares against. Redundant `.` components, repeated separators and trailing
+/// separators are dropped. The repository root itself normalizes to ".".
+fn normalizeLintPath(
+    arena: std.mem.Allocator,
+    path: []const u8,
+) NormalizeLintPathError![]const u8 {
+    if (path.len == 0) return error.LintPathEmpty;
+    if (std.fs.path.isAbsolute(path)) return error.LintPathAbsolute;
+    if (is_windows and hasWindowsDriveDesignator(path)) return error.LintPathAbsolute;
+
+    var components: std.ArrayList([]const u8) = .empty;
+    var it = std.mem.splitAny(u8, path, path_separators);
+    while (it.next()) |component| {
+        if (component.len == 0) continue;
+        if (std.mem.eql(u8, component, ".")) continue;
+        // Only a whole `..` component escapes; names like `..foo` are ordinary files.
+        if (std.mem.eql(u8, component, "..")) return error.LintPathEscapesRepository;
+        try components.append(arena, component);
+    }
+
+    if (components.items.len == 0) return ".";
+    return try std.mem.join(arena, "/", components.items);
+}
+
+const LintPathKind = enum { file, directory };
+
+/// Rejects lint paths the linter cannot walk: paths that do not exist, explicit files that
+/// are not zig sources, and anything that is neither a file nor a directory.
+fn validateLintPath(path: []const u8) !LintPathKind {
+    const kind: std.fs.File.Kind = blk: {
+        const stat = std.fs.cwd().statFile(path) catch |err| switch (err) {
+            error.IsDir => break :blk .directory,
+            error.FileNotFound, error.NotDir => {
+                core.log("lint path does not exist: {s}\n", .{path});
+                return error.InvalidLintPath;
+            },
+            else => |e| return e,
+        };
+        break :blk stat.kind;
+    };
+
+    switch (kind) {
+        .directory => return .directory,
+        .file => {
+            if (!std.mem.endsWith(u8, path, ".zig")) {
+                core.log("lint path is not a zig source file: {s}\n", .{path});
+                return error.InvalidLintPath;
+            }
+            return .file;
+        },
+        else => {
+            core.log("lint path is neither a file nor a directory: {s}\n", .{path});
+            return error.InvalidLintPath;
+        },
+    }
+}
+
+const LintPaths = struct {
+    all: []const []const u8,
+    /// Test inclusion compares a companion file against its siblings, so only a selected
+    /// directory can supply a root. An explicitly selected file gets file level rules only.
+    directories: []const []const u8,
+};
+
+/// Resolves and validates the paths to walk. Falls back to `project_paths` when nothing was
+/// requested, so an argument-free run lints exactly what it always has.
+fn resolveLintPaths(
+    arena: std.mem.Allocator,
+    requested: []const []const u8,
+) !LintPaths {
+    const use_defaults = requested.len == 0;
+    const sources: []const []const u8 = if (use_defaults) &project_paths else requested;
+
+    var all: std.ArrayList([]const u8) = .empty;
+    var directories: std.ArrayList([]const u8) = .empty;
+    for (sources) |source| {
+        const path = if (use_defaults) source else try normalizeRequestedPath(arena, source);
+        const kind = try validateLintPath(path);
+        try all.append(arena, path);
+        if (kind == .directory) try directories.append(arena, path);
+    }
+
+    return .{ .all = all.items, .directories = directories.items };
+}
+
+fn normalizeRequestedPath(arena: std.mem.Allocator, request: []const u8) ![]const u8 {
+    return normalizeLintPath(arena, request) catch |err| {
+        switch (err) {
+            error.OutOfMemory => return err,
+            error.LintPathEmpty => core.log("lint path is empty\n", .{}),
+            error.LintPathAbsolute => core.log(
+                "lint path must be relative to the repository root: {s}\n",
+                .{request},
+            ),
+            error.LintPathEscapesRepository => core.log(
+                "lint path must not contain a '..' component: {s}\n",
+                .{request},
+            ),
+        }
+        return error.InvalidLintPath;
+    };
+}
+
+/// Test inclusion roots that fall inside `lint_dirs`. Walks `v2/components/` and adds each
+/// subdir's `{api,component}.zig` as a joint pair of roots.
+///
+/// Roots are filtered by path rather than by whether their file was collected, so a genuinely
+/// missing companion file is still reported instead of being quietly dropped.
+fn collectTestInclusionRoots(
+    arena: std.mem.Allocator,
+    lint_dirs: []const []const u8,
+) ![]const []const u8 {
+    if (lint_dirs.len == 0) return &.{};
+
+    var roots: std.ArrayList([]const u8) = .empty;
+    for (test_inclusion_static_roots) |root| {
+        if (core.pathSelectsAny(lint_dirs, root)) try roots.append(arena, root);
+    }
+
+    var components_dir = std.fs.cwd().openDir(
+        components_dir_path,
+        .{ .iterate = true },
+    ) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => return roots.items,
+        else => |e| return e,
+    };
+    defer components_dir.close();
+
+    var it = components_dir.iterate();
+    while (try it.next()) |entry| {
+        if (entry.kind != .directory) continue;
+        if (std.mem.eql(u8, entry.name, "runtime")) continue;
+        for (component_root_files) |file_name| {
+            const root = try std.fmt.allocPrint(
+                arena,
+                "{s}/{s}/{s}",
+                .{ components_dir_path, entry.name, file_name },
+            );
+            if (core.pathSelectsAny(lint_dirs, root)) try roots.append(arena, root);
+        }
+    }
+
+    return roots.items;
+}
+
+fn containsPath(paths: []const []const u8, needle: []const u8) bool {
+    for (paths) |path| {
+        if (std.mem.eql(u8, path, needle)) return true;
+    }
+    return false;
+}
+
+fn expectNormalized(expected: []const u8, path: []const u8) !void {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+
+    const normalized = try normalizeLintPath(arena_state.allocator(), path);
+    try std.testing.expectEqualStrings(expected, normalized);
+}
+
+fn expectNormalizeError(expected: NormalizeLintPathError, path: []const u8) !void {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+
+    try std.testing.expectError(expected, normalizeLintPath(arena_state.allocator(), path));
+}
+
+test "lint paths normalize to repository relative form" {
+    try expectNormalized("tools/lint", "tools/lint");
+    try expectNormalized("tools/lint", "./tools/lint");
+    try expectNormalized("tools/lint", "tools/lint/");
+    try expectNormalized("tools/lint", "tools//lint");
+    try expectNormalized("tools/lint", "./tools/./lint///");
+    try expectNormalized("tools/lint/cli.zig", "tools/lint/cli.zig");
+    try expectNormalized(".", ".");
+    try expectNormalized(".", "./");
+    // Only a whole `..` component escapes the repository.
+    try expectNormalized("tools/..foo", "tools/..foo");
+}
+
+test "backslashes only separate components on windows" {
+    if (is_windows) {
+        try expectNormalized("tools/lint", "tools\\lint");
+    } else {
+        try expectNormalized("tools\\lint", "tools\\lint");
+    }
+}
+
+test "windows drive designators are not repository relative" {
+    try std.testing.expect(hasWindowsDriveDesignator("C:foo"));
+    try std.testing.expect(hasWindowsDriveDesignator("c:\\foo"));
+    try std.testing.expect(!hasWindowsDriveDesignator("tools/lint"));
+    try std.testing.expect(!hasWindowsDriveDesignator("2:foo"));
+
+    if (is_windows) {
+        try expectNormalizeError(error.LintPathAbsolute, "C:foo");
+        try expectNormalizeError(error.LintPathAbsolute, "C:\\foo");
+        try expectNormalizeError(error.LintPathAbsolute, "\\\\server\\share");
+    }
+}
+
+test "lint paths outside the repository are rejected" {
+    try expectNormalizeError(error.LintPathEmpty, "");
+    try expectNormalizeError(error.LintPathAbsolute, "/tools/lint");
+    try expectNormalizeError(error.LintPathEscapesRepository, "..");
+    try expectNormalizeError(error.LintPathEscapesRepository, "../outside");
+    try expectNormalizeError(error.LintPathEscapesRepository, "tools/../../outside");
+    try expectNormalizeError(error.LintPathEscapesRepository, "tools/lint/..");
+}
+
+test "no requested paths keeps the default project paths" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+
+    const resolved = try resolveLintPaths(arena_state.allocator(), &.{});
+
+    try std.testing.expectEqual(project_paths.len, resolved.all.len);
+    for (project_paths, resolved.all) |expected, actual| {
+        try std.testing.expectEqualStrings(expected, actual);
+    }
+}
+
+test "requested paths accept directories and zig files" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const directory = try resolveLintPaths(arena, &.{"./tools/lint/"});
+    try std.testing.expectEqual(1, directory.all.len);
+    try std.testing.expectEqualStrings("tools/lint", directory.all[0]);
+    try std.testing.expectEqual(1, directory.directories.len);
+    try std.testing.expectEqualStrings("tools/lint", directory.directories[0]);
+
+    const file = try resolveLintPaths(arena, &.{"tools/lint/cli.zig"});
+    try std.testing.expectEqual(1, file.all.len);
+    try std.testing.expectEqualStrings("tools/lint/cli.zig", file.all[0]);
+    try std.testing.expectEqual(0, file.directories.len);
+
+    const both = try resolveLintPaths(arena, &.{ "tools/lint", "v2/lib" });
+    try std.testing.expectEqual(2, both.all.len);
+    try std.testing.expectEqualStrings("tools/lint", both.all[0]);
+    try std.testing.expectEqualStrings("v2/lib", both.all[1]);
+
+    const root = try resolveLintPaths(arena, &.{"."});
+    try std.testing.expectEqual(1, root.all.len);
+    try std.testing.expectEqualStrings(".", root.all[0]);
+}
+
+test "requested paths reject missing paths and non zig files" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    core.should_log_in_test = false;
+    defer core.should_log_in_test = true;
+
+    try std.testing.expectError(
+        error.InvalidLintPath,
+        resolveLintPaths(arena, &.{"tools/lint/.missing_lint_path.zig"}),
+    );
+    try std.testing.expectError(
+        error.InvalidLintPath,
+        resolveLintPaths(arena, &.{"README.md"}),
+    );
+    try std.testing.expectError(
+        error.InvalidLintPath,
+        resolveLintPaths(arena, &.{"/tools/lint"}),
+    );
+    try std.testing.expectError(
+        error.InvalidLintPath,
+        resolveLintPaths(arena, &.{"../outside"}),
+    );
+}
+
+test "test inclusion roots are limited to the linted paths" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // A default run keeps every static root and every discovered component root.
+    const default_paths = try resolveLintPaths(arena, &.{});
+    const defaults = try collectTestInclusionRoots(arena, default_paths.directories);
+    for (test_inclusion_static_roots) |root| {
+        try std.testing.expect(containsPath(defaults, root));
+    }
+    try std.testing.expect(containsPath(defaults, "v2/components/gossip/api.zig"));
+    try std.testing.expect(containsPath(defaults, "v2/components/gossip/component.zig"));
+    try std.testing.expect(!containsPath(defaults, "v2/components/runtime/api.zig"));
+
+    // A directory selects the roots underneath it, and nothing else.
+    const scoped = try collectTestInclusionRoots(arena, &.{"tools/lint"});
+    try std.testing.expectEqual(1, scoped.len);
+    try std.testing.expectEqualStrings("tools/lint/main.zig", scoped[0]);
+
+    const sibling = try collectTestInclusionRoots(arena, &.{"v2/lib/crypto"});
+    try std.testing.expectEqual(0, sibling.len);
+}
+
+test "an explicit file does not activate test inclusion" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // `tools/lint/main.zig` is itself a static root, but naming it directly asks for file
+    // level rules only.
+    const file = try resolveLintPaths(arena, &.{"tools/lint/main.zig"});
+    const file_roots = try collectTestInclusionRoots(arena, file.directories);
+    try std.testing.expectEqual(0, file_roots.len);
+
+    const directory = try resolveLintPaths(arena, &.{"tools/lint"});
+    const directory_roots = try collectTestInclusionRoots(arena, directory.directories);
+    try std.testing.expectEqual(1, directory_roots.len);
+    try std.testing.expectEqualStrings("tools/lint/main.zig", directory_roots[0]);
 }
 
 fn ensureFixModeCleanAtPath(ctx: *const core.Context, cwd: []const u8) !void {

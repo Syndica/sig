@@ -30,9 +30,16 @@ const excluded_paths = [_][]const u8{
     "v2/lib/crypto/ed25519/wycheproof.zig",
 };
 
-/// Sanity check files skipped exist to keep list in sync with repo
-pub fn lintExcludedPathsExist(ctx: *core.Context, files: *const core.SourceFiles) !void {
+/// Sanity check files skipped exist to keep list in sync with repo. Only exclusions inside
+/// `lint_paths` are checked, because the rest were never collected and would otherwise look
+/// stale during a lint run scoped to a subset of the repository.
+pub fn lintExcludedPathsExist(
+    ctx: *core.Context,
+    lint_paths: []const []const u8,
+    files: *const core.SourceFiles,
+) !void {
     for (excluded_paths) |excluded| {
+        if (!core.pathSelectsAny(lint_paths, excluded)) continue;
         if (files.get(excluded) == null) {
             try ctx.addDiagnostic(
                 excluded,
@@ -200,7 +207,9 @@ test "excluded paths report stale entries" {
     var ctx: core.Context = .{ .arena = allocator, .config = config };
     const files: core.SourceFiles = .{ .items = .empty };
 
-    try lintExcludedPathsExist(&ctx, &files);
+    // Mirrors the default project paths, which cover every configured exclusion.
+    const lint_paths = [_][]const u8{ "v2/components", "v2/lib" };
+    try lintExcludedPathsExist(&ctx, &lint_paths, &files);
 
     try std.testing.expectEqual(excluded_paths.len, ctx.diagnostics.items.len);
     try std.testing.expectEqualStrings(excluded_paths[0], ctx.diagnostics.items[0].path);
@@ -209,4 +218,22 @@ test "excluded paths report stale entries" {
             "if no longer part of project",
         ctx.diagnostics.items[0].message,
     );
+}
+
+test "excluded paths outside the linted paths are not reported" {
+    const allocator = std.heap.page_allocator;
+    const config: cli.Config = .{};
+    var ctx: core.Context = .{ .arena = allocator, .config = config };
+    const files: core.SourceFiles = .{ .items = .empty };
+
+    // `excluded_paths` only ever holds files under v2, so a tools-only run has nothing to check.
+    const unrelated_paths = [_][]const u8{"tools/lint"};
+    try lintExcludedPathsExist(&ctx, &unrelated_paths, &files);
+    try std.testing.expectEqual(0, ctx.diagnostics.items.len);
+
+    // The directory holding the first exclusion still validates that one, and only that one.
+    const relevant_paths = [_][]const u8{std.fs.path.dirname(excluded_paths[0]).?};
+    try lintExcludedPathsExist(&ctx, &relevant_paths, &files);
+    try std.testing.expectEqual(1, ctx.diagnostics.items.len);
+    try std.testing.expectEqualStrings(excluded_paths[0], ctx.diagnostics.items[0].path);
 }

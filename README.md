@@ -106,6 +106,17 @@ Pass explicit linter args after `--`:
 zig build lint -- --fix  # automatically apply fixes
 ```
 
+By default the linter walks a fixed set of project paths. Use `--path` to lint something else:
+
+```sh
+zig build lint -- --path tools/lint
+zig build lint -- --path tools/lint --path v2/lib
+```
+
+- `--path` is repeatable, and explicit paths replace the defaults rather than adding to them.
+- Paths are relative to the repository root.
+- A directory is collected recursively; an explicit file must be a `.zig` source file.
+
 ### Docs
 
 ```sh
