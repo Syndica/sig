@@ -3725,6 +3725,92 @@ test "AccessViolationHandlerCtx.handle" {
     }
 }
 
+test "getReturnData reacquires outputs after real account growth" {
+    const testing = sig.runtime.testing;
+
+    // Arena so `AccountSharedData.resize`'s free of the old backing is a no-op —
+    // the stale-pointer write stays benign and the failure is a clean data diff.
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const allocator = arena_state.allocator();
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    const program_id = Pubkey.initRandom(prng.random());
+    const data_account_key = Pubkey.initRandom(prng.random());
+
+    // The account starts at 8 bytes: the return-data output [0, 4) fits, but the
+    // program-id output [8, 40) lands past the end and forces a grow.
+    const initial_data = [_]u8{0} ** 8;
+
+    _, var tc = try testing.createTransactionContext(allocator, prng.random(), .{
+        .compute_meter = 10_000,
+        .accounts = &.{
+            // index 0: writable, program-owned account data (the growable region).
+            .{ .pubkey = data_account_key, .data = &initial_data, .owner = program_id },
+            // index 1: the program itself.
+            .{ .pubkey = program_id, .owner = sig.runtime.ids.NATIVE_LOADER_ID },
+        },
+        .return_data = .{
+            .program_id = program_id,
+            .data = &.{ 0x11, 0x22, 0x33, 0x44 },
+        },
+    });
+
+    const vm_start: u64 = vm.memory.INPUT_START;
+
+    // Region 0: the account data, tagged with its transaction index (0) so the
+    // handler treats it as growable — exactly what serialization does via
+    // `Region.withPayload`.
+    const account_region = vm.memory.Region.init(
+        .mutable,
+        tc.accounts[0].account.data,
+        vm_start,
+    ).withPayload(0);
+
+    var map = try vm.memory.MemoryMap.init(
+        allocator,
+        &.{
+            account_region,
+        },
+        .v2,
+        .{ .aligned_memory_mapping = false, .virtual_address_space_adjustments = true },
+    );
+    defer map.deinit(allocator);
+
+    // Install the production handler, exactly as `execute()` does at runtime.
+    var avh_ctx: AccessViolationHandlerCtx = .{
+        .tc = &tc,
+        .allocator = allocator,
+        .direct_mapping = true,
+    };
+    map.setAccessViolationHandler(.{
+        .ctx = @ptrCast(&avh_ctx),
+        .call = AccessViolationHandlerCtx.handle,
+    });
+
+    var registers = vm.interpreter.RegisterMap.initFill(0);
+    registers.set(.r1, vm_start); // return data dest: [0, 4) fits the 8-byte account
+    registers.set(.r2, 4);
+    registers.set(.r3, vm_start + 8); // program id dest: [8, 40) is past the end -> grow
+
+    try vm.syscalls.getReturnData(&tc, &map, &registers);
+
+    // The live (reallocated) account must hold the return data. On buggy Sig it
+    // stays zero: the bytes were written through the stale pre-grow pointer.
+    try std.testing.expectEqualSlices(
+        u8,
+        &.{ 0x11, 0x22, 0x33, 0x44 },
+        tc.accounts[0].account.data[0..4],
+    );
+    // The program id landed correctly in the post-grow buffer.
+    try std.testing.expectEqualSlices(
+        u8,
+        &program_id.data,
+        tc.accounts[0].account.data[8..40],
+    );
+}
+
 // SIMD-0460: covers `remapAccessViolation` — converts a generic
 // `AccessViolation` (raised by the VM after the access-violation handler
 // declined to grow) into the specific account-related `InstructionError` the
