@@ -25,6 +25,14 @@ const parallelUnpackZstdTarBall = sig.accounts_db.snapshot.parallelUnpackZstdTar
 // NOTE: this also represents the interval at which progress updates are issued
 const DOWNLOAD_WARMUP_TIME = sig.time.Duration.fromSecs(20);
 
+/// Number of consecutive peer-search rounds (~5s apart) tolerated in which
+/// valid peers exist but none of them advertises a snapshot downloadable in
+/// the requested mode, before giving up. Bounded so a cluster whose peers
+/// serve no incremental snapshots (like a local `solana-test-validator`)
+/// doesn't stall bootstrap forever; the caller falls back to booting from
+/// the full snapshot alone.
+const MAX_UNDOWNLOADABLE_ROUNDS = 5;
+
 const BYTE_PER_KIB = 1024;
 const BYTE_PER_MIB = 1024 * BYTE_PER_KIB;
 const BYTE_PER_GIB = 1024 * BYTE_PER_MIB;
@@ -264,6 +272,7 @@ fn downloadSnapshotWithRetry(
 
     var timer = try std.time.Timer.start();
     var dl_attempts: u64 = 0;
+    var undownloadable_rounds: u64 = 0;
 
     return get_peers: while (timer.read() < max_time.ns and dl_attempts < max_attempts) {
         defer _ = arena.reset(.retain_capacity);
@@ -297,13 +306,19 @@ fn downloadSnapshotWithRetry(
         // 2) configure timeouts to be lower
 
         // try to download from all eligible peers
+        var skipped_peers: usize = 0;
         downloads: for (peers) |peer| {
             const uri, const file_name, const url = try downloadInfo(
                 allocator,
                 mode,
                 peer,
                 full_snapshot_slot,
-            ) orelse continue :downloads;
+            ) orelse {
+                // the peer has no snapshot downloadable in this mode,
+                // e.g. it doesn't serve an incremental snapshot
+                skipped_peers += 1;
+                continue :downloads;
+            };
             defer allocator.free(url);
             defer dl_attempts += 1;
 
@@ -331,6 +346,21 @@ fn downloadSnapshotWithRetry(
 
             break :get_peers .{ peer.full_snapshot.slot, file };
         }
+
+        if (peers.len > 0 and skipped_peers == peers.len) {
+            // every valid peer lacks a snapshot downloadable in this mode;
+            // retrying won't change what peers advertise, so give up after a
+            // few rounds instead of looping forever
+            undownloadable_rounds += 1;
+            if (undownloadable_rounds >= MAX_UNDOWNLOADABLE_ROUNDS) {
+                logger.warn().log("found valid snapshot peers, but none of them serve " ++
+                    "a(n) " ++ @tagName(mode) ++ " snapshot. giving up");
+                return error.UnableToDownloadSnapshot;
+            }
+        } else {
+            undownloadable_rounds = 0;
+        }
+
         // Failed to download from any peers, getting new peers
         // We don't have a good peer yet, wait for gossip table population
         logger.warn().logf("could not find an acceptable snapshot peer. retrying in 5 seconds", .{});
