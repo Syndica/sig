@@ -20,8 +20,7 @@ const util = @import("../util.zig");
 /// // This storage would typically be a shared memory mapping. Stack storage used here
 /// // for simplicity.
 /// var storage: [IntPool.size()]u8 align(@alignOf(IntPool)) = undefined;
-/// const pool: *IntPool = @ptrCast(&storage);
-/// pool.init();
+/// const pool = IntPool.initInBuffer(&storage);
 ///
 /// const item_id = try pool.createId();
 /// item_id.ptr(pool).* = 42;
@@ -44,11 +43,12 @@ pub fn SharedPool(Item: type, cap: usize) type {
         free_list: ItemId.Optional,
 
         // This is effectively a [capacity]Node, however Zig doesn't let us make structs over 4GiB,
-        // which some pools may be.
+        // which some pools may be. A zero length array adds nothing to the header, so it just
+        // marks where the items start and forces the header to be padded to their alignment.
         // We're not using a pointer as we want the header field(s) to be in the same buffer as the
         // pool items.
         // This should normally only be accessed via .buf().
-        _buf: void align(@alignOf(Node)),
+        _buf: [0]Node,
 
         const PoolSelf = @This();
         pub const capacity = cap;
@@ -95,14 +95,23 @@ pub fn SharedPool(Item: type, cap: usize) type {
             return @offsetOf(PoolSelf, "_buf") + capacity * @sizeOf(Item);
         }
 
+        /// Places an initialized pool at the start of `buffer`, which must hold size() bytes.
+        pub fn initInBuffer(buffer: []align(@alignOf(PoolSelf)) u8) *PoolSelf {
+            std.debug.assert(buffer.len >= size());
+
+            const pool: *PoolSelf = @ptrCast(buffer.ptr);
+            pool.init();
+            return pool;
+        }
+
         /// Only use this if you're certain that it's the only way
         pub fn buf(pool: *PoolSelf) []Node {
-            const base: [*]Node = @ptrCast(&pool._buf);
+            const base: [*]Node = &pool._buf;
             return base[0..capacity];
         }
 
         pub fn constBuf(pool: *const PoolSelf) []const Node {
-            const base: [*]const Node = @ptrCast(&pool._buf);
+            const base: [*]const Node = &pool._buf;
             return base[0..capacity];
         }
 
@@ -322,6 +331,35 @@ pub fn Pool(Item: type, IdInt: type) type {
             return @enumFromInt(node - base);
         }
     };
+}
+
+test "shared pool layout" {
+    const P = SharedPool(u64, 4);
+
+    // the zero length array must add no size to the header, while still aligning it to the items
+    try std.testing.expectEqual(@sizeOf(P), @offsetOf(P, "_buf"));
+    try std.testing.expectEqual(@alignOf(u64), @alignOf(P));
+    try std.testing.expectEqual(@sizeOf(P) + 4 * @sizeOf(u64), P.size());
+}
+
+test "shared pool create + destroy" {
+    const capacity = 4;
+    const P = SharedPool(u64, capacity);
+
+    var storage: [P.size()]u8 align(@alignOf(P)) = undefined;
+    const pool = P.initInBuffer(&storage);
+
+    var ids: [capacity]P.ItemId = undefined;
+    for (&ids, 0..) |*id, i| {
+        id.* = try pool.createId();
+        id.ptr(pool).* = i;
+    }
+    try std.testing.expectError(error.OutOfSpace, pool.createId());
+
+    for (ids, 0..) |id, i| try std.testing.expectEqual(i, id.constPtr(pool).*);
+
+    pool.destroyId(ids[1]);
+    try std.testing.expectEqual(ids[1], try pool.createId());
 }
 
 test "pool create + destroy" {
