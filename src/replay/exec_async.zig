@@ -1127,13 +1127,15 @@ fn testSchedulerForBatchesWithOptions(
 fn initSchedulerAccessTransaction(
     allocator: Allocator,
     random: std.Random,
-    payer_seed_byte: u8,
+    payer_seed_value: u64,
     shared_account: Pubkey,
     shared_writable: bool,
 ) !Transaction {
     comptime std.debug.assert(@import("builtin").is_test);
 
-    const payer = try sig.identity.KeyPair.generateDeterministic(@splat(payer_seed_byte));
+    var payer_seed: [32]u8 = @splat(0);
+    std.mem.writeInt(u64, payer_seed[0..8], payer_seed_value, .little);
+    const payer = try sig.identity.KeyPair.generateDeterministic(payer_seed);
     const accounts = try allocator.dupe(core.instruction.InstructionAccount, &.{.{
         .pubkey = shared_account,
         .is_signer = false,
@@ -1176,6 +1178,79 @@ test "TransactionScheduler: inline ready continuation preserves fanout and fanin
     };
     defer for (transactions) |transaction| transaction.deinit(allocator);
 
+    const batches = [_][]const Transaction{
+        transactions[0..1],
+        transactions[1..2],
+        transactions[2..3],
+        transactions[3..4],
+    };
+
+    {
+        var state = try replay.execution.TestState.init(allocator);
+        defer state.deinit(allocator);
+        var scheduler_stats: TransactionScheduler.Stats = undefined;
+
+        try std.testing.expectEqual(
+            null,
+            try testSchedulerForBatchesWithOptions(
+                allocator,
+                &state,
+                &batches,
+                .{
+                    .inline_ready_continuation = false,
+                    .stats_sink = &scheduler_stats,
+                },
+            ),
+        );
+        try std.testing.expectEqual(0, scheduler_stats.inline_ready_continuations);
+    }
+
+    {
+        var state = try replay.execution.TestState.init(allocator);
+        defer state.deinit(allocator);
+        var scheduler_stats: TransactionScheduler.Stats = undefined;
+
+        try std.testing.expectEqual(
+            null,
+            try testSchedulerForBatchesWithOptions(
+                allocator,
+                &state,
+                &batches,
+                .{
+                    .inline_ready_continuation = true,
+                    .stats_sink = &scheduler_stats,
+                },
+            ),
+        );
+        try std.testing.expectEqual(2, scheduler_stats.inline_ready_continuations);
+    }
+}
+
+test "TransactionScheduler: inline ready continuation handles a long writable chain" {
+    const allocator = std.testing.allocator;
+    const transaction_count = 1024;
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const shared_account = Pubkey.initRandom(rng.random());
+
+    const transactions = try allocator.alloc(Transaction, transaction_count);
+    defer allocator.free(transactions);
+    var initialized_count: usize = 0;
+    defer for (transactions[0..initialized_count]) |transaction| transaction.deinit(allocator);
+    for (transactions, 0..) |*transaction, index| {
+        transaction.* = try initSchedulerAccessTransaction(
+            allocator,
+            rng.random(),
+            @intCast(index + 1),
+            shared_account,
+            true,
+        );
+        initialized_count += 1;
+    }
+
+    const batches = try allocator.alloc([]const Transaction, transaction_count);
+    defer allocator.free(batches);
+    for (batches, 0..) |*batch, index| batch.* = transactions[index .. index + 1];
+
     var state = try replay.execution.TestState.init(allocator);
     defer state.deinit(allocator);
     var scheduler_stats: TransactionScheduler.Stats = undefined;
@@ -1185,19 +1260,22 @@ test "TransactionScheduler: inline ready continuation preserves fanout and fanin
         try testSchedulerForBatchesWithOptions(
             allocator,
             &state,
-            &.{
-                transactions[0..1],
-                transactions[1..2],
-                transactions[2..3],
-                transactions[3..4],
-            },
+            batches,
             .{
                 .inline_ready_continuation = true,
                 .stats_sink = &scheduler_stats,
             },
         ),
     );
-    try std.testing.expectEqual(2, scheduler_stats.inline_ready_continuations);
+    try std.testing.expectEqual(transaction_count, scheduler_stats.workers);
+    try std.testing.expectEqual(transaction_count - 1, scheduler_stats.dependency_edges);
+    try std.testing.expectEqual(1, scheduler_stats.initial_ready);
+    try std.testing.expectEqual(1, scheduler_stats.max_dependencies);
+    try std.testing.expectEqual(transaction_count, scheduler_stats.critical_path);
+    try std.testing.expectEqual(
+        transaction_count - 1,
+        scheduler_stats.inline_ready_continuations,
+    );
 }
 
 test "TransactionScheduler: happy path" {
