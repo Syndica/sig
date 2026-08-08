@@ -9,7 +9,6 @@ const CompressedAccountRadix = @import("CompressedAccountRadix.zig");
 
 const CompressedAccountStore = @This();
 
-const Slot = sig.core.Slot;
 const Pubkey = sig.core.Pubkey;
 const Hash = sig.core.Hash;
 const AccountSharedData = sig.runtime.AccountSharedData;
@@ -18,10 +17,14 @@ const INDEX_MAGIC = "CHIMIDX1";
 const CHUNK_MAGIC = "CHIMCHK1";
 const INDEX_HEADER_LEN: usize = 64;
 const DIRECTORY_RECORD_LEN: usize = 16;
-const INDEX_RECORD_LEN: usize = 64;
+const INDEX_FORMAT_VERSION_V1: u32 = 1;
+const INDEX_FORMAT_VERSION_V2: u32 = 2;
+const INDEX_RECORD_LEN_V1: usize = 64;
+const INDEX_RECORD_LEN_V2: usize = 44;
+const INDEX_RECORD_LEN_MAX: usize = @max(INDEX_RECORD_LEN_V1, INDEX_RECORD_LEN_V2);
 const CHUNK_HEADER_LEN: usize = 64;
 const CHUNK_RECORD_LEN: usize = 32;
-const FORMAT_VERSION: u32 = 1;
+const CHUNK_FORMAT_VERSION: u32 = 1;
 const DEFAULT_MAX_CHUNK_BYTES: u64 = 64 * 1024 * 1024;
 const DEFAULT_CHUNK_CACHE_SLOTS: u64 = 128;
 const DEFAULT_CHUNK_CACHE_BYTES: u64 = 256 * 1024 * 1024;
@@ -70,6 +73,8 @@ metrics: Metrics,
 shard_prefix_bits: u32,
 row_count: u64,
 records_offset: u64,
+index_format_version: u32,
+index_record_len: u32,
 max_chunk_bytes: u64,
 
 const DirectoryEntry = struct {
@@ -165,7 +170,6 @@ const IndexRecord = struct {
     uncompressed_offset: u32,
     record_len: u32,
     data_len: u32,
-    slot: Slot,
 };
 
 const LookupCacheEntry = struct {
@@ -382,7 +386,7 @@ fn initWithRadix(
     const directory_offset = readU64(&index_header, 32);
     const records_offset = readU64(&index_header, 40);
 
-    if (index_version != FORMAT_VERSION or index_record_len != INDEX_RECORD_LEN)
+    if (!isSupportedIndexFormat(index_version, index_record_len))
         return error.InvalidCompressedAccountIndex;
     if (shard_prefix_bits == 0 or shard_prefix_bits > 16)
         return error.InvalidCompressedAccountIndex;
@@ -417,7 +421,7 @@ fn initWithRadix(
             .file_size = index_file_size,
             .row_count = row_count,
             .records_offset = records_offset,
-            .record_len = INDEX_RECORD_LEN,
+            .record_len = index_record_len,
             .min_prefix_bits = shard_prefix_bits,
         });
     }
@@ -433,7 +437,7 @@ fn initWithRadix(
     const chunk_record_len = readU32(&chunks_header, 12);
     const chunk_count = readU64(&chunks_header, 16);
     const chunk_records_offset = readU64(&chunks_header, 24);
-    if (chunk_version != FORMAT_VERSION or chunk_record_len != CHUNK_RECORD_LEN)
+    if (chunk_version != CHUNK_FORMAT_VERSION or chunk_record_len != CHUNK_RECORD_LEN)
         return error.InvalidCompressedAccountChunks;
     if (chunk_records_offset != CHUNK_HEADER_LEN)
         return error.InvalidCompressedAccountChunks;
@@ -569,6 +573,8 @@ fn initWithRadix(
         .shard_prefix_bits = shard_prefix_bits,
         .row_count = row_count,
         .records_offset = records_offset,
+        .index_format_version = index_version,
+        .index_record_len = index_record_len,
         .max_chunk_bytes = envU64("SIG_COMPRESSED_ACCOUNT_STORE_MAX_CHUNK_BYTES", DEFAULT_MAX_CHUNK_BYTES),
     };
 }
@@ -729,7 +735,9 @@ pub fn samplePubkeys(
     for (samples, 0..) |*sample, i| {
         var row_index = @as(u64, @intCast(i)) * stride;
         if (row_index >= self.row_count) row_index = self.row_count - 1;
-        const record = try self.readIndexRecordAt(self.records_offset + row_index * INDEX_RECORD_LEN);
+        const record = try self.readIndexRecordAt(
+            self.records_offset + row_index * @as(u64, self.index_record_len),
+        );
         sample.* = .{
             .pubkey = record.pubkey,
             .data_len = record.data_len,
@@ -1253,7 +1261,7 @@ fn lookup(self: *CompressedAccountStore, address: Pubkey) !?IndexRecord {
 
     while (lo < hi) {
         const mid = lo + (hi - lo) / 2;
-        const offset = base_offset + mid * INDEX_RECORD_LEN;
+        const offset = base_offset + mid * @as(u64, self.index_record_len);
         const record = try self.readIndexRecordAt(offset);
         const cmp = comparePubkey(record.pubkey, address);
         if (cmp == 0) {
@@ -1940,30 +1948,45 @@ fn readIndexRecordAt(self: *CompressedAccountStore, offset: u64) !IndexRecord {
 
     _ = self.index_record_read_count.fetchAdd(1, .monotonic);
     self.metrics.index_record_read_count.inc();
+    const index_record_len: usize = @intCast(self.index_record_len);
 
     if (self.index_mmap) |mapped| {
         if (offset > std.math.maxInt(usize)) return error.InvalidCompressedAccountIndex;
         const start: usize = @intCast(offset);
-        if (start > mapped.len or INDEX_RECORD_LEN > mapped.len - start)
+        if (start > mapped.len or index_record_len > mapped.len - start)
             return error.InvalidCompressedAccountIndex;
-        return decodeIndexRecord(mapped[start..][0..INDEX_RECORD_LEN]);
+        return decodeIndexRecord(
+            self.index_format_version,
+            mapped[start..][0..index_record_len],
+        );
     }
 
-    var bytes: [INDEX_RECORD_LEN]u8 = undefined;
-    if (try self.index_file.preadAll(&bytes, offset) != bytes.len)
+    var bytes: [INDEX_RECORD_LEN_MAX]u8 = undefined;
+    const record_bytes = bytes[0..index_record_len];
+    if (try self.index_file.preadAll(record_bytes, offset) != record_bytes.len)
         return error.InvalidCompressedAccountIndex;
 
-    return decodeIndexRecord(&bytes);
+    return decodeIndexRecord(self.index_format_version, record_bytes);
 }
 
-fn decodeIndexRecord(bytes: []const u8) IndexRecord {
+fn decodeIndexRecord(index_format_version: u32, bytes: []const u8) !IndexRecord {
+    if (!isSupportedIndexFormat(index_format_version, @intCast(bytes.len)))
+        return error.InvalidCompressedAccountIndex;
+    const data_len = if (index_format_version == INDEX_FORMAT_VERSION_V2)
+        readU32(bytes, 40)
+    else
+        readU32(bytes, 44);
+    const record_len = if (index_format_version == INDEX_FORMAT_VERSION_V2)
+        std.math.add(u32, @intCast(@sizeOf(SnapshotAccountHeader)), data_len) catch
+            return error.InvalidCompressedAccountIndex
+    else
+        readU32(bytes, 40);
     return .{
         .pubkey = .{ .data = bytes[0..Pubkey.SIZE].* },
         .chunk_id = readU32(bytes, 32),
         .uncompressed_offset = readU32(bytes, 36),
-        .record_len = readU32(bytes, 40),
-        .data_len = readU32(bytes, 44),
-        .slot = readU64(bytes, 48),
+        .record_len = record_len,
+        .data_len = data_len,
     };
 }
 
@@ -2468,6 +2491,39 @@ fn readU32(bytes: []const u8, offset: usize) u32 {
 
 fn readU64(bytes: []const u8, offset: usize) u64 {
     return std.mem.readInt(u64, bytes[offset..][0..8], .little);
+}
+
+fn isSupportedIndexFormat(version: u32, record_len: u32) bool {
+    return (version == INDEX_FORMAT_VERSION_V1 and record_len == @as(u32, @intCast(INDEX_RECORD_LEN_V1))) or
+        (version == INDEX_FORMAT_VERSION_V2 and record_len == @as(u32, @intCast(INDEX_RECORD_LEN_V2)));
+}
+
+test "compressed account index v1 and v2 records decode equivalently" {
+    var v1 = [_]u8{0} ** INDEX_RECORD_LEN_V1;
+    var v2 = [_]u8{0} ** INDEX_RECORD_LEN_V2;
+    for (0..Pubkey.SIZE) |i| {
+        v1[i] = @intCast(i + 1);
+        v2[i] = @intCast(i + 1);
+    }
+    std.mem.writeInt(u32, v1[32..36], 17, .little);
+    std.mem.writeInt(u32, v1[36..40], 4096, .little);
+    std.mem.writeInt(u32, v1[40..44], 392, .little);
+    std.mem.writeInt(u32, v1[44..48], 256, .little);
+    std.mem.writeInt(u32, v2[32..36], 17, .little);
+    std.mem.writeInt(u32, v2[36..40], 4096, .little);
+    std.mem.writeInt(u32, v2[40..44], 256, .little);
+
+    const decoded_v1 = try decodeIndexRecord(INDEX_FORMAT_VERSION_V1, &v1);
+    const decoded_v2 = try decodeIndexRecord(INDEX_FORMAT_VERSION_V2, &v2);
+    try std.testing.expectEqualSlices(u8, &decoded_v1.pubkey.data, &decoded_v2.pubkey.data);
+    try std.testing.expectEqual(decoded_v1.chunk_id, decoded_v2.chunk_id);
+    try std.testing.expectEqual(decoded_v1.uncompressed_offset, decoded_v2.uncompressed_offset);
+    try std.testing.expectEqual(decoded_v1.record_len, decoded_v2.record_len);
+    try std.testing.expectEqual(decoded_v1.data_len, decoded_v2.data_len);
+    try std.testing.expectError(
+        error.InvalidCompressedAccountIndex,
+        decodeIndexRecord(INDEX_FORMAT_VERSION_V2, &v1),
+    );
 }
 
 test "decoded account cache priority reserve preserves the normal quota" {

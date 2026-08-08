@@ -16,6 +16,9 @@ const Args = struct {
     chunk_local: bool = false,
     accounts_per_chunk: usize = 16,
     batch_repeats: usize = 1,
+    lookup_only: bool = false,
+    lookup_repeats: usize = 5,
+    lookup_warmup_repeats: usize = 1,
 };
 
 pub fn main() !void {
@@ -47,6 +50,17 @@ pub fn main() !void {
     if (samples.len == 0) return error.NoCompressedAccountSamples;
 
     var failures: usize = 0;
+    if (args.lookup_only) {
+        failures += try runLookupSmoke(
+            allocator,
+            &rooted,
+            samples,
+            args.lookup_repeats,
+            args.lookup_warmup_repeats,
+        );
+        if (failures != 0) return error.CompressedAccountStoreSmokeFailed;
+        return;
+    }
     if (args.batch_size != 0) {
         failures += try runBatchSmoke(
             allocator,
@@ -207,6 +221,14 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
         } else if (std.mem.eql(u8, arg, "--batch-repeats") and i + 1 < argv.len) {
             i += 1;
             args.batch_repeats = try std.fmt.parseInt(usize, argv[i], 10);
+        } else if (std.mem.eql(u8, arg, "--lookup-only")) {
+            args.lookup_only = true;
+        } else if (std.mem.eql(u8, arg, "--lookup-repeats") and i + 1 < argv.len) {
+            i += 1;
+            args.lookup_repeats = try std.fmt.parseInt(usize, argv[i], 10);
+        } else if (std.mem.eql(u8, arg, "--lookup-warmup-repeats") and i + 1 < argv.len) {
+            i += 1;
+            args.lookup_warmup_repeats = try std.fmt.parseInt(usize, argv[i], 10);
         } else if (std.mem.eql(u8, arg, "--help")) {
             printHelp();
             std.process.exit(0);
@@ -219,6 +241,9 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
     if (args.batch_only and args.batch_size == 0) return error.InvalidArgument;
     if (args.chunk_local and args.accounts_per_chunk == 0) return error.InvalidArgument;
     if (args.batch_repeats == 0) return error.InvalidArgument;
+    if (args.lookup_repeats == 0) return error.InvalidArgument;
+    if (args.lookup_only and (args.batch_size != 0 or args.batch_only or args.chunk_local))
+        return error.InvalidArgument;
     return args;
 }
 
@@ -228,6 +253,7 @@ fn printHelp() void {
         \\  zig build compressed_store_smoke -- --rooted-db /private/tmp/chimera-smoke/accounts.db --sample 1000
         \\  zig build compressed_store_smoke -- --rooted-db /private/tmp/chimera-smoke/accounts.db --sample 16384 --batch-size 4096 --batch-only
         \\  zig build compressed_store_smoke -- --rooted-db /private/tmp/chimera-smoke/accounts.db --sample 16384 --batch-size 4096 --batch-only --chunk-local --accounts-per-chunk 16 --batch-repeats 2
+        \\  zig build compressed_store_smoke -- --rooted-db /private/tmp/chimera-smoke/accounts.db --sample 131072 --lookup-only --lookup-repeats 5 --lookup-warmup-repeats 1
         \\
         \\Required env:
         \\  SIG_COMPRESSED_ACCOUNT_STORE_INDEX=/path/account-index.bin
@@ -238,8 +264,96 @@ fn printHelp() void {
         \\Use --batch-size to measure grouped compressed-store reads without replay.
         \\Use --chunk-local to sample multiple accounts from each selected compressed chunk.
         \\Use --batch-repeats to rerun the same grouped loads in one process and measure chunk-cache hits.
+        \\Use --lookup-only for deterministic randomized compressed-index lookups without chunk reads.
+        \\Disable SIG_COMPRESSED_ACCOUNT_STORE_LOOKUP_CACHE and mmap for raw pread comparisons.
         \\
     , .{});
+}
+
+fn runLookupSmoke(
+    allocator: std.mem.Allocator,
+    rooted: *Rooted,
+    samples: []const sig.accounts_db.CompressedAccountStore.Sample,
+    repeats: usize,
+    warmup_repeats: usize,
+) !usize {
+    const timing_count = try std.math.mul(usize, samples.len, repeats);
+    const latencies = try allocator.alloc(u64, timing_count);
+    defer allocator.free(latencies);
+    const order = try allocator.alloc(usize, samples.len);
+    defer allocator.free(order);
+    for (order, 0..) |*entry, i| entry.* = i;
+    shuffleLookupOrder(order);
+
+    var failures: usize = 0;
+    var warmup: usize = 0;
+    while (warmup < warmup_repeats) : (warmup += 1) {
+        for (order) |sample_index| {
+            const sample = samples[sample_index];
+            const actual = try rooted.compressedAccountChunkId(sample.pubkey);
+            if (actual == null or actual.? != sample.chunk_id) failures += 1;
+        }
+    }
+
+    var lookup_timer = try std.time.Timer.start();
+    var total_timer = try std.time.Timer.start();
+    var timing_index: usize = 0;
+    var repeat: usize = 0;
+    while (repeat < repeats) : (repeat += 1) {
+        const rotation = if (order.len == 0) 0 else (repeat *% 8191) % order.len;
+        for (0..order.len) |position| {
+            const sample_index = order[(position + rotation) % order.len];
+            const sample = samples[sample_index];
+            lookup_timer.reset();
+            const actual = try rooted.compressedAccountChunkId(sample.pubkey);
+            latencies[timing_index] = lookup_timer.read();
+            timing_index += 1;
+            if (actual == null or actual.? != sample.chunk_id) failures += 1;
+        }
+    }
+    const total_ns = total_timer.read();
+
+    std.mem.sort(u64, latencies, {}, std.sort.asc(u64));
+    const p50 = percentile(latencies, 50, 100);
+    const p95 = percentile(latencies, 95, 100);
+    const p99 = percentile(latencies, 99, 100);
+    const lookup_count = samples.len * repeats;
+    const lookups_per_second = if (total_ns == 0)
+        0.0
+    else
+        @as(f64, @floatFromInt(lookup_count)) * @as(f64, std.time.ns_per_s) /
+            @as(f64, @floatFromInt(total_ns));
+
+    std.debug.print(
+        "compressed_account_store_lookup_result pass={} samples={} repeats={} warmup_repeats={} lookups={} failures={} lookup_total_ms={d:.3} lookups_per_second={d:.3} latency_p50_us={d:.3} latency_p95_us={d:.3} latency_p99_us={d:.3}\n",
+        .{
+            failures == 0,
+            samples.len,
+            repeats,
+            warmup_repeats,
+            lookup_count,
+            failures,
+            nsToMs(total_ns),
+            lookups_per_second,
+            nsToUs(p50),
+            nsToUs(p95),
+            nsToUs(p99),
+        },
+    );
+    return failures;
+}
+
+fn shuffleLookupOrder(order: []usize) void {
+    var state: u64 = 0x9e3779b97f4a7c15;
+    var upper = order.len;
+    while (upper > 1) {
+        upper -= 1;
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        const other: usize = @intCast(state % @as(u64, @intCast(upper + 1)));
+        std.mem.swap(usize, &order[upper], &order[other]);
+    }
 }
 
 fn runBatchSmoke(
@@ -445,4 +559,8 @@ fn percentile(sorted: []const u64, numerator: usize, denominator: usize) u64 {
 
 fn nsToMs(ns: u64) f64 {
     return @as(f64, @floatFromInt(ns)) / 1_000_000.0;
+}
+
+fn nsToUs(ns: u64) f64 {
+    return @as(f64, @floatFromInt(ns)) / 1_000.0;
 }

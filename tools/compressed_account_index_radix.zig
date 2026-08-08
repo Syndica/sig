@@ -5,8 +5,10 @@ const Radix = sig.accounts_db.CompressedAccountRadix;
 
 const INDEX_MAGIC = "CHIMIDX1";
 const INDEX_HEADER_LEN: usize = 64;
-const INDEX_RECORD_LEN: u32 = 64;
-const INDEX_FORMAT_VERSION: u32 = 1;
+const INDEX_RECORD_LEN_V1: u32 = 64;
+const INDEX_RECORD_LEN_V2: u32 = 44;
+const INDEX_FORMAT_VERSION_V1: u32 = 1;
+const INDEX_FORMAT_VERSION_V2: u32 = 2;
 const DEFAULT_READ_MIB: usize = 32;
 const PROGRESS_ROWS: u64 = 50_000_000;
 
@@ -27,6 +29,7 @@ const IndexMetadata = struct {
     file_size: u64,
     row_count: u64,
     records_offset: u64,
+    record_len: u32,
     shard_prefix_bits: u32,
 };
 
@@ -55,9 +58,10 @@ pub fn main() !void {
 
     const read_bytes = std.math.mul(usize, args.read_mib, 1024 * 1024) catch
         return error.InvalidReadSize;
-    const rows_per_read = read_bytes / INDEX_RECORD_LEN;
+    const index_record_len: usize = @intCast(metadata.record_len);
+    const rows_per_read = read_bytes / index_record_len;
     if (rows_per_read == 0) return error.InvalidReadSize;
-    const scan_buffer = try allocator.alloc(u8, rows_per_read * INDEX_RECORD_LEN);
+    const scan_buffer = try allocator.alloc(u8, rows_per_read * index_record_len);
     defer allocator.free(scan_buffer);
 
     std.debug.print(
@@ -82,14 +86,14 @@ pub fn main() !void {
     while (row < metadata.row_count) {
         const rows_remaining = metadata.row_count - row;
         const rows_this_read: usize = @intCast(@min(rows_remaining, rows_per_read));
-        const bytes_this_read = rows_this_read * INDEX_RECORD_LEN;
-        const offset = metadata.records_offset + row * INDEX_RECORD_LEN;
+        const bytes_this_read = rows_this_read * index_record_len;
+        const offset = metadata.records_offset + row * @as(u64, metadata.record_len);
         if (try index_file.preadAll(scan_buffer[0..bytes_this_read], offset) != bytes_this_read)
             return error.InvalidCompressedAccountIndex;
 
         var local_row: usize = 0;
         while (local_row < rows_this_read) : (local_row += 1) {
-            const record_offset = local_row * INDEX_RECORD_LEN;
+            const record_offset = local_row * index_record_len;
             const prefix = prefixFromRecord(scan_buffer[record_offset..][0..3], args.prefix_bits);
             if (have_previous_prefix and prefix < previous_prefix)
                 return error.UnsortedCompressedAccountIndex;
@@ -126,7 +130,7 @@ pub fn main() !void {
 
     const header = try Radix.encodeHeader(
         args.prefix_bits,
-        INDEX_RECORD_LEN,
+        metadata.record_len,
         metadata.row_count,
         metadata.file_size,
         metadata.records_offset,
@@ -180,15 +184,14 @@ fn readIndexMetadata(file: *std.fs.File) !IndexMetadata {
     const shard_prefix_bits = readU32(&header, 16);
     const row_count = readU64(&header, 24);
     const records_offset = readU64(&header, 40);
-    if (version != INDEX_FORMAT_VERSION or
-        record_len != INDEX_RECORD_LEN or
+    if (!isSupportedIndexFormat(version, record_len) or
         shard_prefix_bits == 0 or
         shard_prefix_bits > 16)
     {
         return error.InvalidCompressedAccountIndex;
     }
 
-    const records_bytes = std.math.mul(u64, row_count, INDEX_RECORD_LEN) catch
+    const records_bytes = std.math.mul(u64, row_count, @as(u64, record_len)) catch
         return error.InvalidCompressedAccountIndex;
     const expected_file_size = std.math.add(u64, records_offset, records_bytes) catch
         return error.InvalidCompressedAccountIndex;
@@ -200,6 +203,7 @@ fn readIndexMetadata(file: *std.fs.File) !IndexMetadata {
         .file_size = file_size,
         .row_count = row_count,
         .records_offset = records_offset,
+        .record_len = record_len,
         .shard_prefix_bits = shard_prefix_bits,
     };
 }
@@ -273,4 +277,9 @@ fn readU32(bytes: []const u8, offset: usize) u32 {
 
 fn readU64(bytes: []const u8, offset: usize) u64 {
     return std.mem.readInt(u64, bytes[offset..][0..8], .little);
+}
+
+fn isSupportedIndexFormat(version: u32, record_len: u32) bool {
+    return (version == INDEX_FORMAT_VERSION_V1 and record_len == INDEX_RECORD_LEN_V1) or
+        (version == INDEX_FORMAT_VERSION_V2 and record_len == INDEX_RECORD_LEN_V2);
 }
