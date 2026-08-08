@@ -375,6 +375,12 @@ pub fn replaySlotSync(
         replay_timer.read().asNanos(),
         replay_stats,
     );
+    logProgramLoadStats(
+        logger,
+        metrics,
+        svm_gateway.params.slot,
+        svm_gateway.programLoadStats(),
+    );
     try flushDeferredSlotAccountCacheWrites(logger, params.slot_account_cache);
     if (params.slot_account_cache) |cache| {
         logSlotAccountCacheStats(logger, svm_gateway.params.slot, cache.stats.snapshot());
@@ -499,6 +505,47 @@ pub fn logReplayBatchStats(
             stats.execution_ok,
             stats.execution_err,
             stats.committed,
+        },
+    );
+}
+
+pub fn logProgramLoadStats(
+    logger: anytype,
+    metrics: replay.service.Metrics,
+    slot: Slot,
+    stats: sig.runtime.program_loader.ProgramLoadStats.Snapshot,
+) void {
+    metrics.program_cache_hits.set(stats.cache_hits);
+    metrics.program_cache_misses.set(stats.cache_misses);
+    metrics.program_load_attempts.set(stats.load_attempts);
+    metrics.program_load_successes.set(stats.load_successes);
+    metrics.program_load_failures.set(stats.load_failures);
+    metrics.program_load_races.set(stats.load_races);
+    metrics.program_executable_bytes.set(stats.executable_bytes);
+    metrics.programdata_reads.set(stats.programdata_reads);
+    metrics.programdata_bytes.set(stats.programdata_bytes);
+    metrics.programdata_read_time.observe(stats.programdata_read_ns);
+    metrics.program_elf_load_time.observe(stats.elf_load_ns);
+    metrics.program_verify_time.observe(stats.verify_ns);
+    metrics.program_load_total_time.observe(stats.load_total_ns);
+
+    logger.info().logf(
+        "slot_program_load_stats slot={} cache_hits={} cache_misses={} load_attempts={} load_successes={} load_failures={} load_races={} executable_bytes={} programdata_reads={} programdata_bytes={} programdata_read={D} elf_load={D} verify={D} load_total={D}",
+        .{
+            slot,
+            stats.cache_hits,
+            stats.cache_misses,
+            stats.load_attempts,
+            stats.load_successes,
+            stats.load_failures,
+            stats.load_races,
+            stats.executable_bytes,
+            stats.programdata_reads,
+            stats.programdata_bytes,
+            stats.programdata_read_ns,
+            stats.elf_load_ns,
+            stats.verify_ns,
+            stats.load_total_ns,
         },
     );
 }

@@ -21,6 +21,7 @@ const wrapDB = sig.runtime.account_loader.wrapDB;
 pub const ProgramMap = struct {
     inner: sig.utils.collections.PubkeyMap(LoadedProgram),
     lock: sig.sync.RwLock,
+    load_stats: ProgramLoadStats = .{},
 
     pub const empty = ProgramMap{
         .inner = .empty,
@@ -68,6 +69,89 @@ pub const ProgramMap = struct {
         defer self.lock.unlockShared();
         return self.inner.contains(address);
     }
+
+    pub fn loadStats(self: *const ProgramMap) ProgramLoadStats.Snapshot {
+        return self.load_stats.snapshot();
+    }
+};
+
+pub const ProgramLoadStats = struct {
+    cache_hits: std.atomic.Value(u64) = .init(0),
+    cache_misses: std.atomic.Value(u64) = .init(0),
+    load_attempts: std.atomic.Value(u64) = .init(0),
+    load_successes: std.atomic.Value(u64) = .init(0),
+    load_failures: std.atomic.Value(u64) = .init(0),
+    load_races: std.atomic.Value(u64) = .init(0),
+    executable_bytes: std.atomic.Value(u64) = .init(0),
+    programdata_reads: std.atomic.Value(u64) = .init(0),
+    programdata_bytes: std.atomic.Value(u64) = .init(0),
+    programdata_read_ns: std.atomic.Value(u64) = .init(0),
+    elf_load_ns: std.atomic.Value(u64) = .init(0),
+    verify_ns: std.atomic.Value(u64) = .init(0),
+    load_total_ns: std.atomic.Value(u64) = .init(0),
+
+    pub const Snapshot = struct {
+        cache_hits: u64,
+        cache_misses: u64,
+        load_attempts: u64,
+        load_successes: u64,
+        load_failures: u64,
+        load_races: u64,
+        executable_bytes: u64,
+        programdata_reads: u64,
+        programdata_bytes: u64,
+        programdata_read_ns: u64,
+        elf_load_ns: u64,
+        verify_ns: u64,
+        load_total_ns: u64,
+    };
+
+    fn recordLoad(
+        self: *ProgramLoadStats,
+        measurement: ProgramLoadMeasurement,
+        success: bool,
+    ) void {
+        _ = self.load_attempts.fetchAdd(1, .monotonic);
+        _ = if (success)
+            self.load_successes.fetchAdd(1, .monotonic)
+        else
+            self.load_failures.fetchAdd(1, .monotonic);
+        _ = self.executable_bytes.fetchAdd(measurement.executable_bytes, .monotonic);
+        _ = self.programdata_reads.fetchAdd(measurement.programdata_reads, .monotonic);
+        _ = self.programdata_bytes.fetchAdd(measurement.programdata_bytes, .monotonic);
+        _ = self.programdata_read_ns.fetchAdd(measurement.programdata_read_ns, .monotonic);
+        _ = self.elf_load_ns.fetchAdd(measurement.elf_load_ns, .monotonic);
+        _ = self.verify_ns.fetchAdd(measurement.verify_ns, .monotonic);
+        _ = self.load_total_ns.fetchAdd(measurement.load_total_ns, .monotonic);
+    }
+
+    pub fn snapshot(self: *const ProgramLoadStats) Snapshot {
+        return .{
+            .cache_hits = self.cache_hits.load(.monotonic),
+            .cache_misses = self.cache_misses.load(.monotonic),
+            .load_attempts = self.load_attempts.load(.monotonic),
+            .load_successes = self.load_successes.load(.monotonic),
+            .load_failures = self.load_failures.load(.monotonic),
+            .load_races = self.load_races.load(.monotonic),
+            .executable_bytes = self.executable_bytes.load(.monotonic),
+            .programdata_reads = self.programdata_reads.load(.monotonic),
+            .programdata_bytes = self.programdata_bytes.load(.monotonic),
+            .programdata_read_ns = self.programdata_read_ns.load(.monotonic),
+            .elf_load_ns = self.elf_load_ns.load(.monotonic),
+            .verify_ns = self.verify_ns.load(.monotonic),
+            .load_total_ns = self.load_total_ns.load(.monotonic),
+        };
+    }
+};
+
+const ProgramLoadMeasurement = struct {
+    executable_bytes: u64 = 0,
+    programdata_reads: u64 = 0,
+    programdata_bytes: u64 = 0,
+    programdata_read_ns: u64 = 0,
+    elf_load_ns: u64 = 0,
+    verify_ns: u64 = 0,
+    load_total_ns: u64 = 0,
 };
 
 pub const LoadedProgram = union(enum(u8)) {
@@ -98,22 +182,42 @@ pub fn loadIfProgram(
     slot: u64,
 ) AccountLoadError!void {
     // https://github.com/firedancer-io/solfuzz-agave/blob/agave-v3.0.3/src/lib.rs#L771-L800
-    if (!account.owner.equals(&bpf_loader.v1.ID) and
-        !account.owner.equals(&bpf_loader.v2.ID) and
-        !account.owner.equals(&bpf_loader.v3.ID) and
-        !account.owner.equals(&bpf_loader.v4.ID) or
-        programs.contains(address)) return;
+    const is_program = account.owner.equals(&bpf_loader.v1.ID) or
+        account.owner.equals(&bpf_loader.v2.ID) or
+        account.owner.equals(&bpf_loader.v3.ID) or
+        account.owner.equals(&bpf_loader.v4.ID);
+    if (!is_program) return;
 
-    var loaded_program = try loadProgram(
+    if (programs.contains(address)) {
+        _ = programs.load_stats.cache_hits.fetchAdd(1, .monotonic);
+        return;
+    }
+    _ = programs.load_stats.cache_misses.fetchAdd(1, .monotonic);
+
+    var load_timer = sig.time.Timer.start();
+    var measurement = ProgramLoadMeasurement{};
+    var loaded_program = loadProgram(
         programs_allocator,
         account,
         account_reader,
         enviroment,
         slot,
-    );
+        &measurement,
+    ) catch |err| {
+        measurement.load_total_ns = load_timer.read().asNanos();
+        programs.load_stats.recordLoad(measurement, false);
+        return err;
+    };
+    measurement.load_total_ns = load_timer.read().asNanos();
+    programs.load_stats.recordLoad(measurement, switch (loaded_program) {
+        .loaded => true,
+        .failed => false,
+    });
+
     errdefer loaded_program.deinit(programs_allocator);
 
     if (!try programs.putIfAbsent(programs_allocator, address, loaded_program)) {
+        _ = programs.load_stats.load_races.fetchAdd(1, .monotonic);
         loaded_program.deinit(programs_allocator);
     }
 }
@@ -125,6 +229,7 @@ fn loadProgram(
     accounts: SlotAccountReader,
     environment: *const vm.Environment,
     slot: u64,
+    measurement: *ProgramLoadMeasurement,
 ) AccountLoadError!LoadedProgram {
     const zone = tracy.Zone.init(@src(), .{ .name = "loadProgram" });
     defer zone.deinit();
@@ -133,22 +238,32 @@ fn loadProgram(
         allocator,
         account,
         accounts,
+        measurement,
     ) orelse return .failed;
     defer allocator.free(executable_bytes); // freed unless returned
 
+    measurement.executable_bytes = @intCast(executable_bytes.len);
     if (maybe_deployment_slot) |ds| if (ds >= slot) return .failed;
 
-    const executable = sig.vm.elf.load(
-        allocator,
-        executable_bytes,
-        &environment.loader,
-        environment.config,
-    ) catch return .failed;
-
-    executable.verify(&environment.loader) catch {
-        executable.deinit(allocator);
-        return .failed;
+    const executable = blk: {
+        var elf_timer = sig.time.Timer.start();
+        defer measurement.elf_load_ns = elf_timer.read().asNanos();
+        break :blk sig.vm.elf.load(
+            allocator,
+            executable_bytes,
+            &environment.loader,
+            environment.config,
+        ) catch return .failed;
     };
+
+    {
+        var verify_timer = sig.time.Timer.start();
+        defer measurement.verify_ns = verify_timer.read().asNanos();
+        executable.verify(&environment.loader) catch {
+            executable.deinit(allocator);
+            return .failed;
+        };
+    }
     defer executable_bytes = &.{}; // to avoid freeing
     return .{ .loaded = .{
         .executable = executable,
@@ -161,6 +276,7 @@ fn loadDeploymentSlotAndExecutableBytes(
     allocator: Allocator,
     account: *const AccountSharedData,
     accounts: SlotAccountReader,
+    measurement: *ProgramLoadMeasurement,
 ) AccountLoadError!?struct { ?u64, []u8 } {
     if (account.owner.equals(&bpf_loader.v1.ID) or account.owner.equals(&bpf_loader.v2.ID)) {
         return .{ null, try allocator.dupe(u8, account.data) };
@@ -177,12 +293,17 @@ fn loadDeploymentSlotAndExecutableBytes(
             else => return null,
         };
 
-        const program_data_account = try wrapDB(accounts.get(allocator, program_data_key)) orelse
-            return null;
+        measurement.programdata_reads += 1;
+        const program_data_account = blk: {
+            var read_timer = sig.time.Timer.start();
+            defer measurement.programdata_read_ns += read_timer.read().asNanos();
+            break :blk try wrapDB(accounts.get(allocator, program_data_key)) orelse return null;
+        };
         defer program_data_account.deinit(allocator);
 
         const meta_size = bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE;
         const account_len = program_data_account.data.len();
+        measurement.programdata_bytes += @intCast(account_len);
         if (account_len < meta_size) {
             return null;
         }
@@ -301,6 +422,32 @@ test "loadPrograms: load v1, v2 program" {
             .failed => return error.FailedToLoadProgram,
             .loaded => {},
         }
+
+        const first_stats = loaded_programs.loadStats();
+        try std.testing.expectEqual(0, first_stats.cache_hits);
+        try std.testing.expectEqual(2, first_stats.cache_misses);
+        try std.testing.expectEqual(2, first_stats.load_attempts);
+        try std.testing.expectEqual(2, first_stats.load_successes);
+        try std.testing.expectEqual(0, first_stats.load_failures);
+        try std.testing.expectEqual(0, first_stats.load_races);
+        try std.testing.expectEqual(@as(u64, @intCast(program_elf.len * 2)), first_stats.executable_bytes);
+        try std.testing.expectEqual(0, first_stats.programdata_reads);
+        try std.testing.expectEqual(0, first_stats.programdata_bytes);
+
+        const program_v1_account = accounts.get(program_v1_key).?;
+        try loadIfProgram(
+            allocator,
+            &loaded_programs,
+            program_v1_key,
+            &program_v1_account,
+            .{ .account_shared_data_map = &accounts },
+            &.ALL_ENABLED,
+            0,
+        );
+        const hit_stats = loaded_programs.loadStats();
+        try std.testing.expectEqual(1, hit_stats.cache_hits);
+        try std.testing.expectEqual(first_stats.cache_misses, hit_stats.cache_misses);
+        try std.testing.expectEqual(first_stats.load_attempts, hit_stats.load_attempts);
     }
 }
 
@@ -370,6 +517,14 @@ test "loadPrograms: load v3 program" {
             .failed => return error.TestFailed,
             .loaded => {},
         }
+
+        const stats = loaded_programs.loadStats();
+        try std.testing.expectEqual(1, stats.cache_misses);
+        try std.testing.expectEqual(1, stats.load_attempts);
+        try std.testing.expectEqual(1, stats.load_successes);
+        try std.testing.expectEqual(1, stats.programdata_reads);
+        try std.testing.expectEqual(@as(u64, @intCast(program_data_bytes.len)), stats.programdata_bytes);
+        try std.testing.expectEqual(@as(u64, @intCast(program_elf.len)), stats.executable_bytes);
     }
 
     { // Delay visibility failure
@@ -385,6 +540,14 @@ test "loadPrograms: load v3 program" {
             .failed => {},
             .loaded => return error.TestFailed,
         }
+
+        const stats = loaded_programs.loadStats();
+        try std.testing.expectEqual(1, stats.load_attempts);
+        try std.testing.expectEqual(0, stats.load_successes);
+        try std.testing.expectEqual(1, stats.load_failures);
+        try std.testing.expectEqual(1, stats.programdata_reads);
+        try std.testing.expectEqual(@as(u64, @intCast(program_data_bytes.len)), stats.programdata_bytes);
+        try std.testing.expectEqual(@as(u64, @intCast(program_elf.len)), stats.executable_bytes);
     }
 
     { // Bad program data meta

@@ -134,6 +134,12 @@ pub const SvmGateway = struct {
         programs.deinit(allocator);
     }
 
+    pub fn programLoadStats(
+        self: *const SvmGateway,
+    ) sig.runtime.program_loader.ProgramLoadStats.Snapshot {
+        return self.state.programs.loadStats();
+    }
+
     pub fn environment(self: *const SvmGateway) !TransactionExecutionEnvironment {
         const last_blockhash = self.state.blockhash_queue.get().last_hash orelse
             return error.MissingLastBlockhash;

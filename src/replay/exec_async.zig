@@ -221,6 +221,12 @@ pub const ReplaySlotFuture = struct {
                 self.slot_timer.read().asNanos(),
                 self.txn_scheduler.batch_stats.snapshot(),
             );
+            replay.execution.logProgramLoadStats(
+                self.logger,
+                self.metrics,
+                slot,
+                self.txn_scheduler.svm_gateway.programLoadStats(),
+            );
             const stats_log_ns = phase_timer.read().asNanos();
             phase_timer.reset();
             if (self.result_ptr.load(.acquire) != null) {
