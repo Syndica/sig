@@ -176,6 +176,7 @@ pub const ReplaySlotFuture = struct {
 
             const poh_stats = self.poh_verifier.stats();
             const scheduler_stats = self.txn_scheduler.stats();
+            if (self.txn_scheduler.stats_sink) |stats_sink| stats_sink.* = scheduler_stats;
             self.metrics.poh_verify_wall_time.observe(poh_stats.wall_ns);
             self.metrics.poh_verify_cpu_time.observe(poh_stats.cpu_ns);
             self.metrics.transaction_scheduler_build_time.observe(scheduler_stats.build_ns);
@@ -188,8 +189,11 @@ pub const ReplaySlotFuture = struct {
             self.metrics.transaction_scheduler_initial_ready.set(scheduler_stats.initial_ready);
             self.metrics.transaction_scheduler_max_dependencies.set(scheduler_stats.max_dependencies);
             self.metrics.transaction_scheduler_critical_path.set(scheduler_stats.critical_path);
+            self.metrics.transaction_scheduler_inline_ready_continuations.set(
+                scheduler_stats.inline_ready_continuations,
+            );
             self.logger.info().logf(
-                "slot_replay_scheduler_stats slot={} poh_entries={} poh_tasks={} poh_wall={D} poh_cpu={D} scheduler_build={D} preprocess_tasks={} preprocess_wall={D} preprocess_cpu={D} scheduler_execute_wall={D} workers={} dependency_edges={} initial_ready={} max_dependencies={} critical_path={}",
+                "slot_replay_scheduler_stats slot={} poh_entries={} poh_tasks={} poh_wall={D} poh_cpu={D} scheduler_build={D} preprocess_tasks={} preprocess_wall={D} preprocess_cpu={D} scheduler_execute_wall={D} workers={} dependency_edges={} initial_ready={} max_dependencies={} critical_path={} inline_ready_continuations={}",
                 .{
                     slot,
                     poh_stats.entries,
@@ -206,6 +210,7 @@ pub const ReplaySlotFuture = struct {
                     scheduler_stats.initial_ready,
                     scheduler_stats.max_dependencies,
                     scheduler_stats.critical_path,
+                    scheduler_stats.inline_ready_continuations,
                 },
             );
 
@@ -411,6 +416,9 @@ const TransactionScheduler = struct {
     preprocess_cpu_ns: Atomic(u64) = .init(0),
     remaining: Atomic(u64) = .init(0),
     execute_wall_ns: Atomic(u64) = .init(0),
+    inline_ready_continuation: bool = false,
+    inline_ready_continuations: Atomic(u64) = .init(0),
+    stats_sink: ?*Stats = null,
 
     const Error = Allocator.Error || error{ReplayBatchFailed};
 
@@ -460,6 +468,12 @@ const TransactionScheduler = struct {
         initial_ready: u64,
         max_dependencies: u64,
         critical_path: u64,
+        inline_ready_continuations: u64,
+    };
+
+    const StartOptions = struct {
+        inline_ready_continuation: ?bool = null,
+        stats_sink: ?*Stats = null,
     };
 
     fn deinit(const_self: TransactionScheduler) void {
@@ -476,9 +490,17 @@ const TransactionScheduler = struct {
     }
 
     fn start(self: *TransactionScheduler) Error!void {
+        return self.startWithOptions(.{});
+    }
+
+    fn startWithOptions(self: *TransactionScheduler, options: StartOptions) Error!void {
         const zone = tracy.Zone.init(@src(), .{ .name = "TransactionScheduler.start" });
         defer zone.deinit();
         var build_timer = sig.time.Timer.start();
+
+        self.inline_ready_continuation = options.inline_ready_continuation orelse
+            envBool("SIG_REPLAY_SCHEDULER_INLINE_READY_CONTINUATION", false);
+        self.stats_sink = options.stats_sink;
 
         const allocator = self.future.arena.allocator();
         const entries = self.future.entries;
@@ -815,6 +837,7 @@ const TransactionScheduler = struct {
             .initial_ready = self.initial_ready,
             .max_dependencies = self.max_dependencies,
             .critical_path = self.critical_path,
+            .inline_ready_continuations = self.inline_ready_continuations.load(.acquire),
         };
     }
 
@@ -874,18 +897,25 @@ const TransactionScheduler = struct {
         }
 
         fn run(task: *ThreadPool.Task) void {
-            const zone = tracy.Zone.init(@src(), .{ .name = "replayExecute" });
-            defer zone.deinit();
-
             const self: *Worker = @alignCast(@fieldParentPtr("task", task));
             defer self.scheduler.future.finish();
-            defer self.scheduler.finishWorker();
+
+            var current: ?*Worker = self;
+            while (current) |worker| {
+                current = worker.executeAndReleaseWaiters();
+                worker.scheduler.finishWorker();
+            }
+        }
+
+        fn executeAndReleaseWaiters(self: *Worker) ?*Worker {
+            const zone = tracy.Zone.init(@src(), .{ .name = "replayExecute" });
+            defer zone.deinit();
 
             const future = self.scheduler.future;
             const preprocessed = self.preprocessed orelse {
                 future.logger.err().log("transaction execution scheduled before preprocessing");
                 future.setError(Error.ReplayBatchFailed);
-                return;
+                return null;
             };
             const preprocessed_batch = [_]PreprocessedTransaction{preprocessed};
             const outcome = replayBatch(
@@ -899,7 +929,7 @@ const TransactionScheduler = struct {
             ) catch |err| {
                 future.logger.err().logf("replayBatch failed with error: {}", .{err});
                 future.setError(Error.ReplayBatchFailed);
-                return;
+                return null;
             };
             self.scheduler.batch_stats.add(outcome.stats);
             const result = outcome.result;
@@ -910,19 +940,31 @@ const TransactionScheduler = struct {
                     .{result.failure},
                 );
                 future.setError(.{ .invalid_transaction = result.failure });
-                return;
+                return null;
             }
 
             var task_batch = ThreadPool.Batch{};
-            defer future.schedule(task_batch);
+            var inline_waiter: ?*Worker = null;
 
             // Try to schedule the other workers waiting for us
             for (self.waiters.items) |id| {
                 const waiter = &self.scheduler.workers.items[id];
                 if (waiter.ref_count.fetchSub(1, .acq_rel) - 1 == 0) {
-                    task_batch.push(.from(&waiter.task));
+                    if (self.scheduler.inline_ready_continuation and inline_waiter == null) {
+                        inline_waiter = waiter;
+                    } else {
+                        task_batch.push(.from(&waiter.task));
+                    }
                 }
             }
+
+            // Preserve all existing parallelism: queue every additional ready worker before
+            // continuing one dependency-chain successor on this already-running pool thread.
+            future.schedule(task_batch);
+            if (inline_waiter != null) {
+                _ = self.scheduler.inline_ready_continuations.fetchAdd(1, .monotonic);
+            }
+            return inline_waiter;
         }
     };
 };
@@ -965,6 +1007,15 @@ fn testSchedulerForBatches(
     allocator: Allocator,
     state: *replay.execution.TestState,
     batches: []const []const Transaction,
+) !?ReplaySlotError {
+    return testSchedulerForBatchesWithOptions(allocator, state, batches, .{});
+}
+
+fn testSchedulerForBatchesWithOptions(
+    allocator: Allocator,
+    state: *replay.execution.TestState,
+    batches: []const []const Transaction,
+    options: TransactionScheduler.StartOptions,
 ) !?ReplaySlotError {
     comptime std.debug.assert(@import("builtin").is_test);
 
@@ -1064,13 +1115,89 @@ fn testSchedulerForBatches(
         wg.start();
         defer future.finish();
 
-        future.txn_scheduler.start() catch |e| future.setError(e);
+        future.txn_scheduler.startWithOptions(options) catch |e| future.setError(e);
     }
 
     return switch ((try result).output) {
         .last_entry_hash => null,
         .err => |err| err,
     };
+}
+
+fn initSchedulerAccessTransaction(
+    allocator: Allocator,
+    random: std.Random,
+    payer_seed_byte: u8,
+    shared_account: Pubkey,
+    shared_writable: bool,
+) !Transaction {
+    comptime std.debug.assert(@import("builtin").is_test);
+
+    const payer = try sig.identity.KeyPair.generateDeterministic(@splat(payer_seed_byte));
+    const accounts = try allocator.dupe(core.instruction.InstructionAccount, &.{.{
+        .pubkey = shared_account,
+        .is_signer = false,
+        .is_writable = shared_writable,
+    }});
+    var instruction: core.Instruction = .{
+        .program_id = Pubkey.initRandom(random),
+        .accounts = accounts,
+        .data = &.{},
+        .owned_data = false,
+    };
+    defer instruction.deinit(allocator);
+
+    const message: core.transaction.Message = try .initCompile(
+        allocator,
+        &.{instruction},
+        Pubkey.fromPublicKey(&payer.public_key),
+        Hash.initRandom(random),
+        null,
+    );
+    errdefer message.deinit(allocator);
+    return Transaction.initOwnedMessageWithSigningKeypairs(
+        allocator,
+        .legacy,
+        message,
+        &.{payer},
+    );
+}
+
+test "TransactionScheduler: inline ready continuation preserves fanout and fanin" {
+    const allocator = std.testing.allocator;
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const shared_account = Pubkey.initRandom(rng.random());
+
+    var transactions = [_]Transaction{
+        try initSchedulerAccessTransaction(allocator, rng.random(), 1, shared_account, true),
+        try initSchedulerAccessTransaction(allocator, rng.random(), 2, shared_account, false),
+        try initSchedulerAccessTransaction(allocator, rng.random(), 3, shared_account, false),
+        try initSchedulerAccessTransaction(allocator, rng.random(), 4, shared_account, true),
+    };
+    defer for (transactions) |transaction| transaction.deinit(allocator);
+
+    var state = try replay.execution.TestState.init(allocator);
+    defer state.deinit(allocator);
+    var scheduler_stats: TransactionScheduler.Stats = undefined;
+
+    try std.testing.expectEqual(
+        null,
+        try testSchedulerForBatchesWithOptions(
+            allocator,
+            &state,
+            &.{
+                transactions[0..1],
+                transactions[1..2],
+                transactions[2..3],
+                transactions[3..4],
+            },
+            .{
+                .inline_ready_continuation = true,
+                .stats_sink = &scheduler_stats,
+            },
+        ),
+    );
+    try std.testing.expectEqual(2, scheduler_stats.inline_ready_continuations);
 }
 
 test "TransactionScheduler: happy path" {

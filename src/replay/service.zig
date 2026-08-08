@@ -59,6 +59,7 @@ pub const Metrics = struct {
     transaction_scheduler_initial_ready: *sig.prometheus.Gauge(u64),
     transaction_scheduler_max_dependencies: *sig.prometheus.Gauge(u64),
     transaction_scheduler_critical_path: *sig.prometheus.Gauge(u64),
+    transaction_scheduler_inline_ready_continuations: *sig.prometheus.Gauge(u64),
     freeze_completed_slots_time: *sig.prometheus.Histogram,
     freeze_slot_time: *sig.prometheus.Histogram,
     consensus_time: *sig.prometheus.Histogram,
