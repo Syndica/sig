@@ -5,6 +5,7 @@
 //! `SnapshotAccountHeader || account.data` records.
 const std = @import("std");
 const sig = @import("../sig.zig");
+const CompressedAccountRadix = @import("CompressedAccountRadix.zig");
 
 const CompressedAccountStore = @This();
 
@@ -27,11 +28,14 @@ const DEFAULT_CHUNK_CACHE_BYTES: u64 = 256 * 1024 * 1024;
 const DEFAULT_LOOKUP_CACHE_ENTRIES: u64 = 1_000_000;
 const DEFAULT_DECODED_ACCOUNT_CACHE_ENTRIES: u64 = 16_384;
 const DEFAULT_DECODED_ACCOUNT_CACHE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const DEFAULT_DECODED_ACCOUNT_CACHE_PRIORITY_ENTRIES: u64 = 0;
 const DEFAULT_DECODED_ACCOUNT_CACHE_CLEAR_EACH_BATCH = true;
 const MAX_BATCH_DECODE_THREADS: u64 = 64;
 
 allocator: std.mem.Allocator,
 index_file: std.fs.File,
+index_mmap: ?[]align(std.heap.page_size_min) const u8,
+radix_index: ?CompressedAccountRadix,
 chunks_file: std.fs.File,
 segments_file: std.fs.File,
 directory: []DirectoryEntry,
@@ -46,12 +50,22 @@ chunk_cache_max_bytes: u64,
 lookup_cache: sig.utils.collections.PubkeyMap(LookupCacheEntry),
 lookup_cache_mutex: std.Thread.Mutex = .{},
 lookup_cache_max_entries: usize,
-decoded_account_cache: sig.utils.collections.PubkeyMap(AccountSharedData),
+decoded_account_cache: sig.utils.collections.PubkeyMap(*AccountSharedData),
+decoded_account_cache_headers: std.heap.ArenaAllocator,
 decoded_account_cache_mutex: std.Thread.Mutex = .{},
 decoded_account_cache_max_entries: usize,
+decoded_account_cache_priority_reserve_entries: usize,
 decoded_account_cache_max_bytes: u64,
 decoded_account_cache_clear_each_batch: bool,
 decoded_account_cache_bytes: u64 = 0,
+decoded_account_cache_priority_entries: u64 = 0,
+decoded_account_cache_priority_insert_count: std.atomic.Value(u64) = .init(0),
+decoded_account_cache_priority_skip_count: std.atomic.Value(u64) = .init(0),
+decoded_account_cache_skip_entry_limit_count: std.atomic.Value(u64) = .init(0),
+decoded_account_cache_skip_byte_limit_count: std.atomic.Value(u64) = .init(0),
+decoded_account_cache_skip_oversize_count: std.atomic.Value(u64) = .init(0),
+decoded_account_cache_skip_allocation_count: std.atomic.Value(u64) = .init(0),
+index_record_read_count: std.atomic.Value(u64) = .init(0),
 metrics: Metrics,
 shard_prefix_bits: u32,
 row_count: u64,
@@ -94,12 +108,27 @@ const Metrics = struct {
     cache_bytes: *sig.prometheus.Gauge(u64),
     cache_entries: *sig.prometheus.Gauge(u64),
     lookup_cache_entries: *sig.prometheus.Gauge(u64),
+    index_mmap_enabled: *sig.prometheus.Gauge(u64),
+    radix_index_enabled: *sig.prometheus.Gauge(u64),
+    radix_index_prefix_bits: *sig.prometheus.Gauge(u64),
+    index_record_read_count: *sig.prometheus.Counter,
     decoded_account_cache_hit_count: *sig.prometheus.Counter,
     decoded_account_cache_miss_count: *sig.prometheus.Counter,
     decoded_account_cache_insert_count: *sig.prometheus.Counter,
     decoded_account_cache_skip_count: *sig.prometheus.Counter,
+    decoded_account_cache_priority_insert_count: *sig.prometheus.Counter,
+    decoded_account_cache_priority_skip_count: *sig.prometheus.Counter,
+    decoded_account_cache_skip_entry_limit_count: *sig.prometheus.Counter,
+    decoded_account_cache_skip_byte_limit_count: *sig.prometheus.Counter,
+    decoded_account_cache_skip_oversize_count: *sig.prometheus.Counter,
+    decoded_account_cache_skip_allocation_count: *sig.prometheus.Counter,
     decoded_account_cache_entries: *sig.prometheus.Gauge(u64),
     decoded_account_cache_bytes: *sig.prometheus.Gauge(u64),
+    decoded_account_cache_max_entries: *sig.prometheus.Gauge(u64),
+    decoded_account_cache_priority_entries: *sig.prometheus.Gauge(u64),
+    decoded_account_cache_priority_reserve_entries: *sig.prometheus.Gauge(u64),
+    decoded_account_cache_effective_max_entries: *sig.prometheus.Gauge(u64),
+    decoded_account_cache_max_bytes: *sig.prometheus.Gauge(u64),
     batch_decode_time: *sig.prometheus.Histogram,
     batch_decode_pubkeys: *sig.prometheus.Gauge(u64),
     batch_decode_compressed_pubkeys: *sig.prometheus.Gauge(u64),
@@ -110,6 +139,7 @@ const Metrics = struct {
     batch_decode_accounts_loaded: *sig.prometheus.Gauge(u64),
     batch_decode_accounts_cached: *sig.prometheus.Gauge(u64),
     batch_decode_accounts_skipped: *sig.prometheus.Gauge(u64),
+    batch_decode_index_records_read: *sig.prometheus.Gauge(u64),
     get_time: *sig.prometheus.Histogram,
     lookup_time: *sig.prometheus.Histogram,
     read_index_record_time: *sig.prometheus.Histogram,
@@ -162,8 +192,54 @@ pub const BatchDecodeResult = struct {
     chunks_cached: u64 = 0,
     accounts_loaded: u64 = 0,
     accounts_cached: u64 = 0,
+    accounts_borrowed: u64 = 0,
     accounts_skipped: u64 = 0,
+    materialized_data_bytes: u64 = 0,
+    borrowed_data_bytes: u64 = 0,
+    decoded_cache_entries: u64 = 0,
+    decoded_cache_bytes: u64 = 0,
+    decoded_cache_max_entries: u64 = 0,
+    decoded_cache_priority_entries: u64 = 0,
+    decoded_cache_priority_reserve_entries: u64 = 0,
+    decoded_cache_effective_max_entries: u64 = 0,
+    decoded_cache_max_bytes: u64 = 0,
+    decoded_cache_priority_insert_total: u64 = 0,
+    decoded_cache_priority_skip_total: u64 = 0,
+    decoded_cache_skip_entry_limit_total: u64 = 0,
+    decoded_cache_skip_byte_limit_total: u64 = 0,
+    decoded_cache_skip_oversize_total: u64 = 0,
+    decoded_cache_skip_allocation_total: u64 = 0,
+    total_ns: u64 = 0,
+    index_lookup_ns: u64 = 0,
+    index_records_read: u64 = 0,
+    chunk_plan_ns: u64 = 0,
+    cached_chunk_load_ns: u64 = 0,
+    cold_chunk_load_ns: u64 = 0,
+    cold_decompress_wall_ns: u64 = 0,
+    cold_account_materialize_ns: u64 = 0,
+    chunk_cache_insert_ns: u64 = 0,
 };
+
+const DecodedAccountCacheInsertPolicy = enum {
+    normal,
+    priority,
+};
+
+fn decodedAccountCacheHasCapacityForPolicy(
+    base_entries: usize,
+    priority_reserve_entries: usize,
+    total_entries: usize,
+    priority_entries: usize,
+    policy: DecodedAccountCacheInsertPolicy,
+) bool {
+    std.debug.assert(priority_entries <= total_entries);
+    if (priority_reserve_entries == 0) return total_entries < base_entries;
+
+    return switch (policy) {
+        .normal => total_entries - priority_entries < base_entries,
+        .priority => priority_entries < priority_reserve_entries,
+    };
+}
 
 const BatchDecodeCandidate = struct {
     pubkey: Pubkey,
@@ -194,6 +270,18 @@ const ParallelChunkDecodeContext = struct {
     store: *CompressedAccountStore,
     groups: []const BatchChunkGroup,
     results: []ParallelChunkDecodeResult,
+    next_index: std.atomic.Value(usize) = .init(0),
+};
+
+const BatchLookupResult = struct {
+    pubkey: Pubkey,
+    record: ?IndexRecord = null,
+    err: ?anyerror = null,
+};
+
+const ParallelBatchLookupContext = struct {
+    store: *CompressedAccountStore,
+    results: []BatchLookupResult,
     next_index: std.atomic.Value(usize) = .init(0),
 };
 
@@ -261,6 +349,16 @@ pub fn init(
     chunks_path: []const u8,
     segments_path: []const u8,
 ) !CompressedAccountStore {
+    return initWithRadix(allocator, index_path, chunks_path, segments_path, null);
+}
+
+fn initWithRadix(
+    allocator: std.mem.Allocator,
+    index_path: []const u8,
+    chunks_path: []const u8,
+    segments_path: []const u8,
+    radix_path: ?[]const u8,
+) !CompressedAccountStore {
     var index_file = try std.fs.cwd().openFile(index_path, .{ .mode = .read_only });
     errdefer index_file.close();
 
@@ -294,6 +392,8 @@ pub fn init(
     if (directory_offset != INDEX_HEADER_LEN)
         return error.InvalidCompressedAccountIndex;
 
+    const index_file_size = try index_file.getEndPos();
+
     const shard_count: usize = @intCast(shard_count_u32);
     const directory_bytes_len = shard_count * DIRECTORY_RECORD_LEN;
     const directory_bytes = try allocator.alloc(u8, directory_bytes_len);
@@ -310,6 +410,18 @@ pub fn init(
             .count = readU32(directory_bytes, offset + 8),
         };
     }
+
+    var radix_index: ?CompressedAccountRadix = null;
+    if (radix_path) |path| {
+        radix_index = try CompressedAccountRadix.load(allocator, path, .{
+            .file_size = index_file_size,
+            .row_count = row_count,
+            .records_offset = records_offset,
+            .record_len = INDEX_RECORD_LEN,
+            .min_prefix_bits = shard_prefix_bits,
+        });
+    }
+    errdefer if (radix_index) |*radix| radix.deinit(allocator);
 
     var chunks_header: [CHUNK_HEADER_LEN]u8 = undefined;
     if (try chunks_file.preadAll(&chunks_header, 0) != chunks_header.len)
@@ -376,21 +488,62 @@ pub fn init(
         "SIG_COMPRESSED_ACCOUNT_STORE_DECODED_ACCOUNT_CACHE_ENTRIES",
         DEFAULT_DECODED_ACCOUNT_CACHE_ENTRIES,
     );
-    if (decoded_account_cache_max_entries_u64 > std.math.maxInt(usize))
+    const decoded_account_cache_max_bytes = envU64(
+        "SIG_COMPRESSED_ACCOUNT_STORE_DECODED_ACCOUNT_CACHE_BYTES",
+        DEFAULT_DECODED_ACCOUNT_CACHE_BYTES,
+    );
+    const decoded_account_cache_priority_reserve_entries_u64 = envU64(
+        "SIG_COMPRESSED_ACCOUNT_STORE_DECODED_ACCOUNT_CACHE_PRIORITY_ENTRIES",
+        DEFAULT_DECODED_ACCOUNT_CACHE_PRIORITY_ENTRIES,
+    );
+    if (decoded_account_cache_max_entries_u64 > std.math.maxInt(usize) or
+        decoded_account_cache_priority_reserve_entries_u64 >
+            std.math.maxInt(usize) - decoded_account_cache_max_entries_u64)
+    {
         return error.InvalidCompressedAccountChunks;
-    var decoded_account_cache: sig.utils.collections.PubkeyMap(AccountSharedData) = .{};
+    }
+    const decoded_account_cache_effective_max_entries_u64 =
+        decoded_account_cache_max_entries_u64 + decoded_account_cache_priority_reserve_entries_u64;
+    var decoded_account_cache: sig.utils.collections.PubkeyMap(*AccountSharedData) = .{};
     errdefer decoded_account_cache.deinit(allocator);
+    var decoded_account_cache_headers = std.heap.ArenaAllocator.init(allocator);
+    errdefer decoded_account_cache_headers.deinit();
+
+    var index_mmap: ?[]align(std.heap.page_size_min) const u8 = null;
+    if (envBool("SIG_COMPRESSED_ACCOUNT_STORE_MMAP_INDEX", false)) {
+        if (index_file_size == 0 or index_file_size > std.math.maxInt(usize))
+            return error.InvalidCompressedAccountIndex;
+        index_mmap = try std.posix.mmap(
+            null,
+            @intCast(index_file_size),
+            std.posix.PROT.READ,
+            .{ .TYPE = .PRIVATE },
+            index_file.handle,
+            0,
+        );
+    }
+    errdefer if (index_mmap) |mapped| std.posix.munmap(mapped);
 
     const metrics = try sig.prometheus.globalRegistry().initStruct(Metrics);
     metrics.cache_bytes.set(0);
     metrics.cache_entries.set(0);
     metrics.lookup_cache_entries.set(0);
+    metrics.index_mmap_enabled.set(@intFromBool(index_mmap != null));
+    metrics.radix_index_enabled.set(@intFromBool(radix_index != null));
+    metrics.radix_index_prefix_bits.set(if (radix_index) |radix| radix.prefix_bits else 0);
     metrics.decoded_account_cache_entries.set(0);
     metrics.decoded_account_cache_bytes.set(0);
+    metrics.decoded_account_cache_max_entries.set(decoded_account_cache_max_entries_u64);
+    metrics.decoded_account_cache_priority_entries.set(0);
+    metrics.decoded_account_cache_priority_reserve_entries.set(decoded_account_cache_priority_reserve_entries_u64);
+    metrics.decoded_account_cache_effective_max_entries.set(decoded_account_cache_effective_max_entries_u64);
+    metrics.decoded_account_cache_max_bytes.set(decoded_account_cache_max_bytes);
 
     return .{
         .allocator = allocator,
         .index_file = index_file,
+        .index_mmap = index_mmap,
+        .radix_index = radix_index,
         .chunks_file = chunks_file,
         .segments_file = segments_file,
         .directory = directory,
@@ -402,11 +555,12 @@ pub fn init(
         .lookup_cache = lookup_cache,
         .lookup_cache_max_entries = @intCast(lookup_cache_max_entries_u64),
         .decoded_account_cache = decoded_account_cache,
+        .decoded_account_cache_headers = decoded_account_cache_headers,
         .decoded_account_cache_max_entries = @intCast(decoded_account_cache_max_entries_u64),
-        .decoded_account_cache_max_bytes = envU64(
-            "SIG_COMPRESSED_ACCOUNT_STORE_DECODED_ACCOUNT_CACHE_BYTES",
-            DEFAULT_DECODED_ACCOUNT_CACHE_BYTES,
+        .decoded_account_cache_priority_reserve_entries = @intCast(
+            decoded_account_cache_priority_reserve_entries_u64,
         ),
+        .decoded_account_cache_max_bytes = decoded_account_cache_max_bytes,
         .decoded_account_cache_clear_each_batch = envBool(
             "SIG_COMPRESSED_ACCOUNT_STORE_DECODED_ACCOUNT_CACHE_CLEAR_EACH_BATCH",
             DEFAULT_DECODED_ACCOUNT_CACHE_CLEAR_EACH_BATCH,
@@ -429,6 +583,9 @@ pub fn initFromEnv(allocator: std.mem.Allocator) !?CompressedAccountStore {
     const segments_path = try envPath(allocator, "SIG_COMPRESSED_ACCOUNT_STORE_SEGMENTS");
     errdefer if (segments_path) |path| allocator.free(path);
 
+    const radix_path = try envPath(allocator, "SIG_COMPRESSED_ACCOUNT_STORE_RADIX_INDEX");
+    errdefer if (radix_path) |path| allocator.free(path);
+
     const overlay_index_path = try envPath(allocator, "SIG_COMPRESSED_ACCOUNT_STORE_OVERLAY_INDEX");
     errdefer if (overlay_index_path) |path| allocator.free(path);
 
@@ -438,31 +595,58 @@ pub fn initFromEnv(allocator: std.mem.Allocator) !?CompressedAccountStore {
     const overlay_segments_path = try envPath(allocator, "SIG_COMPRESSED_ACCOUNT_STORE_OVERLAY_SEGMENTS");
     errdefer if (overlay_segments_path) |path| allocator.free(path);
 
+    const overlay_radix_path = try envPath(allocator, "SIG_COMPRESSED_ACCOUNT_STORE_OVERLAY_RADIX_INDEX");
+    errdefer if (overlay_radix_path) |path| allocator.free(path);
+
     const base_missing = index_path == null and chunks_path == null and segments_path == null;
     const overlay_missing = overlay_index_path == null and overlay_chunks_path == null and overlay_segments_path == null;
-    if (base_missing and overlay_missing) return null;
+    if (base_missing and overlay_missing) {
+        if (radix_path != null or overlay_radix_path != null)
+            return error.MissingCompressedAccountStoreEnv;
+        return null;
+    }
     if (index_path == null or chunks_path == null or segments_path == null)
         return error.MissingCompressedAccountStoreEnv;
     if (overlay_index_path == null or overlay_chunks_path == null or overlay_segments_path == null) {
         if (!overlay_missing) return error.MissingCompressedAccountStoreEnv;
     }
+    if (overlay_missing and overlay_radix_path != null)
+        return error.MissingCompressedAccountStoreEnv;
 
     defer allocator.free(index_path.?);
     defer allocator.free(chunks_path.?);
     defer allocator.free(segments_path.?);
+    defer if (radix_path) |path| allocator.free(path);
     defer if (overlay_index_path) |path| allocator.free(path);
     defer if (overlay_chunks_path) |path| allocator.free(path);
     defer if (overlay_segments_path) |path| allocator.free(path);
+    defer if (overlay_radix_path) |path| allocator.free(path);
 
-    var store = try init(allocator, index_path.?, chunks_path.?, segments_path.?);
+    var store = try initWithRadix(
+        allocator,
+        index_path.?,
+        chunks_path.?,
+        segments_path.?,
+        radix_path,
+    );
     errdefer store.deinit();
 
     if (!overlay_missing) {
         const overlay = try allocator.create(CompressedAccountStore);
         errdefer allocator.destroy(overlay);
-        overlay.* = try init(allocator, overlay_index_path.?, overlay_chunks_path.?, overlay_segments_path.?);
+        overlay.* = try initWithRadix(
+            allocator,
+            overlay_index_path.?,
+            overlay_chunks_path.?,
+            overlay_segments_path.?,
+            overlay_radix_path,
+        );
         store.overlay_store = overlay;
     }
+
+    store.metrics.index_mmap_enabled.set(@intFromBool(store.index_mmap != null));
+    store.metrics.radix_index_enabled.set(@intFromBool(store.radix_index != null));
+    store.metrics.radix_index_prefix_bits.set(if (store.radix_index) |radix| radix.prefix_bits else 0);
 
     return store;
 }
@@ -473,6 +657,8 @@ pub fn deinit(self: *CompressedAccountStore) void {
         self.allocator.destroy(overlay);
         self.overlay_store = null;
     }
+    if (self.index_mmap) |mapped| std.posix.munmap(mapped);
+    if (self.radix_index) |*radix| radix.deinit(self.allocator);
     self.index_file.close();
     self.chunks_file.close();
     self.segments_file.close();
@@ -483,6 +669,7 @@ pub fn deinit(self: *CompressedAccountStore) void {
     self.lookup_cache.deinit(self.allocator);
     self.decodedAccountCacheClearUnlocked();
     self.decoded_account_cache.deinit(self.allocator);
+    self.decoded_account_cache_headers.deinit();
     self.allocator.free(self.chunk_cache);
     self.allocator.free(self.directory);
     self.allocator.free(self.chunk_table);
@@ -510,6 +697,15 @@ pub fn get(
         return null;
     };
     return try self.readAccountRecord(allocator, address, record);
+}
+
+pub fn accountDataLen(self: *CompressedAccountStore, address: Pubkey) !?usize {
+    if (self.overlay_store) |overlay| {
+        if (try overlay.accountDataLen(address)) |data_len| return data_len;
+    }
+
+    const record = try self.lookup(address) orelse return null;
+    return record.data_len;
 }
 
 pub fn samplePubkeys(
@@ -688,6 +884,7 @@ pub fn batchDecodeAccountsForPubkeys(
     var result: BatchDecodeResult = .{ .pubkeys = @intCast(pubkeys.len) };
     if (!self.decodedAccountCacheEnabled()) {
         result.accounts_skipped = @intCast(pubkeys.len);
+        self.snapshotDecodedAccountCache(&result);
         self.recordBatchDecodeResult(result);
         return result;
     }
@@ -768,6 +965,7 @@ pub fn batchDecodeAccountsForPubkeys(
         i = end;
     }
 
+    self.snapshotDecodedAccountCache(&result);
     self.recordBatchDecodeResult(result);
     return result;
 }
@@ -777,6 +975,55 @@ pub fn batchLoadAccountsForPubkeys(
     allocator: std.mem.Allocator,
     pubkeys: []const Pubkey,
     accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+) !BatchDecodeResult {
+    return self.batchLoadAccountsForPubkeysInternal(
+        allocator,
+        pubkeys,
+        accounts,
+        null,
+        .normal,
+    );
+}
+
+pub fn batchLoadAccountsForPubkeysBorrowed(
+    self: *CompressedAccountStore,
+    allocator: std.mem.Allocator,
+    pubkeys: []const Pubkey,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    borrowed_accounts: *sig.utils.collections.PubkeyMap(*const AccountSharedData),
+) !BatchDecodeResult {
+    return self.batchLoadAccountsForPubkeysInternal(
+        allocator,
+        pubkeys,
+        accounts,
+        borrowed_accounts,
+        .normal,
+    );
+}
+
+pub fn batchLoadAccountsForPubkeysBorrowedPriority(
+    self: *CompressedAccountStore,
+    allocator: std.mem.Allocator,
+    pubkeys: []const Pubkey,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    borrowed_accounts: *sig.utils.collections.PubkeyMap(*const AccountSharedData),
+) !BatchDecodeResult {
+    return self.batchLoadAccountsForPubkeysInternal(
+        allocator,
+        pubkeys,
+        accounts,
+        borrowed_accounts,
+        .priority,
+    );
+}
+
+fn batchLoadAccountsForPubkeysInternal(
+    self: *CompressedAccountStore,
+    allocator: std.mem.Allocator,
+    pubkeys: []const Pubkey,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    borrowed_accounts: ?*sig.utils.collections.PubkeyMap(*const AccountSharedData),
+    cache_insert_policy: DecodedAccountCacheInsertPolicy,
 ) !BatchDecodeResult {
     var timer = sig.time.Timer.start();
     defer self.metrics.batch_decode_time.observe(timer.read().asNanos());
@@ -793,24 +1040,77 @@ pub fn batchLoadAccountsForPubkeys(
     defer candidates.deinit(allocator);
     try candidates.ensureTotalCapacity(allocator, pubkeys.len);
 
+    var lookup_results: std.ArrayListUnmanaged(BatchLookupResult) = .{};
+    defer lookup_results.deinit(allocator);
+    try lookup_results.ensureTotalCapacity(allocator, pubkeys.len);
+
+    var phase_timer = sig.time.Timer.start();
+    try unique_pubkeys.ensureTotalCapacity(allocator, pubkeys.len);
     for (pubkeys) |pubkey| {
         const pubkey_gop = try unique_pubkeys.getOrPut(allocator, pubkey);
         if (pubkey_gop.found_existing) continue;
         pubkey_gop.value_ptr.* = {};
+    }
 
-        const record = try self.lookup(pubkey) orelse {
+    result.pubkeys = @intCast(unique_pubkeys.count());
+
+    if (borrowed_accounts) |borrowed| {
+        if (self.decodedAccountCacheBatchLoadEnabled()) {
+            try borrowed.ensureUnusedCapacity(allocator, unique_pubkeys.count());
+            self.decoded_account_cache_mutex.lock();
+            defer self.decoded_account_cache_mutex.unlock();
+
+            for (unique_pubkeys.keys()) |pubkey| {
+                if (self.decoded_account_cache.get(pubkey)) |cached_account| {
+                    self.metrics.decoded_account_cache_hit_count.inc();
+                    putBorrowedAccount(allocator, borrowed, pubkey, cached_account) catch |err|
+                        return err;
+                    result.accounts_cached += 1;
+                    result.accounts_borrowed += 1;
+                    result.borrowed_data_bytes += @intCast(cached_account.data.len);
+                    continue;
+                }
+                self.metrics.decoded_account_cache_miss_count.inc();
+                lookup_results.appendAssumeCapacity(.{ .pubkey = pubkey });
+            }
+        } else {
+            for (unique_pubkeys.keys()) |pubkey| {
+                lookup_results.appendAssumeCapacity(.{ .pubkey = pubkey });
+            }
+        }
+    } else {
+        for (unique_pubkeys.keys()) |pubkey| {
+            if (self.decodedAccountCacheBatchLoadEnabled()) {
+                if (try self.decodedAccountCacheGet(allocator, pubkey)) |cached_account| {
+                    var account = cached_account;
+                    try putLoadedAccount(allocator, accounts, pubkey, &account);
+                    result.accounts_cached += 1;
+                    continue;
+                }
+            }
+
+            lookup_results.appendAssumeCapacity(.{ .pubkey = pubkey });
+        }
+    }
+
+    const index_records_before = self.index_record_read_count.load(.monotonic);
+    try self.resolveBatchLookups(allocator, lookup_results.items);
+    result.index_records_read = self.index_record_read_count.load(.monotonic) -% index_records_before;
+    for (lookup_results.items) |lookup_result| {
+        if (lookup_result.err) |err| return err;
+        const record = lookup_result.record orelse {
             result.missing_pubkeys += 1;
             continue;
         };
-        candidates.appendAssumeCapacity(.{ .pubkey = pubkey, .record = record });
+        candidates.appendAssumeCapacity(.{ .pubkey = lookup_result.pubkey, .record = record });
         result.compressed_pubkeys += 1;
         const chunk_gop = try unique_chunks.getOrPut(allocator, record.chunk_id);
         if (!chunk_gop.found_existing) chunk_gop.value_ptr.* = {};
     }
-
-    result.pubkeys = @intCast(unique_pubkeys.count());
+    result.index_lookup_ns = phase_timer.read().asNanos();
     result.unique_chunks = @intCast(unique_chunks.count());
 
+    phase_timer.reset();
     std.mem.sort(BatchDecodeCandidate, candidates.items, {}, BatchDecodeCandidate.lessThan);
     var cold_groups: std.ArrayListUnmanaged(BatchChunkGroup) = .{};
     defer cold_groups.deinit(allocator);
@@ -822,12 +1122,17 @@ pub fn batchLoadAccountsForPubkeys(
         var end = i + 1;
         while (end < candidates.items.len and candidates.items[end].record.chunk_id == chunk_id) : (end += 1) {}
 
-        if (try self.batchLoadFromCachedChunk(
+        var cached_chunk_timer = sig.time.Timer.start();
+        const loaded_from_cached_chunk = try self.batchLoadFromCachedChunk(
             allocator,
             candidates.items[i..end],
             accounts,
+            borrowed_accounts,
+            cache_insert_policy,
             &result,
-        )) {
+        );
+        result.cached_chunk_load_ns += cached_chunk_timer.read().asNanos();
+        if (loaded_from_cached_chunk) {
             result.chunks_cached += 1;
             i = end;
             continue;
@@ -851,16 +1156,74 @@ pub fn batchLoadAccountsForPubkeys(
         });
         i = end;
     }
+    const chunk_plan_elapsed_ns = phase_timer.read().asNanos();
+    result.chunk_plan_ns = chunk_plan_elapsed_ns -
+        @min(chunk_plan_elapsed_ns, result.cached_chunk_load_ns);
 
+    phase_timer.reset();
     try self.batchLoadColdChunkGroups(
         allocator,
         cold_groups.items,
         accounts,
+        borrowed_accounts,
+        cache_insert_policy,
         &result,
     );
+    result.cold_chunk_load_ns = phase_timer.read().asNanos();
+    result.total_ns = timer.read().asNanos();
 
+    self.snapshotDecodedAccountCache(&result);
     self.recordBatchDecodeResult(result);
     return result;
+}
+
+fn resolveBatchLookups(
+    self: *CompressedAccountStore,
+    allocator: std.mem.Allocator,
+    results: []BatchLookupResult,
+) !void {
+    if (results.len == 0) return;
+
+    const default_threads = envU64("SIG_COMPRESSED_ACCOUNT_STORE_BATCH_DECODE_THREADS", 1);
+    const configured_threads = envU64(
+        "SIG_COMPRESSED_ACCOUNT_STORE_BATCH_INDEX_THREADS",
+        default_threads,
+    );
+    const max_threads: usize = @intCast(@min(configured_threads, MAX_BATCH_DECODE_THREADS));
+    if (max_threads <= 1 or results.len == 1) {
+        for (results) |*result| result.record = try self.lookup(result.pubkey);
+        return;
+    }
+
+    var context: ParallelBatchLookupContext = .{
+        .store = self,
+        .results = results,
+    };
+    const worker_count = @min(max_threads, results.len);
+    const threads = try allocator.alloc(std.Thread, worker_count);
+    defer allocator.free(threads);
+
+    var spawned: usize = 0;
+    errdefer {
+        for (threads[0..spawned]) |*thread| thread.join();
+    }
+    while (spawned < worker_count) : (spawned += 1) {
+        threads[spawned] = try std.Thread.spawn(.{}, parallelBatchLookupWorker, .{&context});
+    }
+    for (threads[0..spawned]) |*thread| thread.join();
+}
+
+fn parallelBatchLookupWorker(context: *ParallelBatchLookupContext) void {
+    while (true) {
+        const index = context.next_index.fetchAdd(1, .monotonic);
+        if (index >= context.results.len) return;
+        context.results[index].record = context.store.lookup(
+            context.results[index].pubkey,
+        ) catch |err| {
+            context.results[index].err = err;
+            continue;
+        };
+    }
 }
 
 fn lookup(self: *CompressedAccountStore, address: Pubkey) !?IndexRecord {
@@ -872,15 +1235,25 @@ fn lookup(self: *CompressedAccountStore, address: Pubkey) !?IndexRecord {
         return null;
     }
 
-    const shard_id = shardPrefix(address, self.shard_prefix_bits);
-    if (shard_id >= self.directory.len) return error.InvalidCompressedAccountIndex;
-    const shard = self.directory[shard_id];
+    var base_offset: u64 = undefined;
+    var lo: u64 = 0;
+    var hi: u64 = undefined;
+    if (self.radix_index) |*radix| {
+        const range = radix.rangeForPubkey(&address.data);
+        base_offset = self.records_offset;
+        lo = range.lo;
+        hi = range.hi;
+    } else {
+        const shard_id = shardPrefix(address, self.shard_prefix_bits);
+        if (shard_id >= self.directory.len) return error.InvalidCompressedAccountIndex;
+        const shard = self.directory[shard_id];
+        base_offset = shard.offset;
+        hi = shard.count;
+    }
 
-    var lo: usize = 0;
-    var hi: usize = shard.count;
     while (lo < hi) {
         const mid = lo + (hi - lo) / 2;
-        const offset = shard.offset + @as(u64, @intCast(mid)) * INDEX_RECORD_LEN;
+        const offset = base_offset + mid * INDEX_RECORD_LEN;
         const record = try self.readIndexRecordAt(offset);
         const cmp = comparePubkey(record.pubkey, address);
         if (cmp == 0) {
@@ -929,6 +1302,23 @@ fn decodedAccountCacheEnabled(self: *const CompressedAccountStore) bool {
     return self.decoded_account_cache_max_entries > 0 and self.decoded_account_cache_max_bytes > 0;
 }
 
+fn decodedAccountCacheBatchLoadEnabled(self: *const CompressedAccountStore) bool {
+    return self.decodedAccountCacheEnabled() and !self.decoded_account_cache_clear_each_batch;
+}
+
+fn decodedAccountCacheHasEntryCapacity(
+    self: *const CompressedAccountStore,
+    policy: DecodedAccountCacheInsertPolicy,
+) bool {
+    return decodedAccountCacheHasCapacityForPolicy(
+        self.decoded_account_cache_max_entries,
+        self.decoded_account_cache_priority_reserve_entries,
+        self.decoded_account_cache.count(),
+        @intCast(self.decoded_account_cache_priority_entries),
+        policy,
+    );
+}
+
 fn decodedAccountCacheGet(
     self: *CompressedAccountStore,
     allocator: std.mem.Allocator,
@@ -962,35 +1352,42 @@ fn decodedAccountCacheContains(
 fn decodedAccountCachePutOwned(
     self: *CompressedAccountStore,
     address: Pubkey,
-    account: AccountSharedData,
-) !bool {
-    if (!self.decodedAccountCacheEnabled()) return false;
+    account_arg: AccountSharedData,
+) !?*const AccountSharedData {
+    if (!self.decodedAccountCacheEnabled()) return null;
+    var account = account_arg;
     const account_bytes: u64 = @intCast(account.data.len);
-    if (account_bytes > self.decoded_account_cache_max_bytes) return false;
+    if (account_bytes > self.decoded_account_cache_max_bytes) {
+        self.recordDecodedAccountCacheSkipReason(.oversize);
+        return null;
+    }
 
     self.decoded_account_cache_mutex.lock();
     defer self.decoded_account_cache_mutex.unlock();
 
-    if (self.decoded_account_cache.getPtr(address)) |existing| {
-        const existing_bytes: u64 = @intCast(existing.data.len);
-        const projected = self.decoded_account_cache_bytes - existing_bytes + account_bytes;
-        if (projected > self.decoded_account_cache_max_bytes) return false;
-        existing.deinit(self.allocator);
-        existing.* = account;
-        self.decoded_account_cache_bytes = projected;
-    } else {
-        if (self.decoded_account_cache.count() >= self.decoded_account_cache_max_entries)
-            return false;
-        if (self.decoded_account_cache_bytes + account_bytes > self.decoded_account_cache_max_bytes)
-            return false;
-        try self.decoded_account_cache.put(self.allocator, address, account);
-        self.decoded_account_cache_bytes += account_bytes;
+    if (self.decoded_account_cache.get(address)) |stored| {
+        account.deinit(self.allocator);
+        return stored;
     }
+    if (!self.decodedAccountCacheHasEntryCapacity(.normal)) {
+        self.recordDecodedAccountCacheSkipReason(.entry_limit);
+        return null;
+    }
+    if (account_bytes > self.decoded_account_cache_max_bytes - self.decoded_account_cache_bytes) {
+        self.recordDecodedAccountCacheSkipReason(.byte_limit);
+        return null;
+    }
+
+    try self.decoded_account_cache.ensureUnusedCapacity(self.allocator, 1);
+    const stored = try self.decoded_account_cache_headers.allocator().create(AccountSharedData);
+    stored.* = account;
+    self.decoded_account_cache.putAssumeCapacityNoClobber(address, stored);
+    self.decoded_account_cache_bytes += account_bytes;
 
     self.metrics.decoded_account_cache_insert_count.inc();
     self.metrics.decoded_account_cache_entries.set(@intCast(self.decoded_account_cache.count()));
     self.metrics.decoded_account_cache_bytes.set(self.decoded_account_cache_bytes);
-    return true;
+    return stored;
 }
 
 fn decodedAccountCacheClearLocked(self: *CompressedAccountStore) void {
@@ -998,13 +1395,153 @@ fn decodedAccountCacheClearLocked(self: *CompressedAccountStore) void {
 }
 
 fn decodedAccountCacheClearUnlocked(self: *CompressedAccountStore) void {
-    for (self.decoded_account_cache.values()) |*account| {
+    for (self.decoded_account_cache.values()) |account| {
         account.deinit(self.allocator);
     }
     self.decoded_account_cache.clearRetainingCapacity();
+    _ = self.decoded_account_cache_headers.reset(.retain_capacity);
     self.decoded_account_cache_bytes = 0;
+    self.decoded_account_cache_priority_entries = 0;
     self.metrics.decoded_account_cache_entries.set(0);
     self.metrics.decoded_account_cache_bytes.set(0);
+    self.metrics.decoded_account_cache_priority_entries.set(0);
+}
+
+fn decodedAccountCachePutClone(
+    self: *CompressedAccountStore,
+    address: Pubkey,
+    account: *const AccountSharedData,
+    policy: DecodedAccountCacheInsertPolicy,
+) ?*const AccountSharedData {
+    if (!self.decodedAccountCacheBatchLoadEnabled()) return null;
+    const account_bytes: u64 = @intCast(account.data.len);
+    if (account_bytes > self.decoded_account_cache_max_bytes) {
+        self.recordDecodedAccountCacheSkipReason(.oversize);
+        self.metrics.decoded_account_cache_skip_count.inc();
+        self.recordDecodedAccountCachePrioritySkip(policy);
+        return null;
+    }
+
+    self.decoded_account_cache_mutex.lock();
+    defer self.decoded_account_cache_mutex.unlock();
+
+    if (self.decoded_account_cache.get(address)) |stored| return stored;
+    if (!self.decodedAccountCacheHasEntryCapacity(policy)) {
+        self.recordDecodedAccountCacheSkipReason(.entry_limit);
+        self.metrics.decoded_account_cache_skip_count.inc();
+        self.recordDecodedAccountCachePrioritySkip(policy);
+        return null;
+    }
+    if (account_bytes > self.decoded_account_cache_max_bytes - self.decoded_account_cache_bytes) {
+        self.recordDecodedAccountCacheSkipReason(.byte_limit);
+        self.metrics.decoded_account_cache_skip_count.inc();
+        self.recordDecodedAccountCachePrioritySkip(policy);
+        return null;
+    }
+
+    self.decoded_account_cache.ensureUnusedCapacity(self.allocator, 1) catch {
+        self.recordDecodedAccountCacheSkipReason(.allocation);
+        self.metrics.decoded_account_cache_skip_count.inc();
+        self.recordDecodedAccountCachePrioritySkip(policy);
+        return null;
+    };
+    var cached_account = account.clone(self.allocator) catch {
+        self.recordDecodedAccountCacheSkipReason(.allocation);
+        self.metrics.decoded_account_cache_skip_count.inc();
+        self.recordDecodedAccountCachePrioritySkip(policy);
+        return null;
+    };
+    const stored = self.decoded_account_cache_headers.allocator().create(AccountSharedData) catch {
+        cached_account.deinit(self.allocator);
+        self.recordDecodedAccountCacheSkipReason(.allocation);
+        self.metrics.decoded_account_cache_skip_count.inc();
+        self.recordDecodedAccountCachePrioritySkip(policy);
+        return null;
+    };
+    stored.* = cached_account;
+    self.decoded_account_cache.putAssumeCapacityNoClobber(address, stored);
+    self.decoded_account_cache_bytes += account_bytes;
+
+    self.metrics.decoded_account_cache_insert_count.inc();
+    self.metrics.decoded_account_cache_entries.set(@intCast(self.decoded_account_cache.count()));
+    self.metrics.decoded_account_cache_bytes.set(self.decoded_account_cache_bytes);
+    if (policy == .priority) {
+        self.decoded_account_cache_priority_entries += 1;
+        _ = self.decoded_account_cache_priority_insert_count.fetchAdd(1, .monotonic);
+        self.metrics.decoded_account_cache_priority_insert_count.inc();
+        self.metrics.decoded_account_cache_priority_entries.set(self.decoded_account_cache_priority_entries);
+    }
+    return stored;
+}
+
+fn recordDecodedAccountCachePrioritySkip(
+    self: *CompressedAccountStore,
+    policy: DecodedAccountCacheInsertPolicy,
+) void {
+    if (policy != .priority) return;
+    _ = self.decoded_account_cache_priority_skip_count.fetchAdd(1, .monotonic);
+    self.metrics.decoded_account_cache_priority_skip_count.inc();
+}
+
+const DecodedAccountCacheSkipReason = enum {
+    entry_limit,
+    byte_limit,
+    oversize,
+    allocation,
+};
+
+fn recordDecodedAccountCacheSkipReason(
+    self: *CompressedAccountStore,
+    reason: DecodedAccountCacheSkipReason,
+) void {
+    switch (reason) {
+        .entry_limit => {
+            _ = self.decoded_account_cache_skip_entry_limit_count.fetchAdd(1, .monotonic);
+            self.metrics.decoded_account_cache_skip_entry_limit_count.inc();
+        },
+        .byte_limit => {
+            _ = self.decoded_account_cache_skip_byte_limit_count.fetchAdd(1, .monotonic);
+            self.metrics.decoded_account_cache_skip_byte_limit_count.inc();
+        },
+        .oversize => {
+            _ = self.decoded_account_cache_skip_oversize_count.fetchAdd(1, .monotonic);
+            self.metrics.decoded_account_cache_skip_oversize_count.inc();
+        },
+        .allocation => {
+            _ = self.decoded_account_cache_skip_allocation_count.fetchAdd(1, .monotonic);
+            self.metrics.decoded_account_cache_skip_allocation_count.inc();
+        },
+    }
+}
+
+fn snapshotDecodedAccountCache(
+    self: *CompressedAccountStore,
+    result: *BatchDecodeResult,
+) void {
+    self.decoded_account_cache_mutex.lock();
+    result.decoded_cache_entries = @intCast(self.decoded_account_cache.count());
+    result.decoded_cache_bytes = self.decoded_account_cache_bytes;
+    result.decoded_cache_max_entries = @intCast(self.decoded_account_cache_max_entries);
+    result.decoded_cache_priority_entries = self.decoded_account_cache_priority_entries;
+    result.decoded_cache_priority_reserve_entries = @intCast(self.decoded_account_cache_priority_reserve_entries);
+    result.decoded_cache_effective_max_entries = @intCast(
+        self.decoded_account_cache_max_entries + self.decoded_account_cache_priority_reserve_entries,
+    );
+    result.decoded_cache_max_bytes = self.decoded_account_cache_max_bytes;
+    self.decoded_account_cache_mutex.unlock();
+
+    result.decoded_cache_skip_entry_limit_total =
+        self.decoded_account_cache_skip_entry_limit_count.load(.monotonic);
+    result.decoded_cache_skip_byte_limit_total =
+        self.decoded_account_cache_skip_byte_limit_count.load(.monotonic);
+    result.decoded_cache_skip_oversize_total =
+        self.decoded_account_cache_skip_oversize_count.load(.monotonic);
+    result.decoded_cache_skip_allocation_total =
+        self.decoded_account_cache_skip_allocation_count.load(.monotonic);
+    result.decoded_cache_priority_insert_total =
+        self.decoded_account_cache_priority_insert_count.load(.monotonic);
+    result.decoded_cache_priority_skip_total =
+        self.decoded_account_cache_priority_skip_count.load(.monotonic);
 }
 
 fn batchDecodeFromCachedChunk(
@@ -1042,7 +1579,7 @@ fn batchDecodeFromCachedChunk(
         );
         var owns_account = true;
         errdefer if (owns_account) account.deinit(self.allocator);
-        if (try self.decodedAccountCachePutOwned(candidate.pubkey, account)) {
+        if (try self.decodedAccountCachePutOwned(candidate.pubkey, account) != null) {
             owns_account = false;
             result.accounts_loaded += 1;
         } else {
@@ -1072,7 +1609,7 @@ fn batchDecodeFromChunkBytes(
         );
         var owns_account = true;
         errdefer if (owns_account) account.deinit(self.allocator);
-        if (try self.decodedAccountCachePutOwned(candidate.pubkey, account)) {
+        if (try self.decodedAccountCachePutOwned(candidate.pubkey, account) != null) {
             owns_account = false;
             result.accounts_loaded += 1;
         } else {
@@ -1089,6 +1626,8 @@ fn batchLoadFromCachedChunk(
     allocator: std.mem.Allocator,
     candidates: []const BatchDecodeCandidate,
     accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    borrowed_accounts: ?*sig.utils.collections.PubkeyMap(*const AccountSharedData),
+    cache_insert_policy: DecodedAccountCacheInsertPolicy,
     result: *BatchDecodeResult,
 ) !bool {
     if (candidates.len == 0 or self.chunk_cache.len == 0) return false;
@@ -1117,7 +1656,15 @@ fn batchLoadFromCachedChunk(
             candidate.record,
             entry.bytes,
         );
-        try putLoadedAccount(allocator, accounts, candidate.pubkey, &account);
+        try self.placeLoadedAccount(
+            allocator,
+            accounts,
+            borrowed_accounts,
+            candidate.pubkey,
+            &account,
+            cache_insert_policy,
+            result,
+        );
         result.accounts_loaded += 1;
     }
     return true;
@@ -1129,6 +1676,8 @@ fn batchLoadFromChunkBytes(
     candidates: []const BatchDecodeCandidate,
     decompressed: []const u8,
     accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    borrowed_accounts: ?*sig.utils.collections.PubkeyMap(*const AccountSharedData),
+    cache_insert_policy: DecodedAccountCacheInsertPolicy,
     result: *BatchDecodeResult,
 ) !void {
     for (candidates) |candidate| {
@@ -1138,7 +1687,15 @@ fn batchLoadFromChunkBytes(
             candidate.record,
             decompressed,
         );
-        try putLoadedAccount(allocator, accounts, candidate.pubkey, &account);
+        try self.placeLoadedAccount(
+            allocator,
+            accounts,
+            borrowed_accounts,
+            candidate.pubkey,
+            &account,
+            cache_insert_policy,
+            result,
+        );
         result.accounts_loaded += 1;
     }
 }
@@ -1148,6 +1705,8 @@ fn batchLoadColdChunkGroups(
     allocator: std.mem.Allocator,
     groups: []const BatchChunkGroup,
     accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    borrowed_accounts: ?*sig.utils.collections.PubkeyMap(*const AccountSharedData),
+    cache_insert_policy: DecodedAccountCacheInsertPolicy,
     result: *BatchDecodeResult,
 ) !void {
     if (groups.len == 0) return;
@@ -1156,13 +1715,22 @@ fn batchLoadColdChunkGroups(
     const max_threads_u64 = @min(configured_threads, MAX_BATCH_DECODE_THREADS);
     const max_threads: usize = @intCast(max_threads_u64);
     if (max_threads <= 1 or groups.len == 1) {
-        return try self.batchLoadColdChunkGroupsSerial(allocator, groups, accounts, result);
+        return try self.batchLoadColdChunkGroupsSerial(
+            allocator,
+            groups,
+            accounts,
+            borrowed_accounts,
+            cache_insert_policy,
+            result,
+        );
     }
 
     return try self.batchLoadColdChunkGroupsParallel(
         allocator,
         groups,
         accounts,
+        borrowed_accounts,
+        cache_insert_policy,
         result,
         @min(max_threads, groups.len),
     );
@@ -1173,23 +1741,33 @@ fn batchLoadColdChunkGroupsSerial(
     allocator: std.mem.Allocator,
     groups: []const BatchChunkGroup,
     accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    borrowed_accounts: ?*sig.utils.collections.PubkeyMap(*const AccountSharedData),
+    cache_insert_policy: DecodedAccountCacheInsertPolicy,
     result: *BatchDecodeResult,
 ) !void {
     var scratch = try DecompressScratch.init(self.allocator);
     defer scratch.deinit(self.allocator);
 
     for (groups) |group| {
+        var phase_timer = sig.time.Timer.start();
         const decompressed = try self.decompressChunkWithScratch(self.allocator, group.chunk, &scratch);
+        result.cold_decompress_wall_ns += phase_timer.read().asNanos();
         var owns_decompressed = true;
         errdefer if (owns_decompressed) self.allocator.free(decompressed);
+        phase_timer.reset();
         try self.batchLoadFromChunkBytes(
             allocator,
             group.candidates,
             decompressed,
             accounts,
+            borrowed_accounts,
+            cache_insert_policy,
             result,
         );
+        result.cold_account_materialize_ns += phase_timer.read().asNanos();
+        phase_timer.reset();
         _ = try self.insertPrefetchedChunk(group.chunk_id, decompressed);
+        result.chunk_cache_insert_ns += phase_timer.read().asNanos();
         owns_decompressed = false;
         result.chunks_decoded += 1;
     }
@@ -1200,6 +1778,8 @@ fn batchLoadColdChunkGroupsParallel(
     allocator: std.mem.Allocator,
     groups: []const BatchChunkGroup,
     accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    borrowed_accounts: ?*sig.utils.collections.PubkeyMap(*const AccountSharedData),
+    cache_insert_policy: DecodedAccountCacheInsertPolicy,
     result: *BatchDecodeResult,
     worker_count: usize,
 ) !void {
@@ -1224,6 +1804,7 @@ fn batchLoadColdChunkGroupsParallel(
     const threads = try allocator.alloc(std.Thread, worker_count);
     defer allocator.free(threads);
 
+    var decompress_wall_timer = sig.time.Timer.start();
     var spawned: usize = 0;
     errdefer {
         for (threads[0..spawned]) |*thread| thread.join();
@@ -1232,20 +1813,27 @@ fn batchLoadColdChunkGroupsParallel(
         threads[spawned] = try std.Thread.spawn(.{}, parallelChunkDecodeWorker, .{&context});
     }
     for (threads[0..spawned]) |*thread| thread.join();
+    result.cold_decompress_wall_ns += decompress_wall_timer.read().asNanos();
 
     for (groups, parallel_results) |group, *parallel_result| {
         if (parallel_result.err) |err| return err;
         const decompressed = parallel_result.decompressed orelse return error.InvalidCompressedAccountChunk;
         var owns_decompressed = true;
         errdefer if (owns_decompressed) self.allocator.free(decompressed);
+        var phase_timer = sig.time.Timer.start();
         try self.batchLoadFromChunkBytes(
             allocator,
             group.candidates,
             decompressed,
             accounts,
+            borrowed_accounts,
+            cache_insert_policy,
             result,
         );
+        result.cold_account_materialize_ns += phase_timer.read().asNanos();
+        phase_timer.reset();
         _ = try self.insertPrefetchedChunk(group.chunk_id, decompressed);
+        result.chunk_cache_insert_ns += phase_timer.read().asNanos();
         parallel_result.decompressed = null;
         owns_decompressed = false;
         result.chunks_decoded += 1;
@@ -1277,6 +1865,48 @@ fn parallelChunkDecodeWorker(context: *ParallelChunkDecodeContext) void {
     }
 }
 
+fn placeLoadedAccount(
+    self: *CompressedAccountStore,
+    allocator: std.mem.Allocator,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    borrowed_accounts: ?*sig.utils.collections.PubkeyMap(*const AccountSharedData),
+    pubkey: Pubkey,
+    account: *AccountSharedData,
+    cache_insert_policy: DecodedAccountCacheInsertPolicy,
+    result: *BatchDecodeResult,
+) !void {
+    result.materialized_data_bytes += @intCast(account.data.len);
+
+    if (borrowed_accounts) |borrowed| {
+        if (self.decodedAccountCachePutClone(pubkey, account, cache_insert_policy)) |cached_account| {
+            putBorrowedAccount(allocator, borrowed, pubkey, cached_account) catch |err| {
+                account.deinit(allocator);
+                account.* = undefined;
+                return err;
+            };
+            result.accounts_borrowed += 1;
+            result.borrowed_data_bytes += @intCast(cached_account.data.len);
+            account.deinit(allocator);
+            account.* = undefined;
+            return;
+        }
+    } else {
+        _ = self.decodedAccountCachePutClone(pubkey, account, cache_insert_policy);
+    }
+
+    try putLoadedAccount(allocator, accounts, pubkey, account);
+}
+
+fn putBorrowedAccount(
+    allocator: std.mem.Allocator,
+    accounts: *sig.utils.collections.PubkeyMap(*const AccountSharedData),
+    pubkey: Pubkey,
+    account: *const AccountSharedData,
+) !void {
+    const gop = try accounts.getOrPut(allocator, pubkey);
+    gop.value_ptr.* = account;
+}
+
 fn putLoadedAccount(
     allocator: std.mem.Allocator,
     accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
@@ -1301,23 +1931,39 @@ fn recordBatchDecodeResult(self: *CompressedAccountStore, result: BatchDecodeRes
     self.metrics.batch_decode_accounts_loaded.set(result.accounts_loaded);
     self.metrics.batch_decode_accounts_cached.set(result.accounts_cached);
     self.metrics.batch_decode_accounts_skipped.set(result.accounts_skipped);
+    self.metrics.batch_decode_index_records_read.set(result.index_records_read);
 }
 
 fn readIndexRecordAt(self: *CompressedAccountStore, offset: u64) !IndexRecord {
     var timer = sig.time.Timer.start();
     defer self.metrics.read_index_record_time.observe(timer.read().asNanos());
 
+    _ = self.index_record_read_count.fetchAdd(1, .monotonic);
+    self.metrics.index_record_read_count.inc();
+
+    if (self.index_mmap) |mapped| {
+        if (offset > std.math.maxInt(usize)) return error.InvalidCompressedAccountIndex;
+        const start: usize = @intCast(offset);
+        if (start > mapped.len or INDEX_RECORD_LEN > mapped.len - start)
+            return error.InvalidCompressedAccountIndex;
+        return decodeIndexRecord(mapped[start..][0..INDEX_RECORD_LEN]);
+    }
+
     var bytes: [INDEX_RECORD_LEN]u8 = undefined;
     if (try self.index_file.preadAll(&bytes, offset) != bytes.len)
         return error.InvalidCompressedAccountIndex;
 
+    return decodeIndexRecord(&bytes);
+}
+
+fn decodeIndexRecord(bytes: []const u8) IndexRecord {
     return .{
         .pubkey = .{ .data = bytes[0..Pubkey.SIZE].* },
-        .chunk_id = readU32(&bytes, 32),
-        .uncompressed_offset = readU32(&bytes, 36),
-        .record_len = readU32(&bytes, 40),
-        .data_len = readU32(&bytes, 44),
-        .slot = readU64(&bytes, 48),
+        .chunk_id = readU32(bytes, 32),
+        .uncompressed_offset = readU32(bytes, 36),
+        .record_len = readU32(bytes, 40),
+        .data_len = readU32(bytes, 44),
+        .slot = readU64(bytes, 48),
     };
 }
 
@@ -1822,4 +2468,18 @@ fn readU32(bytes: []const u8, offset: usize) u32 {
 
 fn readU64(bytes: []const u8, offset: usize) u64 {
     return std.mem.readInt(u64, bytes[offset..][0..8], .little);
+}
+
+test "decoded account cache priority reserve preserves the normal quota" {
+    try std.testing.expect(decodedAccountCacheHasCapacityForPolicy(4, 2, 0, 0, .normal));
+    try std.testing.expect(decodedAccountCacheHasCapacityForPolicy(4, 2, 0, 0, .priority));
+    try std.testing.expect(decodedAccountCacheHasCapacityForPolicy(4, 2, 4, 1, .normal));
+    try std.testing.expect(!decodedAccountCacheHasCapacityForPolicy(4, 2, 5, 1, .normal));
+    try std.testing.expect(decodedAccountCacheHasCapacityForPolicy(4, 2, 5, 1, .priority));
+    try std.testing.expect(!decodedAccountCacheHasCapacityForPolicy(4, 2, 6, 2, .priority));
+
+    try std.testing.expect(decodedAccountCacheHasCapacityForPolicy(4, 0, 3, 3, .normal));
+    try std.testing.expect(decodedAccountCacheHasCapacityForPolicy(4, 0, 3, 3, .priority));
+    try std.testing.expect(!decodedAccountCacheHasCapacityForPolicy(4, 0, 4, 4, .normal));
+    try std.testing.expect(!decodedAccountCacheHasCapacityForPolicy(4, 0, 4, 4, .priority));
 }

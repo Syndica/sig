@@ -105,19 +105,27 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
     zone.value(params.finalize_state.slot);
     defer zone.deinit();
 
+    var total_timer = sig.time.Timer.start();
+
     // TODO: reconsider locking the hash for the entire function. (this is how agave does it)
+    var phase_timer = sig.time.Timer.start();
     var slot_hash = params.slot_hash.write();
     defer slot_hash.unlock();
+    const hash_lock_ns = phase_timer.read().asNanos();
 
     if (slot_hash.get().* != null) return; // already frozen
 
+    phase_timer.reset();
     try finalizeState(allocator, params.finalize_state);
+    const finalize_state_ns = phase_timer.read().asNanos();
 
+    phase_timer.reset();
     const maybe_lt_hash, slot_hash.mut().* = try hashSlot(
         allocator,
         params.hash_slot,
         params.thread_pool,
     );
+    const hash_slot_ns = phase_timer.read().asNanos();
     if (maybe_lt_hash) |lt_hash| params.accounts_lt_hash.set(lt_hash);
 
     params.logger.info().logf(
@@ -126,6 +134,19 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
     );
 
     tracy.frameMarkNamed("slots frozen");
+
+    const total_ns = total_timer.read().asNanos();
+    params.logger.info().logf(
+        "replay_freeze_timing slot={} hash_lock_ns={} finalize_state_ns={} hash_slot_ns={} unattributed_ns={} total_ns={}",
+        .{
+            params.hash_slot.slot,
+            hash_lock_ns,
+            finalize_state_ns,
+            hash_slot_ns,
+            total_ns -| (hash_lock_ns + finalize_state_ns + hash_slot_ns),
+            total_ns,
+        },
+    );
 
     // NOTE: agave updates hard_forks and hash_overrides here
 }

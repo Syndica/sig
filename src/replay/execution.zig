@@ -19,6 +19,7 @@ const Slot = core.Slot;
 
 const AccountStore = sig.accounts_db.AccountStore;
 const AccountSharedData = sig.runtime.AccountSharedData;
+const bpf_loader = sig.runtime.program.bpf_loader;
 
 const ForkProgress = sig.consensus.progress_map.ForkProgress;
 const ParsedVote = sig.consensus.vote_listener.vote_parser.ParsedVote;
@@ -37,9 +38,12 @@ const SvmGateway = replay.svm_gateway.SvmGateway;
 
 const executeTransaction = replay.svm_gateway.executeTransaction;
 const preprocessTransaction = replay.preprocess_transaction.preprocessTransaction;
+const PreprocessTransactionResult =
+    replay.preprocess_transaction.PreprocessTransactionResult;
 const verifyPoh = core.entry.verifyPoh;
 
 const Logger = sig.trace.Logger("replay.execution");
+const failing_allocator = sig.utils.allocators.failing.allocator(.{});
 
 /// The result of replaying an individual slot.
 pub const ReplayResult = struct {
@@ -67,6 +71,7 @@ pub fn replayActiveSlots(state: *ReplayState, metrics: replay.service.Metrics) !
 fn replayActiveSlotsAsync(state: *ReplayState, metrics: replay.service.Metrics) ![]const ReplayResult {
     const zone = tracy.Zone.init(@src(), .{ .name = "replayActiveSlotsAsync" });
     defer zone.deinit();
+    var total_timer = sig.time.Timer.start();
 
     const slot_tracker = &state.slot_tracker;
     const epoch_tracker = state.epoch_tracker;
@@ -74,28 +79,46 @@ fn replayActiveSlotsAsync(state: *ReplayState, metrics: replay.service.Metrics) 
     var results = std.ArrayListUnmanaged(ReplaySlotFuture.Result){};
     defer results.deinit(state.allocator);
 
+    var active_slots_ns: u64 = 0;
+    var prepare_slots_ns: u64 = 0;
+    var dispatch_ns: u64 = 0;
+    var wait_ns: u64 = 0;
+    var first_slot: Slot = 0;
+    var last_slot: Slot = 0;
+    var active_slot_count: usize = 0;
+
     {
         var wait_group = std.Thread.WaitGroup{};
-        defer wait_group.wait();
+        var wait_complete = false;
+        defer if (!wait_complete) wait_group.wait();
 
+        var phase_timer = sig.time.Timer.start();
         const active_slots = try slot_tracker.activeSlots(state.allocator);
         defer state.allocator.free(active_slots);
         state.execution_log_helper.logActiveSlots(active_slots);
+        active_slots_ns = phase_timer.read().asNanos();
+        active_slot_count = active_slots.len;
 
         if (active_slots.len == 0) {
             return &.{};
         }
+        first_slot = active_slots[0];
+        last_slot = active_slots[active_slots.len - 1];
 
         try results.ensureTotalCapacity(state.allocator, active_slots.len);
         for (active_slots) |slot| {
             state.logger.debug().logf("replaying slot: {}", .{slot});
 
-            const params = switch (try prepareSlot(state, metrics, slot_tracker, epoch_tracker, slot)) {
+            phase_timer.reset();
+            const prepared = try prepareSlot(state, metrics, slot_tracker, epoch_tracker, slot);
+            prepare_slots_ns += phase_timer.read().asNanos();
+            const params = switch (prepared) {
                 .confirm => |params| params,
                 .empty, .dead, .leader => continue,
             };
 
             const result_ptr = results.addOneAssumeCapacity();
+            phase_timer.reset();
             ReplaySlotFuture.startAsync(
                 state.allocator,
                 .from(state.logger),
@@ -105,15 +128,43 @@ fn replayActiveSlotsAsync(state: *ReplayState, metrics: replay.service.Metrics) 
                 params,
                 result_ptr,
             );
+            dispatch_ns += phase_timer.read().asNanos();
         }
+
+        phase_timer.reset();
+        wait_group.wait();
+        wait_complete = true;
+        wait_ns = phase_timer.read().asNanos();
     }
 
+    var result_timer = sig.time.Timer.start();
     const replay_results = try state.allocator.alloc(ReplayResult, results.items.len);
     errdefer state.allocator.free(replay_results);
 
     for (replay_results, results.items) |*replay_result, result| {
         replay_result.* = try result;
     }
+
+    const result_copy_ns = result_timer.read().asNanos();
+    const total_ns = total_timer.read().asNanos();
+    const known_ns = active_slots_ns + prepare_slots_ns + dispatch_ns + wait_ns + result_copy_ns;
+    const unattributed_ns = total_ns -| known_ns;
+    state.logger.info().logf(
+        "replay_active_async_timing first_slot={} last_slot={} active_slots={} confirmed_slots={} active_slot_scan_ns={} prepare_slots_ns={} dispatch_ns={} wait_ns={} result_copy_ns={} unattributed_ns={} total_ns={}",
+        .{
+            first_slot,
+            last_slot,
+            active_slot_count,
+            results.items.len,
+            active_slots_ns,
+            prepare_slots_ns,
+            dispatch_ns,
+            wait_ns,
+            result_copy_ns,
+            unattributed_ns,
+            total_ns,
+        },
+    );
 
     return replay_results;
 }
@@ -190,9 +241,17 @@ pub const ReplaySlotParams = struct {
     }
 };
 
-const SlotAccountCache = struct {
+pub const SlotAccountCache = struct {
     allocator: Allocator,
+    lock: sig.sync.RwLock = .{},
+    stats: sig.accounts_db.SlotAccountCacheStats = .{},
     accounts: sig.utils.collections.PubkeyMap(AccountSharedData) = .{},
+    borrowed_accounts: sig.utils.collections.PubkeyMap(*const AccountSharedData) = .{},
+    account_data_lens: sig.utils.collections.PubkeyMap(?usize) = .{},
+    deferred_dirty: sig.utils.collections.PubkeyMap(void) = .{},
+    defer_writes: bool = false,
+    deferred_db: ?*sig.accounts_db.Db = null,
+    deferred_slot: Slot = 0,
 
     pub fn init(allocator: Allocator) SlotAccountCache {
         return .{ .allocator = allocator };
@@ -201,7 +260,14 @@ const SlotAccountCache = struct {
     pub fn deinit(self: *SlotAccountCache) void {
         for (self.accounts.values()) |*account| account.deinit(self.allocator);
         self.accounts.deinit(self.allocator);
+        self.borrowed_accounts.deinit(self.allocator);
+        self.account_data_lens.deinit(self.allocator);
+        self.deferred_dirty.deinit(self.allocator);
         self.* = undefined;
+    }
+
+    fn containsAccount(self: *const SlotAccountCache, pubkey: sig.core.Pubkey) bool {
+        return self.accounts.contains(pubkey) or self.borrowed_accounts.contains(pubkey);
     }
 };
 
@@ -280,21 +346,38 @@ pub fn replaySlotSync(
         }
     }
 
+    var replay_timer = sig.time.Timer.start();
+    var replay_stats = ReplayBatchStats{};
     for (params.transactions) |transaction| {
         var exit = Atomic(bool).init(false);
 
-        switch (try replayBatch(
+        const outcome = try replayBatch(
             allocator,
             metrics,
             &svm_gateway,
             params.committer,
             &.{transaction},
+            null,
             &exit,
-        )) {
+        );
+        replay_stats.add(outcome.stats);
+
+        switch (outcome.result) {
             .success => {},
             .failure => {}, // spy node: skip failed txs, let slot complete + geyser write
             .exit => unreachable,
         }
+    }
+    logReplayBatchStats(
+        logger,
+        svm_gateway.params.slot,
+        "sync",
+        replay_timer.read().asNanos(),
+        replay_stats,
+    );
+    try flushDeferredSlotAccountCacheWrites(logger, params.slot_account_cache);
+    if (params.slot_account_cache) |cache| {
+        logSlotAccountCacheStats(logger, svm_gateway.params.slot, cache.stats.snapshot());
     }
 
     return null;
@@ -310,6 +393,187 @@ pub const BatchResult = union(enum) {
     exit,
 };
 
+pub const ReplayBatchStats = struct {
+    transactions: u64 = 0,
+    preprocessed: u64 = 0,
+    preprocess_errors: u64 = 0,
+    execution_ok: u64 = 0,
+    execution_err: u64 = 0,
+    committed: u64 = 0,
+    preprocess_ns: u64 = 0,
+    geyser_parse_ns: u64 = 0,
+    execute_ns: u64 = 0,
+    commit_ns: u64 = 0,
+    total_ns: u64 = 0,
+
+    pub fn add(self: *ReplayBatchStats, other: ReplayBatchStats) void {
+        self.transactions += other.transactions;
+        self.preprocessed += other.preprocessed;
+        self.preprocess_errors += other.preprocess_errors;
+        self.execution_ok += other.execution_ok;
+        self.execution_err += other.execution_err;
+        self.committed += other.committed;
+        self.preprocess_ns += other.preprocess_ns;
+        self.geyser_parse_ns += other.geyser_parse_ns;
+        self.execute_ns += other.execute_ns;
+        self.commit_ns += other.commit_ns;
+        self.total_ns += other.total_ns;
+    }
+};
+
+pub const AtomicReplayBatchStats = struct {
+    transactions: Atomic(u64) = Atomic(u64).init(0),
+    preprocessed: Atomic(u64) = Atomic(u64).init(0),
+    preprocess_errors: Atomic(u64) = Atomic(u64).init(0),
+    execution_ok: Atomic(u64) = Atomic(u64).init(0),
+    execution_err: Atomic(u64) = Atomic(u64).init(0),
+    committed: Atomic(u64) = Atomic(u64).init(0),
+    preprocess_ns: Atomic(u64) = Atomic(u64).init(0),
+    geyser_parse_ns: Atomic(u64) = Atomic(u64).init(0),
+    execute_ns: Atomic(u64) = Atomic(u64).init(0),
+    commit_ns: Atomic(u64) = Atomic(u64).init(0),
+    total_ns: Atomic(u64) = Atomic(u64).init(0),
+
+    pub fn add(self: *AtomicReplayBatchStats, stats: ReplayBatchStats) void {
+        _ = self.transactions.fetchAdd(stats.transactions, .monotonic);
+        _ = self.preprocessed.fetchAdd(stats.preprocessed, .monotonic);
+        _ = self.preprocess_errors.fetchAdd(stats.preprocess_errors, .monotonic);
+        _ = self.execution_ok.fetchAdd(stats.execution_ok, .monotonic);
+        _ = self.execution_err.fetchAdd(stats.execution_err, .monotonic);
+        _ = self.committed.fetchAdd(stats.committed, .monotonic);
+        _ = self.preprocess_ns.fetchAdd(stats.preprocess_ns, .monotonic);
+        _ = self.geyser_parse_ns.fetchAdd(stats.geyser_parse_ns, .monotonic);
+        _ = self.execute_ns.fetchAdd(stats.execute_ns, .monotonic);
+        _ = self.commit_ns.fetchAdd(stats.commit_ns, .monotonic);
+        _ = self.total_ns.fetchAdd(stats.total_ns, .monotonic);
+    }
+
+    pub fn snapshot(self: *const AtomicReplayBatchStats) ReplayBatchStats {
+        return .{
+            .transactions = self.transactions.load(.monotonic),
+            .preprocessed = self.preprocessed.load(.monotonic),
+            .preprocess_errors = self.preprocess_errors.load(.monotonic),
+            .execution_ok = self.execution_ok.load(.monotonic),
+            .execution_err = self.execution_err.load(.monotonic),
+            .committed = self.committed.load(.monotonic),
+            .preprocess_ns = self.preprocess_ns.load(.monotonic),
+            .geyser_parse_ns = self.geyser_parse_ns.load(.monotonic),
+            .execute_ns = self.execute_ns.load(.monotonic),
+            .commit_ns = self.commit_ns.load(.monotonic),
+            .total_ns = self.total_ns.load(.monotonic),
+        };
+    }
+};
+
+pub const ReplayBatchOutcome = struct {
+    result: BatchResult,
+    stats: ReplayBatchStats,
+};
+
+pub const PreprocessedTransaction = struct {
+    result: PreprocessTransactionResult,
+    elapsed_ns: u64,
+};
+
+pub fn logReplayBatchStats(
+    logger: anytype,
+    slot: Slot,
+    mode: []const u8,
+    total_ns: u64,
+    stats: ReplayBatchStats,
+) void {
+    logger.info().logf(
+        "slot_replay_timings slot={} mode={s} total={D} replay_batch_total={D} preprocess={D} geyser_parse={D} execute={D} commit={D} transactions={} preprocessed={} preprocess_errors={} execution_ok={} execution_err={} committed={}",
+        .{
+            slot,
+            mode,
+            total_ns,
+            stats.total_ns,
+            stats.preprocess_ns,
+            stats.geyser_parse_ns,
+            stats.execute_ns,
+            stats.commit_ns,
+            stats.transactions,
+            stats.preprocessed,
+            stats.preprocess_errors,
+            stats.execution_ok,
+            stats.execution_err,
+            stats.committed,
+        },
+    );
+}
+
+pub fn logSlotAccountCacheStats(
+    logger: anytype,
+    slot: Slot,
+    stats: sig.accounts_db.SlotAccountCacheStats.Snapshot,
+) void {
+    logger.info().logf(
+        "slot_account_cache_stats slot={} get_calls={} cache_hits={} cache_misses={} fallback_found={} fallback_missing={} fallback_time={D} fallback_cache_fills={} fallback_cache_fill_races={} fallback_tombstone_fills={} cache_puts={} cache_put_replacements={} deferred_puts={} deferred_unique_writes={} deferred_flush_writes={} deferred_flush_missing={} deferred_flush_time={D}",
+        .{
+            slot,
+            stats.get_calls,
+            stats.cache_hits,
+            stats.cache_misses,
+            stats.fallback_found,
+            stats.fallback_missing,
+            stats.fallback_ns,
+            stats.fallback_cache_fills,
+            stats.fallback_cache_fill_races,
+            stats.fallback_tombstone_fills,
+            stats.cache_puts,
+            stats.cache_put_replacements,
+            stats.deferred_puts,
+            stats.deferred_unique_writes,
+            stats.deferred_flush_writes,
+            stats.deferred_flush_missing,
+            stats.deferred_flush_ns,
+        },
+    );
+}
+
+pub fn flushDeferredSlotAccountCacheWrites(
+    logger: anytype,
+    maybe_cache: ?*SlotAccountCache,
+) !void {
+    const cache = maybe_cache orelse return;
+    if (!cache.defer_writes) return;
+
+    const db = cache.deferred_db orelse return;
+    const slot = cache.deferred_slot;
+    var timer = sig.time.Timer.start();
+    var flush_writes: u64 = 0;
+    var missing: u64 = 0;
+
+    cache.lock.lockShared();
+    defer cache.lock.unlockShared();
+
+    for (cache.deferred_dirty.keys()) |pubkey| {
+        const account = cache.accounts.get(pubkey) orelse {
+            missing += 1;
+            continue;
+        };
+        try db.put(slot, pubkey, account);
+        flush_writes += 1;
+    }
+
+    const elapsed_ns = timer.read().asNanos();
+    _ = cache.stats.deferred_flush_writes.fetchAdd(flush_writes, .monotonic);
+    _ = cache.stats.deferred_flush_missing.fetchAdd(missing, .monotonic);
+    _ = cache.stats.deferred_flush_ns.fetchAdd(elapsed_ns, .monotonic);
+
+    logger.info().logf(
+        "slot_account_cache_deferred_flush slot={} dirty_pubkeys={} writes={} missing={} time={D}",
+        .{
+            slot,
+            cache.deferred_dirty.count(),
+            flush_writes,
+            missing,
+            elapsed_ns,
+        },
+    );
+}
+
 /// Processes a batch of transactions by verifying their signatures and
 /// executing them with the SVM.
 pub fn replayBatch(
@@ -318,14 +582,19 @@ pub fn replayBatch(
     svm_gateway: *SvmGateway,
     committer: Committer,
     transactions: []const ResolvedTransaction,
+    preprocessed_transactions: ?[]const PreprocessedTransaction,
     exit: *Atomic(bool),
-) !BatchResult {
+) !ReplayBatchOutcome {
     var zone = tracy.Zone.init(@src(), .{ .name = "replayBatch" });
     zone.value(transactions.len);
     defer zone.deinit();
     errdefer zone.color(0xFF0000);
     var batch_timer = sig.time.Timer.start();
     defer metrics.replay_batch_time.observe(batch_timer.read().asNanos());
+    var stats = ReplayBatchStats{ .transactions = @intCast(transactions.len) };
+    if (preprocessed_transactions) |preprocessed| {
+        std.debug.assert(preprocessed.len == transactions.len);
+    }
 
     // `gpa` allocations may be persisted to data structures, e.g.
     // - votes
@@ -356,36 +625,58 @@ pub fn replayBatch(
         tmp_allocator.free(successful_txs);
     }
 
-    for (transactions) |transaction| {
+    for (transactions, 0..) |transaction, transaction_index| {
         if (exit.load(.monotonic)) {
-            return .exit;
+            stats.total_ns = batch_timer.read().asNanos() +
+                if (preprocessed_transactions != null) stats.preprocess_ns else 0;
+            return .{ .result = .exit, .stats = stats };
         }
 
         const instruction_limit = svm_gateway.params.feature_set.active(
             .static_instruction_limit,
             svm_gateway.params.slot,
         );
-        const hash, const compute_budget_details = switch (preprocessTransaction(
-            transaction.transaction,
-            .run_sig_verify,
-            instruction_limit,
-        )) {
-            .ok => |res| res,
-            .err => continue, // spy node: skip tx with preprocess error, let slot complete
+        const preprocess_result = if (preprocessed_transactions) |preprocessed| blk: {
+            const result = preprocessed[transaction_index];
+            stats.preprocess_ns += result.elapsed_ns;
+            break :blk result.result;
+        } else blk: {
+            var preprocess_timer = sig.time.Timer.start();
+            const result = preprocessTransaction(
+                transaction.transaction,
+                .run_sig_verify,
+                instruction_limit,
+            );
+            stats.preprocess_ns += preprocess_timer.read().asNanos();
+            break :blk result;
+        };
+        const hash, const compute_budget_details = switch (preprocess_result) {
+            .ok => |res| blk: {
+                stats.preprocessed += 1;
+                break :blk res;
+            },
+            .err => {
+                stats.preprocess_errors += 1;
+                continue; // spy node: skip tx with preprocess error, let slot complete
+            },
         };
 
         const runtime_transaction = transaction.toRuntimeTransaction(hash, compute_budget_details);
 
-        pumpfun_parser.parseTransaction(
-            &transaction.transaction,
-            svm_gateway.params.slot,
-            committer.geyser_writer,
-        );
-        pumpfun_parser.emitResolvedAccountMap(
-            &transaction,
-            svm_gateway.params.slot,
-            committer.geyser_writer,
-        );
+        {
+            var phase_timer = sig.time.Timer.start();
+            pumpfun_parser.parseTransaction(
+                &transaction.transaction,
+                svm_gateway.params.slot,
+                committer.geyser_writer,
+            );
+            pumpfun_parser.emitResolvedAccountMap(
+                &transaction,
+                svm_gateway.params.slot,
+                committer.geyser_writer,
+            );
+            stats.geyser_parse_ns += phase_timer.read().asNanos();
+        }
 
         const transaction_result = blk: {
             var phase_timer = sig.time.Timer.start();
@@ -395,7 +686,9 @@ pub fn replayBatch(
                 svm_gateway,
                 &runtime_transaction,
             );
-            metrics.execute_transaction_time.observe(phase_timer.read().asNanos());
+            const elapsed_ns = phase_timer.read().asNanos();
+            stats.execute_ns += elapsed_ns;
+            metrics.execute_transaction_time.observe(elapsed_ns);
             break :blk result;
         };
 
@@ -404,8 +697,12 @@ pub fn replayBatch(
                 successful_txs[populated_count] = transaction;
                 results[populated_count] = .{ hash, result };
                 populated_count += 1;
+                stats.execution_ok += 1;
             },
-            .err => continue, // spy node: skip failed tx, let slot complete
+            .err => {
+                stats.execution_err += 1;
+                continue; // spy node: skip failed tx, let slot complete
+            },
         }
     }
     {
@@ -417,10 +714,15 @@ pub fn replayBatch(
             successful_txs[0..populated_count],
             results[0..populated_count],
         );
-        metrics.commit_transactions_time.observe(phase_timer.read().asNanos());
+        const elapsed_ns = phase_timer.read().asNanos();
+        stats.commit_ns += elapsed_ns;
+        stats.committed += populated_count;
+        metrics.commit_transactions_time.observe(elapsed_ns);
     }
 
-    return .success;
+    stats.total_ns = batch_timer.read().asNanos() +
+        if (preprocessed_transactions != null) stats.preprocess_ns else 0;
+    return .{ .result = .success, .stats = stats };
 }
 
 const PreparedSlot = union(enum) {
@@ -472,6 +774,7 @@ fn prepareSlot(
     errdefer zone.color(0xFF0000);
     var prepare_timer = sig.time.Timer.start();
     defer metrics.prepare_slot_time.observe(prepare_timer.read().asNanos());
+    var phase_timer = sig.time.Timer.start();
 
     const progress_get_or_put = try state.progress_map.map.getOrPut(state.allocator, slot);
     if (progress_get_or_put.found_existing and progress_get_or_put.value_ptr.is_dead) {
@@ -516,6 +819,8 @@ fn prepareSlot(
     // it's worth reconsidering once we introduce actual locking here and flesh
     // out more usages of this struct.
     const confirmation_progress = &fork_progress.replay_progress.arc_ed.rwlock_ed;
+    const progress_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
 
     const previous_last_entry = confirmation_progress.last_entry;
     const entries, const slot_is_full = blk: {
@@ -550,6 +855,8 @@ fn prepareSlot(
 
         break :blk .{ entries, slot_is_full };
     };
+    const ledger_entries_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
 
     const tick_height =
         slot_info.state().tick_height.fetchAdd(core.entry.tickCount(entries), .monotonic);
@@ -576,33 +883,55 @@ fn prepareSlot(
             envBool("SIG_REPLAY_BATCH_COMPRESSED_ACCOUNTS_PRE_RESOLVE_STATIC_KEYS", true),
         );
     }
+    const pre_resolve_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
 
     // TODO: Avoid the need to read this from accountsdb. We could broaden the
     // scope of the sysvar cache, add this to slot constants, or implement
     // additional mechanisms for lookup tables to detect slot age (e.g. block height).
     const slot_hashes = blk: {
-        var phase_timer = sig.time.Timer.start();
+        var metric_timer = sig.time.Timer.start();
         const hashes = try replay.update_sysvar.getSysvarFromAccount(
             SlotHashes,
             state.allocator,
             slot_account_reader,
         ) orelse return error.MissingSlotHashesSysvar;
-        metrics.load_slot_hashes_time.observe(phase_timer.read().asNanos());
+        metrics.load_slot_hashes_time.observe(metric_timer.read().asNanos());
         break :blk hashes;
     };
+    const slot_hashes_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
 
+    const parallel_resolve_block = envBool("SIG_REPLAY_PARALLEL_RESOLVE_BLOCK", false);
+    const parallel_resolve_workers = blk: {
+        const configured = envU64("SIG_REPLAY_PARALLEL_RESOLVE_BLOCK_WORKERS", 0);
+        if (configured == 0) break :blk @as(usize, @intCast(state.thread_pool.max_threads));
+        break :blk std.math.cast(usize, configured) orelse std.math.maxInt(usize);
+    };
     const resolved_txns = blk: {
-        var phase_timer = sig.time.Timer.start();
-        const txns = try replay.resolve_lookup.resolveBlock(state.allocator, entries, .{
+        var metric_timer = sig.time.Timer.start();
+        const resolver: replay.resolve_lookup.SlotResolver = .{
             .slot = slot,
             .account_reader = slot_account_reader,
             .reserved_accounts = &slot_info.constants().reserved_accounts,
             .slot_hashes = slot_hashes,
             .logger = state.logger.withScope("replay-resolve"),
-        });
-        metrics.resolve_block_time.observe(phase_timer.read().asNanos());
+        };
+        const txns = if (parallel_resolve_block)
+            try replay.resolve_lookup.resolveBlockParallel(
+                state.allocator,
+                &state.thread_pool,
+                parallel_resolve_workers,
+                entries,
+                resolver,
+            )
+        else
+            try replay.resolve_lookup.resolveBlock(state.allocator, entries, resolver);
+        metrics.resolve_block_time.observe(metric_timer.read().asNanos());
         break :blk txns;
     };
+    const resolve_block_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
     errdefer {
         for (resolved_txns) |transaction| transaction.deinit(state.allocator);
         state.allocator.free(resolved_txns);
@@ -637,6 +966,8 @@ fn prepareSlot(
             resolved_txns,
         );
     }
+    const post_resolve_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
 
     var slot_account_cache: ?*SlotAccountCache = null;
     errdefer destroySlotAccountCache(state.allocator, slot_account_cache);
@@ -644,6 +975,7 @@ fn prepareSlot(
     const execution_account_store = if (envBool("SIG_REPLAY_SLOT_READ_FRAME", false))
         try buildSlotReadFrameAccountStore(
             state.allocator,
+            .from(state.logger),
             metrics,
             slot,
             state.account_store,
@@ -665,6 +997,8 @@ fn prepareSlot(
         )
     else
         state.account_store.forSlot(slot, &slot_info.constants().ancestors);
+    const read_frame_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
 
     var svm_gateway = try SvmGateway.init(state.allocator, .{
         .slot = slot,
@@ -679,6 +1013,8 @@ fn prepareSlot(
         .status_cache = &state.status_cache,
     });
     errdefer svm_gateway.deinit(state.allocator);
+    const svm_gateway_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
 
     const committer = replay.Committer{
         .logger = .from(state.logger),
@@ -703,7 +1039,7 @@ fn prepareSlot(
         .tick_hash_count = &confirmation_progress.tick_hash_count,
     };
 
-    return .{ .confirm = .{
+    const prepared: PreparedSlot = .{ .confirm = .{
         .entries = entries,
         .transactions = resolved_txns,
         .last_entry = previous_last_entry,
@@ -713,9 +1049,33 @@ fn prepareSlot(
         .account_store = state.account_store,
         .slot_account_cache = slot_account_cache,
     } };
+    const finalize_ns = phase_timer.read().asNanos();
+    const total_ns = prepare_timer.read().asNanos();
+    const known_ns = progress_ns + ledger_entries_ns + pre_resolve_ns + slot_hashes_ns +
+        resolve_block_ns + post_resolve_ns + read_frame_ns + svm_gateway_ns + finalize_ns;
+    const unattributed_ns = total_ns -| known_ns;
+    state.logger.info().logf(
+        "slot_prepare_timing slot={} resolve_mode={s} progress_ns={} ledger_entries_ns={} pre_resolve_ns={} slot_hashes_ns={} resolve_block_ns={} post_resolve_ns={} read_frame_ns={} svm_gateway_ns={} finalize_ns={} unattributed_ns={} total_ns={}",
+        .{
+            slot,
+            if (parallel_resolve_block) "parallel" else "serial",
+            progress_ns,
+            ledger_entries_ns,
+            pre_resolve_ns,
+            slot_hashes_ns,
+            resolve_block_ns,
+            post_resolve_ns,
+            read_frame_ns,
+            svm_gateway_ns,
+            finalize_ns,
+            unattributed_ns,
+            total_ns,
+        },
+    );
+    return prepared;
 }
 
-fn destroySlotAccountCache(allocator: Allocator, maybe_cache: ?*SlotAccountCache) void {
+pub fn destroySlotAccountCache(allocator: Allocator, maybe_cache: ?*SlotAccountCache) void {
     if (maybe_cache) |cache| {
         cache.deinit();
         allocator.destroy(cache);
@@ -724,6 +1084,7 @@ fn destroySlotAccountCache(allocator: Allocator, maybe_cache: ?*SlotAccountCache
 
 fn buildSlotReadFrameAccountStore(
     allocator: Allocator,
+    logger: Logger,
     metrics: replay.service.Metrics,
     slot: Slot,
     account_store: AccountStore,
@@ -740,6 +1101,7 @@ fn buildSlotReadFrameAccountStore(
 
     const cache = try allocator.create(SlotAccountCache);
     cache.* = SlotAccountCache.init(allocator);
+    configureDeferredSlotAccountWrites(cache, db, slot);
     errdefer {
         cache.deinit();
         allocator.destroy(cache);
@@ -747,6 +1109,7 @@ fn buildSlotReadFrameAccountStore(
 
     try populateSlotReadFrame(
         allocator,
+        logger,
         metrics,
         slot,
         cache,
@@ -760,12 +1123,19 @@ fn buildSlotReadFrameAccountStore(
         slot,
         ancestors,
         allocator,
+        &cache.lock,
         &cache.accounts,
+        &cache.borrowed_accounts,
+        &cache.account_data_lens,
+        &cache.stats,
+        &cache.deferred_dirty,
+        cache.defer_writes,
     } };
 }
 
 fn populateSlotReadFrame(
     allocator: Allocator,
+    logger: Logger,
     metrics: replay.service.Metrics,
     slot: Slot,
     cache: *SlotAccountCache,
@@ -773,13 +1143,25 @@ fn populateSlotReadFrame(
     transactions: []const ResolvedTransaction,
 ) !void {
     var timer = sig.time.Timer.start();
-    defer metrics.slot_read_frame_time.observe(timer.read().asNanos());
+    var phase_timer = sig.time.Timer.start();
 
-    var unique_pubkeys: sig.utils.collections.PubkeyMap(void) = .{};
+    const PubkeyNeed = struct {
+        refs: u32 = 0,
+        writable: bool = false,
+    };
+
+    const WritableCandidate = struct {
+        pubkey: sig.core.Pubkey,
+        refs: u32,
+
+        fn lessThan(_: void, a: @This(), b: @This()) bool {
+            if (a.refs == b.refs) return comparePubkey(a.pubkey, b.pubkey) < 0;
+            return a.refs > b.refs;
+        }
+    };
+
+    var unique_pubkeys: sig.utils.collections.PubkeyMap(PubkeyNeed) = .{};
     defer unique_pubkeys.deinit(allocator);
-
-    var writable_pubkeys: sig.utils.collections.PubkeyMap(void) = .{};
-    defer writable_pubkeys.deinit(allocator);
 
     var account_refs: u64 = 0;
     for (transactions) |transaction| {
@@ -789,53 +1171,258 @@ fn populateSlotReadFrame(
         ) |pubkey, is_writable| {
             account_refs += 1;
             const pubkey_gop = try unique_pubkeys.getOrPut(allocator, pubkey);
-            if (!pubkey_gop.found_existing) pubkey_gop.value_ptr.* = {};
-            if (is_writable) {
-                const writable_gop = try writable_pubkeys.getOrPut(allocator, pubkey);
-                if (!writable_gop.found_existing) writable_gop.value_ptr.* = {};
-            }
+            if (!pubkey_gop.found_existing) pubkey_gop.value_ptr.* = .{};
+            pubkey_gop.value_ptr.refs +|= 1;
+            pubkey_gop.value_ptr.writable = pubkey_gop.value_ptr.writable or is_writable;
+        }
+    }
+    const collect_needs_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
+
+    var selected_pubkeys: std.ArrayListUnmanaged(sig.core.Pubkey) = .{};
+    defer selected_pubkeys.deinit(allocator);
+    try selected_pubkeys.ensureTotalCapacity(allocator, unique_pubkeys.count());
+
+    const include_writable =
+        envBool("SIG_REPLAY_SLOT_READ_FRAME_INCLUDE_WRITABLE", false);
+    const writable_min_refs =
+        envU64("SIG_REPLAY_SLOT_READ_FRAME_WRITABLE_MIN_REFS", 0);
+    const writable_max_pubkeys =
+        envU64("SIG_REPLAY_SLOT_READ_FRAME_MAX_WRITABLE_PUBKEYS", 0);
+
+    var selected_writable_pubkeys: sig.utils.collections.PubkeyMap(void) = .{};
+    defer selected_writable_pubkeys.deinit(allocator);
+    var writable_hot_candidates: u64 = 0;
+    if (!include_writable and writable_min_refs > 0) {
+        var writable_candidates: std.ArrayListUnmanaged(WritableCandidate) = .{};
+        defer writable_candidates.deinit(allocator);
+
+        for (unique_pubkeys.keys(), unique_pubkeys.values()) |pubkey, need| {
+            if (!need.writable) continue;
+            if (need.refs < writable_min_refs) continue;
+            writable_hot_candidates += 1;
+            try writable_candidates.append(allocator, .{
+                .pubkey = pubkey,
+                .refs = need.refs,
+            });
+        }
+
+        std.mem.sort(WritableCandidate, writable_candidates.items, {}, WritableCandidate.lessThan);
+        const selected_count: usize =
+            if (writable_max_pubkeys == 0 or writable_max_pubkeys > writable_candidates.items.len)
+                writable_candidates.items.len
+            else
+                @intCast(writable_max_pubkeys);
+        try selected_writable_pubkeys.ensureTotalCapacity(allocator, selected_count);
+        for (writable_candidates.items[0..selected_count]) |candidate| {
+            selected_writable_pubkeys.putAssumeCapacity(candidate.pubkey, {});
         }
     }
 
-    var readonly_pubkeys: std.ArrayListUnmanaged(sig.core.Pubkey) = .{};
-    defer readonly_pubkeys.deinit(allocator);
-    try readonly_pubkeys.ensureTotalCapacity(allocator, unique_pubkeys.count());
-
+    var readonly_included: u64 = 0;
+    var writable_included: u64 = 0;
     var writable_skipped: u64 = 0;
-    var unrooted_skipped: u64 = 0;
-    for (unique_pubkeys.keys()) |pubkey| {
-        if (writable_pubkeys.contains(pubkey)) {
+    for (unique_pubkeys.keys(), unique_pubkeys.values()) |pubkey, need| {
+        const is_writable = need.writable;
+        const include_this_writable =
+            include_writable or selected_writable_pubkeys.contains(pubkey);
+        if (is_writable and !include_this_writable) {
             writable_skipped += 1;
             continue;
         }
-        if (account_reader.hasUnrootedAccount(pubkey)) {
-            unrooted_skipped += 1;
-            continue;
+        if (is_writable) {
+            writable_included += 1;
+        } else {
+            readonly_included += 1;
         }
-        readonly_pubkeys.appendAssumeCapacity(pubkey);
+        selected_pubkeys.appendAssumeCapacity(pubkey);
     }
 
-    std.mem.sort(sig.core.Pubkey, readonly_pubkeys.items, {}, struct {
+    std.mem.sort(sig.core.Pubkey, selected_pubkeys.items, {}, struct {
         fn lessThan(_: void, a: sig.core.Pubkey, b: sig.core.Pubkey) bool {
             return comparePubkey(a, b) < 0;
         }
     }.lessThan);
+    const select_pubkeys_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
+
+    const batch_unrooted =
+        envBool("SIG_REPLAY_SLOT_READ_FRAME_BATCH_UNROOTED", false);
+    const borrow_decoded_account_cache =
+        envBool("SIG_REPLAY_SLOT_READ_FRAME_BORROW_DECODED_ACCOUNT_CACHE", false);
+    const unrooted_result = if (batch_unrooted)
+        try account_reader.batchLoadUnrootedAccounts(
+            allocator,
+            selected_pubkeys.items,
+            &cache.accounts,
+        )
+    else
+        sig.accounts_db.Unrooted.BatchLoadResult{
+            .pubkeys = @intCast(selected_pubkeys.items.len),
+        };
+    const unrooted_preload_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
+
+    var frame_pubkeys: std.ArrayListUnmanaged(sig.core.Pubkey) = .{};
+    defer frame_pubkeys.deinit(allocator);
+    try frame_pubkeys.ensureTotalCapacity(allocator, selected_pubkeys.items.len);
+    for (selected_pubkeys.items) |pubkey| {
+        if (!cache.containsAccount(pubkey)) frame_pubkeys.appendAssumeCapacity(pubkey);
+    }
+    const frame_filter_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
 
     const chunk_hotness = if (envBool("SIG_REPLAY_SLOT_READ_FRAME_MEASURE_CHUNK_HOTNESS", false))
-        try measureSlotReadFrameChunkHotness(allocator, account_reader, readonly_pubkeys.items)
+        try measureSlotReadFrameChunkHotness(allocator, account_reader, frame_pubkeys.items)
     else
         SlotReadFrameChunkHotness{};
+    const chunk_hotness_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
 
-    const result = try account_reader.batchLoadCompressedAccounts(
+    const result = if (borrow_decoded_account_cache)
+        try account_reader.batchLoadCompressedAccountsBorrowed(
+            allocator,
+            frame_pubkeys.items,
+            &cache.accounts,
+            &cache.borrowed_accounts,
+        )
+    else
+        try account_reader.batchLoadCompressedAccounts(
+            allocator,
+            frame_pubkeys.items,
+            &cache.accounts,
+        );
+    const compressed_load_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
+
+    const unrooted_skipped = unrooted_result.resolved;
+    const unrooted_accounts_loaded = unrooted_result.loaded;
+    const unrooted_accounts_missing = unrooted_result.tombstones;
+    var tombstone_pubkeys: u64 = unrooted_result.tombstones;
+    for (frame_pubkeys.items) |pubkey| {
+        if (cache.containsAccount(pubkey)) continue;
+        try cache.accounts.put(allocator, pubkey, AccountSharedData.EMPTY);
+        tombstone_pubkeys += 1;
+    }
+    const tombstone_fill_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
+
+    var programdata_seen: sig.utils.collections.PubkeyMap(void) = .{};
+    defer programdata_seen.deinit(allocator);
+    var programdata_pubkeys: std.ArrayListUnmanaged(sig.core.Pubkey) = .{};
+    defer programdata_pubkeys.deinit(allocator);
+    try collectLoaderV3ProgramDataPubkeys(
         allocator,
-        readonly_pubkeys.items,
-        &cache.accounts,
+        cache,
+        &programdata_seen,
+        &programdata_pubkeys,
     );
+
+    var programdata_missing_pubkeys: std.ArrayListUnmanaged(sig.core.Pubkey) = .{};
+    defer programdata_missing_pubkeys.deinit(allocator);
+    try programdata_missing_pubkeys.ensureTotalCapacity(allocator, programdata_pubkeys.items.len);
+
+    for (programdata_pubkeys.items) |pubkey| {
+        if (cache.containsAccount(pubkey)) continue;
+        programdata_missing_pubkeys.appendAssumeCapacity(pubkey);
+    }
+
+    std.mem.sort(sig.core.Pubkey, programdata_missing_pubkeys.items, {}, struct {
+        fn lessThan(_: void, a: sig.core.Pubkey, b: sig.core.Pubkey) bool {
+            return comparePubkey(a, b) < 0;
+        }
+    }.lessThan);
+    const programdata_collect_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
+
+    const preload_programdata_accounts =
+        envBool("SIG_REPLAY_SLOT_READ_FRAME_PRELOAD_PROGRAMDATA_ACCOUNTS", true);
+    var programdata_data_len_found: u64 = 0;
+    var programdata_data_len_missing: u64 = 0;
+    if (!preload_programdata_accounts) {
+        for (programdata_missing_pubkeys.items) |pubkey| {
+            const data_len = try account_reader.accountDataLen(allocator, pubkey);
+            try cache.account_data_lens.put(allocator, pubkey, data_len);
+            if (data_len != null) {
+                programdata_data_len_found += 1;
+            } else {
+                programdata_data_len_missing += 1;
+            }
+        }
+    }
+    const programdata_data_len_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
+
+    const programdata_unrooted_result = if (preload_programdata_accounts and batch_unrooted)
+        try account_reader.batchLoadUnrootedAccounts(
+            allocator,
+            programdata_missing_pubkeys.items,
+            &cache.accounts,
+        )
+    else
+        sig.accounts_db.Unrooted.BatchLoadResult{
+            .pubkeys = if (preload_programdata_accounts)
+                @intCast(programdata_missing_pubkeys.items.len)
+            else
+                0,
+        };
+    const programdata_unrooted_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
+
+    var programdata_rooted_pubkeys: std.ArrayListUnmanaged(sig.core.Pubkey) = .{};
+    defer programdata_rooted_pubkeys.deinit(allocator);
+    try programdata_rooted_pubkeys.ensureTotalCapacity(allocator, programdata_missing_pubkeys.items.len);
+    if (preload_programdata_accounts) {
+        for (programdata_missing_pubkeys.items) |pubkey| {
+            if (!cache.containsAccount(pubkey)) programdata_rooted_pubkeys.appendAssumeCapacity(pubkey);
+        }
+    }
+    const programdata_filter_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
+
+    const programdata_result = if (preload_programdata_accounts and borrow_decoded_account_cache)
+        try account_reader.batchLoadCompressedAccountsBorrowedPriority(
+            allocator,
+            programdata_rooted_pubkeys.items,
+            &cache.accounts,
+            &cache.borrowed_accounts,
+        )
+    else if (preload_programdata_accounts)
+        try account_reader.batchLoadCompressedAccounts(
+            allocator,
+            programdata_rooted_pubkeys.items,
+            &cache.accounts,
+        )
+    else
+        sig.accounts_db.CompressedAccountStore.BatchDecodeResult{};
+    const programdata_compressed_load_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
+
+    var programdata_tombstone_pubkeys: u64 = programdata_unrooted_result.tombstones;
+    for (programdata_rooted_pubkeys.items) |pubkey| {
+        if (cache.containsAccount(pubkey)) continue;
+        try cache.accounts.put(allocator, pubkey, AccountSharedData.EMPTY);
+        tombstone_pubkeys += 1;
+        programdata_tombstone_pubkeys += 1;
+    }
+    const programdata_tombstone_fill_ns = phase_timer.read().asNanos();
+
+    const programdata_unrooted_loaded = programdata_unrooted_result.loaded;
+    const programdata_unrooted_missing = programdata_unrooted_result.tombstones;
+
+    const programdata_metadata_pubkeys = if (preload_programdata_accounts)
+        0
+    else
+        programdata_missing_pubkeys.items.len;
+    const programdata_preload_pubkeys = if (preload_programdata_accounts)
+        programdata_missing_pubkeys.items.len
+    else
+        0;
 
     metrics.slot_read_frame_slot.set(slot);
     metrics.slot_read_frame_account_refs.set(account_refs);
     metrics.slot_read_frame_unique_pubkeys.set(@intCast(unique_pubkeys.count()));
-    metrics.slot_read_frame_readonly_pubkeys.set(@intCast(readonly_pubkeys.items.len));
+    metrics.slot_read_frame_readonly_pubkeys.set(readonly_included);
     metrics.slot_read_frame_writable_skipped_pubkeys.set(writable_skipped);
     metrics.slot_read_frame_unrooted_skipped_pubkeys.set(unrooted_skipped);
     metrics.slot_read_frame_compressed_pubkeys.set(result.compressed_pubkeys);
@@ -848,6 +1435,170 @@ fn populateSlotReadFrame(
     metrics.slot_read_frame_accounts_loaded.set(result.accounts_loaded);
     metrics.slot_read_frame_accounts_cached.set(result.accounts_cached);
     metrics.slot_read_frame_accounts_skipped.set(result.accounts_skipped);
+
+    const elapsed_ns = timer.read().asNanos();
+    metrics.slot_read_frame_time.observe(elapsed_ns);
+    logger.info().logf(
+        "slot_read_frame slot={} time={D} account_refs={} unique_pubkeys={} preload_pubkeys={} readonly_pubkeys={} writable_included_pubkeys={} writable_skipped_pubkeys={} writable_hot_min_refs={} writable_hot_max_pubkeys={} writable_hot_candidates={} unrooted_skipped_pubkeys={} unrooted_preload_pubkeys={} unrooted_accounts_loaded={} unrooted_accounts_missing={} tombstone_pubkeys={} compressed_pubkeys={} missing_pubkeys={} unique_chunks={} chunks_hot_before_load={} chunks_cold_before_load={} chunks_decoded={} chunks_cached={} accounts_loaded={} accounts_cached={} accounts_borrowed={} accounts_skipped={}",
+        .{
+            slot,
+            elapsed_ns,
+            account_refs,
+            unique_pubkeys.count(),
+            selected_pubkeys.items.len + programdata_preload_pubkeys,
+            readonly_included,
+            writable_included,
+            writable_skipped,
+            writable_min_refs,
+            writable_max_pubkeys,
+            writable_hot_candidates,
+            unrooted_skipped,
+            unrooted_result.resolved,
+            unrooted_accounts_loaded,
+            unrooted_accounts_missing,
+            tombstone_pubkeys,
+            result.compressed_pubkeys,
+            result.missing_pubkeys,
+            result.unique_chunks,
+            chunk_hotness.hot_chunks,
+            chunk_hotness.cold_chunks,
+            result.chunks_decoded,
+            result.chunks_cached,
+            result.accounts_loaded,
+            result.accounts_cached,
+            result.accounts_borrowed,
+            result.accounts_skipped,
+        },
+    );
+    logger.info().logf(
+        "slot_read_frame_programdata slot={} metadata_pubkeys={} metadata_found={} metadata_missing={} preload_enabled={} preload_pubkeys={} unrooted_pubkeys={} unrooted_loaded={} unrooted_missing={} tombstone_pubkeys={} compressed_pubkeys={} missing_pubkeys={} unique_chunks={} chunks_decoded={} chunks_cached={} accounts_loaded={} accounts_cached={} accounts_borrowed={} accounts_skipped={}",
+        .{
+            slot,
+            programdata_metadata_pubkeys,
+            programdata_data_len_found,
+            programdata_data_len_missing,
+            preload_programdata_accounts,
+            programdata_preload_pubkeys,
+            programdata_unrooted_result.resolved,
+            programdata_unrooted_loaded,
+            programdata_unrooted_missing,
+            programdata_tombstone_pubkeys,
+            programdata_result.compressed_pubkeys,
+            programdata_result.missing_pubkeys,
+            programdata_result.unique_chunks,
+            programdata_result.chunks_decoded,
+            programdata_result.chunks_cached,
+            programdata_result.accounts_loaded,
+            programdata_result.accounts_cached,
+            programdata_result.accounts_borrowed,
+            programdata_result.accounts_skipped,
+        },
+    );
+    logger.info().logf(
+        "slot_read_frame_phases slot={} total={D} collect_needs={D} select_pubkeys={D} unrooted_preload={D} frame_filter={D} chunk_hotness={D} compressed_load={D} tombstone_fill={D} programdata_collect={D} programdata_data_len={D} programdata_unrooted={D} programdata_filter={D} programdata_compressed_load={D} programdata_tombstone_fill={D}",
+        .{
+            slot,
+            elapsed_ns,
+            collect_needs_ns,
+            select_pubkeys_ns,
+            unrooted_preload_ns,
+            frame_filter_ns,
+            chunk_hotness_ns,
+            compressed_load_ns,
+            tombstone_fill_ns,
+            programdata_collect_ns,
+            programdata_data_len_ns,
+            programdata_unrooted_ns,
+            programdata_filter_ns,
+            programdata_compressed_load_ns,
+            programdata_tombstone_fill_ns,
+        },
+    );
+    logSlotReadFrameCompressedPhases(logger, slot, "main", result);
+    logSlotReadFrameCompressedPhases(logger, slot, "programdata", programdata_result);
+}
+
+fn logSlotReadFrameCompressedPhases(
+    logger: Logger,
+    slot: Slot,
+    scope: []const u8,
+    result: sig.accounts_db.CompressedAccountStore.BatchDecodeResult,
+) void {
+    logger.info().logf(
+        "slot_read_frame_compressed_phases slot={} scope={s} total={D} index_lookup={D} index_records_read={} chunk_plan={D} cached_chunk_load={D} cold_chunk_load={D} cold_decompress_wall={D} cold_account_materialize={D} chunk_cache_insert={D} materialized_data_bytes={} borrowed_data_bytes={} decoded_cache_entries={} decoded_cache_bytes={} decoded_cache_max_entries={} decoded_cache_priority_entries={} decoded_cache_priority_reserve_entries={} decoded_cache_effective_max_entries={} decoded_cache_max_bytes={} decoded_cache_priority_insert_total={} decoded_cache_priority_skip_total={} decoded_cache_skip_entry_limit_total={} decoded_cache_skip_byte_limit_total={} decoded_cache_skip_oversize_total={} decoded_cache_skip_allocation_total={}",
+        .{
+            slot,
+            scope,
+            result.total_ns,
+            result.index_lookup_ns,
+            result.index_records_read,
+            result.chunk_plan_ns,
+            result.cached_chunk_load_ns,
+            result.cold_chunk_load_ns,
+            result.cold_decompress_wall_ns,
+            result.cold_account_materialize_ns,
+            result.chunk_cache_insert_ns,
+            result.materialized_data_bytes,
+            result.borrowed_data_bytes,
+            result.decoded_cache_entries,
+            result.decoded_cache_bytes,
+            result.decoded_cache_max_entries,
+            result.decoded_cache_priority_entries,
+            result.decoded_cache_priority_reserve_entries,
+            result.decoded_cache_effective_max_entries,
+            result.decoded_cache_max_bytes,
+            result.decoded_cache_priority_insert_total,
+            result.decoded_cache_priority_skip_total,
+            result.decoded_cache_skip_entry_limit_total,
+            result.decoded_cache_skip_byte_limit_total,
+            result.decoded_cache_skip_oversize_total,
+            result.decoded_cache_skip_allocation_total,
+        },
+    );
+}
+
+fn collectLoaderV3ProgramDataPubkeys(
+    allocator: Allocator,
+    cache: *const SlotAccountCache,
+    seen: *sig.utils.collections.PubkeyMap(void),
+    out: *std.ArrayListUnmanaged(sig.core.Pubkey),
+) !void {
+    for (cache.accounts.values()) |*account| {
+        try collectLoaderV3ProgramDataPubkey(allocator, cache, account, seen, out);
+    }
+    for (cache.borrowed_accounts.values()) |account| {
+        try collectLoaderV3ProgramDataPubkey(allocator, cache, account, seen, out);
+    }
+}
+
+fn collectLoaderV3ProgramDataPubkey(
+    allocator: Allocator,
+    cache: *const SlotAccountCache,
+    account: *const AccountSharedData,
+    seen: *sig.utils.collections.PubkeyMap(void),
+    out: *std.ArrayListUnmanaged(sig.core.Pubkey),
+) !void {
+    if (account.lamports == 0) return;
+    if (!account.executable) return;
+    if (!account.owner.equals(&bpf_loader.v3.ID)) return;
+
+    const state = sig.bincode.readFromSlice(
+        failing_allocator,
+        bpf_loader.v3.State,
+        account.data,
+        .{},
+    ) catch return;
+
+    const programdata_address = switch (state) {
+        .program => |program| program.programdata_address,
+        else => return,
+    };
+    if (cache.containsAccount(programdata_address)) return;
+
+    const gop = try seen.getOrPut(allocator, programdata_address);
+    if (gop.found_existing) return;
+    gop.value_ptr.* = {};
+    try out.append(allocator, programdata_address);
 }
 
 const SlotReadFrameChunkHotness = struct {
@@ -908,6 +1659,7 @@ fn buildCachedSlotAccountStore(
 
     const cache = try allocator.create(SlotAccountCache);
     cache.* = SlotAccountCache.init(allocator);
+    configureDeferredSlotAccountWrites(cache, db, slot);
     errdefer {
         cache.deinit();
         allocator.destroy(cache);
@@ -928,8 +1680,25 @@ fn buildCachedSlotAccountStore(
         slot,
         ancestors,
         allocator,
+        &cache.lock,
         &cache.accounts,
+        &cache.borrowed_accounts,
+        &cache.account_data_lens,
+        &cache.stats,
+        &cache.deferred_dirty,
+        cache.defer_writes,
     } };
+}
+
+fn configureDeferredSlotAccountWrites(
+    cache: *SlotAccountCache,
+    db: *sig.accounts_db.Db,
+    slot: Slot,
+) void {
+    if (!envBool("SIG_REPLAY_DEFER_SLOT_ACCOUNT_WRITES", false)) return;
+    cache.defer_writes = true;
+    cache.deferred_db = db;
+    cache.deferred_slot = slot;
 }
 
 fn populateSlotAccountCache(

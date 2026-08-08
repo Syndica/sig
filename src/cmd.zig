@@ -2970,17 +2970,26 @@ const AppBase = struct {
 
         const metrics_registry = globalRegistry();
         const metrics_thread = try sig.utils.service_manager.spawnService( //
-            .from(logger), exit, "metrics endpoint", .{}, //
+            .from(logger), exit, "metrics endpoint", .{
+                .error_handler = .{ .max_iterations = 1 },
+            }, //
             servePrometheus, .{ allocator, metrics_registry, cfg.metrics_port });
         errdefer metrics_thread.detach();
 
         const my_keypair = try sig.identity.getOrInit(allocator, .from(logger));
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
 
-        const entrypoints = try cfg.gossip.getEntrypointAddrs(try cfg.getCluster(), allocator);
+        const entrypoints = cfg.gossip.getEntrypointAddrs(try cfg.getCluster(), allocator) catch |err| blk: {
+            logger.warn().logf("failed to resolve gossip entrypoints; continuing without entrypoints: {}", .{err});
+            break :blk try allocator.alloc(SocketAddr, 0);
+        };
+        errdefer allocator.free(entrypoints);
         if (entrypoints.len == 0) logger.warn().log("no gossip entrypoints provided");
 
-        const echo_data = try getShredAndIPFromEchoServer(.from(logger), entrypoints);
+        const echo_data = getShredAndIPFromEchoServer(.from(logger), entrypoints) catch |err| blk: {
+            logger.warn().logf("failed to get shred/ip echo; using configured defaults: {}", .{err});
+            break :blk .{ .shred_version = null, .ip = null };
+        };
 
         const my_shred_version =
             cfg.shred_version orelse

@@ -28,6 +28,8 @@ const assert = std.debug.assert;
 const verifyTicks = replay.execution.verifyTicks;
 const verifyPoh = core.entry.verifyPoh;
 const replayBatch = replay.execution.replayBatch;
+const preprocessTransaction = replay.preprocess_transaction.preprocessTransaction;
+const PreprocessedTransaction = replay.execution.PreprocessedTransaction;
 
 const Logger = sig.trace.Logger("replay-async");
 
@@ -46,6 +48,8 @@ pub const ReplaySlotFuture = struct {
     poh_verifier: PohVerifier,
     txn_scheduler: TransactionScheduler,
     metrics: replay.service.Metrics,
+    slot_timer: sig.time.Timer,
+    slot_account_cache: ?*replay.execution.SlotAccountCache,
 
     // Threading state.
     pending: Atomic(usize),
@@ -92,13 +96,18 @@ pub const ReplaySlotFuture = struct {
             .poh_verifier = .{
                 .future = self,
                 .initial_hash = params.last_entry,
+                .timer = .start(),
             },
             .metrics = metrics,
+            .slot_timer = .start(),
+            .slot_account_cache = params.slot_account_cache,
             .txn_scheduler = .{
                 .future = self,
                 .transactions = params.transactions,
                 .svm_gateway = params.svm_gateway,
                 .committer = params.committer,
+                .execute_timer = .start(),
+                .preprocess_timer = .start(),
             },
             .pending = .init(1), // start with 1 for this scope's self.finish()
             .thread_pool = thread_pool,
@@ -159,22 +168,129 @@ pub const ReplaySlotFuture = struct {
             // Read the wait gruop out of self, as self will be freed at the end.
             const wg = self.wait_group;
             defer wg.finish();
+            const allocator = self.allocator;
+            const logger = self.logger;
+            const slot = self.txn_scheduler.svm_gateway.params.slot;
+            var finish_timer = sig.time.Timer.start();
+            var phase_timer = sig.time.Timer.start();
+
+            const poh_stats = self.poh_verifier.stats();
+            const scheduler_stats = self.txn_scheduler.stats();
+            self.metrics.poh_verify_wall_time.observe(poh_stats.wall_ns);
+            self.metrics.poh_verify_cpu_time.observe(poh_stats.cpu_ns);
+            self.metrics.transaction_scheduler_build_time.observe(scheduler_stats.build_ns);
+            self.metrics.transaction_preprocess_wall_time.observe(scheduler_stats.preprocess_wall_ns);
+            self.metrics.transaction_preprocess_cpu_time.observe(scheduler_stats.preprocess_cpu_ns);
+            self.metrics.transaction_preprocess_tasks.set(scheduler_stats.preprocess_tasks);
+            self.metrics.transaction_scheduler_execute_wall_time.observe(scheduler_stats.execute_wall_ns);
+            self.metrics.transaction_scheduler_workers.set(scheduler_stats.workers);
+            self.metrics.transaction_scheduler_dependency_edges.set(scheduler_stats.dependency_edges);
+            self.metrics.transaction_scheduler_initial_ready.set(scheduler_stats.initial_ready);
+            self.metrics.transaction_scheduler_max_dependencies.set(scheduler_stats.max_dependencies);
+            self.metrics.transaction_scheduler_critical_path.set(scheduler_stats.critical_path);
+            self.logger.info().logf(
+                "slot_replay_scheduler_stats slot={} poh_entries={} poh_tasks={} poh_wall={D} poh_cpu={D} scheduler_build={D} preprocess_tasks={} preprocess_wall={D} preprocess_cpu={D} scheduler_execute_wall={D} workers={} dependency_edges={} initial_ready={} max_dependencies={} critical_path={}",
+                .{
+                    slot,
+                    poh_stats.entries,
+                    poh_stats.tasks,
+                    poh_stats.wall_ns,
+                    poh_stats.cpu_ns,
+                    scheduler_stats.build_ns,
+                    scheduler_stats.preprocess_tasks,
+                    scheduler_stats.preprocess_wall_ns,
+                    scheduler_stats.preprocess_cpu_ns,
+                    scheduler_stats.execute_wall_ns,
+                    scheduler_stats.workers,
+                    scheduler_stats.dependency_edges,
+                    scheduler_stats.initial_ready,
+                    scheduler_stats.max_dependencies,
+                    scheduler_stats.critical_path,
+                },
+            );
+
+            replay.execution.logReplayBatchStats(
+                self.logger,
+                slot,
+                "async",
+                self.slot_timer.read().asNanos(),
+                self.txn_scheduler.batch_stats.snapshot(),
+            );
+            const stats_log_ns = phase_timer.read().asNanos();
+            phase_timer.reset();
+            if (self.result_ptr.load(.acquire) != null) {
+                replay.execution.flushDeferredSlotAccountCacheWrites(
+                    self.logger,
+                    self.slot_account_cache,
+                ) catch |err| {
+                    self.logger.err().logf(
+                        "deferred slot account cache flush failed: {}",
+                        .{err},
+                    );
+                    self.setError(Error.ReplayBatchFailed);
+                };
+            }
+            const deferred_flush_ns = phase_timer.read().asNanos();
+            phase_timer.reset();
+            if (self.slot_account_cache) |cache| {
+                replay.execution.logSlotAccountCacheStats(
+                    self.logger,
+                    slot,
+                    cache.stats.snapshot(),
+                );
+            }
+            const cache_stats_log_ns = phase_timer.read().asNanos();
+            phase_timer.reset();
 
             if (self.result_ptr.load(.acquire)) |result_ptr| {
                 result_ptr.* = .{
-                    .slot = self.txn_scheduler.svm_gateway.params.slot,
+                    .slot = slot,
                     .output = .{ .last_entry_hash = self.entries[self.entries.len - 1].hash },
                 };
             } else assert(self.exit.load(.monotonic)); // a setError() occured & consumed the result
+            const publish_result_ns = phase_timer.read().asNanos();
+            phase_timer.reset();
 
             for (self.entries) |entry| entry.deinit(self.allocator);
             self.allocator.free(self.entries);
+            const entries_deinit_ns = phase_timer.read().asNanos();
+            phase_timer.reset();
 
             self.txn_scheduler.deinit();
+            const scheduler_deinit_ns = phase_timer.read().asNanos();
+            phase_timer.reset();
             self.poh_verifier.deinit();
+            const poh_deinit_ns = phase_timer.read().asNanos();
+            phase_timer.reset();
+            replay.execution.destroySlotAccountCache(self.allocator, self.slot_account_cache);
+            const slot_cache_deinit_ns = phase_timer.read().asNanos();
+            phase_timer.reset();
 
             self.arena.deinit();
-            self.allocator.destroy(self);
+            const arena_deinit_ns = phase_timer.read().asNanos();
+            const total_ns = finish_timer.read().asNanos();
+            const known_ns = stats_log_ns + deferred_flush_ns + cache_stats_log_ns +
+                publish_result_ns + entries_deinit_ns + scheduler_deinit_ns + poh_deinit_ns +
+                slot_cache_deinit_ns + arena_deinit_ns;
+            const unattributed_ns = total_ns -| known_ns;
+            logger.info().logf(
+                "replay_future_finish_timing slot={} stats_log_ns={} deferred_flush_ns={} cache_stats_log_ns={} publish_result_ns={} entries_deinit_ns={} scheduler_deinit_ns={} poh_deinit_ns={} slot_cache_deinit_ns={} arena_deinit_ns={} unattributed_ns={} total_ns={}",
+                .{
+                    slot,
+                    stats_log_ns,
+                    deferred_flush_ns,
+                    cache_stats_log_ns,
+                    publish_result_ns,
+                    entries_deinit_ns,
+                    scheduler_deinit_ns,
+                    poh_deinit_ns,
+                    slot_cache_deinit_ns,
+                    arena_deinit_ns,
+                    unattributed_ns,
+                    total_ns,
+                },
+            );
+            allocator.destroy(self);
         }
     }
 };
@@ -183,8 +299,20 @@ const PohVerifier = struct {
     future: *ReplaySlotFuture,
     initial_hash: Hash,
     workers: std.ArrayListUnmanaged(Worker) = .{},
+    timer: sig.time.Timer,
+    task_count: u64 = 0,
+    remaining: Atomic(u64) = .init(0),
+    cpu_ns: Atomic(u64) = .init(0),
+    wall_ns: Atomic(u64) = .init(0),
 
     const Error = Allocator.Error;
+
+    const Stats = struct {
+        entries: u64,
+        tasks: u64,
+        wall_ns: u64,
+        cpu_ns: u64,
+    };
 
     fn deinit(const_self: PohVerifier) void {
         var self = const_self;
@@ -198,6 +326,10 @@ const PohVerifier = struct {
         const entries = future.entries;
         const allocator = self.future.arena.allocator();
 
+        self.timer.reset();
+        self.task_count = entries.len;
+        self.remaining.store(entries.len, .monotonic);
+
         var task_batch = ThreadPool.Batch{};
         defer future.schedule(task_batch);
 
@@ -210,6 +342,22 @@ const PohVerifier = struct {
         }
     }
 
+    fn finishWorker(self: *PohVerifier, elapsed_ns: u64) void {
+        _ = self.cpu_ns.fetchAdd(elapsed_ns, .monotonic);
+        if (self.remaining.fetchSub(1, .acq_rel) == 1) {
+            self.wall_ns.store(self.timer.read().asNanos(), .release);
+        }
+    }
+
+    fn stats(self: *const PohVerifier) Stats {
+        return .{
+            .entries = self.future.entries.len,
+            .tasks = self.task_count,
+            .wall_ns = self.wall_ns.load(.acquire),
+            .cpu_ns = self.cpu_ns.load(.acquire),
+        };
+    }
+
     const Worker = struct {
         task: ThreadPool.Task = .{ .callback = run },
         future: *ReplaySlotFuture,
@@ -220,7 +368,11 @@ const PohVerifier = struct {
             defer zone.deinit();
 
             const self: *Worker = @alignCast(@fieldParentPtr("task", task));
-            defer self.future.finish();
+            var timer = sig.time.Timer.start();
+            defer {
+                self.future.poh_verifier.finishWorker(timer.read().asNanos());
+                self.future.finish();
+            }
             if (self.future.exit.load(.acquire)) return;
 
             const initial_hash = switch (self.index) {
@@ -243,8 +395,72 @@ const TransactionScheduler = struct {
     svm_gateway: SvmGateway,
     committer: Committer,
     workers: std.ArrayListUnmanaged(Worker) = .{},
+    preprocess_workers: std.ArrayListUnmanaged(PreprocessWorker) = .{},
+    batch_stats: replay.execution.AtomicReplayBatchStats = .{},
+    build_ns: u64 = 0,
+    dependency_edges: u64 = 0,
+    initial_ready: u64 = 0,
+    max_dependencies: u64 = 0,
+    critical_path: u64 = 0,
+    critical_worker: ?u32 = null,
+    execute_timer: sig.time.Timer,
+    preprocess_timer: sig.time.Timer,
+    preprocess_next: Atomic(usize) = .init(0),
+    preprocess_remaining: Atomic(u64) = .init(0),
+    preprocess_wall_ns: Atomic(u64) = .init(0),
+    preprocess_cpu_ns: Atomic(u64) = .init(0),
+    remaining: Atomic(u64) = .init(0),
+    execute_wall_ns: Atomic(u64) = .init(0),
 
     const Error = Allocator.Error || error{ReplayBatchFailed};
+
+    const AccountLock = struct {
+        last_writer: ?u32 = null,
+        readers: std.ArrayListUnmanaged(u32) = .{},
+        readonly_accesses: u64 = 0,
+        writable_accesses: u64 = 0,
+        conflict_refs: u64 = 0,
+        max_reader_fanout: u64 = 0,
+    };
+
+    const AccountLockMap = std.AutoArrayHashMapUnmanaged(Pubkey, AccountLock);
+
+    const DependencyReason = struct {
+        pubkey: Pubkey,
+        writable: bool,
+    };
+
+    const CriticalAccount = struct {
+        pubkey: Pubkey,
+        critical_edges: u64,
+        readonly_accesses: u64,
+        writable_accesses: u64,
+        conflict_refs: u64,
+        max_reader_fanout: u64,
+
+        fn lessThan(_: void, lhs: CriticalAccount, rhs: CriticalAccount) bool {
+            if (lhs.critical_edges != rhs.critical_edges) {
+                return lhs.critical_edges > rhs.critical_edges;
+            }
+            if (lhs.conflict_refs != rhs.conflict_refs) {
+                return lhs.conflict_refs > rhs.conflict_refs;
+            }
+            return lhs.pubkey.order(rhs.pubkey) == .lt;
+        }
+    };
+
+    const Stats = struct {
+        build_ns: u64,
+        preprocess_tasks: u64,
+        preprocess_wall_ns: u64,
+        preprocess_cpu_ns: u64,
+        execute_wall_ns: u64,
+        workers: u64,
+        dependency_edges: u64,
+        initial_ready: u64,
+        max_dependencies: u64,
+        critical_path: u64,
+    };
 
     fn deinit(const_self: TransactionScheduler) void {
         var self = const_self;
@@ -256,20 +472,27 @@ const TransactionScheduler = struct {
 
         allocator = self.future.arena.allocator(); // this came from Future's local arena.
         self.workers.deinit(allocator);
+        self.preprocess_workers.deinit(allocator);
     }
 
     fn start(self: *TransactionScheduler) Error!void {
         const zone = tracy.Zone.init(@src(), .{ .name = "TransactionScheduler.start" });
         defer zone.deinit();
+        var build_timer = sig.time.Timer.start();
 
         const allocator = self.future.arena.allocator();
         const entries = self.future.entries;
+        const slot = self.svm_gateway.params.slot;
+        const hotspot_slot = envU64(
+            "SIG_REPLAY_SCHEDULER_DEPENDENCY_HOTSPOTS_SLOT",
+            0,
+        );
+        const dependency_hotspots_enabled =
+            envBool("SIG_REPLAY_SCHEDULER_DEPENDENCY_HOTSPOTS", false) and
+            (hotspot_slot == 0 or hotspot_slot == slot);
 
         // Account locking across all sequential transactions.
-        var account_locks = std.AutoArrayHashMapUnmanaged(Pubkey, struct {
-            last_writer: ?u32 = null,
-            readers: std.ArrayListUnmanaged(u32) = .{},
-        }){};
+        var account_locks = AccountLockMap{};
         defer {
             for (account_locks.values()) |*lock| lock.readers.deinit(allocator);
             account_locks.deinit(allocator);
@@ -282,6 +505,11 @@ const TransactionScheduler = struct {
         // Within a transaction, dependencies on previous transactions.
         var txn_deps = std.AutoArrayHashMapUnmanaged(u32, void){};
         defer txn_deps.deinit(allocator);
+
+        // Populated only for the requested diagnostic slot. The scheduler still
+        // uses txn_deps as its sole source of ordering truth.
+        var dependency_reasons = std.AutoArrayHashMapUnmanaged(u32, DependencyReason){};
+        defer dependency_reasons.deinit(allocator);
 
         var expected_transaction_count: usize = 0;
         for (entries) |entry| {
@@ -312,6 +540,7 @@ const TransactionScheduler = struct {
 
                 const id: u32 = @intCast(self.workers.items.len);
                 txn_deps.clearRetainingCapacity();
+                dependency_reasons.clearRetainingCapacity();
                 for (
                     transaction.accounts.items(.pubkey),
                     transaction.accounts.items(.is_writable),
@@ -335,23 +564,64 @@ const TransactionScheduler = struct {
                     if (!gop.found_existing) lock.* = .{};
 
                     if (writable) {
+                        if (dependency_hotspots_enabled) lock.writable_accesses += 1;
                         // if we write, we depend on last writer, or the readers who depend on it.
                         if (lock.readers.items.len > 0) {
+                            if (dependency_hotspots_enabled) {
+                                lock.max_reader_fanout = @max(
+                                    lock.max_reader_fanout,
+                                    lock.readers.items.len,
+                                );
+                            }
                             for (lock.readers.items) |reader_id| {
-                                if (reader_id != id) try txn_deps.put(allocator, reader_id, {});
+                                if (reader_id != id) {
+                                    if (dependency_hotspots_enabled) lock.conflict_refs += 1;
+                                    try recordDependency(
+                                        allocator,
+                                        &txn_deps,
+                                        &dependency_reasons,
+                                        dependency_hotspots_enabled,
+                                        reader_id,
+                                        pubkey,
+                                        true,
+                                    );
+                                }
                             }
                             lock.readers.clearRetainingCapacity();
                         } else if (lock.last_writer) |writer_id| {
-                            if (writer_id != id) try txn_deps.put(allocator, writer_id, {});
+                            if (writer_id != id) {
+                                if (dependency_hotspots_enabled) lock.conflict_refs += 1;
+                                try recordDependency(
+                                    allocator,
+                                    &txn_deps,
+                                    &dependency_reasons,
+                                    dependency_hotspots_enabled,
+                                    writer_id,
+                                    pubkey,
+                                    true,
+                                );
+                            }
                         }
 
                         // We also become the writer for others later.
                         lock.last_writer = id;
                     } else {
+                        if (dependency_hotspots_enabled) lock.readonly_accesses += 1;
                         // if we read, we depend on last writer & becomes readers for next writer
                         try lock.readers.append(allocator, id);
                         if (lock.last_writer) |writer_id| {
-                            if (writer_id != id) try txn_deps.put(allocator, writer_id, {});
+                            if (writer_id != id) {
+                                if (dependency_hotspots_enabled) lock.conflict_refs += 1;
+                                try recordDependency(
+                                    allocator,
+                                    &txn_deps,
+                                    &dependency_reasons,
+                                    dependency_hotspots_enabled,
+                                    writer_id,
+                                    pubkey,
+                                    false,
+                                );
+                            }
                         }
                     }
                 }
@@ -360,26 +630,231 @@ const TransactionScheduler = struct {
                 for (txn_deps.keys()) |writer_id| {
                     try self.workers.items[writer_id].waiters.append(allocator, id);
                 }
+                const dependency_count = txn_deps.count();
+                self.dependency_edges += dependency_count;
+                self.max_dependencies = @max(self.max_dependencies, dependency_count);
+                var critical_depth: u64 = 1;
+                var critical_parent: ?u32 = null;
+                var critical_account: ?Pubkey = null;
+                for (txn_deps.keys()) |dependency_id| {
+                    const candidate_depth =
+                        self.workers.items[dependency_id].critical_depth + 1;
+                    if (candidate_depth > critical_depth) {
+                        critical_depth = candidate_depth;
+                        critical_parent = dependency_id;
+                        if (dependency_hotspots_enabled) {
+                            critical_account = dependency_reasons.get(dependency_id).?.pubkey;
+                        }
+                    }
+                }
+                if (critical_depth > self.critical_path) {
+                    self.critical_path = critical_depth;
+                    self.critical_worker = id;
+                }
                 // Create job with a ref_count for each dependency.
                 try self.workers.append(allocator, .{
                     .scheduler = self,
                     .transaction = transaction,
-                    .ref_count = .init(@intCast(txn_deps.count())),
+                    .ref_count = .init(@intCast(dependency_count)),
                     .waiters = .{},
+                    .critical_depth = critical_depth,
+                    .critical_parent = critical_parent,
+                    .critical_account = critical_account,
                 });
             }
         }
 
-        var task_batch = ThreadPool.Batch{};
-        defer self.future.schedule(task_batch);
-
-        // Once workers have stable pointers, schedule the ones with no dependencies.
+        // Count the workers that can execute as soon as preprocessing completes.
         for (self.workers.items) |*worker| {
             if (worker.ref_count.raw == 0) {
-                task_batch.push(.from(&worker.task));
+                self.initial_ready += 1;
             }
         }
+
+        if (dependency_hotspots_enabled) {
+            try self.logDependencyHotspots(allocator, &account_locks);
+        }
+
+        self.build_ns = build_timer.read().asNanos();
+        self.remaining.store(self.workers.items.len, .monotonic);
+        if (self.workers.items.len == 0) return;
+
+        const preprocess_task_count = @min(
+            self.workers.items.len,
+            @as(usize, @intCast(self.future.thread_pool.max_threads)),
+        );
+        try self.preprocess_workers.ensureTotalCapacity(allocator, preprocess_task_count);
+        var task_batch = ThreadPool.Batch{};
+        for (0..preprocess_task_count) |_| {
+            const worker = self.preprocess_workers.addOneAssumeCapacity();
+            worker.* = .{ .scheduler = self };
+            task_batch.push(.from(&worker.task));
+        }
+
+        self.preprocess_next.store(0, .monotonic);
+        self.preprocess_remaining.store(preprocess_task_count, .monotonic);
+        self.execute_timer.reset();
+        self.preprocess_timer.reset();
+        self.future.schedule(task_batch);
     }
+
+    fn recordDependency(
+        allocator: Allocator,
+        txn_deps: *std.AutoArrayHashMapUnmanaged(u32, void),
+        dependency_reasons: *std.AutoArrayHashMapUnmanaged(u32, DependencyReason),
+        capture_reason: bool,
+        dependency_id: u32,
+        pubkey: Pubkey,
+        writable: bool,
+    ) Allocator.Error!void {
+        if (txn_deps.contains(dependency_id)) return;
+        try txn_deps.put(allocator, dependency_id, {});
+        if (capture_reason) {
+            try dependency_reasons.put(allocator, dependency_id, .{
+                .pubkey = pubkey,
+                .writable = writable,
+            });
+        }
+    }
+
+    fn logDependencyHotspots(
+        self: *const TransactionScheduler,
+        allocator: Allocator,
+        account_locks: *const AccountLockMap,
+    ) Allocator.Error!void {
+        var path_accounts = std.AutoArrayHashMapUnmanaged(Pubkey, u64){};
+        defer path_accounts.deinit(allocator);
+
+        var traced_edges: u64 = 0;
+        var cursor = self.critical_worker;
+        while (cursor) |worker_id| {
+            const worker = &self.workers.items[worker_id];
+            const pubkey = worker.critical_account orelse break;
+            const gop = try path_accounts.getOrPut(allocator, pubkey);
+            if (!gop.found_existing) gop.value_ptr.* = 0;
+            gop.value_ptr.* += 1;
+            traced_edges += 1;
+            cursor = worker.critical_parent;
+        }
+
+        var ranked = std.ArrayListUnmanaged(CriticalAccount){};
+        defer ranked.deinit(allocator);
+        try ranked.ensureTotalCapacity(allocator, path_accounts.count());
+        for (path_accounts.keys(), path_accounts.values()) |pubkey, critical_edges| {
+            const lock = account_locks.get(pubkey).?;
+            ranked.appendAssumeCapacity(.{
+                .pubkey = pubkey,
+                .critical_edges = critical_edges,
+                .readonly_accesses = lock.readonly_accesses,
+                .writable_accesses = lock.writable_accesses,
+                .conflict_refs = lock.conflict_refs,
+                .max_reader_fanout = lock.max_reader_fanout,
+            });
+        }
+        std.mem.sort(CriticalAccount, ranked.items, {}, CriticalAccount.lessThan);
+
+        self.future.logger.info().logf(
+            "slot_replay_scheduler_critical_path slot={} path_nodes={} traced_edges={} unique_accounts={} terminal_tx={?}",
+            .{
+                self.svm_gateway.params.slot,
+                self.critical_path,
+                traced_edges,
+                path_accounts.count(),
+                self.critical_worker,
+            },
+        );
+        for (ranked.items[0..@min(ranked.items.len, 8)], 0..) |account, rank| {
+            const pubkey = account.pubkey.base58String();
+            self.future.logger.info().logf(
+                "slot_replay_scheduler_dependency_hotspot slot={} rank={} account={s} critical_edges={} writable_accesses={} readonly_accesses={} conflict_refs={} max_reader_fanout={}",
+                .{
+                    self.svm_gateway.params.slot,
+                    rank + 1,
+                    pubkey.constSlice(),
+                    account.critical_edges,
+                    account.writable_accesses,
+                    account.readonly_accesses,
+                    account.conflict_refs,
+                    account.max_reader_fanout,
+                },
+            );
+        }
+    }
+
+    fn finishPreprocessWorker(self: *TransactionScheduler, elapsed_ns: u64) void {
+        _ = self.preprocess_cpu_ns.fetchAdd(elapsed_ns, .monotonic);
+        if (self.preprocess_remaining.fetchSub(1, .acq_rel) == 1) {
+            self.preprocess_wall_ns.store(self.preprocess_timer.read().asNanos(), .release);
+            if (self.future.exit.load(.acquire)) return;
+
+            var task_batch = ThreadPool.Batch{};
+            for (self.workers.items) |*worker| {
+                if (worker.ref_count.raw == 0) {
+                    task_batch.push(.from(&worker.task));
+                }
+            }
+            self.future.schedule(task_batch);
+        }
+    }
+
+    fn finishWorker(self: *TransactionScheduler) void {
+        if (self.remaining.fetchSub(1, .acq_rel) == 1) {
+            self.execute_wall_ns.store(self.execute_timer.read().asNanos(), .release);
+        }
+    }
+
+    fn stats(self: *const TransactionScheduler) Stats {
+        return .{
+            .build_ns = self.build_ns,
+            .preprocess_tasks = self.preprocess_workers.items.len,
+            .preprocess_wall_ns = self.preprocess_wall_ns.load(.acquire),
+            .preprocess_cpu_ns = self.preprocess_cpu_ns.load(.acquire),
+            .execute_wall_ns = self.execute_wall_ns.load(.acquire),
+            .workers = self.workers.items.len,
+            .dependency_edges = self.dependency_edges,
+            .initial_ready = self.initial_ready,
+            .max_dependencies = self.max_dependencies,
+            .critical_path = self.critical_path,
+        };
+    }
+
+    const PreprocessWorker = struct {
+        task: ThreadPool.Task = .{ .callback = run },
+        scheduler: *TransactionScheduler,
+
+        fn run(task: *ThreadPool.Task) void {
+            const zone = tracy.Zone.init(@src(), .{ .name = "replayPreprocess" });
+            defer zone.deinit();
+
+            const self: *PreprocessWorker = @alignCast(@fieldParentPtr("task", task));
+            var worker_timer = sig.time.Timer.start();
+            defer {
+                self.scheduler.finishPreprocessWorker(worker_timer.read().asNanos());
+                self.scheduler.future.finish();
+            }
+
+            const future = self.scheduler.future;
+            const instruction_limit = self.scheduler.svm_gateway.params.feature_set.active(
+                .static_instruction_limit,
+                self.scheduler.svm_gateway.params.slot,
+            );
+            while (!future.exit.load(.acquire)) {
+                const index = self.scheduler.preprocess_next.fetchAdd(1, .monotonic);
+                if (index >= self.scheduler.workers.items.len) return;
+
+                const worker = &self.scheduler.workers.items[index];
+                var preprocess_timer = sig.time.Timer.start();
+                worker.preprocessed = .{
+                    .result = preprocessTransaction(
+                        worker.transaction.transaction,
+                        .run_sig_verify,
+                        instruction_limit,
+                    ),
+                    .elapsed_ns = preprocess_timer.read().asNanos(),
+                };
+            }
+        }
+    };
 
     const Worker = struct {
         task: ThreadPool.Task = .{ .callback = run },
@@ -387,6 +862,10 @@ const TransactionScheduler = struct {
         transaction: ResolvedTransaction,
         ref_count: Atomic(u32),
         waiters: std.ArrayListUnmanaged(u32),
+        critical_depth: u64,
+        critical_parent: ?u32,
+        critical_account: ?Pubkey,
+        preprocessed: ?PreprocessedTransaction = null,
 
         fn deinit(const_self: Worker, allocator: Allocator) void {
             var self = const_self;
@@ -400,20 +879,30 @@ const TransactionScheduler = struct {
 
             const self: *Worker = @alignCast(@fieldParentPtr("task", task));
             defer self.scheduler.future.finish();
+            defer self.scheduler.finishWorker();
 
             const future = self.scheduler.future;
-            const result = replayBatch(
+            const preprocessed = self.preprocessed orelse {
+                future.logger.err().log("transaction execution scheduled before preprocessing");
+                future.setError(Error.ReplayBatchFailed);
+                return;
+            };
+            const preprocessed_batch = [_]PreprocessedTransaction{preprocessed};
+            const outcome = replayBatch(
                 future.allocator, // cant use future's arena here as its multi-threaded
                 future.metrics,
                 &self.scheduler.svm_gateway,
                 self.scheduler.committer,
                 &.{self.transaction},
+                &preprocessed_batch,
                 &future.exit,
             ) catch |err| {
                 future.logger.err().logf("replayBatch failed with error: {}", .{err});
                 future.setError(Error.ReplayBatchFailed);
                 return;
             };
+            self.scheduler.batch_stats.add(outcome.stats);
+            const result = outcome.result;
 
             if (result == .failure) {
                 future.logger.err().logf(
@@ -437,6 +926,40 @@ const TransactionScheduler = struct {
         }
     };
 };
+
+fn envBool(key: []const u8, default_value: bool) bool {
+    const allocator = std.heap.page_allocator;
+    const raw = std.process.getEnvVarOwned(allocator, key) catch return default_value;
+    defer allocator.free(raw);
+
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    if (trimmed.len == 0) return default_value;
+    if (std.ascii.eqlIgnoreCase(trimmed, "1") or
+        std.ascii.eqlIgnoreCase(trimmed, "true") or
+        std.ascii.eqlIgnoreCase(trimmed, "yes") or
+        std.ascii.eqlIgnoreCase(trimmed, "on"))
+    {
+        return true;
+    }
+    if (std.ascii.eqlIgnoreCase(trimmed, "0") or
+        std.ascii.eqlIgnoreCase(trimmed, "false") or
+        std.ascii.eqlIgnoreCase(trimmed, "no") or
+        std.ascii.eqlIgnoreCase(trimmed, "off"))
+    {
+        return false;
+    }
+    return default_value;
+}
+
+fn envU64(key: []const u8, default_value: u64) u64 {
+    const allocator = std.heap.page_allocator;
+    const raw = std.process.getEnvVarOwned(allocator, key) catch return default_value;
+    defer allocator.free(raw);
+
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    if (trimmed.len == 0) return default_value;
+    return std.fmt.parseUnsigned(u64, trimmed, 10) catch default_value;
+}
 
 fn testSchedulerForBatches(
     allocator: Allocator,
@@ -518,13 +1041,18 @@ fn testSchedulerForBatches(
             .poh_verifier = .{
                 .future = future,
                 .initial_hash = .ZEROES, // poh_verifier not used.
+                .timer = .start(),
             },
             .metrics = metrics,
+            .slot_timer = .start(),
+            .slot_account_cache = null,
             .txn_scheduler = .{
                 .future = future,
                 .transactions = resolved_transactions,
                 .svm_gateway = svm_gateway,
                 .committer = committer,
+                .execute_timer = .start(),
+                .preprocess_timer = .start(),
             },
             .pending = .init(1), // start with 1 for this scope's future.finish()
             .thread_pool = &thread_pool,

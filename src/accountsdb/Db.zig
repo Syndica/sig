@@ -132,6 +132,19 @@ pub fn get(
     return null;
 }
 
+pub fn accountDataLen(
+    self: *Db,
+    allocator: std.mem.Allocator,
+    address: Pubkey,
+    ancestors: *const Ancestors,
+) !?usize {
+    if (self.unrooted.accountDataLen(address, ancestors)) |result| {
+        if (result.lamports == 0) return null;
+        return result.data_len;
+    }
+    return try self.rooted.accountDataLen(allocator, address);
+}
+
 pub fn compressedAccountChunkId(self: *Db, address: Pubkey) !?u32 {
     return try self.rooted.compressedAccountChunkId(address);
 }
@@ -163,6 +176,36 @@ pub fn batchLoadCompressedAccounts(
     accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
 ) !CompressedAccountStore.BatchDecodeResult {
     return try self.rooted.batchLoadCompressedAccountsForPubkeys(allocator, pubkeys, accounts);
+}
+
+pub fn batchLoadCompressedAccountsBorrowed(
+    self: *Db,
+    allocator: std.mem.Allocator,
+    pubkeys: []const Pubkey,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    borrowed_accounts: *sig.utils.collections.PubkeyMap(*const AccountSharedData),
+) !CompressedAccountStore.BatchDecodeResult {
+    return try self.rooted.batchLoadCompressedAccountsForPubkeysBorrowed(
+        allocator,
+        pubkeys,
+        accounts,
+        borrowed_accounts,
+    );
+}
+
+pub fn batchLoadCompressedAccountsBorrowedPriority(
+    self: *Db,
+    allocator: std.mem.Allocator,
+    pubkeys: []const Pubkey,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    borrowed_accounts: *sig.utils.collections.PubkeyMap(*const AccountSharedData),
+) !CompressedAccountStore.BatchDecodeResult {
+    return try self.rooted.batchLoadCompressedAccountsForPubkeysBorrowedPriority(
+        allocator,
+        pubkeys,
+        accounts,
+        borrowed_accounts,
+    );
 }
 
 pub const SlotModifiedIterator = struct {

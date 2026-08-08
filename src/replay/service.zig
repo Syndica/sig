@@ -47,6 +47,18 @@ pub const Metrics = struct {
     replay_batch_time: *sig.prometheus.Histogram,
     execute_transaction_time: *sig.prometheus.Histogram,
     commit_transactions_time: *sig.prometheus.Histogram,
+    poh_verify_wall_time: *sig.prometheus.Histogram,
+    poh_verify_cpu_time: *sig.prometheus.Histogram,
+    transaction_scheduler_build_time: *sig.prometheus.Histogram,
+    transaction_preprocess_wall_time: *sig.prometheus.Histogram,
+    transaction_preprocess_cpu_time: *sig.prometheus.Histogram,
+    transaction_preprocess_tasks: *sig.prometheus.Gauge(u64),
+    transaction_scheduler_execute_wall_time: *sig.prometheus.Histogram,
+    transaction_scheduler_workers: *sig.prometheus.Gauge(u64),
+    transaction_scheduler_dependency_edges: *sig.prometheus.Gauge(u64),
+    transaction_scheduler_initial_ready: *sig.prometheus.Gauge(u64),
+    transaction_scheduler_max_dependencies: *sig.prometheus.Gauge(u64),
+    transaction_scheduler_critical_path: *sig.prometheus.Gauge(u64),
     freeze_completed_slots_time: *sig.prometheus.Histogram,
     freeze_slot_time: *sig.prometheus.Histogram,
     consensus_time: *sig.prometheus.Histogram,
@@ -137,6 +149,7 @@ pub fn advanceReplay(
     var start_time = sig.time.Timer.start();
     replay_state.logger.debug().log("advancing replay");
 
+    var leader_schedule_timer = sig.time.Timer.start();
     var leader_schedules_with_epoch_infos = try replay_state.epoch_tracker.getLeaderSchedules();
     defer leader_schedules_with_epoch_infos.release();
     var leader_schedules = leader_schedules_with_epoch_infos.leader_schedules;
@@ -144,9 +157,10 @@ pub fn advanceReplay(
         &leader_schedules,
         sig.core.leader_schedule.LeaderSchedules.getLeaderOrNull,
     );
+    const leader_schedule_ns = leader_schedule_timer.read().asNanos();
 
     // find slots in the ledger
-    {
+    const track_new_slots_ns = blk: {
         var phase_timer = sig.time.Timer.start();
         try trackNewSlots(
             allocator,
@@ -160,28 +174,35 @@ pub fn advanceReplay(
             &replay_state.hard_forks,
             &replay_state.progress_map,
         );
-        metrics.track_new_slots_time.observe(phase_timer.read().asNanos());
-    }
+        const elapsed_ns = phase_timer.read().asNanos();
+        metrics.track_new_slots_time.observe(elapsed_ns);
+        break :blk elapsed_ns;
+    };
 
     // replay slots
     const slot_results = blk: {
         var phase_timer = sig.time.Timer.start();
         const results = try replay.execution.replayActiveSlots(replay_state, metrics);
-        metrics.replay_active_slots_time.observe(phase_timer.read().asNanos());
-        break :blk results;
+        const elapsed_ns = phase_timer.read().asNanos();
+        metrics.replay_active_slots_time.observe(elapsed_ns);
+        break :blk .{ results, elapsed_ns };
     };
-    defer allocator.free(slot_results);
+    defer allocator.free(slot_results[0]);
 
     // freeze slots
-    const processed_a_slot: bool = blk: {
+    const freeze_result = blk: {
         var phase_timer = sig.time.Timer.start();
-        const processed = try freezeCompletedSlots(replay_state, metrics, slot_results);
-        metrics.freeze_completed_slots_time.observe(phase_timer.read().asNanos());
-        break :blk processed;
+        const processed = try freezeCompletedSlots(replay_state, metrics, slot_results[0]);
+        const elapsed_ns = phase_timer.read().asNanos();
+        metrics.freeze_completed_slots_time.observe(elapsed_ns);
+        break :blk .{ processed, elapsed_ns };
     };
 
     // run consensus
+    var consensus_mode: []const u8 = "bypass";
+    var consensus_ns: u64 = 0;
     if (consensus_params) |consensus| {
+        consensus_mode = "tower";
         var phase_timer = sig.time.Timer.start();
         var gossip_verified_vote_hashes: std.ArrayListUnmanaged(GossipVerifiedVoteHash) = .empty;
         defer gossip_verified_vote_hashes.deinit(allocator);
@@ -205,29 +226,52 @@ pub fn advanceReplay(
             .slot_leaders = slot_leaders,
             .duplicate_confirmed_slots = &duplicate_confirmed_slots,
             .gossip_verified_vote_hashes = &gossip_verified_vote_hashes,
-            .results = slot_results,
+            .results = slot_results[0],
         });
-        metrics.consensus_time.observe(phase_timer.read().asNanos());
+        consensus_ns = phase_timer.read().asNanos();
+        metrics.consensus_time.observe(consensus_ns);
     } else {
         var phase_timer = sig.time.Timer.start();
         try bypassConsensus(replay_state);
-        metrics.bypass_consensus_time.observe(phase_timer.read().asNanos());
+        consensus_ns = phase_timer.read().asNanos();
+        metrics.bypass_consensus_time.observe(consensus_ns);
     }
 
-    if (slot_results.len != 0) {
+    if (slot_results[0].len != 0) {
         const elapsed = start_time.read().asNanos();
         metrics.slot_execution_time.observe(elapsed);
+        const accounted_ns = leader_schedule_ns +
+            track_new_slots_ns +
+            slot_results[1] +
+            freeze_result[1] +
+            consensus_ns;
+        replay_state.logger.info().logf(
+            "replay_phase_timing first_slot={} last_slot={} slot_results={} leader_schedule_ns={} track_new_slots_ns={} replay_active_slots_ns={} freeze_completed_slots_ns={} consensus_mode={s} consensus_ns={} unattributed_ns={} total_ns={}",
+            .{
+                slot_results[0][0].slot,
+                slot_results[0][slot_results[0].len - 1].slot,
+                slot_results[0].len,
+                leader_schedule_ns,
+                track_new_slots_ns,
+                slot_results[1],
+                freeze_result[1],
+                consensus_mode,
+                consensus_ns,
+                elapsed -| accounted_ns,
+                elapsed,
+            },
+        );
         replay_state.logger.info().logf("advanced in {D}", .{elapsed});
     }
 
     if (replay_state.stop_at_slot) |stop_slot| {
-        for (slot_results) |result| if (result.slot >= stop_slot) {
+        for (slot_results[0]) |result| if (result.slot >= stop_slot) {
             replay_state.logger.info().logf("Reached end slot {}, exiting replay", .{stop_slot});
             return error.ReachedEndSlot;
         };
     }
 
-    if (!processed_a_slot) std.Thread.sleep(10 * std.time.ns_per_ms);
+    if (!freeze_result[0]) std.Thread.sleep(10 * std.time.ns_per_ms);
 }
 
 pub const Dependencies = struct {
@@ -703,6 +747,8 @@ fn freezeCompletedSlots(
 
 /// bypass the tower bft consensus protocol, simply rooting slots with SlotTree.reRoot
 fn bypassConsensus(state: *ReplayState) !void {
+    var total_timer = sig.time.Timer.start();
+
     // NOTE: Processed slot semantics differ from Agave when Sig is in bypass-consensus mode.
     // In bypass mode, `latest_processed_slot` is set to the highest slot among all fork
     // leaves (SlotTree.tip()).
@@ -715,22 +761,65 @@ fn bypassConsensus(state: *ReplayState) !void {
     // See: https://github.com/anza-xyz/agave/blob/5e900421520a10933642d5e9a21e191a70f9b125/core/src/replay_stage.rs#L2683
     //
     // TowerConsensus implements Agave's processed slot semantics when consensus is enabled.
+    var phase_timer = sig.time.Timer.start();
     state.slot_tracker.latest_processed_slot.set(state.slot_tree.tip());
+    const processed_tip_ns = phase_timer.read().asNanos();
 
-    if (state.slot_tree.reRoot(state.allocator)) |new_root| {
+    phase_timer.reset();
+    const maybe_new_root = state.slot_tree.reRoot(state.allocator);
+    const reroot_ns = phase_timer.read().asNanos();
+
+    if (maybe_new_root) |new_root| {
         const slot_tracker = &state.slot_tracker;
 
         state.logger.info().logf("rooting slot with SlotTree.reRoot: {}", .{new_root});
+
+        phase_timer.reset();
         slot_tracker.root.store(new_root, .monotonic);
+        const root_store_ns = phase_timer.read().asNanos();
+
+        phase_timer.reset();
         slot_tracker.pruneNonRooted(&state.thread_pool);
+        const prune_non_rooted_ns = phase_timer.read().asNanos();
 
+        phase_timer.reset();
         try state.status_cache.addRoot(state.allocator, new_root);
+        const status_cache_ns = phase_timer.read().asNanos();
 
+        phase_timer.reset();
         const slot_constants = slot_tracker.get(new_root).?;
         defer slot_constants.release();
         try state.account_store.onSlotRooted(
             new_root,
             &slot_constants.constants().ancestors,
+        );
+        const account_store_root_ns = phase_timer.read().asNanos();
+        const total_ns = total_timer.read().asNanos();
+
+        state.logger.info().logf(
+            "replay_bypass_consensus_timing root_changed=true new_root={} processed_tip_ns={} reroot_ns={} root_store_ns={} prune_non_rooted_ns={} status_cache_ns={} account_store_root_ns={} unattributed_ns={} total_ns={}",
+            .{
+                new_root,
+                processed_tip_ns,
+                reroot_ns,
+                root_store_ns,
+                prune_non_rooted_ns,
+                status_cache_ns,
+                account_store_root_ns,
+                total_ns -| (processed_tip_ns + reroot_ns + root_store_ns + prune_non_rooted_ns + status_cache_ns + account_store_root_ns),
+                total_ns,
+            },
+        );
+    } else {
+        const total_ns = total_timer.read().asNanos();
+        state.logger.info().logf(
+            "replay_bypass_consensus_timing root_changed=false new_root=0 processed_tip_ns={} reroot_ns={} root_store_ns=0 prune_non_rooted_ns=0 status_cache_ns=0 account_store_root_ns=0 unattributed_ns={} total_ns={}",
+            .{
+                processed_tip_ns,
+                reroot_ns,
+                total_ns -| (processed_tip_ns + reroot_ns),
+                total_ns,
+            },
         );
     }
 }

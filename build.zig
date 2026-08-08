@@ -220,9 +220,11 @@ pub fn build(b: *Build) !void {
     const test_step = b.step("test", "Run library tests");
     const fuzz_step = b.step("fuzz", "Gossip fuzz testing");
     const ledger_inspect_step = b.step("ledger_inspect", "Inspect a ledger RocksDB for replay handoff debugging");
+    const rpc_ledger_bridge_step = b.step("rpc_ledger_bridge", "Build a synthetic replay bridge from finalized RPC blocks");
     const repair_lab_step = b.step("repair_lab", "Inspect per-FEC repair/recovery state for a ledger slot");
     const fec_capture_probe_step = b.step("fec_capture_probe", "Probe FEC completion from raw Chimera shred spool files");
     const compressed_store_smoke_step = b.step("compressed_store_smoke", "Smoke-test Rooted.get through compressed account store");
+    const compressed_index_radix_step = b.step("compressed_index_radix", "Build a dense radix sidecar for a compressed account index");
     const reduced_checkpoint_from_manifest_step = b.step("reduced_checkpoint_from_manifest", "Write reduced checkpoint metadata from snapshot manifest bincode files");
     const benchmark_step = b.step("benchmark", "Benchmark client");
     const geyser_reader_step = b.step("geyser_reader", "Read data from geyser");
@@ -407,6 +409,27 @@ pub fn build(b: *Build) !void {
     }
     addInstallAndRun(b, ledger_inspect_step, ledger_inspect_exe, config);
 
+    const rpc_ledger_bridge_exe = b.addExecutable(.{
+        .name = "rpc-ledger-bridge",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/rpc_ledger_bridge.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = imports,
+            .error_tracing = config.error_tracing,
+            .link_libc = true,
+        }),
+        .use_llvm = config.use_llvm,
+    });
+    rpc_ledger_bridge_exe.root_module.addImport("sig", sig_mod);
+    rpc_ledger_bridge_exe.root_module.addImport("std14", std14_mod);
+    rpc_ledger_bridge_exe.root_module.addObject(memcpy);
+    switch (config.ledger_db) {
+        .rocksdb => rpc_ledger_bridge_exe.root_module.addImport("rocksdb", rocksdb_mod),
+        .hashmap => {},
+    }
+    addInstallAndRun(b, rpc_ledger_bridge_step, rpc_ledger_bridge_exe, config);
+
     const repair_lab_exe = b.addExecutable(.{
         .name = "sig-repair-lab",
         .root_module = b.createModule(.{
@@ -469,6 +492,27 @@ pub fn build(b: *Build) !void {
         .hashmap => {},
     }
     addInstallAndRun(b, compressed_store_smoke_step, compressed_store_smoke_exe, config);
+
+    const compressed_index_radix_exe = b.addExecutable(.{
+        .name = "compressed-account-index-radix",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/compressed_account_index_radix.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = imports,
+            .error_tracing = config.error_tracing,
+            .link_libc = true,
+        }),
+        .use_llvm = config.use_llvm,
+    });
+    compressed_index_radix_exe.root_module.addImport("sig", sig_mod);
+    compressed_index_radix_exe.root_module.addImport("std14", std14_mod);
+    compressed_index_radix_exe.root_module.addObject(memcpy);
+    switch (config.ledger_db) {
+        .rocksdb => compressed_index_radix_exe.root_module.addImport("rocksdb", rocksdb_mod),
+        .hashmap => {},
+    }
+    addInstallAndRun(b, compressed_index_radix_step, compressed_index_radix_exe, config);
 
     const reduced_checkpoint_from_manifest_exe = b.addExecutable(.{
         .name = "reduced-checkpoint-from-manifest",

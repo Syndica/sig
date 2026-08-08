@@ -49,6 +49,20 @@ pub const ProgramMap = struct {
         return if (try self.inner.fetchPut(allocator, address, program)) |x| x.value else null;
     }
 
+    pub fn putIfAbsent(
+        self: *ProgramMap,
+        allocator: Allocator,
+        address: Pubkey,
+        program: LoadedProgram,
+    ) Allocator.Error!bool {
+        self.lock.lock();
+        defer self.lock.unlock();
+
+        if (self.inner.contains(address)) return false;
+        try self.inner.put(allocator, address, program);
+        return true;
+    }
+
     pub fn contains(self: *ProgramMap, address: Pubkey) bool {
         self.lock.lockShared();
         defer self.lock.unlockShared();
@@ -99,8 +113,8 @@ pub fn loadIfProgram(
     );
     errdefer loaded_program.deinit(programs_allocator);
 
-    if (try programs.fetchPut(programs_allocator, address, loaded_program)) |old_value| {
-        old_value.deinit(programs_allocator);
+    if (!try programs.putIfAbsent(programs_allocator, address, loaded_program)) {
+        loaded_program.deinit(programs_allocator);
     }
 }
 
@@ -217,6 +231,20 @@ fn loadDeploymentSlotAndExecutableBytes(
     } else {
         return null;
     }
+}
+
+test "ProgramMap.putIfAbsent does not replace existing entry" {
+    const allocator = std.testing.allocator;
+    var programs = ProgramMap.empty;
+    defer programs.deinit(allocator);
+
+    var first_key_data = [_]u8{0} ** Pubkey.SIZE;
+    first_key_data[0] = 1;
+    const key = Pubkey{ .data = first_key_data };
+
+    try std.testing.expect(try programs.putIfAbsent(allocator, key, .failed));
+    try std.testing.expect(!try programs.putIfAbsent(allocator, key, .failed));
+    try std.testing.expectEqual(1, programs.inner.count());
 }
 
 test "loadPrograms: load v1, v2 program" {

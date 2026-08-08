@@ -155,6 +155,212 @@ pub fn resolveBlock(
     return try resolved_transactions.toOwnedSlice(allocator);
 }
 
+pub fn resolveBlockParallel(
+    allocator: Allocator,
+    thread_pool: *sig.sync.ThreadPool,
+    worker_limit: usize,
+    entries: []const sig.core.Entry,
+    resolver: SlotResolver,
+) ![]const replay.resolve_lookup.ResolvedTransaction {
+    const zone = tracy.Zone.init(@src(), .{ .name = "resolveBlockParallel" });
+    defer zone.deinit();
+    var timer = sig.time.Timer.start();
+
+    var transaction_count: usize = 0;
+    var address_lookup_transactions: usize = 0;
+    var address_lookup_table_refs: usize = 0;
+    for (entries) |entry| {
+        if (entry.isTick()) continue;
+        transaction_count += entry.transactions.len;
+        for (entry.transactions) |transaction| {
+            if (transaction.msg.address_lookups.len != 0) address_lookup_transactions += 1;
+            address_lookup_table_refs += transaction.msg.address_lookups.len;
+        }
+    }
+
+    const pool_threads: usize = @intCast(thread_pool.max_threads);
+    const max_workers = @min(pool_threads, @max(1, worker_limit));
+    if (transaction_count == 0 or max_workers <= 1) {
+        return resolveBlock(allocator, entries, resolver);
+    }
+
+    const transactions = try allocator.alloc(Transaction, transaction_count);
+    defer allocator.free(transactions);
+    var transaction_index: usize = 0;
+    for (entries) |entry| {
+        if (entry.isTick()) continue;
+        @memcpy(transactions[transaction_index..][0..entry.transactions.len], entry.transactions);
+        transaction_index += entry.transactions.len;
+    }
+    std.debug.assert(transaction_index == transaction_count);
+
+    const ResolveResult = union(enum) {
+        pending,
+        resolved: ResolvedTransaction,
+        err: anyerror,
+    };
+
+    const results = try allocator.alloc(ResolveResult, transaction_count);
+    defer allocator.free(results);
+    for (results) |*result| result.* = .pending;
+    defer for (results) |result| switch (result) {
+        .resolved => |resolved| resolved.deinit(allocator),
+        .pending, .err => {},
+    };
+
+    const Worker = struct {
+        task: sig.sync.ThreadPool.Task = .{ .callback = run },
+        wg: *std.Thread.WaitGroup,
+        allocator: Allocator,
+        transactions: []const Transaction,
+        results: []ResolveResult,
+        resolver: SlotResolver,
+        next_index: *std.atomic.Value(usize),
+
+        fn run(task: *sig.sync.ThreadPool.Task) void {
+            const worker: *@This() = @alignCast(@fieldParentPtr("task", task));
+            defer worker.wg.finish();
+
+            while (true) {
+                const index = worker.next_index.fetchAdd(1, .monotonic);
+                if (index >= worker.transactions.len) return;
+
+                const resolved = resolveTransaction(
+                    worker.allocator,
+                    worker.transactions[index],
+                    worker.resolver,
+                ) catch |err| {
+                    worker.results[index] = .{ .err = err };
+                    continue;
+                };
+                worker.results[index] = .{ .resolved = resolved };
+            }
+        }
+    };
+
+    const worker_count = @min(max_workers, transaction_count);
+    var workers = try std.ArrayListUnmanaged(Worker).initCapacity(allocator, worker_count);
+    defer workers.deinit(allocator);
+    var next_index = std.atomic.Value(usize).init(0);
+    {
+        var wg = std.Thread.WaitGroup{};
+        wg.startMany(worker_count);
+
+        var batch = sig.sync.ThreadPool.Batch{};
+        for (0..worker_count) |_| {
+            const worker = workers.addOneAssumeCapacity();
+            worker.* = .{
+                .wg = &wg,
+                .allocator = allocator,
+                .transactions = transactions,
+                .results = results,
+                .resolver = resolver,
+                .next_index = &next_index,
+            };
+            batch.push(.from(&worker.task));
+        }
+        thread_pool.schedule(batch);
+        wg.wait();
+    }
+
+    var resolved_transactions =
+        try std.ArrayListUnmanaged(replay.resolve_lookup.ResolvedTransaction)
+            .initCapacity(allocator, transaction_count);
+    errdefer {
+        for (resolved_transactions.items) |transaction| transaction.deinit(allocator);
+        resolved_transactions.deinit(allocator);
+    }
+
+    var skipped_alt_not_found: usize = 0;
+    var skipped_alt_invalid: usize = 0;
+    for (results) |*result| switch (result.*) {
+        .pending => unreachable,
+        .resolved => |resolved| {
+            resolved_transactions.appendAssumeCapacity(resolved);
+            result.* = .pending;
+        },
+        .err => |err| switch (err) {
+            error.AddressLookupTableNotFound => skipped_alt_not_found += 1,
+            error.InvalidAddressLookupTableOwner,
+            error.InvalidAddressLookupTableData,
+            error.InvalidAddressLookupTableIndex,
+            => skipped_alt_invalid += 1,
+            else => return err,
+        },
+    };
+
+    const elapsed_ns = timer.read().asNanos();
+    resolver.logger.info().logf(
+        "resolve_block_parallel_timing slot={} total={D} workers={} worker_limit={} pool_threads={} transactions={} address_lookup_transactions={} address_lookup_table_refs={} skipped_alt_not_found={} skipped_alt_invalid={} resolved_transactions={}",
+        .{
+            resolver.slot,
+            elapsed_ns,
+            worker_count,
+            worker_limit,
+            pool_threads,
+            transaction_count,
+            address_lookup_transactions,
+            address_lookup_table_refs,
+            skipped_alt_not_found,
+            skipped_alt_invalid,
+            resolved_transactions.items.len,
+        },
+    );
+
+    return try resolved_transactions.toOwnedSlice(allocator);
+}
+
+test "resolveBlockParallel preserves canonical transaction order" {
+    const allocator = std.testing.allocator;
+
+    var tx_arena = std.heap.ArenaAllocator.init(allocator);
+    defer tx_arena.deinit();
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
+
+    var transactions: [12]Transaction = undefined;
+    for (&transactions) |*transaction| {
+        transaction.* = try .initRandom(tx_arena.allocator(), rng.random(), null);
+    }
+
+    const entries = [_]sig.core.Entry{
+        .{ .num_hashes = 1, .hash = .ZEROES, .transactions = transactions[0..4] },
+        .{ .num_hashes = 1, .hash = .ZEROES, .transactions = &.{} },
+        .{ .num_hashes = 1, .hash = .ZEROES, .transactions = transactions[4..9] },
+        .{ .num_hashes = 1, .hash = .ZEROES, .transactions = transactions[9..12] },
+    };
+    const resolver: SlotResolver = .{
+        .slot = 1,
+        .account_reader = .noop,
+        .reserved_accounts = &.empty,
+        .slot_hashes = .INIT,
+    };
+
+    var thread_pool = sig.sync.ThreadPool.init(.{ .max_threads = 4 });
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
+
+    const resolved = try resolveBlockParallel(
+        allocator,
+        &thread_pool,
+        4,
+        &entries,
+        resolver,
+    );
+    defer {
+        for (resolved) |transaction| transaction.deinit(allocator);
+        allocator.free(resolved);
+    }
+
+    try std.testing.expectEqual(transactions.len, resolved.len);
+    for (transactions, resolved) |expected, actual| {
+        try std.testing.expect(expected.msg.recent_blockhash.eql(actual.transaction.msg.recent_blockhash));
+        try std.testing.expectEqual(expected.msg.account_keys.len, actual.accounts.len);
+        try std.testing.expect(expected.msg.account_keys[0].equals(&actual.accounts.get(0).pubkey));
+    }
+}
+
 pub fn resolveBatch(
     allocator: Allocator,
     batch: []const Transaction,

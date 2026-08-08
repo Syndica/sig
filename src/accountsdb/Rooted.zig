@@ -35,6 +35,7 @@ sqlite_mem_used: ?*Gauge = null,
 /// on any threads that use put or get.
 threadlocal var put_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var get_stmt: ?*sql.sqlite3_stmt = null;
+threadlocal var get_data_len_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var put_snapshot_ref_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var get_snapshot_ref_stmt: ?*sql.sqlite3_stmt = null;
 
@@ -154,6 +155,10 @@ pub fn deinitThreadLocals() void {
         _ = sql.sqlite3_finalize(stmt);
         get_stmt = null;
     }
+    if (get_data_len_stmt) |stmt| {
+        _ = sql.sqlite3_finalize(stmt);
+        get_data_len_stmt = null;
+    }
     if (put_snapshot_ref_stmt) |stmt| {
         _ = sql.sqlite3_finalize(stmt);
         put_snapshot_ref_stmt = null;
@@ -261,6 +266,50 @@ pub fn get(
     }
 }
 
+pub fn accountDataLen(
+    self: *Rooted,
+    allocator: std.mem.Allocator,
+    address: Pubkey,
+) !?usize {
+    const stmt: *sql.sqlite3_stmt = if (get_data_len_stmt) |stmt| stmt else blk: {
+        const query =
+            \\SELECT lamports, length(data)
+            \\FROM entries WHERE address = ?;
+        ;
+        self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_data_len_stmt, null));
+        break :blk get_data_len_stmt.?;
+    };
+    defer {
+        std.debug.assert(sql.sqlite3_reset(stmt) == OK);
+        std.debug.assert(sql.sqlite3_clear_bindings(stmt) == OK);
+    }
+
+    self.err(sql.sqlite3_bind_blob(stmt, 1, &address.data, Pubkey.SIZE, sql.SQLITE_STATIC));
+
+    switch (sql.sqlite3_step(stmt)) {
+        ROW => {
+            const lamports: u64 = @bitCast(sql.sqlite3_column_int64(stmt, 0));
+            if (lamports == 0) return null;
+            return @intCast(sql.sqlite3_column_int64(stmt, 1));
+        },
+        DONE => {
+            if (try self.getSnapshotRefAccount(allocator, address)) |account| {
+                defer account.deinit(allocator);
+                if (account.lamports == 0) return null;
+                return account.data.len;
+            }
+            if (self.compressed_account_store) |*store| {
+                return try store.accountDataLen(address);
+            }
+            return null;
+        },
+        else => |rc| {
+            self.err(rc);
+            unreachable;
+        },
+    }
+}
+
 const SnapshotRef = struct {
     slot: Slot,
     file_id: u32,
@@ -339,6 +388,42 @@ pub fn batchLoadCompressedAccountsForPubkeys(
 ) !CompressedAccountStore.BatchDecodeResult {
     if (self.compressed_account_store) |*store| {
         return try store.batchLoadAccountsForPubkeys(allocator, pubkeys, accounts);
+    }
+    return .{ .pubkeys = @intCast(pubkeys.len), .accounts_skipped = @intCast(pubkeys.len) };
+}
+
+pub fn batchLoadCompressedAccountsForPubkeysBorrowed(
+    self: *Rooted,
+    allocator: std.mem.Allocator,
+    pubkeys: []const Pubkey,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    borrowed_accounts: *sig.utils.collections.PubkeyMap(*const AccountSharedData),
+) !CompressedAccountStore.BatchDecodeResult {
+    if (self.compressed_account_store) |*store| {
+        return try store.batchLoadAccountsForPubkeysBorrowed(
+            allocator,
+            pubkeys,
+            accounts,
+            borrowed_accounts,
+        );
+    }
+    return .{ .pubkeys = @intCast(pubkeys.len), .accounts_skipped = @intCast(pubkeys.len) };
+}
+
+pub fn batchLoadCompressedAccountsForPubkeysBorrowedPriority(
+    self: *Rooted,
+    allocator: std.mem.Allocator,
+    pubkeys: []const Pubkey,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    borrowed_accounts: *sig.utils.collections.PubkeyMap(*const AccountSharedData),
+) !CompressedAccountStore.BatchDecodeResult {
+    if (self.compressed_account_store) |*store| {
+        return try store.batchLoadAccountsForPubkeysBorrowedPriority(
+            allocator,
+            pubkeys,
+            accounts,
+            borrowed_accounts,
+        );
     }
     return .{ .pubkeys = @intCast(pubkeys.len), .accounts_skipped = @intCast(pubkeys.len) };
 }

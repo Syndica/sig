@@ -17,6 +17,66 @@ const Slot = sig.core.Slot;
 const AccountSharedData = sig.runtime.AccountSharedData;
 const CompressedAccountPrefetchResult = accounts_db.CompressedAccountStore.PrefetchResult;
 const CompressedAccountBatchDecodeResult = accounts_db.CompressedAccountStore.BatchDecodeResult;
+const AtomicU64 = std.atomic.Value(u64);
+
+pub const SlotAccountCacheStats = struct {
+    get_calls: AtomicU64 = AtomicU64.init(0),
+    cache_hits: AtomicU64 = AtomicU64.init(0),
+    cache_misses: AtomicU64 = AtomicU64.init(0),
+    fallback_found: AtomicU64 = AtomicU64.init(0),
+    fallback_missing: AtomicU64 = AtomicU64.init(0),
+    fallback_ns: AtomicU64 = AtomicU64.init(0),
+    fallback_cache_fills: AtomicU64 = AtomicU64.init(0),
+    fallback_cache_fill_races: AtomicU64 = AtomicU64.init(0),
+    fallback_tombstone_fills: AtomicU64 = AtomicU64.init(0),
+    cache_puts: AtomicU64 = AtomicU64.init(0),
+    cache_put_replacements: AtomicU64 = AtomicU64.init(0),
+    deferred_puts: AtomicU64 = AtomicU64.init(0),
+    deferred_unique_writes: AtomicU64 = AtomicU64.init(0),
+    deferred_flush_writes: AtomicU64 = AtomicU64.init(0),
+    deferred_flush_missing: AtomicU64 = AtomicU64.init(0),
+    deferred_flush_ns: AtomicU64 = AtomicU64.init(0),
+
+    pub const Snapshot = struct {
+        get_calls: u64,
+        cache_hits: u64,
+        cache_misses: u64,
+        fallback_found: u64,
+        fallback_missing: u64,
+        fallback_ns: u64,
+        fallback_cache_fills: u64,
+        fallback_cache_fill_races: u64,
+        fallback_tombstone_fills: u64,
+        cache_puts: u64,
+        cache_put_replacements: u64,
+        deferred_puts: u64,
+        deferred_unique_writes: u64,
+        deferred_flush_writes: u64,
+        deferred_flush_missing: u64,
+        deferred_flush_ns: u64,
+    };
+
+    pub fn snapshot(self: *const SlotAccountCacheStats) Snapshot {
+        return .{
+            .get_calls = self.get_calls.load(.monotonic),
+            .cache_hits = self.cache_hits.load(.monotonic),
+            .cache_misses = self.cache_misses.load(.monotonic),
+            .fallback_found = self.fallback_found.load(.monotonic),
+            .fallback_missing = self.fallback_missing.load(.monotonic),
+            .fallback_ns = self.fallback_ns.load(.monotonic),
+            .fallback_cache_fills = self.fallback_cache_fills.load(.monotonic),
+            .fallback_cache_fill_races = self.fallback_cache_fill_races.load(.monotonic),
+            .fallback_tombstone_fills = self.fallback_tombstone_fills.load(.monotonic),
+            .cache_puts = self.cache_puts.load(.monotonic),
+            .cache_put_replacements = self.cache_put_replacements.load(.monotonic),
+            .deferred_puts = self.deferred_puts.load(.monotonic),
+            .deferred_unique_writes = self.deferred_unique_writes.load(.monotonic),
+            .deferred_flush_writes = self.deferred_flush_writes.load(.monotonic),
+            .deferred_flush_missing = self.deferred_flush_missing.load(.monotonic),
+            .deferred_flush_ns = self.deferred_flush_ns.load(.monotonic),
+        };
+    }
+};
 
 /// Interface for both reading and writing accounts.
 ///
@@ -220,7 +280,13 @@ pub const SlotAccountStore = union(enum) {
         Slot,
         *const Ancestors,
         Allocator,
+        *sig.sync.RwLock,
         *sig.utils.collections.PubkeyMap(AccountSharedData),
+        *sig.utils.collections.PubkeyMap(*const AccountSharedData),
+        *sig.utils.collections.PubkeyMap(?usize),
+        *SlotAccountCacheStats,
+        *sig.utils.collections.PubkeyMap(void),
+        bool,
     },
     /// Contains many versions of accounts and becomes fork-aware using
     /// ancestors, like accountsdb.
@@ -241,15 +307,38 @@ pub const SlotAccountStore = union(enum) {
                 try db.put(slot, address, account);
             },
             .cached_accounts_db => |tuple| {
-                const db, const slot, _, const allocator, const cache = tuple;
+                const db, const slot, _, const allocator, const cache_lock, const cache, _, const account_data_lens, const stats, const deferred_dirty, const defer_writes = tuple;
                 const cloned = try account.clone(allocator);
                 errdefer cloned.deinit(allocator);
 
-                try db.put(slot, address, account);
+                if (!defer_writes) {
+                    try db.put(slot, address, account);
+                }
+
+                cache_lock.lock();
+                defer cache_lock.unlock();
+
+                if (defer_writes) {
+                    const dirty_gop = try deferred_dirty.getOrPut(allocator, address);
+                    if (!dirty_gop.found_existing) {
+                        dirty_gop.value_ptr.* = {};
+                        _ = stats.deferred_unique_writes.fetchAdd(1, .monotonic);
+                    }
+                    _ = stats.deferred_puts.fetchAdd(1, .monotonic);
+                }
 
                 const gop = try cache.getOrPut(allocator, address);
                 if (gop.found_existing) gop.value_ptr.deinit(allocator);
                 gop.value_ptr.* = cloned;
+                try account_data_lens.put(
+                    allocator,
+                    address,
+                    if (account.lamports == 0) null else account.data.len,
+                );
+                _ = stats.cache_puts.fetchAdd(1, .monotonic);
+                if (gop.found_existing) {
+                    _ = stats.cache_put_replacements.fetchAdd(1, .monotonic);
+                }
             },
             .thread_safe_map => |tuple| {
                 const map, const slot, _ = tuple;
@@ -269,7 +358,9 @@ pub const SlotAccountStore = union(enum) {
         return switch (self) {
             .accounts_db => |tuple| .{ .accounts_db = .{ tuple[0], tuple[2] } },
             .cached_accounts_db => |tuple| .{
-                .cached_accounts_db = .{ tuple[0], tuple[2], tuple[4] },
+                .cached_accounts_db = .{
+                    tuple[0], tuple[2], tuple[3], tuple[4], tuple[5], tuple[6], tuple[7], tuple[8],
+                },
             },
             .thread_safe_map => |tuple| .{ .thread_safe_map = .{ tuple[0], tuple[2] } },
             .account_shared_data_map => |tuple| .{ .account_shared_data_map = tuple[1] },
@@ -283,7 +374,12 @@ pub const SlotAccountReader = union(enum) {
     cached_accounts_db: struct {
         *accounts_db.Db,
         *const Ancestors,
-        *const sig.utils.collections.PubkeyMap(AccountSharedData),
+        Allocator,
+        *sig.sync.RwLock,
+        *sig.utils.collections.PubkeyMap(AccountSharedData),
+        *sig.utils.collections.PubkeyMap(*const AccountSharedData),
+        *sig.utils.collections.PubkeyMap(?usize),
+        *SlotAccountCacheStats,
     },
     /// Contains many versions of accounts and becomes fork-aware using
     /// ancestors, like accountsdb.
@@ -310,16 +406,68 @@ pub const SlotAccountReader = union(enum) {
                 return account;
             },
             .cached_accounts_db => |tuple| {
-                const db, const ancestors, const cache = tuple;
-                if (cache.get(address)) |asd| {
-                    if (asd.lamports == 0) return null;
-                    return asd.asAccount();
+                const db, const ancestors, const allocator, const cache_lock, const cache, const borrowed_cache, const account_data_lens, const stats = tuple;
+                _ = stats.get_calls.fetchAdd(1, .monotonic);
+                {
+                    cache_lock.lockShared();
+                    defer cache_lock.unlockShared();
+                    if (cache.get(address)) |asd| {
+                        _ = stats.cache_hits.fetchAdd(1, .monotonic);
+                        if (asd.lamports == 0) return null;
+                        return (try asd.clone(alloc)).toOwnedAccount();
+                    }
+                    if (borrowed_cache.get(address)) |asd| {
+                        _ = stats.cache_hits.fetchAdd(1, .monotonic);
+                        if (asd.lamports == 0) return null;
+                        return (try asd.clone(alloc)).toOwnedAccount();
+                    }
                 }
-                const account = try db.get(alloc, address, ancestors) orelse return null;
+                _ = stats.cache_misses.fetchAdd(1, .monotonic);
+                var fallback_timer = sig.time.Timer.start();
+                var account = (try db.get(alloc, address, ancestors)) orelse {
+                    _ = stats.fallback_ns.fetchAdd(fallback_timer.read().asNanos(), .monotonic);
+                    _ = stats.fallback_missing.fetchAdd(1, .monotonic);
+                    try cacheFallbackIfAbsent(
+                        allocator,
+                        cache_lock,
+                        cache,
+                        account_data_lens,
+                        stats,
+                        address,
+                        AccountSharedData.EMPTY,
+                        true,
+                    );
+                    return null;
+                };
+                errdefer account.deinit(alloc);
+                _ = stats.fallback_ns.fetchAdd(fallback_timer.read().asNanos(), .monotonic);
                 if (account.lamports == 0) {
                     account.deinit(alloc);
+                    _ = stats.fallback_missing.fetchAdd(1, .monotonic);
+                    try cacheFallbackIfAbsent(
+                        allocator,
+                        cache_lock,
+                        cache,
+                        account_data_lens,
+                        stats,
+                        address,
+                        AccountSharedData.EMPTY,
+                        true,
+                    );
                     return null;
                 }
+                _ = stats.fallback_found.fetchAdd(1, .monotonic);
+                const cache_account = try AccountSharedData.fromAccount(allocator, &account);
+                try cacheFallbackIfAbsent(
+                    allocator,
+                    cache_lock,
+                    cache,
+                    account_data_lens,
+                    stats,
+                    address,
+                    cache_account,
+                    false,
+                );
                 return account;
             },
             .thread_safe_map => |pair| pair[0].get(address, pair[1]),
@@ -335,6 +483,55 @@ pub const SlotAccountReader = union(enum) {
                 };
             },
             .noop => null,
+        };
+    }
+
+    pub fn accountDataLen(
+        self: SlotAccountReader,
+        alloc: std.mem.Allocator,
+        address: Pubkey,
+    ) !?usize {
+        return switch (self) {
+            .accounts_db => |pair| try pair[0].accountDataLen(alloc, address, pair[1]),
+            .cached_accounts_db => |tuple| blk: {
+                const cache_lock = tuple[3];
+                const cache = tuple[4];
+                const borrowed_cache = tuple[5];
+                const account_data_lens = tuple[6];
+                {
+                    cache_lock.lockShared();
+                    defer cache_lock.unlockShared();
+
+                    if (cache.get(address)) |asd| {
+                        if (asd.lamports == 0) return null;
+                        break :blk asd.data.len;
+                    }
+                    if (borrowed_cache.get(address)) |asd| {
+                        if (asd.lamports == 0) return null;
+                        break :blk asd.data.len;
+                    }
+                    if (account_data_lens.get(address)) |data_len| break :blk data_len;
+                }
+
+                const data_len = try tuple[0].accountDataLen(alloc, address, tuple[1]);
+                {
+                    cache_lock.lock();
+                    defer cache_lock.unlock();
+                    const gop = try account_data_lens.getOrPut(tuple[2], address);
+                    if (!gop.found_existing) gop.value_ptr.* = data_len;
+                }
+                break :blk data_len;
+            },
+            .account_shared_data_map => |map| {
+                const asd = map.get(address) orelse return null;
+                if (asd.lamports == 0) return null;
+                return asd.data.len;
+            },
+            else => {
+                var account = try self.get(alloc, address) orelse return null;
+                defer account.deinit(alloc);
+                return account.data.len();
+            },
         };
     }
 
@@ -391,6 +588,67 @@ pub const SlotAccountReader = union(enum) {
         };
     }
 
+    pub fn batchLoadCompressedAccountsBorrowed(
+        self: SlotAccountReader,
+        allocator: std.mem.Allocator,
+        pubkeys: []const Pubkey,
+        accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+        borrowed_accounts: *sig.utils.collections.PubkeyMap(*const AccountSharedData),
+    ) !CompressedAccountBatchDecodeResult {
+        return switch (self) {
+            .accounts_db => |pair| try pair[0].batchLoadCompressedAccountsBorrowed(
+                allocator,
+                pubkeys,
+                accounts,
+                borrowed_accounts,
+            ),
+            .cached_accounts_db => |tuple| try tuple[0].batchLoadCompressedAccountsBorrowed(
+                allocator,
+                pubkeys,
+                accounts,
+                borrowed_accounts,
+            ),
+            else => .{ .pubkeys = @intCast(pubkeys.len), .accounts_skipped = @intCast(pubkeys.len) },
+        };
+    }
+
+    pub fn batchLoadCompressedAccountsBorrowedPriority(
+        self: SlotAccountReader,
+        allocator: std.mem.Allocator,
+        pubkeys: []const Pubkey,
+        accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+        borrowed_accounts: *sig.utils.collections.PubkeyMap(*const AccountSharedData),
+    ) !CompressedAccountBatchDecodeResult {
+        return switch (self) {
+            .accounts_db => |pair| try pair[0].batchLoadCompressedAccountsBorrowedPriority(
+                allocator,
+                pubkeys,
+                accounts,
+                borrowed_accounts,
+            ),
+            .cached_accounts_db => |tuple| try tuple[0].batchLoadCompressedAccountsBorrowedPriority(
+                allocator,
+                pubkeys,
+                accounts,
+                borrowed_accounts,
+            ),
+            else => .{ .pubkeys = @intCast(pubkeys.len), .accounts_skipped = @intCast(pubkeys.len) },
+        };
+    }
+
+    pub fn batchLoadUnrootedAccounts(
+        self: SlotAccountReader,
+        allocator: std.mem.Allocator,
+        pubkeys: []const Pubkey,
+        accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    ) !accounts_db.Unrooted.BatchLoadResult {
+        return switch (self) {
+            .accounts_db => |pair| try pair[0].unrooted.batchLoad(allocator, pubkeys, pair[1], accounts),
+            .cached_accounts_db => |tuple| try tuple[0].unrooted.batchLoad(allocator, pubkeys, tuple[1], accounts),
+            else => .{ .pubkeys = @intCast(pubkeys.len) },
+        };
+    }
+
     pub fn hasUnrootedAccount(self: SlotAccountReader, address: Pubkey) bool {
         return switch (self) {
             .accounts_db => |pair| pair[0].unrooted.get(address, pair[1]) != null,
@@ -399,6 +657,42 @@ pub const SlotAccountReader = union(enum) {
         };
     }
 };
+
+fn cacheFallbackIfAbsent(
+    allocator: Allocator,
+    cache_lock: *sig.sync.RwLock,
+    cache: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    account_data_lens: *sig.utils.collections.PubkeyMap(?usize),
+    stats: *SlotAccountCacheStats,
+    address: Pubkey,
+    account: AccountSharedData,
+    tombstone: bool,
+) !void {
+    var cache_account = account;
+    errdefer cache_account.deinit(allocator);
+
+    cache_lock.lock();
+    defer cache_lock.unlock();
+
+    const data_len_gop = try account_data_lens.getOrPut(allocator, address);
+    if (!data_len_gop.found_existing) {
+        data_len_gop.value_ptr.* = if (tombstone) null else cache_account.data.len;
+    }
+
+    const gop = try cache.getOrPut(allocator, address);
+    if (gop.found_existing) {
+        cache_account.deinit(allocator);
+        _ = stats.fallback_cache_fill_races.fetchAdd(1, .monotonic);
+        return;
+    }
+
+    gop.value_ptr.* = cache_account;
+    if (tombstone) {
+        _ = stats.fallback_tombstone_fills.fetchAdd(1, .monotonic);
+    } else {
+        _ = stats.fallback_cache_fills.fetchAdd(1, .monotonic);
+    }
+}
 
 /// Simple implementation of AccountReader and AccountStore, used for tests
 const ThreadSafeAccountMap = struct {
@@ -736,6 +1030,240 @@ test "AccountStore does not return 0-lamport accounts from accountsdb" {
         allocator,
         one_lamport_address,
     )).?.lamports);
+}
+
+test "cached SlotAccountReader fills fallback hits and tombstones" {
+    const allocator = std.testing.allocator;
+
+    var test_state = try accounts_db.Db.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    var ancestors = Ancestors{};
+    defer ancestors.deinit(allocator);
+    try ancestors.ancestors.put(allocator, 0, {});
+
+    const existing_address = Pubkey{ .data = @splat(7) };
+    const missing_address = Pubkey{ .data = @splat(8) };
+    var existing_data = "cached-fallback".*;
+    try db.put(0, existing_address, .{
+        .lamports = 42,
+        .data = existing_data[0..],
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    var cache_lock: sig.sync.RwLock = .{};
+    var cache: sig.utils.collections.PubkeyMap(AccountSharedData) = .{};
+    var borrowed_cache: sig.utils.collections.PubkeyMap(*const AccountSharedData) = .{};
+    var account_data_lens: sig.utils.collections.PubkeyMap(?usize) = .{};
+    defer {
+        for (cache.values()) |*account| account.deinit(allocator);
+        cache.deinit(allocator);
+        borrowed_cache.deinit(allocator);
+        account_data_lens.deinit(allocator);
+    }
+    var stats = SlotAccountCacheStats{};
+
+    const reader: SlotAccountReader = .{ .cached_accounts_db = .{
+        db,
+        &ancestors,
+        allocator,
+        &cache_lock,
+        &cache,
+        &borrowed_cache,
+        &account_data_lens,
+        &stats,
+    } };
+
+    try std.testing.expectEqual(
+        @as(?usize, existing_data.len),
+        try reader.accountDataLen(allocator, existing_address),
+    );
+    try std.testing.expectEqual(
+        null,
+        try reader.accountDataLen(allocator, missing_address),
+    );
+    try std.testing.expectEqual(@as(usize, 0), cache.count());
+    try std.testing.expectEqual(@as(usize, 2), account_data_lens.count());
+
+    const first_existing = (try reader.get(allocator, existing_address)).?;
+    defer first_existing.deinit(allocator);
+    const second_existing = (try reader.get(allocator, existing_address)).?;
+    defer second_existing.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u64, 42), first_existing.lamports);
+    try std.testing.expectEqual(@as(u64, 42), second_existing.lamports);
+
+    try std.testing.expectEqual(null, try reader.get(allocator, missing_address));
+    try std.testing.expectEqual(null, try reader.get(allocator, missing_address));
+
+    const snapshot = stats.snapshot();
+    try std.testing.expectEqual(@as(u64, 4), snapshot.get_calls);
+    try std.testing.expectEqual(@as(u64, 2), snapshot.cache_hits);
+    try std.testing.expectEqual(@as(u64, 2), snapshot.cache_misses);
+    try std.testing.expectEqual(@as(u64, 1), snapshot.fallback_found);
+    try std.testing.expectEqual(@as(u64, 1), snapshot.fallback_missing);
+    try std.testing.expectEqual(@as(u64, 1), snapshot.fallback_cache_fills);
+    try std.testing.expectEqual(@as(u64, 0), snapshot.fallback_cache_fill_races);
+    try std.testing.expectEqual(@as(u64, 1), snapshot.fallback_tombstone_fills);
+}
+
+test "cached SlotAccountReader prefers owned overlay over borrowed base" {
+    const allocator = std.testing.allocator;
+
+    var test_state = try accounts_db.Db.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    var ancestors = Ancestors{};
+    defer ancestors.deinit(allocator);
+
+    var cache_lock: sig.sync.RwLock = .{};
+    var cache: sig.utils.collections.PubkeyMap(AccountSharedData) = .{};
+    var borrowed_cache: sig.utils.collections.PubkeyMap(*const AccountSharedData) = .{};
+    var account_data_lens: sig.utils.collections.PubkeyMap(?usize) = .{};
+    defer {
+        for (cache.values()) |*account| account.deinit(allocator);
+        cache.deinit(allocator);
+        borrowed_cache.deinit(allocator);
+        account_data_lens.deinit(allocator);
+    }
+    var stats = SlotAccountCacheStats{};
+
+    const borrowed_only_address = Pubkey{ .data = @splat(10) };
+    const overlay_address = Pubkey{ .data = @splat(11) };
+    var borrowed_only_data = "borrowed-only".*;
+    var borrowed_overlay_data = "borrowed-base".*;
+    const borrowed_only_account: AccountSharedData = .{
+        .lamports = 7,
+        .data = borrowed_only_data[0..],
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+    const borrowed_overlay_account: AccountSharedData = .{
+        .lamports = 8,
+        .data = borrowed_overlay_data[0..],
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+    try borrowed_cache.put(allocator, borrowed_only_address, &borrowed_only_account);
+    try borrowed_cache.put(allocator, overlay_address, &borrowed_overlay_account);
+
+    var owned_overlay = try borrowed_overlay_account.clone(allocator);
+    owned_overlay.lamports = 9;
+    var owns_overlay = true;
+    errdefer if (owns_overlay) owned_overlay.deinit(allocator);
+    try cache.put(allocator, overlay_address, owned_overlay);
+    owns_overlay = false;
+
+    const reader: SlotAccountReader = .{ .cached_accounts_db = .{
+        db,
+        &ancestors,
+        allocator,
+        &cache_lock,
+        &cache,
+        &borrowed_cache,
+        &account_data_lens,
+        &stats,
+    } };
+
+    const borrowed = (try reader.get(allocator, borrowed_only_address)).?;
+    defer borrowed.deinit(allocator);
+    const overlaid = (try reader.get(allocator, overlay_address)).?;
+    defer overlaid.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u64, 7), borrowed.lamports);
+    try std.testing.expectEqualStrings("borrowed-only", borrowed.data.owned_allocation);
+    try std.testing.expectEqual(@as(u64, 9), overlaid.lamports);
+    try std.testing.expectEqualStrings("borrowed-base", overlaid.data.owned_allocation);
+    try std.testing.expectEqual(@as(?usize, "borrowed-base".len), try reader.accountDataLen(
+        allocator,
+        overlay_address,
+    ));
+}
+
+test "cached SlotAccountStore can defer DB writes into dirty set" {
+    const allocator = std.testing.allocator;
+
+    var test_state = try accounts_db.Db.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const slot: Slot = 1;
+    var ancestors = Ancestors{};
+    defer ancestors.deinit(allocator);
+    try ancestors.ancestors.put(allocator, slot, {});
+
+    var cache_lock: sig.sync.RwLock = .{};
+    var cache: sig.utils.collections.PubkeyMap(AccountSharedData) = .{};
+    var borrowed_cache: sig.utils.collections.PubkeyMap(*const AccountSharedData) = .{};
+    var account_data_lens: sig.utils.collections.PubkeyMap(?usize) = .{};
+    var dirty: sig.utils.collections.PubkeyMap(void) = .{};
+    defer {
+        for (cache.values()) |*account| account.deinit(allocator);
+        cache.deinit(allocator);
+        borrowed_cache.deinit(allocator);
+        account_data_lens.deinit(allocator);
+        dirty.deinit(allocator);
+    }
+    var stats = SlotAccountCacheStats{};
+
+    const address = Pubkey{ .data = @splat(9) };
+    var first_data = "deferred-first".*;
+    var second_data = "deferred-second".*;
+
+    const store: SlotAccountStore = .{ .cached_accounts_db = .{
+        db,
+        slot,
+        &ancestors,
+        allocator,
+        &cache_lock,
+        &cache,
+        &borrowed_cache,
+        &account_data_lens,
+        &stats,
+        &dirty,
+        true,
+    } };
+
+    try store.put(address, .{
+        .lamports = 11,
+        .data = first_data[0..],
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+    try store.put(address, .{
+        .lamports = 12,
+        .data = second_data[0..],
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    });
+
+    const cached = (try store.reader().get(allocator, address)).?;
+    defer cached.deinit(allocator);
+    try std.testing.expectEqual(@as(u64, 12), cached.lamports);
+    try std.testing.expectEqual(
+        @as(?usize, second_data.len),
+        try store.reader().accountDataLen(allocator, address),
+    );
+    try std.testing.expectEqual(@as(usize, 1), dirty.count());
+
+    if (try db.get(allocator, address, &ancestors)) |db_account| {
+        defer db_account.deinit(allocator);
+        return error.TestExpectedNoDbWrite;
+    }
+
+    const snapshot = stats.snapshot();
+    try std.testing.expectEqual(@as(u64, 2), snapshot.cache_puts);
+    try std.testing.expectEqual(@as(u64, 1), snapshot.cache_put_replacements);
+    try std.testing.expectEqual(@as(u64, 2), snapshot.deferred_puts);
+    try std.testing.expectEqual(@as(u64, 1), snapshot.deferred_unique_writes);
 }
 
 test ThreadSafeAccountMap {

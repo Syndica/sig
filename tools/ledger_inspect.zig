@@ -72,6 +72,8 @@ fn inspectSlotSummary(allocator: std.mem.Allocator, ledger: *Ledger, slot: Slot)
     var parent_slot: ?Slot = null;
     var is_full = false;
     var is_connected = false;
+    var meta_received: ?u64 = null;
+    var meta_last_index: ?u64 = null;
 
     if (try ledger.db.get(allocator, schema.slot_meta, slot)) |meta_value| {
         var meta = meta_value;
@@ -80,6 +82,8 @@ fn inspectSlotSummary(allocator: std.mem.Allocator, ledger: *Ledger, slot: Slot)
         parent_slot = meta.parent_slot;
         is_full = meta.isFull();
         is_connected = meta.isConnected();
+        meta_received = meta.received;
+        meta_last_index = meta.last_index;
     }
 
     const data_stats = try countShreds(allocator, ledger, schema.data_shred, slot);
@@ -91,13 +95,15 @@ fn inspectSlotSummary(allocator: std.mem.Allocator, ledger: *Ledger, slot: Slot)
     const entries, const tx_count = try entrySummary(allocator, ledger, slot);
 
     std.debug.print(
-        "summary slot={} meta={s} parent_slot={?} is_full={} is_connected={} entries={} tx_count={} data_shreds={} code_shreds={} data_first_missing={?}\n",
+        "summary slot={} meta={s} parent_slot={?} is_full={} is_connected={} meta_received={?} meta_last_index={?} entries={} tx_count={} data_shreds={} code_shreds={} data_first_missing={?}\n",
         .{
             slot,
             if (meta_present) "present" else "missing",
             parent_slot,
             is_full,
             is_connected,
+            meta_received,
+            meta_last_index,
             entries,
             tx_count,
             data_stats.count,

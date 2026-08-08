@@ -56,6 +56,7 @@ pub fn main() !void {
             args.batch_size,
             args.batch_repeats,
             args.print_samples,
+            !args.chunk_local,
         );
     }
     if (args.batch_only) {
@@ -99,7 +100,7 @@ pub fn main() !void {
         };
         defer account.deinit(allocator);
 
-        if (account.data.len != sample.data_len) {
+        if (!args.chunk_local and account.data.len != sample.data_len) {
             failures += 1;
             std.debug.print(
                 "sample_fail index={} pubkey={s} error=data_len_mismatch expected={} actual={}\n",
@@ -249,6 +250,7 @@ fn runBatchSmoke(
     batch_size: usize,
     repeats: usize,
     print_batches: usize,
+    validate_sample_data_len: bool,
 ) !usize {
     if (batch_size == 0) return error.InvalidArgument;
 
@@ -271,6 +273,8 @@ fn runBatchSmoke(
     var accounts_cached: u64 = 0;
     var accounts_skipped: u64 = 0;
     var total_data_bytes: u64 = 0;
+    var index_lookup_ns: u64 = 0;
+    var index_records_read: u64 = 0;
     var timer = try std.time.Timer.start();
 
     std.debug.print(
@@ -320,6 +324,8 @@ fn runBatchSmoke(
             chunks_cached += result.chunks_cached;
             accounts_cached += result.accounts_cached;
             accounts_skipped += result.accounts_skipped;
+            index_lookup_ns += result.index_lookup_ns;
+            index_records_read += result.index_records_read;
 
             if (result.accounts_loaded != batch_len or result.missing_pubkeys != 0) {
                 failures += batch_len;
@@ -346,7 +352,7 @@ fn runBatchSmoke(
                     );
                     continue;
                 };
-                if (account.data.len != sample.data_len) {
+                if (validate_sample_data_len and account.data.len != sample.data_len) {
                     failures += 1;
                     std.debug.print(
                         "batch_sample_fail repeat={} batch={} pubkey={s} error=data_len_mismatch expected={} actual={}\n",
@@ -359,7 +365,7 @@ fn runBatchSmoke(
 
             if (batch_index < print_batches) {
                 std.debug.print(
-                    "batch_ok repeat={} index={} pubkeys={} loaded={} unique_chunks={} chunks_decoded={} chunks_cached={} latency_ms={d:.3} per_account_ms={d:.6}\n",
+                    "batch_ok repeat={} index={} pubkeys={} loaded={} unique_chunks={} chunks_decoded={} chunks_cached={} latency_ms={d:.3} per_account_ms={d:.6} index_lookup_ms={d:.3} index_records_read={}\n",
                     .{
                         repeat,
                         batch_index,
@@ -370,6 +376,8 @@ fn runBatchSmoke(
                         result.chunks_cached,
                         nsToMs(elapsed),
                         nsToMs(elapsed / batch_len),
+                        nsToMs(result.index_lookup_ns),
+                        result.index_records_read,
                     },
                 );
             }
@@ -386,7 +394,7 @@ fn runBatchSmoke(
     const account_p99 = percentile(per_account_latencies, 99, 100);
 
     std.debug.print(
-        "compressed_account_store_batch_smoke_result pass={} samples={} batches={} batch_size={} repeats={} failures={} loaded={} missing={} total_data_bytes={} unique_chunks_sum={} chunks_decoded={} chunks_cached={} accounts_cached={} accounts_skipped={} batch_latency_p50_ms={d:.3} batch_latency_p95_ms={d:.3} batch_latency_p99_ms={d:.3} account_latency_p50_ms={d:.6} account_latency_p95_ms={d:.6} account_latency_p99_ms={d:.6}\n",
+        "compressed_account_store_batch_smoke_result pass={} samples={} batches={} batch_size={} repeats={} failures={} loaded={} missing={} total_data_bytes={} unique_chunks_sum={} chunks_decoded={} chunks_cached={} accounts_cached={} accounts_skipped={} index_lookup_total_ms={d:.3} index_records_read={} index_records_per_loaded={d:.3} batch_latency_p50_ms={d:.3} batch_latency_p95_ms={d:.3} batch_latency_p99_ms={d:.3} account_latency_p50_ms={d:.6} account_latency_p95_ms={d:.6} account_latency_p99_ms={d:.6}\n",
         .{
             failures == 0,
             samples.len,
@@ -402,6 +410,12 @@ fn runBatchSmoke(
             chunks_cached,
             accounts_cached,
             accounts_skipped,
+            nsToMs(index_lookup_ns),
+            index_records_read,
+            if (loaded == 0)
+                0.0
+            else
+                @as(f64, @floatFromInt(index_records_read)) / @as(f64, @floatFromInt(loaded)),
             nsToMs(batch_p50),
             nsToMs(batch_p95),
             nsToMs(batch_p99),

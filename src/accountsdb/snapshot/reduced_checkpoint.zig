@@ -396,7 +396,7 @@ pub const ReducedBankFields = struct {
             .genesis_creation_time = bank_fields.genesis_creation_time,
             .slots_per_year = bank_fields.slots_per_year,
             .slot = bank_fields.slot,
-            .epoch = bank_fields.epoch,
+            .epoch = bank_fields.epoch_schedule.getEpoch(bank_fields.slot),
             .block_height = bank_fields.block_height,
             .collector_id = bank_fields.collector_id,
             .fee_rate_governor = bank_fields.fee_rate_governor,
@@ -687,13 +687,61 @@ test "ReducedCheckpoint round-trips through reduced schema" {
     try std.testing.expectEqual(manifest.bank_fields.ticks_per_slot, rebuilt.bank_fields.ticks_per_slot);
     try std.testing.expectEqual(manifest.bank_fields.ns_per_slot, rebuilt.bank_fields.ns_per_slot);
     try std.testing.expectEqual(manifest.bank_fields.genesis_creation_time, rebuilt.bank_fields.genesis_creation_time);
-    try std.testing.expectEqual(manifest.bank_fields.epoch, rebuilt.bank_fields.epoch);
+    try std.testing.expectEqual(
+        manifest.bank_fields.epoch_schedule.getEpoch(manifest.bank_fields.slot),
+        rebuilt.bank_fields.epoch,
+    );
     try std.testing.expect(manifest.bank_fields.collector_id.equals(&rebuilt.bank_fields.collector_id));
     try std.testing.expect(manifest.bank_extra.accounts_lt_hash.eql(rebuilt.bank_extra.accounts_lt_hash));
     try std.testing.expectEqual(
         manifest.bank_extra.versioned_epoch_stakes.count(),
         rebuilt.bank_extra.versioned_epoch_stakes.count(),
     );
+}
+
+test "ReducedCheckpoint canonicalizes bank epoch from slot" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(123);
+    const random = prng.random();
+
+    var bank_fields = try BankFields.initRandom(allocator, random, 2);
+    defer bank_fields.deinit(allocator);
+
+    bank_fields.slot = 436_194_174;
+    bank_fields.epoch_schedule = EpochSchedule.INIT;
+    bank_fields.epoch = 0;
+
+    const bank_extra: ExtraFields = .{
+        .lamports_per_signature = 0,
+        .snapshot_persistence = null,
+        .epoch_accounts_hash = null,
+        .versioned_epoch_stakes = .{},
+        .accounts_lt_hash = .IDENTITY,
+    };
+
+    var manifest: Manifest = .{
+        .bank_fields = bank_fields,
+        .accounts_db_fields = .{
+            .file_map = .{},
+            .stored_meta_write_version = 0,
+            .slot = bank_fields.slot,
+            .bank_hash_info = .{ .stats = .zero_init },
+            .rooted_slots = &.{},
+            .rooted_slot_hashes = &.{},
+        },
+        .bank_extra = bank_extra,
+    };
+
+    var checkpoint = try ReducedCheckpoint.fromManifest(allocator, &manifest);
+    defer checkpoint.deinit(allocator);
+
+    const expected_epoch = bank_fields.epoch_schedule.getEpoch(bank_fields.slot);
+    try std.testing.expectEqual(expected_epoch, checkpoint.bank_fields.epoch);
+
+    var rebuilt = try checkpoint.toManifest(allocator);
+    defer rebuilt.deinit(allocator);
+
+    try std.testing.expectEqual(expected_epoch, rebuilt.bank_fields.epoch);
 }
 
 test "writeManifestToFilePath persists reduced checkpoint metadata" {

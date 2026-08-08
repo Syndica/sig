@@ -39,6 +39,19 @@ pub const SlotIndex = struct {
     };
 };
 
+pub const BatchLoadResult = struct {
+    pubkeys: u64 = 0,
+    ancestor_slots: u64 = 0,
+    resolved: u64 = 0,
+    loaded: u64 = 0,
+    tombstones: u64 = 0,
+};
+
+pub const AccountDataLenResult = struct {
+    lamports: u64,
+    data_len: usize,
+};
+
 pub fn init(allocator: std.mem.Allocator) !Unrooted {
     const slots = try allocator.alloc(SlotIndex, MAX_SLOTS);
     errdefer allocator.free(slots);
@@ -108,21 +121,140 @@ pub fn get(
     var best_slot: Slot = 0;
     var result: ?Account = null;
 
-    for (self.slots) |*index| {
+    for (ancestors.ancestors.keys()) |slot| {
+        if (slot < best_slot) continue;
+
+        const index = &self.slots[slot % MAX_SLOTS];
         if (index.is_empty.load(.acquire)) continue;
 
-        index.lock.lockShared();
-        defer index.lock.unlockShared();
+        {
+            index.lock.lockShared();
+            defer index.lock.unlockShared();
 
-        if (index.slot >= best_slot and ancestors.containsSlot(index.slot)) {
+            if (index.is_empty.load(.acquire)) continue;
+            if (index.slot != slot) continue;
+
             n_gets += 1;
             const data = index.entries.get(address) orelse continue;
             result = data.asAccount();
-            best_slot = index.slot;
+            best_slot = slot;
         }
     }
 
     return result;
+}
+
+pub fn accountDataLen(
+    self: *Unrooted,
+    address: Pubkey,
+    ancestors: *const Ancestors,
+) ?AccountDataLenResult {
+    var best_slot: Slot = 0;
+    var result: ?AccountDataLenResult = null;
+
+    for (ancestors.ancestors.keys()) |slot| {
+        if (slot < best_slot) continue;
+
+        const index = &self.slots[slot % MAX_SLOTS];
+        if (index.is_empty.load(.acquire)) continue;
+
+        {
+            index.lock.lockShared();
+            defer index.lock.unlockShared();
+
+            if (index.is_empty.load(.acquire)) continue;
+            if (index.slot != slot) continue;
+
+            const data = index.entries.get(address) orelse continue;
+            result = .{
+                .lamports = data.lamports,
+                .data_len = data.data.len,
+            };
+            best_slot = slot;
+        }
+    }
+
+    return result;
+}
+
+pub fn batchLoad(
+    self: *Unrooted,
+    allocator: std.mem.Allocator,
+    pubkeys: []const Pubkey,
+    ancestors: *const Ancestors,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+) !BatchLoadResult {
+    var result: BatchLoadResult = .{ .pubkeys = @intCast(pubkeys.len) };
+    if (pubkeys.len == 0) return result;
+
+    var ancestor_slots: std.ArrayListUnmanaged(Slot) = .{};
+    defer ancestor_slots.deinit(allocator);
+    try ancestor_slots.ensureTotalCapacity(allocator, ancestors.ancestors.count());
+    for (ancestors.ancestors.keys()) |slot| ancestor_slots.appendAssumeCapacity(slot);
+    result.ancestor_slots = @intCast(ancestor_slots.items.len);
+
+    std.mem.sort(Slot, ancestor_slots.items, {}, struct {
+        fn lessThan(_: void, a: Slot, b: Slot) bool {
+            return a > b;
+        }
+    }.lessThan);
+
+    var resolved: sig.utils.collections.PubkeyMap(void) = .{};
+    defer resolved.deinit(allocator);
+    try resolved.ensureTotalCapacity(allocator, pubkeys.len);
+
+    for (ancestor_slots.items) |slot| {
+        if (resolved.count() >= pubkeys.len) break;
+
+        const index = &self.slots[slot % MAX_SLOTS];
+        if (index.is_empty.load(.acquire)) continue;
+
+        {
+            index.lock.lockShared();
+            defer index.lock.unlockShared();
+
+            if (index.is_empty.load(.acquire)) continue;
+            if (index.slot != slot) continue;
+
+            for (pubkeys) |pubkey| {
+                if (resolved.contains(pubkey)) continue;
+                const data = index.entries.get(pubkey) orelse continue;
+
+                const resolved_gop = try resolved.getOrPut(allocator, pubkey);
+                if (resolved_gop.found_existing) continue;
+                resolved_gop.value_ptr.* = {};
+
+                var account = if (data.lamports == 0)
+                    AccountSharedData.EMPTY
+                else
+                    try data.clone(allocator);
+                try putLoadedAccount(allocator, accounts, pubkey, &account);
+
+                result.resolved += 1;
+                if (data.lamports == 0) {
+                    result.tombstones += 1;
+                } else {
+                    result.loaded += 1;
+                }
+            }
+        }
+    }
+
+    return result;
+}
+
+fn putLoadedAccount(
+    allocator: std.mem.Allocator,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    pubkey: Pubkey,
+    account: *AccountSharedData,
+) !void {
+    errdefer account.deinit(allocator);
+
+    const gop = try accounts.getOrPut(allocator, pubkey);
+    if (gop.found_existing) gop.value_ptr.deinit(allocator);
+    gop.value_ptr.* = account.*;
+    account.* = undefined;
 }
 
 test "sanity check" {
@@ -177,6 +309,74 @@ test "sanity check" {
 
     const result = db.get(account_a, &ancestors).?;
     try std.testing.expectEqual(result.lamports, 250_000); // should return slot 3
+}
+
+test "batchLoad uses latest ancestor and preserves tombstones" {
+    const allocator = std.testing.allocator;
+    var db: Unrooted = try .init(allocator);
+    defer db.deinit(allocator);
+
+    const account_a: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    const account_b: Pubkey = .parse("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk");
+    const account_c: Pubkey = .parse("7EqfdGiB5UZgLWc1U9xYbKdy9Ky9NoYcMbEwUq9aAWR6");
+
+    const old_data = try allocator.dupe(u8, "old");
+    var owns_old_data = true;
+    errdefer if (owns_old_data) allocator.free(old_data);
+    try db.put(allocator, 1, account_a, .{
+        .data = old_data,
+        .executable = false,
+        .lamports = 100,
+        .owner = account_b,
+        .rent_epoch = 0,
+    });
+    owns_old_data = false;
+    try db.put(allocator, 2, account_a, AccountSharedData.EMPTY);
+
+    const live_data = try allocator.dupe(u8, "live");
+    var owns_live_data = true;
+    errdefer if (owns_live_data) allocator.free(live_data);
+    try db.put(allocator, 2, account_b, .{
+        .data = live_data,
+        .executable = true,
+        .lamports = 200,
+        .owner = account_c,
+        .rent_epoch = 1,
+    });
+    owns_live_data = false;
+
+    var ancestors: Ancestors = try .initWithSlots(allocator, &.{ 1, 2 });
+    defer ancestors.deinit(allocator);
+
+    const tombstone_len = db.accountDataLen(account_a, &ancestors).?;
+    try std.testing.expectEqual(@as(u64, 0), tombstone_len.lamports);
+    try std.testing.expectEqual(@as(usize, 0), tombstone_len.data_len);
+    const live_len = db.accountDataLen(account_b, &ancestors).?;
+    try std.testing.expectEqual(@as(u64, 200), live_len.lamports);
+    try std.testing.expectEqual(@as(usize, "live".len), live_len.data_len);
+    try std.testing.expectEqual(null, db.accountDataLen(account_c, &ancestors));
+
+    var accounts: sig.utils.collections.PubkeyMap(AccountSharedData) = .{};
+    defer {
+        for (accounts.values()) |*account| account.deinit(allocator);
+        accounts.deinit(allocator);
+    }
+
+    const result = try db.batchLoad(
+        allocator,
+        &.{ account_a, account_b, account_c },
+        &ancestors,
+        &accounts,
+    );
+
+    try std.testing.expectEqual(@as(u64, 3), result.pubkeys);
+    try std.testing.expectEqual(@as(u64, 2), result.resolved);
+    try std.testing.expectEqual(@as(u64, 1), result.loaded);
+    try std.testing.expectEqual(@as(u64, 1), result.tombstones);
+
+    try std.testing.expectEqual(@as(u64, 0), accounts.get(account_a).?.lamports);
+    try std.testing.expectEqual(@as(u64, 200), accounts.get(account_b).?.lamports);
+    try std.testing.expect(!accounts.contains(account_c));
 }
 
 test "forked behaviour" {

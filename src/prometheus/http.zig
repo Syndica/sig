@@ -16,7 +16,7 @@ pub fn servePrometheus(
     };
     var server = try httpz.Server(*const MetricsEndpoint).init(
         allocator,
-        .{ .port = port, .address = "0.0.0.0", .thread_pool = .{ .count = 1 } },
+        .{ .port = port, .address = "127.0.0.1", .thread_pool = .{ .count = 1 } },
         &endpoint,
     );
     var router = try server.router(.{});
