@@ -18,6 +18,7 @@ const ComputeBudget = sig.runtime.ComputeBudget;
 const FeatureSet = sig.core.FeatureSet;
 const ProcessedTransaction = sig.runtime.transaction_execution.ProcessedTransaction;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
+const ProgramLoadStats = sig.runtime.program_loader.ProgramLoadStats;
 const RuntimeTransaction = sig.runtime.transaction_execution.RuntimeTransaction;
 const SysvarCache = sig.runtime.SysvarCache;
 const TransactionExecutionEnvironment =
@@ -42,7 +43,7 @@ pub fn executeTransaction(
         svm_gateway.params.account_store,
         &environment,
         &.{ .log = true, .log_messages_byte_limit = null },
-        &svm_gateway.state.programs,
+        svm_gateway.programMap(),
     );
 }
 
@@ -58,7 +59,11 @@ pub const SvmGateway = struct {
         sysvar_cache: SysvarCache,
         vm_environment: vm.Environment,
         next_vm_environment: ?vm.Environment,
-        programs: ProgramMap,
+        programs: union(enum) {
+            owned: ProgramMap,
+            borrowed: *ProgramMap,
+        },
+        program_load_stats_start: ProgramLoadStats.Snapshot,
 
         /// This is an ugly solution, but it doesn't actually lead to any issues
         /// with contention due to how replay works. Long term, this will be
@@ -81,6 +86,7 @@ pub const SvmGateway = struct {
         rent_collector: *const RentCollector,
         epoch_stakes: *const sig.core.EpochStakes,
         status_cache: *StatusCache,
+        program_map: ?*ProgramMap = null,
     };
 
     pub fn init(allocator: Allocator, params: Params) !SvmGateway {
@@ -110,7 +116,14 @@ pub const SvmGateway = struct {
                 .sysvar_cache = sysvar_cache,
                 .vm_environment = vm_environment,
                 .next_vm_environment = null, // TODO epoch boundary
-                .programs = .empty,
+                .programs = if (params.program_map) |program_map|
+                    .{ .borrowed = program_map }
+                else
+                    .{ .owned = .empty },
+                .program_load_stats_start = if (params.program_map) |program_map|
+                    program_map.loadStats()
+                else
+                    std.mem.zeroes(ProgramLoadStats.Snapshot),
 
                 // blockhash queue is only written when freezing a slot,
                 // which comes *after* executing all transactions, not
@@ -130,14 +143,34 @@ pub const SvmGateway = struct {
 
         self.state.sysvar_cache.deinit(allocator);
 
-        var programs = self.state.programs;
-        programs.deinit(allocator);
+        switch (self.state.programs) {
+            .owned => |owned| {
+                var programs = owned;
+                programs.deinit(allocator);
+            },
+            .borrowed => {},
+        }
+    }
+
+    pub fn programMap(self: *SvmGateway) *ProgramMap {
+        return switch (self.state.programs) {
+            .owned => |*programs| programs,
+            .borrowed => |programs| programs,
+        };
     }
 
     pub fn programLoadStats(
         self: *const SvmGateway,
     ) sig.runtime.program_loader.ProgramLoadStats.Snapshot {
-        return self.state.programs.loadStats();
+        const current = switch (self.state.programs) {
+            .owned => |*programs| programs.loadStats(),
+            .borrowed => |programs| programs.loadStats(),
+        };
+        return current.subtract(self.state.program_load_stats_start);
+    }
+
+    pub fn programCacheEntryCount(self: *SvmGateway) usize {
+        return self.programMap().entryCount();
     }
 
     pub fn environment(self: *const SvmGateway) !TransactionExecutionEnvironment {

@@ -16,6 +16,7 @@ const SlotState = sig.core.bank.SlotState;
 
 const AccountStore = sig.accounts_db.AccountStore;
 const AccountReader = sig.accounts_db.AccountReader;
+const ProgramMap = sig.runtime.program_loader.ProgramMap;
 
 const Ledger = sig.ledger.Ledger;
 
@@ -339,10 +340,16 @@ pub const ReplayState = struct {
     disable_transaction_status_writes: bool,
     stop_at_slot: ?sig.core.Slot,
     geyser_writer: ?*sig.geyser.GeyserWriter,
+    persistent_program_map: ProgramMap,
+    persistent_program_map_tip: ?Slot,
+    persistent_program_map_epoch: ?u64,
+    persistent_program_map_pending_slot: ?Slot,
 
     pub fn deinit(self: *ReplayState) void {
         self.thread_pool.shutdown();
         self.thread_pool.deinit();
+
+        self.persistent_program_map.deinit(self.allocator);
 
         self.slot_tracker.deinit(self.allocator);
         self.progress_map.deinit(self.allocator);
@@ -415,7 +422,63 @@ pub const ReplayState = struct {
             .disable_transaction_status_writes = deps.disable_transaction_status_writes,
             .stop_at_slot = deps.stop_at_slot,
             .geyser_writer = deps.geyser_writer,
+            .persistent_program_map = .empty,
+            .persistent_program_map_tip = deps.root.slot,
+            .persistent_program_map_epoch = null,
+            .persistent_program_map_pending_slot = null,
         };
+    }
+
+    pub const PersistentProgramMapPreparation = struct {
+        map: *ProgramMap,
+        reused_parent: bool,
+        entries_before: usize,
+        failed_entries_removed: usize,
+    };
+
+    pub fn preparePersistentProgramMap(
+        self: *ReplayState,
+        slot: Slot,
+        parent_slot: Slot,
+        epoch: u64,
+    ) PersistentProgramMapPreparation {
+        const reused_parent = self.persistent_program_map_pending_slot == null and
+            self.persistent_program_map_tip == parent_slot and
+            self.persistent_program_map_epoch == epoch;
+        if (!reused_parent) self.resetPersistentProgramMap(parent_slot, epoch);
+
+        const entries_before = self.persistent_program_map.entryCount();
+        const failed_entries_removed = self.persistent_program_map.removeFailedEntries();
+        self.persistent_program_map_pending_slot = slot;
+        return .{
+            .map = &self.persistent_program_map,
+            .reused_parent = reused_parent,
+            .entries_before = entries_before,
+            .failed_entries_removed = failed_entries_removed,
+        };
+    }
+
+    pub fn commitPersistentProgramMap(self: *ReplayState, slot: Slot) void {
+        if (self.persistent_program_map_pending_slot != slot) return;
+        self.persistent_program_map_tip = slot;
+        self.persistent_program_map_pending_slot = null;
+    }
+
+    pub fn discardPersistentProgramMap(self: *ReplayState, slot: Slot) void {
+        if (self.persistent_program_map_pending_slot != slot) return;
+        self.resetPersistentProgramMap(null, null);
+    }
+
+    pub fn resetPersistentProgramMap(
+        self: *ReplayState,
+        tip: ?Slot,
+        epoch: ?u64,
+    ) void {
+        self.persistent_program_map.deinit(self.allocator);
+        self.persistent_program_map = .empty;
+        self.persistent_program_map_tip = tip;
+        self.persistent_program_map_epoch = epoch;
+        self.persistent_program_map_pending_slot = null;
     }
 };
 
@@ -836,6 +899,7 @@ fn freezeCompletedSlots(
     var processed_a_slot = false;
     for (results) |result| switch (result.output) {
         .err => |err| {
+            state.discardPersistentProgramMap(result.slot);
             state.logger.logf(
                 switch (err) {
                     // invalid_block may be a non-issue and simply indicate that
@@ -871,9 +935,11 @@ fn freezeCompletedSlots(
                     last_entry_hash,
                     state.ledger,
                 ));
+                state.commitPersistentProgramMap(slot);
                 metrics.freeze_slot_time.observe(freeze_timer.read().asNanos());
                 processed_a_slot = true;
             } else {
+                state.discardPersistentProgramMap(slot);
                 state.logger.info().logf("partially replayed slot: {}", .{slot});
             }
         },
@@ -1328,6 +1394,46 @@ test "advance calls consensus.process with empty replay results" {
 
     // No slots were replayed
     try std.testing.expectEqual(0, replay_state.slot_tracker.root.load(.monotonic));
+}
+
+test "persistent program cache only follows a direct parent in the same epoch" {
+    const allocator = std.testing.allocator;
+    var dep_stubs = try DependencyStubs.init(allocator, .FOR_TESTS);
+    defer dep_stubs.deinit();
+
+    var replay_state = try dep_stubs.stubbedState(allocator, .FOR_TESTS);
+    defer {
+        replay_state.deinit();
+        replay_state.epoch_tracker.deinit();
+        allocator.destroy(replay_state.epoch_tracker);
+    }
+
+    const first = replay_state.preparePersistentProgramMap(1, 0, 7);
+    try std.testing.expect(!first.reused_parent);
+    try std.testing.expectEqual(0, first.entries_before);
+    var key_data = [_]u8{0} ** Pubkey.SIZE;
+    key_data[0] = 1;
+    try std.testing.expect(try first.map.putIfAbsent(
+        allocator,
+        .{ .data = key_data },
+        .failed,
+    ));
+    replay_state.commitPersistentProgramMap(1);
+
+    const child = replay_state.preparePersistentProgramMap(2, 1, 7);
+    try std.testing.expect(child.reused_parent);
+    try std.testing.expectEqual(1, child.entries_before);
+    try std.testing.expectEqual(1, child.failed_entries_removed);
+    replay_state.commitPersistentProgramMap(2);
+
+    const fork = replay_state.preparePersistentProgramMap(3, 0, 7);
+    try std.testing.expect(!fork.reused_parent);
+    try std.testing.expectEqual(0, fork.entries_before);
+    replay_state.commitPersistentProgramMap(3);
+
+    const next_epoch = replay_state.preparePersistentProgramMap(4, 3, 8);
+    try std.testing.expect(!next_epoch.reused_parent);
+    try std.testing.expectEqual(0, next_epoch.entries_before);
 }
 
 test "Execute testnet block single threaded" {

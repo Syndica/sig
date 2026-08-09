@@ -73,6 +73,36 @@ pub const ProgramMap = struct {
     pub fn loadStats(self: *const ProgramMap) ProgramLoadStats.Snapshot {
         return self.load_stats.snapshot();
     }
+
+    pub fn entryCount(self: *ProgramMap) usize {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+        return self.inner.count();
+    }
+
+    /// Loader instructions replace deployed/retracted/closed programs with a
+    /// temporary failed entry so they cannot be executed again in the same
+    /// slot. A ProgramMap that survives into a direct child must drop those
+    /// sentinels so the child reloads the account's post-commit state.
+    pub fn removeFailedEntries(self: *ProgramMap) usize {
+        self.lock.lock();
+        defer self.lock.unlock();
+
+        var removed: usize = 0;
+        var index = self.inner.count();
+        while (index > 0) {
+            index -= 1;
+            switch (self.inner.values()[index]) {
+                .failed => {
+                    const address = self.inner.keys()[index];
+                    std.debug.assert(self.inner.swapRemove(address));
+                    removed += 1;
+                },
+                .loaded => {},
+            }
+        }
+        return removed;
+    }
 };
 
 pub const ProgramLoadStats = struct {
@@ -104,6 +134,24 @@ pub const ProgramLoadStats = struct {
         elf_load_ns: u64,
         verify_ns: u64,
         load_total_ns: u64,
+
+        pub fn subtract(self: Snapshot, earlier: Snapshot) Snapshot {
+            return .{
+                .cache_hits = self.cache_hits -| earlier.cache_hits,
+                .cache_misses = self.cache_misses -| earlier.cache_misses,
+                .load_attempts = self.load_attempts -| earlier.load_attempts,
+                .load_successes = self.load_successes -| earlier.load_successes,
+                .load_failures = self.load_failures -| earlier.load_failures,
+                .load_races = self.load_races -| earlier.load_races,
+                .executable_bytes = self.executable_bytes -| earlier.executable_bytes,
+                .programdata_reads = self.programdata_reads -| earlier.programdata_reads,
+                .programdata_bytes = self.programdata_bytes -| earlier.programdata_bytes,
+                .programdata_read_ns = self.programdata_read_ns -| earlier.programdata_read_ns,
+                .elf_load_ns = self.elf_load_ns -| earlier.elf_load_ns,
+                .verify_ns = self.verify_ns -| earlier.verify_ns,
+                .load_total_ns = self.load_total_ns -| earlier.load_total_ns,
+            };
+        }
     };
 
     fn recordLoad(
@@ -366,6 +414,41 @@ test "ProgramMap.putIfAbsent does not replace existing entry" {
     try std.testing.expect(try programs.putIfAbsent(allocator, key, .failed));
     try std.testing.expect(!try programs.putIfAbsent(allocator, key, .failed));
     try std.testing.expectEqual(1, programs.inner.count());
+}
+
+test "ProgramMap removes failed child-slot sentinels" {
+    const allocator = std.testing.allocator;
+    var programs = ProgramMap.empty;
+    defer programs.deinit(allocator);
+
+    var first_key_data = [_]u8{0} ** Pubkey.SIZE;
+    first_key_data[0] = 1;
+    var second_key_data = [_]u8{0} ** Pubkey.SIZE;
+    second_key_data[0] = 2;
+    try programs.inner.put(allocator, .{ .data = first_key_data }, .failed);
+    try programs.inner.put(allocator, .{ .data = second_key_data }, .failed);
+
+    try std.testing.expectEqual(2, programs.entryCount());
+    try std.testing.expectEqual(2, programs.removeFailedEntries());
+    try std.testing.expectEqual(0, programs.entryCount());
+}
+
+test "ProgramLoadStats snapshot subtraction reports per-slot delta" {
+    var stats = ProgramLoadStats{};
+    _ = stats.cache_hits.fetchAdd(9, .monotonic);
+    _ = stats.load_attempts.fetchAdd(4, .monotonic);
+    const start = stats.snapshot();
+
+    _ = stats.cache_hits.fetchAdd(7, .monotonic);
+    _ = stats.cache_misses.fetchAdd(2, .monotonic);
+    _ = stats.load_attempts.fetchAdd(2, .monotonic);
+    _ = stats.load_total_ns.fetchAdd(123, .monotonic);
+
+    const delta = stats.snapshot().subtract(start);
+    try std.testing.expectEqual(7, delta.cache_hits);
+    try std.testing.expectEqual(2, delta.cache_misses);
+    try std.testing.expectEqual(2, delta.load_attempts);
+    try std.testing.expectEqual(123, delta.load_total_ns);
 }
 
 test "loadPrograms: load v1, v2 program" {

@@ -102,6 +102,17 @@ fn replayActiveSlotsAsync(state: *ReplayState, metrics: replay.service.Metrics) 
         if (active_slots.len == 0) {
             return &.{};
         }
+        const persistent_program_cache =
+            envBool("SIG_REPLAY_PERSISTENT_PROGRAM_CACHE", false);
+        const use_persistent_program_cache =
+            persistent_program_cache and active_slots.len == 1;
+        if (persistent_program_cache and active_slots.len > 1) {
+            state.resetPersistentProgramMap(null, null);
+            state.logger.info().logf(
+                "persistent_program_cache disabled_for_iteration active_slots={}",
+                .{active_slots.len},
+            );
+        }
         first_slot = active_slots[0];
         last_slot = active_slots[active_slots.len - 1];
 
@@ -110,7 +121,14 @@ fn replayActiveSlotsAsync(state: *ReplayState, metrics: replay.service.Metrics) 
             state.logger.debug().logf("replaying slot: {}", .{slot});
 
             phase_timer.reset();
-            const prepared = try prepareSlot(state, metrics, slot_tracker, epoch_tracker, slot);
+            const prepared = try prepareSlot(
+                state,
+                metrics,
+                slot_tracker,
+                epoch_tracker,
+                slot,
+                use_persistent_program_cache,
+            );
             prepare_slots_ns += phase_timer.read().asNanos();
             const params = switch (prepared) {
                 .confirm => |params| params,
@@ -186,6 +204,15 @@ fn replayActiveSlotsSync(state: *ReplayState, metrics: replay.service.Metrics) !
     if (active_slots.len == 0) {
         return &.{};
     }
+    const persistent_program_cache = envBool("SIG_REPLAY_PERSISTENT_PROGRAM_CACHE", false);
+    const use_persistent_program_cache = persistent_program_cache and active_slots.len == 1;
+    if (persistent_program_cache and active_slots.len > 1) {
+        state.resetPersistentProgramMap(null, null);
+        state.logger.info().logf(
+            "persistent_program_cache disabled_for_iteration active_slots={}",
+            .{active_slots.len},
+        );
+    }
 
     var results = try std.ArrayListUnmanaged(ReplayResult)
         .initCapacity(allocator, active_slots.len);
@@ -194,7 +221,14 @@ fn replayActiveSlotsSync(state: *ReplayState, metrics: replay.service.Metrics) !
     for (active_slots) |slot| {
         state.logger.debug().logf("replaying slot: {}", .{slot});
 
-        const params = switch (try prepareSlot(state, metrics, slot_tracker, epoch_tracker, slot)) {
+        const params = switch (try prepareSlot(
+            state,
+            metrics,
+            slot_tracker,
+            epoch_tracker,
+            slot,
+            use_persistent_program_cache,
+        )) {
             .confirm => |params| params,
             .empty, .dead, .leader => continue,
         };
@@ -814,6 +848,7 @@ fn prepareSlot(
     slot_tracker: *SlotTracker,
     epoch_tracker: *sig.core.EpochTracker,
     slot: Slot,
+    use_persistent_program_cache: bool,
 ) !PreparedSlot {
     var zone = tracy.Zone.init(@src(), .{ .name = "prepareSlot" });
     zone.value(slot);
@@ -1047,6 +1082,24 @@ fn prepareSlot(
     const read_frame_ns = phase_timer.read().asNanos();
     phase_timer.reset();
 
+    const persistent_program_map = if (use_persistent_program_cache) blk: {
+        const parent_slot = slot_info.constants().parent_slot;
+        const epoch = epoch_tracker.epoch_schedule.getEpoch(slot);
+        const preparation = state.preparePersistentProgramMap(slot, parent_slot, epoch);
+        state.logger.info().logf(
+            "persistent_program_cache slot={} parent_slot={} epoch={} source={s} entries_before={} failed_entries_removed={}",
+            .{
+                slot,
+                parent_slot,
+                epoch,
+                if (preparation.reused_parent) "parent" else "empty",
+                preparation.entries_before,
+                preparation.failed_entries_removed,
+            },
+        );
+        break :blk preparation.map;
+    } else null;
+
     var svm_gateway = try SvmGateway.init(state.allocator, .{
         .slot = slot,
         .max_age = sig.core.BlockhashQueue.MAX_RECENT_BLOCKHASHES / 2,
@@ -1058,6 +1111,7 @@ fn prepareSlot(
         .rent_collector = &slot_info.constants().rent_collector,
         .epoch_stakes = &epoch_info.stakes,
         .status_cache = &state.status_cache,
+        .program_map = persistent_program_map,
     });
     errdefer svm_gateway.deinit(state.allocator);
     const svm_gateway_ns = phase_timer.read().asNanos();
@@ -2437,14 +2491,14 @@ test "prepareSlot: empty and dead slots are handled correctly" {
 
     try std.testing.expectEqual(
         .empty,
-        try prepareSlot(&state, metrics, &state.slot_tracker, state.epoch_tracker, 1),
+        try prepareSlot(&state, metrics, &state.slot_tracker, state.epoch_tracker, 1, false),
     );
 
     try dep_stubs.ledger.resultWriter().setDeadSlot(1);
 
     try std.testing.expectEqual(
         .dead,
-        try prepareSlot(&state, metrics, &state.slot_tracker, state.epoch_tracker, 1),
+        try prepareSlot(&state, metrics, &state.slot_tracker, state.epoch_tracker, 1, false),
     );
 }
 
@@ -2694,3 +2748,33 @@ pub const TestState = struct {
         }
     }
 };
+
+test "SvmGateway borrows persistent ProgramMap and reports per-slot deltas" {
+    const allocator = std.testing.allocator;
+    var state = try TestState.init(allocator);
+    defer state.deinit(allocator);
+
+    var persistent_programs = sig.runtime.program_loader.ProgramMap.empty;
+    defer persistent_programs.deinit(allocator);
+
+    var params = state.svmParams();
+    params.program_map = &persistent_programs;
+    var first = try SvmGateway.init(allocator, params);
+    var key_data = [_]u8{0} ** sig.core.Pubkey.SIZE;
+    key_data[0] = 1;
+    try std.testing.expect(try first.programMap().putIfAbsent(
+        allocator,
+        .{ .data = key_data },
+        .failed,
+    ));
+    _ = first.programMap().load_stats.cache_hits.fetchAdd(3, .monotonic);
+    try std.testing.expectEqual(3, first.programLoadStats().cache_hits);
+    first.deinit(allocator);
+
+    try std.testing.expectEqual(1, persistent_programs.entryCount());
+    var second = try SvmGateway.init(allocator, params);
+    _ = second.programMap().load_stats.cache_hits.fetchAdd(2, .monotonic);
+    try std.testing.expectEqual(2, second.programLoadStats().cache_hits);
+    second.deinit(allocator);
+    try std.testing.expectEqual(1, persistent_programs.entryCount());
+}
