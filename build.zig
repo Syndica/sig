@@ -376,6 +376,8 @@ const Sig = struct {
         try components.put(b.allocator, "runtime", runtime);
         try api_import_list.append(b.allocator, .{ .name = "runtime_api", .module = runtime.api });
 
+        components.get("consensus").?.api.addImport("replay_api", components.get("replay").?.api);
+
         const api_imports = try api_import_list.toOwnedSlice(b.allocator);
 
         const topology = b.createModule(.{

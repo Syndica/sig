@@ -6,6 +6,7 @@ const topology = @import("topology");
 const accounts_db = @import("accounts_db_api");
 const shred = @import("shred_api");
 const replay = @import("replay_api");
+const consensus = @import("consensus_api");
 
 const tel = lib.telemetry;
 const fixture_loader = @import("fixtures/load.zig");
@@ -59,6 +60,9 @@ pub fn main() !void {
 
     var exec_req_response_region: Region(replay.ExecReqResponse) = try .simple();
     exec_req_response_region.ptr().init();
+
+    var replay_notifications: Region(consensus.ReplayNotifications) = try .simple();
+    replay_notifications.ptr().init();
 
     var snapshot_metadata: Region(accounts_db.RuntimeMetadata) = try .simple();
     snapshot_metadata.ptr().init();
@@ -137,6 +141,7 @@ pub fn main() !void {
                 .replay_transaction_pool = transaction_pool.finish(),
                 .block_pool = block_pool.finish(),
                 .exec_req_response = exec_req_response_region.finish(),
+                .replay_notifications = replay_notifications.finish(),
                 .account_pool = account_pool_init,
                 .account_lookups = account_lookups.finish(),
                 .tel = telemetry_region.finish(),

@@ -87,6 +87,7 @@ const tel = lib.telemetry;
 
 const shred = @import("shred_api");
 const accounts_db = @import("accounts_db_api");
+const consensus = @import("consensus_api");
 
 const api = @import("replay_api");
 
@@ -139,8 +140,10 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
     var deshredded_iter = rw.deshredded_in.get(.reader);
     var exec_request_sender = rw.exec_req_response.request_ring.get(.writer);
     var exec_response_receiver = rw.exec_req_response.response_ring.get(.reader);
+    var consensus_sender = rw.replay_notifications.in.get(.writer);
+    var consensus_receiver = rw.replay_notifications.out.get(.reader);
 
-    try bootstrap(
+    const root_block = try bootstrap(
         logger,
         runner,
         rw.snapshot_metadata_in,
@@ -150,10 +153,15 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         blockhash_states,
     );
 
+    const notification = consensus_sender.next() orelse unreachable;
+    notification.* = root_block;
+    consensus_sender.markUsed();
+
     // After the slot is supposedly populated, start shred recv (eventually Repair service) on it.
 
-    task: switch (@as(enum { exec_response, fec_set, idle }, .idle)) {
+    task: switch (@as(enum { consensus_finalized, exec_response, fec_set, idle }, .idle)) {
         .idle => {
+            if (consensus_receiver.peek() != null) continue :task .consensus_finalized;
             if (exec_response_receiver.peek() != null) continue :task .exec_response;
             if (deshredded_iter.peek() != null) continue :task .fec_set;
 
@@ -161,10 +169,26 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             defer zone.deinit();
 
             while (true) : (std.atomic.spinLoopHint()) {
+                if (consensus_receiver.peek() != null) continue :task .consensus_finalized;
                 if (exec_response_receiver.peek() != null) continue :task .exec_response;
                 if (deshredded_iter.peek() != null) continue :task .fec_set;
                 try runner.activity.signalIdleSpinning();
             }
+        },
+        .consensus_finalized => {
+            const zone = tracy.Zone.init(@src(), .{ .name = "consensus_finalized" });
+            defer zone.deinit();
+            try runner.activity.signalActive();
+
+            const finalized = consensus_receiver.next() orelse unreachable;
+            defer consensus_receiver.markUsed();
+
+            logger.info().logf(
+                "consensus finalized slot {f} ({})",
+                .{ rw.block_pool.indexToPtr(finalized.*).slot, finalized.* },
+            );
+
+            continue :task .idle;
         },
         .exec_response => {
             const zone = tracy.Zone.init(@src(), .{ .name = "exec_response" });
@@ -196,7 +220,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             // Asserting that we're receiving them back in order (we have single threaded exec).
             std.debug.assert(response.task_id == exec_state.n_transactions_completed);
 
-            exec_state.n_transactions_completed += 1;
+            exec_state.observeExecutionResult(response_data.result.success);
 
             if (exec_state.finished()) {
                 logger.info().logf(
@@ -208,6 +232,9 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                         exec_state.n_transactions_completed,
                     },
                 );
+                if (exec_state.status.successful) {
+                    sendBlockCompletionToConsensus(block_ref, &consensus_sender);
+                }
             }
 
             continue :task .idle;
@@ -263,8 +290,8 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
                 rw.replay_transaction_pool,
                 exec_states,
                 deserial_states,
+                &consensus_sender,
                 &exec_request_sender,
-
                 unrooted,
                 rw.account_pool,
                 rw.account_lookups,
@@ -273,6 +300,15 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
             continue :task .idle;
         },
     }
+}
+
+fn sendBlockCompletionToConsensus(
+    block_ref: api.BlockRef,
+    sender: anytype,
+) void {
+    const notification = sender.next() orelse unreachable;
+    notification.* = block_ref;
+    sender.markUsed();
 }
 
 /// Reads all the RuntimeMetadata provided by accountsdb from the snapshot or
@@ -298,7 +334,7 @@ fn bootstrap(
     block_pool: *api.BlockPool,
     exec_states: *BlockExecStates,
     blockhash_states: *BlockHashStates,
-) !void {
+) !api.BlockRef {
     var num_hashes: usize = 0;
     // Drain the blockhash queue into the block tree. accountsdb writes into
     // this ring blocks waiting for the reader (us).
@@ -364,7 +400,7 @@ fn bootstrap(
     exec_states[root_block.index()] = .{
         .n_transactions_requested = 0,
         .n_transactions_completed = 0,
-        .all_transactions_requested = true,
+        .status = .{ .all_transactions_requested = true },
     };
     std.debug.assert(exec_states[root_block.index()].?.finished());
 
@@ -372,6 +408,8 @@ fn bootstrap(
         "finished bootstrapping replay at slot {} (block_id={f})",
         .{ root_slot, snapshot_metadata.block_id },
     );
+
+    return root_block;
 }
 
 /// Holds the accounts mutated for each tracked Block.
@@ -872,6 +910,7 @@ fn maybeContinueBlockExec(
     // per-block states
     block_exec_states: *BlockExecStates,
     block_deserial_states: *DeserialStates,
+    consensus_sender: anytype,
 
     // for sending exec requests
     // NOTE: we should instead be sending to the transaction scheduler (when it is implemented)
@@ -895,7 +934,7 @@ fn maybeContinueBlockExec(
         // parent not finished => can't start exec for child
         const parent_exec_state: *BlockExecState =
             &(block_exec_states[block_parent.index()] orelse return);
-        if (!parent_exec_state.all_transactions_requested) return;
+        if (!parent_exec_state.status.all_transactions_requested) return;
     }
 
     const exec_state: *BlockExecState = blk: {
@@ -927,6 +966,7 @@ fn maybeContinueBlockExec(
                     transaction_pool,
                     block_exec_states,
                     block_deserial_states,
+                    consensus_sender,
                     exec_request_sender,
 
                     unrooted,
@@ -1106,9 +1146,9 @@ fn maybeContinueBlockExec(
     // transactions inside.
     if (!block_deserial_state.pos_node.slot_complete) return;
 
-    // // start_of_batch should be false if we have finished deserialising.
+    // start_of_batch should be false if we have finished deserialising.
     // std.debug.assert(!block_deserial_state.start_of_batch);
-    exec_state.all_transactions_requested = true;
+    exec_state.status.all_transactions_requested = true;
 
     logger.info().logf(
         "requested all transactions for slot {f} ({})",
@@ -1125,6 +1165,9 @@ fn maybeContinueBlockExec(
                 exec_state.n_transactions_completed,
             },
         );
+        if (exec_state.status.successful) {
+            sendBlockCompletionToConsensus(block_ref, consensus_sender);
+        }
     }
 
     // try to exec children
@@ -1142,8 +1185,8 @@ fn maybeContinueBlockExec(
             transaction_pool,
             block_exec_states,
             block_deserial_states,
+            consensus_sender,
             exec_request_sender,
-
             unrooted,
             account_pool,
             rooted_lookups,
@@ -1386,18 +1429,25 @@ const BlockDeserialState = struct {
 };
 
 const BlockExecState = struct {
-    n_transactions_requested: u32,
-    n_transactions_completed: u32,
-    all_transactions_requested: bool,
+    n_transactions_requested: u32 = 0,
+    n_transactions_completed: u32 = 0,
+    status: Status = .{},
 
-    const default: BlockExecState = .{
-        .n_transactions_requested = 0,
-        .n_transactions_completed = 0,
-        .all_transactions_requested = false,
+    const Status = packed struct(u8) {
+        all_transactions_requested: bool = false,
+        successful: bool = true,
+        _: u6 = 0,
     };
 
+    const default: BlockExecState = .{};
+
+    fn observeExecutionResult(self: *BlockExecState, success: bool) void {
+        self.n_transactions_completed += 1;
+        if (!success) self.status.successful = false;
+    }
+
     fn finished(self: BlockExecState) bool {
-        return self.all_transactions_requested and
+        return self.status.all_transactions_requested and
             self.n_transactions_completed == self.n_transactions_requested;
     }
 };
@@ -1547,6 +1597,108 @@ const MerkleForest = struct {
         tracy.plot(u32, "Merkle forest fec sets (orphaned)", @intCast(self.orphan_map.count()));
     }
 };
+
+test "services.replay: BlockExecState observes successful execution result" {
+    var state: BlockExecState = .{ .n_transactions_requested = 1 };
+
+    try std.testing.expect(!state.finished());
+    try std.testing.expect(state.status.successful);
+
+    state.observeExecutionResult(true);
+    try std.testing.expectEqual(@as(u32, 1), state.n_transactions_completed);
+    try std.testing.expect(state.status.successful);
+    try std.testing.expect(!state.finished());
+
+    state.status.all_transactions_requested = true;
+    try std.testing.expect(state.finished());
+}
+
+test "services.replay: BlockExecState observes failed execution result" {
+    var state: BlockExecState = .{ .n_transactions_requested = 2 };
+
+    state.observeExecutionResult(true);
+    state.observeExecutionResult(false);
+    state.status.all_transactions_requested = true;
+
+    try std.testing.expectEqual(@as(u32, 2), state.n_transactions_completed);
+    try std.testing.expect(!state.status.successful);
+    try std.testing.expect(state.finished());
+}
+
+test "services.replay: BlockExecState finishes zero-transaction block" {
+    var state: BlockExecState = .default;
+
+    try std.testing.expect(!state.finished());
+
+    state.status.all_transactions_requested = true;
+    try std.testing.expect(state.status.successful);
+    try std.testing.expect(state.finished());
+}
+
+test "services.replay: sends root execution and consumes finalization" {
+    const root_block = api.BlockRef.fromInt(4);
+    const completed_block = api.BlockRef.fromInt(5);
+    const finalized_block = api.BlockRef.fromInt(6);
+
+    var notifications: consensus.ReplayNotifications = undefined;
+    notifications.init();
+    var consensus_sender = notifications.in.get(.writer);
+
+    const root_notification = consensus_sender.next().?;
+    root_notification.* = root_block;
+    consensus_sender.markUsed();
+
+    var consensus_input_reader = notifications.in.get(.reader);
+    const root_event = consensus_input_reader.next().?;
+    try std.testing.expectEqual(root_block, root_event.*);
+    consensus_input_reader.markUsed();
+
+    sendBlockCompletionToConsensus(completed_block, &consensus_sender);
+
+    const completion_event = consensus_input_reader.next().?;
+    try std.testing.expectEqual(completed_block, completion_event.*);
+    consensus_input_reader.markUsed();
+
+    var consensus_output_sender = notifications.out.get(.writer);
+    consensus_output_sender.next().?.* = finalized_block;
+    consensus_output_sender.markUsed();
+
+    var replay_finalized_receiver = notifications.out.get(.reader);
+    const finalized = replay_finalized_receiver.next().?;
+    try std.testing.expectEqual(finalized_block, finalized.*);
+    replay_finalized_receiver.markUsed();
+}
+
+test "services.replay: sends successful block completion notification" {
+    const block_ref = api.BlockRef.fromInt(7);
+
+    var notifications: consensus.ReplayNotifications = undefined;
+    notifications.init();
+    var sender = notifications.in.get(.writer);
+    sendBlockCompletionToConsensus(block_ref, &sender);
+
+    var reader = notifications.in.get(.reader);
+    const event = reader.next().?;
+    try std.testing.expectEqual(block_ref, event.*);
+}
+
+test "services.replay: consumes finalized block notifications" {
+    var notifications: consensus.ReplayNotifications = undefined;
+    notifications.init();
+
+    var receiver = notifications.out.get(.reader);
+    try std.testing.expectEqual(@as(?*const api.BlockRef, null), receiver.peek());
+
+    const block_ref = api.BlockRef.fromInt(11);
+    var sender = notifications.out.get(.writer);
+    sender.next().?.* = block_ref;
+    sender.markUsed();
+
+    const finalized = receiver.next().?;
+    try std.testing.expectEqual(block_ref, finalized.*);
+    receiver.markUsed();
+    try std.testing.expectEqual(@as(?*const api.BlockRef, null), receiver.peek());
+}
 
 test "MerkleForest tree put" {
     var tree: MerkleForest = try .init(std.testing.allocator);
@@ -1721,7 +1873,15 @@ test "bootstrap creates root block and chains blockhashes" {
 
     const logger = tel.Logger("main").noop;
 
-    try bootstrap(logger, runner, &metadata, &forest, pool, exec_states, blockhash_states);
+    _ = try bootstrap(
+        logger,
+        runner,
+        &metadata,
+        &forest,
+        pool,
+        exec_states,
+        blockhash_states,
+    );
 
     // find root in pool
     var root_opt: ?api.BlockRef = null;

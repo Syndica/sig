@@ -26,6 +26,7 @@ const shred = @import("shred_api");
 const gossip = @import("gossip_api");
 const snapshot = @import("snapshot_api");
 const replay = @import("replay_api");
+const consensus = @import("consensus_api");
 
 const Region = topology.Region;
 const ServiceRegions = topology.ServiceRegions;
@@ -162,6 +163,7 @@ const Topology = struct {
     gossip: ServiceRegions(.from(services.gossip)),
     shred_receiver: ServiceRegions(.from(services.shred_receiver)),
     replay: ServiceRegions(.from(services.replay)),
+    consensus: ServiceRegions(.from(services.consensus)),
     snapshot: ServiceRegions(.from(services.snapshot)),
     accounts_db: ServiceRegions(.from(services.accounts_db)),
     telemetry: ServiceRegions(.from(services.telemetry)),
@@ -290,6 +292,9 @@ pub fn main() !void {
     var exec_req_response: Region(replay.ExecReqResponse) = try .simple();
     exec_req_response.ptr().init();
 
+    var replay_notifications: Region(consensus.ReplayNotifications) = try .simple();
+    replay_notifications.ptr().init();
+
     // The telemetry service owns one share; every other telemetry share belongs to a service
     // that will call signalReady once it has registered its metrics/log stream.
     const telemetry_params: tel.Region.InitParams = .{
@@ -346,8 +351,16 @@ pub fn main() !void {
                 .replay_transaction_pool = transaction_pool.finish(),
                 .block_pool = block_pool.finish(),
                 .exec_req_response = exec_req_response.finish(),
+                .replay_notifications = replay_notifications.finish(),
                 .account_pool = account_pool.finish(),
                 .account_lookups = replay_account_lookups.finish(),
+                .tel = telemetry_region.finish(),
+            },
+        },
+        .consensus = .{
+            .ro = .{ .block_pool = block_pool.finish() },
+            .rw = .{
+                .replay_notifications = replay_notifications.finish(),
                 .tel = telemetry_region.finish(),
             },
         },

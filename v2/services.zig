@@ -13,6 +13,7 @@ const shred_api = @import("shred_api");
 const gossip_api = @import("gossip_api");
 const snapshot_api = @import("snapshot_api");
 const replay_api = @import("replay_api");
+const consensus_api = @import("consensus_api");
 
 pub const accounts_db = struct {
     pub const components = &.{"accounts_db"};
@@ -78,8 +79,22 @@ pub const replay = struct {
         replay_transaction_pool: *replay_api.TransactionPool,
         block_pool: *replay_api.BlockPool,
         exec_req_response: *replay_api.ExecReqResponse,
+        replay_notifications: *consensus_api.ReplayNotifications,
         account_pool: *lib.AccountPool,
         account_lookups: *accounts_db_api.AccountLookups,
+        tel: *lib.telemetry.Region,
+    };
+};
+
+pub const consensus = struct {
+    pub const components = &.{"consensus"};
+
+    pub const ReadOnly = struct {
+        block_pool: *const replay_api.BlockPool,
+    };
+
+    pub const ReadWrite = struct {
+        replay_notifications: *consensus_api.ReplayNotifications,
         tel: *lib.telemetry.Region,
     };
 };
