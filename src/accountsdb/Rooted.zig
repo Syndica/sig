@@ -40,6 +40,7 @@ memory_metric_sample_count: u64 = 0,
 /// on any threads that use put or get.
 threadlocal var put_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var get_stmt: ?*sql.sqlite3_stmt = null;
+threadlocal var get_overlay_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var get_data_len_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var put_snapshot_ref_stmt: ?*sql.sqlite3_stmt = null;
 threadlocal var get_snapshot_ref_stmt: ?*sql.sqlite3_stmt = null;
@@ -160,6 +161,10 @@ pub fn deinitThreadLocals() void {
     if (get_stmt) |stmt| {
         _ = sql.sqlite3_finalize(stmt);
         get_stmt = null;
+    }
+    if (get_overlay_stmt) |stmt| {
+        _ = sql.sqlite3_finalize(stmt);
+        get_overlay_stmt = null;
     }
     if (get_data_len_stmt) |stmt| {
         _ = sql.sqlite3_finalize(stmt);
@@ -358,6 +363,79 @@ pub fn compressedAccountChunkId(self: *Rooted, address: Pubkey) !?u32 {
         return try store.lookupChunkId(address);
     }
     return null;
+}
+
+pub const BatchLoadOverlayResult = struct {
+    pubkeys: u64 = 0,
+    resolved: u64 = 0,
+    tombstones: u64 = 0,
+};
+
+/// Loads only accounts present in the recent rooted SQLite overlay. Missing
+/// pubkeys are intentionally not loaded from snapshot refs or the compressed
+/// cold store, so callers can retain an existing snapshot value without
+/// decoding it again.
+pub fn batchLoadOverlayAccounts(
+    self: *Rooted,
+    allocator: std.mem.Allocator,
+    pubkeys: []const Pubkey,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+) !BatchLoadOverlayResult {
+    var result: BatchLoadOverlayResult = .{ .pubkeys = @intCast(pubkeys.len) };
+    if (pubkeys.len == 0) return result;
+
+    const stmt: *sql.sqlite3_stmt = if (get_overlay_stmt) |stmt| stmt else blk: {
+        const query =
+            \\SELECT lamports, data, owner, executable, rent_epoch
+            \\FROM entries WHERE address = ?;
+        ;
+        self.err(sql.sqlite3_prepare_v2(self.handle, query, -1, &get_overlay_stmt, null));
+        break :blk get_overlay_stmt.?;
+    };
+
+    for (pubkeys) |address| {
+        defer {
+            std.debug.assert(sql.sqlite3_reset(stmt) == OK);
+            std.debug.assert(sql.sqlite3_clear_bindings(stmt) == OK);
+        }
+
+        self.err(sql.sqlite3_bind_blob(stmt, 1, &address.data, Pubkey.SIZE, sql.SQLITE_STATIC));
+        switch (sql.sqlite3_step(stmt)) {
+            ROW => {
+                const lamports: u64 = @bitCast(sql.sqlite3_column_int64(stmt, 0));
+                var account = if (lamports == 0) AccountSharedData.EMPTY else blk: {
+                    const len: usize = @intCast(sql.sqlite3_column_bytes(stmt, 1));
+                    const data = if (len == 0)
+                        &.{}
+                    else data: {
+                        const ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(stmt, 1));
+                        break :data ptr[0..len];
+                    };
+                    const owner_ptr: [*]const u8 = @ptrCast(sql.sqlite3_column_blob(stmt, 2));
+                    break :blk AccountSharedData{
+                        .lamports = lamports,
+                        .data = try allocator.dupe(u8, data),
+                        .owner = .{ .data = owner_ptr[0..Pubkey.SIZE].* },
+                        .executable = sql.sqlite3_column_int(stmt, 3) != 0,
+                        .rent_epoch = @bitCast(sql.sqlite3_column_int64(stmt, 4)),
+                    };
+                };
+                errdefer account.deinit(allocator);
+
+                const gop = try accounts.getOrPut(allocator, address);
+                if (gop.found_existing) gop.value_ptr.deinit(allocator);
+                gop.value_ptr.* = account;
+                result.resolved += 1;
+                if (lamports == 0) result.tombstones += 1;
+            },
+            DONE => {},
+            else => |rc| {
+                self.err(rc);
+                unreachable;
+            },
+        }
+    }
+    return result;
 }
 
 pub fn compressedAccountChunkCached(self: *Rooted, chunk_id: u32) bool {

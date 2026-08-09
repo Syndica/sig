@@ -671,15 +671,16 @@ pub const SlotCacheLtHashDeltaResult = struct {
     previous_owned: u64,
     previous_borrowed: u64,
     previous_unrooted: u64,
+    previous_rooted: u64,
     previous_missing: u64,
     unchanged: u64,
     current_missing: u64,
 };
 
 /// Computes the same per-slot lattice-hash delta as freeze.deltaLtHash, but
-/// reads each account's pre-slot value from the slot frame instead of looking
-/// it up again after replay. The slot cache retains the first owned value and
-/// already keeps compressed borrowed values alive for the lifetime of the DB.
+/// reads each account's pre-slot value from batched unrooted/rooted overlays,
+/// then falls back to the retained slot-frame snapshot value. This preserves
+/// account-store precedence without repeating cold compressed-store reads.
 pub fn computeSlotCacheLtHashDelta(
     allocator: Allocator,
     thread_pool: *ThreadPool,
@@ -692,10 +693,12 @@ pub fn computeSlotCacheLtHashDelta(
         dirty_keys: []const sig.core.Pubkey,
         current_accounts: *const sig.utils.collections.PubkeyMap(AccountSharedData),
         unrooted_accounts: *const sig.utils.collections.PubkeyMap(AccountSharedData),
+        rooted_accounts: *const sig.utils.collections.PubkeyMap(AccountSharedData),
         original_accounts: *const sig.utils.collections.PubkeyMap(AccountSharedData),
         borrowed_accounts: *const sig.utils.collections.PubkeyMap(*const AccountSharedData),
         delta: LtHash = .IDENTITY,
         previous_unrooted: u64 = 0,
+        previous_rooted: u64 = 0,
         previous_owned: u64 = 0,
         previous_borrowed: u64 = 0,
         previous_missing: u64 = 0,
@@ -714,6 +717,9 @@ pub fn computeSlotCacheLtHashDelta(
 
                 const previous: ?AccountSharedData = if (self.unrooted_accounts.get(pubkey)) |account| blk: {
                     self.previous_unrooted += 1;
+                    break :blk account;
+                } else if (self.rooted_accounts.get(pubkey)) |account| blk: {
+                    self.previous_rooted += 1;
                     break :blk account;
                 } else if (self.original_accounts.get(pubkey)) |account| blk: {
                     self.previous_owned += 1;
@@ -769,6 +775,7 @@ pub fn computeSlotCacheLtHashDelta(
         .previous_owned = 0,
         .previous_borrowed = 0,
         .previous_unrooted = 0,
+        .previous_rooted = 0,
         .previous_missing = 0,
         .unchanged = 0,
         .current_missing = 0,
@@ -790,6 +797,23 @@ pub fn computeSlotCacheLtHashDelta(
         selected_keys.items,
         &parent_ancestors,
         &unrooted_accounts,
+    );
+
+    var rooted_pubkeys = std.ArrayListUnmanaged(sig.core.Pubkey){};
+    defer rooted_pubkeys.deinit(allocator);
+    try rooted_pubkeys.ensureTotalCapacity(allocator, selected_keys.items.len);
+    for (selected_keys.items) |pubkey| {
+        if (!unrooted_accounts.contains(pubkey)) rooted_pubkeys.appendAssumeCapacity(pubkey);
+    }
+    var rooted_accounts: sig.utils.collections.PubkeyMap(AccountSharedData) = .{};
+    defer {
+        for (rooted_accounts.values()) |*account| account.deinit(allocator);
+        rooted_accounts.deinit(allocator);
+    }
+    const rooted_result = try db.rooted.batchLoadOverlayAccounts(
+        allocator,
+        rooted_pubkeys.items,
+        &rooted_accounts,
     );
 
     const num_workers = @max(1, @min(selected_keys.items.len, thread_pool.max_threads));
@@ -820,6 +844,7 @@ pub fn computeSlotCacheLtHashDelta(
                 .dirty_keys = selected_keys.items,
                 .current_accounts = &cache.accounts,
                 .unrooted_accounts = &unrooted_accounts,
+                .rooted_accounts = &rooted_accounts,
                 .original_accounts = &cache.original_accounts,
                 .borrowed_accounts = &cache.borrowed_accounts,
             };
@@ -833,6 +858,7 @@ pub fn computeSlotCacheLtHashDelta(
         .dirty_accounts = @intCast(selected_keys.items.len),
         .excluded_accounts = excluded_accounts,
         .previous_unrooted = 0,
+        .previous_rooted = 0,
         .previous_owned = 0,
         .previous_borrowed = 0,
         .previous_missing = 0,
@@ -842,6 +868,7 @@ pub fn computeSlotCacheLtHashDelta(
     for (workers.items) |*worker| {
         result.delta.mixIn(worker.delta);
         result.previous_unrooted += worker.previous_unrooted;
+        result.previous_rooted += worker.previous_rooted;
         result.previous_owned += worker.previous_owned;
         result.previous_borrowed += worker.previous_borrowed;
         result.previous_missing += worker.previous_missing;
@@ -849,6 +876,7 @@ pub fn computeSlotCacheLtHashDelta(
         result.current_missing += worker.current_missing;
     }
     std.debug.assert(result.previous_unrooted <= unrooted_result.resolved);
+    std.debug.assert(result.previous_rooted <= rooted_result.resolved);
     return result;
 }
 
@@ -945,6 +973,7 @@ test "slot cache LT hash delta preserves owned and borrowed previous values" {
     try std.testing.expectEqual(@as(u64, 1), result.previous_owned);
     try std.testing.expectEqual(@as(u64, 1), result.previous_borrowed);
     try std.testing.expectEqual(@as(u64, 0), result.previous_unrooted);
+    try std.testing.expectEqual(@as(u64, 0), result.previous_rooted);
     try std.testing.expectEqual(@as(u64, 1), result.previous_missing);
     try std.testing.expectEqual(@as(u64, 0), result.current_missing);
 }
@@ -1012,6 +1041,77 @@ test "slot cache LT hash delta prefers unrooted ancestor over compressed value" 
 
     try std.testing.expectEqualSlices(u16, &expected.data, &result.delta.data);
     try std.testing.expectEqual(@as(u64, 1), result.previous_unrooted);
+    try std.testing.expectEqual(@as(u64, 0), result.previous_rooted);
+    try std.testing.expectEqual(@as(u64, 0), result.previous_owned);
+    try std.testing.expectEqual(@as(u64, 0), result.previous_borrowed);
+    try std.testing.expectEqual(@as(u64, 0), result.previous_missing);
+    try std.testing.expectEqual(@as(u64, 0), result.current_missing);
+}
+
+test "slot cache LT hash delta prefers rooted overlay over compressed value" {
+    const allocator = std.testing.allocator;
+    var cache = SlotAccountCache.init(allocator);
+    defer cache.deinit();
+    var test_state = try sig.accounts_db.Db.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+    var ancestors: Ancestors = .{};
+    defer ancestors.deinit(allocator);
+    try ancestors.ancestors.put(allocator, 5, {});
+    try ancestors.ancestors.put(allocator, 6, {});
+    cache.deferred_db = db;
+    cache.deferred_ancestors = &ancestors;
+    cache.deferred_slot = 6;
+
+    const key = sig.core.Pubkey{ .data = @splat(7) };
+    var compressed_data = "compressed-root".*;
+    var rooted_data = "rooted-parent".*;
+    var current_data = "current-slot".*;
+    const compressed = AccountSharedData{
+        .lamports = 70,
+        .data = compressed_data[0..],
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+    const rooted = AccountSharedData{
+        .lamports = 71,
+        .data = rooted_data[0..],
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+    const current = AccountSharedData{
+        .lamports = 72,
+        .data = current_data[0..],
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+
+    db.rooted.put(key, 5, rooted);
+    try db.put(6, key, current);
+    try cache.borrowed_accounts.put(allocator, key, &compressed);
+    try cache.accounts.put(allocator, key, try current.clone(allocator));
+    try cache.deferred_dirty.put(allocator, key, {});
+
+    var thread_pool = ThreadPool.init(.{ .max_threads = 2 });
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
+
+    const result = try computeSlotCacheLtHashDelta(allocator, &thread_pool, &cache);
+    defer allocator.free(result.keys);
+    var expected = LtHash.IDENTITY;
+    const rooted_account = rooted.asAccount();
+    const current_account = current.asAccount();
+    expected.mixOut(rooted_account.ltHash(key));
+    expected.mixIn(current_account.ltHash(key));
+
+    try std.testing.expectEqualSlices(u16, &expected.data, &result.delta.data);
+    try std.testing.expectEqual(@as(u64, 0), result.previous_unrooted);
+    try std.testing.expectEqual(@as(u64, 1), result.previous_rooted);
     try std.testing.expectEqual(@as(u64, 0), result.previous_owned);
     try std.testing.expectEqual(@as(u64, 0), result.previous_borrowed);
     try std.testing.expectEqual(@as(u64, 0), result.previous_missing);

@@ -275,12 +275,13 @@ pub const ReplaySlotFuture = struct {
                                 result.keys,
                             );
                             self.logger.info().logf(
-                                "slot_lt_hash_cache_delta status=pass slot={} dirty_accounts={} excluded_accounts={} previous_unrooted={} previous_owned={} previous_borrowed={} previous_missing={} unchanged={} current_missing={}",
+                                "slot_lt_hash_cache_delta status=pass slot={} dirty_accounts={} excluded_accounts={} previous_unrooted={} previous_rooted={} previous_owned={} previous_borrowed={} previous_missing={} unchanged={} current_missing={}",
                                 .{
                                     slot,
                                     result.dirty_accounts,
                                     result.excluded_accounts,
                                     result.previous_unrooted,
+                                    result.previous_rooted,
                                     result.previous_owned,
                                     result.previous_borrowed,
                                     result.previous_missing,
