@@ -75,11 +75,33 @@ pub fn put(self: *Db, slot: Slot, address: Pubkey, data: AccountSharedData) !voi
 // TODO: this should be trivial to put on another thread; this currently blocks the main replay
 // thread for 30-40ms per slot on testnet.
 pub fn onSlotRooted(self: *Db, newly_rooted_slot: Slot, ancestors: *const Ancestors) void {
+    _ = self.onSlotRootedTimed(newly_rooted_slot, ancestors, true);
+}
+
+pub const RootSlotTiming = struct {
+    begin_ns: u64,
+    scan_upsert_ns: u64,
+    commit: Rooted.CommitTransactionTiming,
+    total_ns: u64,
+    slots_scanned: u64,
+    populated_slots_scanned: u64,
+    rooted_slots_flushed: u64,
+    accounts_upserted: u64,
+    accounts_cleared: u64,
+};
+
+/// Roots the slot synchronously and always commits its account updates. The
+/// flag controls only the post-commit maintenance reported in `commit`.
+pub fn onSlotRootedTimed(
+    self: *Db,
+    newly_rooted_slot: Slot,
+    ancestors: *const Ancestors,
+    perform_memory_relief: bool,
+) RootSlotTiming {
+    var total_timer = sig.time.Timer.start();
+    var phase_timer = sig.time.Timer.start();
     self.rooted.beginTransaction();
-    defer {
-        self.rooted.commitTransaction();
-        self.rooted.largest_rooted_slot = newly_rooted_slot;
-    }
+    const begin_ns = phase_timer.read().asNanos();
 
     // Ancestors are kept in a way where the "head" slot is stored.
     std.debug.assert(ancestors.containsSlot(newly_rooted_slot));
@@ -89,29 +111,54 @@ pub fn onSlotRooted(self: *Db, newly_rooted_slot: Slot, ancestors: *const Ancest
 
     const start_slot = if (self.rooted.largest_rooted_slot) |lrs| lrs + 1 else 0;
     const range = newly_rooted_slot - start_slot + 1;
+    var populated_slots_scanned: u64 = 0;
+    var rooted_slots_flushed: u64 = 0;
+    var accounts_upserted: u64 = 0;
+    var accounts_cleared: u64 = 0;
 
+    phase_timer.reset();
     for (0..range) |i| {
         const slot = start_slot + i;
         const index = &self.unrooted.slots[slot % Unrooted.MAX_SLOTS];
 
         if (index.is_empty.load(.acquire)) continue;
         if (index.slot != slot) continue;
+        populated_slots_scanned += 1;
 
         index.lock.lock();
         defer index.lock.unlock();
 
         if (ancestors.containsSlot(index.slot)) {
+            rooted_slots_flushed += 1;
             // TODO: batch put() into rooted
             var entries = index.entries.iterator();
             while (entries.next()) |entry| {
                 self.rooted.put(entry.key_ptr.*, index.slot, entry.value_ptr.*);
+                accounts_upserted += 1;
             }
         }
 
+        accounts_cleared += index.entries.count();
         for (index.entries.values()) |data| data.deinit(self.allocator);
         index.entries.clearRetainingCapacity();
         index.is_empty.store(true, .release);
     }
+    const scan_upsert_ns = phase_timer.read().asNanos();
+
+    const commit = self.rooted.commitTransactionTimed(perform_memory_relief);
+    self.rooted.largest_rooted_slot = newly_rooted_slot;
+
+    return .{
+        .begin_ns = begin_ns,
+        .scan_upsert_ns = scan_upsert_ns,
+        .commit = commit,
+        .total_ns = total_timer.read().asNanos(),
+        .slots_scanned = range,
+        .populated_slots_scanned = populated_slots_scanned,
+        .rooted_slots_flushed = rooted_slots_flushed,
+        .accounts_upserted = accounts_upserted,
+        .accounts_cleared = accounts_cleared,
+    };
 }
 
 pub fn get(
@@ -260,6 +307,44 @@ const testing = struct {
         };
     }
 };
+
+test "onSlotRootedTimed commits while memory relief is deferred" {
+    const allocator = std.testing.allocator;
+
+    var test_state = try Db.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    var ancestors: Ancestors = try .initWithSlots(allocator, &.{0});
+    defer ancestors.deinit(allocator);
+
+    var account_data = [_]u8{ 1, 2, 3 };
+    try db.put(0, .ZEROES, .{
+        .lamports = 42,
+        .data = &account_data,
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 7,
+    });
+
+    const timing = db.onSlotRootedTimed(0, &ancestors, false);
+    try std.testing.expect(!timing.commit.memory_relief_performed);
+    try std.testing.expectEqual(@as(u64, 1), timing.slots_scanned);
+    try std.testing.expectEqual(@as(u64, 1), timing.populated_slots_scanned);
+    try std.testing.expectEqual(@as(u64, 1), timing.rooted_slots_flushed);
+    try std.testing.expectEqual(@as(u64, 1), timing.accounts_upserted);
+    try std.testing.expectEqual(@as(u64, 1), timing.accounts_cleared);
+    try std.testing.expectEqual(@as(u64, 0), timing.commit.db_release_ns);
+    try std.testing.expectEqual(@as(u64, 0), timing.commit.global_release_ns);
+    try std.testing.expectEqual(@as(u64, 0), timing.commit.pressure_relief_ns);
+    try std.testing.expectEqual(@as(?Slot, 0), db.rooted.getLargestRootedSlot());
+
+    const account = (try db.get(allocator, .ZEROES, &ancestors)) orelse
+        return error.MissingCommittedAccount;
+    defer account.deinit(allocator);
+    try std.testing.expectEqual(@as(u64, 42), account.lamports);
+    try std.testing.expect(account.data.eqlSlice(&account_data));
+}
 
 test "many slots, many accounts" {
     const allocator = std.testing.allocator;

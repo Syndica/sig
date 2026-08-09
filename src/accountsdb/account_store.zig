@@ -130,6 +130,30 @@ pub const AccountStore = union(enum) {
             .noop => {},
         }
     }
+
+    pub fn onSlotRootedTimed(
+        self: AccountStore,
+        newly_rooted_slot: Slot,
+        ancestors: *const Ancestors,
+        perform_memory_relief: bool,
+    ) !?accounts_db.Db.RootSlotTiming {
+        var zone = tracy.Zone.init(@src(), .{ .name = "onSlotRootedTimed" });
+        defer zone.deinit();
+        zone.value(newly_rooted_slot);
+
+        return switch (self) {
+            .accounts_db => |db| db.onSlotRootedTimed(
+                newly_rooted_slot,
+                ancestors,
+                perform_memory_relief,
+            ),
+            .thread_safe_map => |db| blk: {
+                try db.onSlotRooted(newly_rooted_slot);
+                break :blk null;
+            },
+            .noop => null,
+        };
+    }
 };
 
 /// Interface for only reading accounts

@@ -344,6 +344,8 @@ pub const ReplayState = struct {
     persistent_program_map_tip: ?Slot,
     persistent_program_map_epoch: ?u64,
     persistent_program_map_pending_slot: ?Slot,
+    root_memory_relief_interval: u64,
+    rooted_slots_since_memory_relief: u64,
 
     pub fn deinit(self: *ReplayState) void {
         self.thread_pool.shutdown();
@@ -426,6 +428,10 @@ pub const ReplayState = struct {
             .persistent_program_map_tip = deps.root.slot,
             .persistent_program_map_epoch = null,
             .persistent_program_map_pending_slot = null,
+            .root_memory_relief_interval = normalizedRootMemoryReliefInterval(
+                envU64("SIG_REPLAY_ROOT_MEMORY_RELIEF_INTERVAL", 1),
+            ),
+            .rooted_slots_since_memory_relief = 0,
         };
     }
 
@@ -888,6 +894,38 @@ fn envBool(key: []const u8, default_value: bool) bool {
     return default_value;
 }
 
+fn envU64(key: []const u8, default_value: u64) u64 {
+    const allocator = std.heap.page_allocator;
+    const raw = std.process.getEnvVarOwned(allocator, key) catch return default_value;
+    defer allocator.free(raw);
+
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    if (trimmed.len == 0) return default_value;
+    return std.fmt.parseInt(u64, trimmed, 10) catch default_value;
+}
+
+fn normalizedRootMemoryReliefInterval(interval: u64) u64 {
+    return @max(interval, 1);
+}
+
+const RootMemoryReliefDecision = struct {
+    perform: bool,
+    next_roots_since_relief: u64,
+};
+
+fn rootMemoryReliefDecision(
+    roots_since_relief: u64,
+    configured_interval: u64,
+) RootMemoryReliefDecision {
+    const interval = normalizedRootMemoryReliefInterval(configured_interval);
+    const roots_including_current = roots_since_relief +| 1;
+    const perform = roots_including_current >= interval;
+    return .{
+        .perform = perform,
+        .next_roots_since_relief = if (perform) 0 else roots_including_current,
+    };
+}
+
 /// freezes any slots that were completed according to these replay results
 fn freezeCompletedSlots(
     state: *ReplayState,
@@ -992,12 +1030,44 @@ fn bypassConsensus(state: *ReplayState) !void {
         phase_timer.reset();
         const slot_constants = slot_tracker.get(new_root).?;
         defer slot_constants.release();
-        try state.account_store.onSlotRooted(
+        const memory_relief = rootMemoryReliefDecision(
+            state.rooted_slots_since_memory_relief,
+            state.root_memory_relief_interval,
+        );
+        const maybe_root_timing = try state.account_store.onSlotRootedTimed(
             new_root,
             &slot_constants.constants().ancestors,
+            memory_relief.perform,
         );
+        state.rooted_slots_since_memory_relief = memory_relief.next_roots_since_relief;
         const account_store_root_ns = phase_timer.read().asNanos();
         const total_ns = total_timer.read().asNanos();
+
+        if (maybe_root_timing) |root_timing| {
+            state.logger.info().logf(
+                "account_store_root_timing new_root={} slots_scanned={} populated_slots_scanned={} rooted_slots_flushed={} accounts_upserted={} accounts_cleared={} begin_ns={} scan_upsert_ns={} commit_ns={} db_release_ns={} global_release_ns={} pressure_relief_ns={} commit_total_ns={} unattributed_ns={} total_ns={} memory_relief={s} memory_relief_interval={} roots_since_relief={}",
+                .{
+                    new_root,
+                    root_timing.slots_scanned,
+                    root_timing.populated_slots_scanned,
+                    root_timing.rooted_slots_flushed,
+                    root_timing.accounts_upserted,
+                    root_timing.accounts_cleared,
+                    root_timing.begin_ns,
+                    root_timing.scan_upsert_ns,
+                    root_timing.commit.commit_ns,
+                    root_timing.commit.db_release_ns,
+                    root_timing.commit.global_release_ns,
+                    root_timing.commit.pressure_relief_ns,
+                    root_timing.commit.total_ns,
+                    root_timing.total_ns -| (root_timing.begin_ns +| root_timing.scan_upsert_ns +| root_timing.commit.total_ns),
+                    root_timing.total_ns,
+                    if (root_timing.commit.memory_relief_performed) "performed" else "deferred",
+                    state.root_memory_relief_interval,
+                    state.rooted_slots_since_memory_relief,
+                },
+            );
+        }
 
         state.logger.info().logf(
             "replay_bypass_consensus_timing root_changed=true new_root={} processed_tip_ns={} reroot_ns={} root_store_ns={} prune_non_rooted_ns={} status_cache_ns={} account_store_root_ns={} unattributed_ns={} total_ns={}",
@@ -1434,6 +1504,33 @@ test "persistent program cache only follows a direct parent in the same epoch" {
     const next_epoch = replay_state.preparePersistentProgramMap(4, 3, 8);
     try std.testing.expect(!next_epoch.reused_parent);
     try std.testing.expectEqual(0, next_epoch.entries_before);
+}
+
+test "root memory relief cadence defaults to every root and normalizes zero" {
+    try std.testing.expectEqual(@as(u64, 1), normalizedRootMemoryReliefInterval(0));
+    try std.testing.expectEqual(@as(u64, 1), normalizedRootMemoryReliefInterval(1));
+
+    const default_decision = rootMemoryReliefDecision(0, 1);
+    try std.testing.expect(default_decision.perform);
+    try std.testing.expectEqual(@as(u64, 0), default_decision.next_roots_since_relief);
+
+    const normalized_zero = rootMemoryReliefDecision(0, 0);
+    try std.testing.expect(normalized_zero.perform);
+    try std.testing.expectEqual(@as(u64, 0), normalized_zero.next_roots_since_relief);
+}
+
+test "root memory relief cadence performs maintenance at configured interval" {
+    const first = rootMemoryReliefDecision(0, 3);
+    try std.testing.expect(!first.perform);
+    try std.testing.expectEqual(@as(u64, 1), first.next_roots_since_relief);
+
+    const second = rootMemoryReliefDecision(first.next_roots_since_relief, 3);
+    try std.testing.expect(!second.perform);
+    try std.testing.expectEqual(@as(u64, 2), second.next_roots_since_relief);
+
+    const third = rootMemoryReliefDecision(second.next_roots_since_relief, 3);
+    try std.testing.expect(third.perform);
+    try std.testing.expectEqual(@as(u64, 0), third.next_roots_since_relief);
 }
 
 test "Execute testnet block single threaded" {

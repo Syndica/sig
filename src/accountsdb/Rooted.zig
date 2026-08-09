@@ -762,16 +762,60 @@ pub fn beginTransaction(self: *Rooted) void {
     self.err(sql.sqlite3_exec(self.handle, "BEGIN TRANSACTION;", null, null, null));
 }
 
+pub const CommitTransactionTiming = struct {
+    commit_ns: u64,
+    db_release_ns: u64,
+    global_release_ns: u64,
+    pressure_relief_ns: u64,
+    total_ns: u64,
+    memory_relief_performed: bool,
+};
+
 pub fn commitTransaction(self: *Rooted) void {
+    _ = self.commitTransactionTimed(true);
+}
+
+/// Always commits the active SQLite transaction. The flag controls only
+/// post-commit cache and allocator memory relief.
+pub fn commitTransactionTimed(
+    self: *Rooted,
+    perform_memory_relief: bool,
+) CommitTransactionTiming {
     const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.commitTransaction" });
     defer zone.deinit();
 
+    var total_timer = sig.time.Timer.start();
+    var phase_timer = sig.time.Timer.start();
     self.err(sql.sqlite3_exec(self.handle, "COMMIT;", null, null, null));
-    self.err(sql.sqlite3_db_release_memory(self.handle));
-    _ = sql.sqlite3_release_memory(std.math.maxInt(c_int));
-    if (builtin.os.tag == .macos) {
-        _ = malloc_zone_pressure_relief(null, 0);
+    const commit_ns = phase_timer.read().asNanos();
+
+    var db_release_ns: u64 = 0;
+    var global_release_ns: u64 = 0;
+    var pressure_relief_ns: u64 = 0;
+    if (perform_memory_relief) {
+        phase_timer.reset();
+        self.err(sql.sqlite3_db_release_memory(self.handle));
+        db_release_ns = phase_timer.read().asNanos();
+
+        phase_timer.reset();
+        _ = sql.sqlite3_release_memory(std.math.maxInt(c_int));
+        global_release_ns = phase_timer.read().asNanos();
+
+        if (builtin.os.tag == .macos) {
+            phase_timer.reset();
+            _ = malloc_zone_pressure_relief(null, 0);
+            pressure_relief_ns = phase_timer.read().asNanos();
+        }
     }
+
+    return .{
+        .commit_ns = commit_ns,
+        .db_release_ns = db_release_ns,
+        .global_release_ns = global_release_ns,
+        .pressure_relief_ns = pressure_relief_ns,
+        .total_ns = total_timer.read().asNanos(),
+        .memory_relief_performed = perform_memory_relief,
+    };
 }
 
 /// Should not be called outside of snapshot loading or slot rooting.
