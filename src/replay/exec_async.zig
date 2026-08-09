@@ -482,6 +482,7 @@ const TransactionScheduler = struct {
 
     const StartOptions = struct {
         overlap_preprocess: ?bool = null,
+        overlap_preprocess_workers: ?usize = null,
         inline_ready_continuation: ?bool = null,
         stats_sink: ?*Stats = null,
     };
@@ -714,10 +715,16 @@ const TransactionScheduler = struct {
         if (self.workers.items.len == 0) return;
 
         const max_threads: usize = @intCast(self.future.thread_pool.max_threads);
-        const preprocess_thread_limit = if (self.overlap_preprocess and max_threads > 1)
-            max_threads - @max(@as(usize, 1), max_threads / 3)
-        else
-            max_threads;
+        const configured_overlap_preprocess_workers =
+            options.overlap_preprocess_workers orelse @as(
+                usize,
+                @intCast(envU64("SIG_REPLAY_SCHEDULER_OVERLAP_PREPROCESS_WORKERS", 0)),
+            );
+        const preprocess_thread_limit = preprocessThreadLimit(
+            self.overlap_preprocess,
+            max_threads,
+            configured_overlap_preprocess_workers,
+        );
         const preprocess_task_count = @min(
             self.workers.items.len,
             @max(@as(usize, 1), preprocess_thread_limit),
@@ -1056,6 +1063,16 @@ fn envU64(key: []const u8, default_value: u64) u64 {
     return std.fmt.parseUnsigned(u64, trimmed, 10) catch default_value;
 }
 
+fn preprocessThreadLimit(
+    overlap_preprocess: bool,
+    max_threads: usize,
+    configured_workers: usize,
+) usize {
+    if (!overlap_preprocess or max_threads <= 1) return max_threads;
+    if (configured_workers > 0) return @min(configured_workers, max_threads - 1);
+    return max_threads - @max(@as(usize, 1), max_threads / 3);
+}
+
 fn testSchedulerForBatches(
     allocator: Allocator,
     state: *replay.execution.TestState,
@@ -1311,12 +1328,14 @@ test "TransactionScheduler: overlap preprocessing preserves fanout and fanin" {
             &batches,
             .{
                 .overlap_preprocess = true,
+                .overlap_preprocess_workers = 4,
                 .inline_ready_continuation = false,
                 .stats_sink = &scheduler_stats,
             },
         ),
     );
     try std.testing.expect(scheduler_stats.overlap_preprocess);
+    try std.testing.expectEqual(1, scheduler_stats.preprocess_tasks);
     try std.testing.expectEqual(0, scheduler_stats.inline_ready_continuations);
     try std.testing.expectEqual(4, scheduler_stats.workers);
     try std.testing.expectEqual(1, scheduler_stats.initial_ready);
@@ -1412,18 +1431,28 @@ test "TransactionScheduler: overlap preprocessing handles a long writable chain"
             batches,
             .{
                 .overlap_preprocess = true,
+                .overlap_preprocess_workers = 4,
                 .inline_ready_continuation = false,
                 .stats_sink = &scheduler_stats,
             },
         ),
     );
     try std.testing.expect(scheduler_stats.overlap_preprocess);
+    try std.testing.expectEqual(1, scheduler_stats.preprocess_tasks);
     try std.testing.expectEqual(transaction_count, scheduler_stats.workers);
     try std.testing.expectEqual(transaction_count - 1, scheduler_stats.dependency_edges);
     try std.testing.expectEqual(1, scheduler_stats.initial_ready);
     try std.testing.expectEqual(1, scheduler_stats.max_dependencies);
     try std.testing.expectEqual(transaction_count, scheduler_stats.critical_path);
     try std.testing.expectEqual(0, scheduler_stats.inline_ready_continuations);
+}
+
+test "TransactionScheduler: overlap preprocessing worker limit" {
+    try std.testing.expectEqual(12, preprocessThreadLimit(false, 12, 4));
+    try std.testing.expectEqual(1, preprocessThreadLimit(true, 1, 4));
+    try std.testing.expectEqual(8, preprocessThreadLimit(true, 12, 0));
+    try std.testing.expectEqual(4, preprocessThreadLimit(true, 12, 4));
+    try std.testing.expectEqual(11, preprocessThreadLimit(true, 12, 12));
 }
 
 test "TransactionScheduler: happy path" {
