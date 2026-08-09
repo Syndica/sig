@@ -193,7 +193,7 @@ pub const ReplaySlotFuture = struct {
                 scheduler_stats.inline_ready_continuations,
             );
             self.logger.info().logf(
-                "slot_replay_scheduler_stats slot={} poh_entries={} poh_tasks={} poh_wall={D} poh_cpu={D} scheduler_build={D} preprocess_tasks={} preprocess_wall={D} preprocess_cpu={D} scheduler_execute_wall={D} workers={} dependency_edges={} initial_ready={} max_dependencies={} critical_path={} overlap_preprocess={} inline_ready_continuations={}",
+                "slot_replay_scheduler_stats slot={} poh_entries={} poh_tasks={} poh_wall={D} poh_cpu={D} scheduler_build={D} preprocess_tasks={} preprocess_wall={D} preprocess_cpu={D} scheduler_execute_wall={D} workers={} dependency_edges={} initial_ready={} max_dependencies={} critical_path={} overlap_preprocess={} inline_ready_continuations={} inline_critical_chain={} inline_critical_chain_min_tail={} inline_critical_chain_continuations={}",
                 .{
                     slot,
                     poh_stats.entries,
@@ -212,6 +212,9 @@ pub const ReplaySlotFuture = struct {
                     scheduler_stats.critical_path,
                     scheduler_stats.overlap_preprocess,
                     scheduler_stats.inline_ready_continuations,
+                    scheduler_stats.inline_critical_chain,
+                    scheduler_stats.inline_critical_chain_min_tail,
+                    scheduler_stats.inline_critical_chain_continuations,
                 },
             );
 
@@ -426,6 +429,9 @@ const TransactionScheduler = struct {
     overlap_preprocess: bool = false,
     inline_ready_continuation: bool = false,
     inline_ready_continuations: Atomic(u64) = .init(0),
+    inline_critical_chain: bool = false,
+    inline_critical_chain_min_tail: u64 = 512,
+    inline_critical_chain_continuations: Atomic(u64) = .init(0),
     stats_sink: ?*Stats = null,
 
     const Error = Allocator.Error || error{ReplayBatchFailed};
@@ -478,12 +484,17 @@ const TransactionScheduler = struct {
         critical_path: u64,
         overlap_preprocess: bool,
         inline_ready_continuations: u64,
+        inline_critical_chain: bool,
+        inline_critical_chain_min_tail: u64,
+        inline_critical_chain_continuations: u64,
     };
 
     const StartOptions = struct {
         overlap_preprocess: ?bool = null,
         overlap_preprocess_workers: ?usize = null,
         inline_ready_continuation: ?bool = null,
+        inline_critical_chain: ?bool = null,
+        inline_critical_chain_min_tail: ?u64 = null,
         stats_sink: ?*Stats = null,
     };
 
@@ -513,6 +524,17 @@ const TransactionScheduler = struct {
             envBool("SIG_REPLAY_SCHEDULER_OVERLAP_PREPROCESS", false);
         self.inline_ready_continuation = options.inline_ready_continuation orelse
             envBool("SIG_REPLAY_SCHEDULER_INLINE_READY_CONTINUATION", false);
+        const inline_critical_chain_requested = options.inline_critical_chain orelse
+            envBool("SIG_REPLAY_SCHEDULER_INLINE_CRITICAL_CHAIN", false);
+        self.inline_critical_chain = !self.inline_ready_continuation and
+            inline_critical_chain_requested;
+        self.inline_critical_chain_min_tail = @max(
+            2,
+            options.inline_critical_chain_min_tail orelse envU64(
+                "SIG_REPLAY_SCHEDULER_INLINE_CRITICAL_CHAIN_MIN_TAIL",
+                512,
+            ),
+        );
         self.stats_sink = options.stats_sink;
 
         const allocator = self.future.arena.allocator();
@@ -693,9 +715,26 @@ const TransactionScheduler = struct {
                     .ref_count = .init(@intCast(dependency_count)),
                     .waiters = .{},
                     .critical_depth = critical_depth,
+                    .critical_tail = 1,
                     .critical_parent = critical_parent,
                     .critical_account = critical_account,
                 });
+            }
+        }
+
+        // Dependencies always point from an earlier worker to a later worker, so a reverse
+        // pass computes the longest remaining dependency tail without changing ready order.
+        // Keep this work behind the opt-in flag so the disabled control remains unchanged.
+        if (self.inline_critical_chain) {
+            for (0..self.workers.items.len) |reverse_index| {
+                const worker_index = self.workers.items.len - 1 - reverse_index;
+                const worker = &self.workers.items[worker_index];
+                for (worker.waiters.items) |waiter_id| {
+                    worker.critical_tail = @max(
+                        worker.critical_tail,
+                        self.workers.items[waiter_id].critical_tail + 1,
+                    );
+                }
             }
         }
 
@@ -865,6 +904,9 @@ const TransactionScheduler = struct {
             .critical_path = self.critical_path,
             .overlap_preprocess = self.overlap_preprocess,
             .inline_ready_continuations = self.inline_ready_continuations.load(.acquire),
+            .inline_critical_chain = self.inline_critical_chain,
+            .inline_critical_chain_min_tail = self.inline_critical_chain_min_tail,
+            .inline_critical_chain_continuations = self.inline_critical_chain_continuations.load(.acquire),
         };
     }
 
@@ -925,6 +967,7 @@ const TransactionScheduler = struct {
         ref_count: Atomic(u32),
         waiters: std.ArrayListUnmanaged(u32),
         critical_depth: u64,
+        critical_tail: u64,
         critical_parent: ?u32,
         critical_account: ?Pubkey,
         preprocessed: ?PreprocessedTransaction = null,
@@ -999,6 +1042,19 @@ const TransactionScheduler = struct {
                     if (self.scheduler.overlap_preprocess and !waiter.tryClaimReady()) continue;
                     if (self.scheduler.inline_ready_continuation and inline_waiter == null) {
                         inline_waiter = waiter;
+                    } else if (self.scheduler.inline_critical_chain and
+                        waiter.critical_tail >= self.scheduler.inline_critical_chain_min_tail)
+                    {
+                        if (inline_waiter) |current_inline| {
+                            if (waiter.critical_tail > current_inline.critical_tail) {
+                                task_batch.push(.from(&current_inline.task));
+                                inline_waiter = waiter;
+                            } else {
+                                task_batch.push(.from(&waiter.task));
+                            }
+                        } else {
+                            inline_waiter = waiter;
+                        }
                     } else {
                         task_batch.push(.from(&waiter.task));
                     }
@@ -1009,7 +1065,14 @@ const TransactionScheduler = struct {
             // continuing one dependency-chain successor on this already-running pool thread.
             future.schedule(task_batch);
             if (inline_waiter != null) {
-                _ = self.scheduler.inline_ready_continuations.fetchAdd(1, .monotonic);
+                if (self.scheduler.inline_critical_chain) {
+                    _ = self.scheduler.inline_critical_chain_continuations.fetchAdd(
+                        1,
+                        .monotonic,
+                    );
+                } else {
+                    _ = self.scheduler.inline_ready_continuations.fetchAdd(1, .monotonic);
+                }
             }
             return inline_waiter;
         }
@@ -1330,6 +1393,8 @@ test "TransactionScheduler: overlap preprocessing preserves fanout and fanin" {
                 .overlap_preprocess = true,
                 .overlap_preprocess_workers = 4,
                 .inline_ready_continuation = false,
+                .inline_critical_chain = true,
+                .inline_critical_chain_min_tail = 512,
                 .stats_sink = &scheduler_stats,
             },
         ),
@@ -1337,6 +1402,9 @@ test "TransactionScheduler: overlap preprocessing preserves fanout and fanin" {
     try std.testing.expect(scheduler_stats.overlap_preprocess);
     try std.testing.expectEqual(1, scheduler_stats.preprocess_tasks);
     try std.testing.expectEqual(0, scheduler_stats.inline_ready_continuations);
+    try std.testing.expect(scheduler_stats.inline_critical_chain);
+    try std.testing.expectEqual(512, scheduler_stats.inline_critical_chain_min_tail);
+    try std.testing.expectEqual(0, scheduler_stats.inline_critical_chain_continuations);
     try std.testing.expectEqual(4, scheduler_stats.workers);
     try std.testing.expectEqual(1, scheduler_stats.initial_ready);
     try std.testing.expectEqual(3, scheduler_stats.critical_path);
@@ -1391,6 +1459,64 @@ test "TransactionScheduler: inline ready continuation handles a long writable ch
     try std.testing.expectEqual(
         transaction_count - 1,
         scheduler_stats.inline_ready_continuations,
+    );
+}
+
+test "TransactionScheduler: selective inline continuation handles only a long critical tail" {
+    const allocator = std.testing.allocator;
+    const transaction_count = 1024;
+    const min_tail = 512;
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const shared_account = Pubkey.initRandom(rng.random());
+
+    const transactions = try allocator.alloc(Transaction, transaction_count);
+    defer allocator.free(transactions);
+    var initialized_count: usize = 0;
+    defer for (transactions[0..initialized_count]) |transaction| transaction.deinit(allocator);
+    for (transactions, 0..) |*transaction, index| {
+        transaction.* = try initSchedulerAccessTransaction(
+            allocator,
+            rng.random(),
+            @intCast(index + 1),
+            shared_account,
+            true,
+        );
+        initialized_count += 1;
+    }
+
+    const batches = try allocator.alloc([]const Transaction, transaction_count);
+    defer allocator.free(batches);
+    for (batches, 0..) |*batch, index| batch.* = transactions[index .. index + 1];
+
+    var state = try replay.execution.TestState.init(allocator);
+    defer state.deinit(allocator);
+    var scheduler_stats: TransactionScheduler.Stats = undefined;
+
+    try std.testing.expectEqual(
+        null,
+        try testSchedulerForBatchesWithOptions(
+            allocator,
+            &state,
+            batches,
+            .{
+                .inline_ready_continuation = false,
+                .inline_critical_chain = true,
+                .inline_critical_chain_min_tail = min_tail,
+                .stats_sink = &scheduler_stats,
+            },
+        ),
+    );
+    try std.testing.expectEqual(transaction_count, scheduler_stats.workers);
+    try std.testing.expectEqual(transaction_count - 1, scheduler_stats.dependency_edges);
+    try std.testing.expectEqual(1, scheduler_stats.initial_ready);
+    try std.testing.expectEqual(1, scheduler_stats.max_dependencies);
+    try std.testing.expectEqual(transaction_count, scheduler_stats.critical_path);
+    try std.testing.expectEqual(0, scheduler_stats.inline_ready_continuations);
+    try std.testing.expect(scheduler_stats.inline_critical_chain);
+    try std.testing.expectEqual(min_tail, scheduler_stats.inline_critical_chain_min_tail);
+    try std.testing.expectEqual(
+        transaction_count - min_tail,
+        scheduler_stats.inline_critical_chain_continuations,
     );
 }
 
