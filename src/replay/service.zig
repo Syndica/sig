@@ -487,6 +487,7 @@ pub fn trackNewSlots(
 ) !void {
     var zone = tracy.Zone.init(@src(), .{ .name = "trackNewSlots" });
     defer zone.deinit();
+    const reuse_parent_feature_set = envBool("SIG_REPLAY_REUSE_PARENT_FEATURE_SET", false);
 
     var frozen_slots_timer = sig.time.Timer.start();
     const root = slot_tracker.root.load(.monotonic);
@@ -517,6 +518,9 @@ pub fn trackNewSlots(
             if (slot_tracker.contains(slot)) continue;
             logger.info().logf("tracking new slot: {}", .{slot});
             var child_timer = sig.time.Timer.start();
+            const parent_epoch = epoch_tracker.epoch_schedule.getEpoch(parent_slot);
+            const slot_epoch = epoch_tracker.epoch_schedule.getEpoch(slot);
+            const use_parent_feature_set = reuse_parent_feature_set and parent_epoch == slot_epoch;
 
             // Constants are not constant at this point since processing new epochs
             // may modify the feature set.
@@ -531,14 +535,13 @@ pub fn trackNewSlots(
                 parent_info.state(),
                 slot_leaders.get(slot) orelse return error.UnknownLeader,
                 slot,
+                use_parent_feature_set,
                 &new_slot_timing,
             );
             const new_slot_ns = new_slot_timer.read().asNanos();
             errdefer constants.deinit(allocator);
             errdefer state.deinit(allocator);
 
-            const parent_epoch = epoch_tracker.epoch_schedule.getEpoch(parent_slot);
-            const slot_epoch = epoch_tracker.epoch_schedule.getEpoch(slot);
             const store = account_store.forSlot(slot, &constants.ancestors);
 
             var epoch_update_timer = sig.time.Timer.start();
@@ -615,10 +618,11 @@ pub fn trackNewSlots(
             const accounted_ns = new_slot_ns + epoch_update_ns + rewards_ns + sysvars_ns +
                 ledger_meta_ns + tracker_put_ns + tree_record_ns;
             logger.info().logf(
-                "track_new_slot_timing slot={} parent_slot={} frozen_slots_ns={} ledger_children_ns={} new_slot_ns={} state_clone_ns={} ancestors_ns={} feature_scan_ns={} reserved_accounts_ns={} constants_finalize_ns={} epoch_update_ns={} rewards_ns={} sysvars_ns={} ledger_meta_ns={} tracker_put_ns={} tree_record_ns={} unattributed_ns={} total_ns={}",
+                "track_new_slot_timing slot={} parent_slot={} feature_source={s} frozen_slots_ns={} ledger_children_ns={} new_slot_ns={} state_clone_ns={} ancestors_ns={} feature_scan_ns={} reserved_accounts_ns={} constants_finalize_ns={} epoch_update_ns={} rewards_ns={} sysvars_ns={} ledger_meta_ns={} tracker_put_ns={} tree_record_ns={} unattributed_ns={} total_ns={}",
                 .{
                     slot,
                     parent_slot,
+                    if (use_parent_feature_set) "parent" else "accountsdb",
                     frozen_slots_ns,
                     ledger_children_ns,
                     new_slot_ns,
@@ -668,6 +672,7 @@ pub fn newSlotFromParent(
     parent_state: *SlotState,
     leader: Pubkey,
     slot: Slot,
+    reuse_parent_feature_set: bool,
     timing: ?*NewSlotFromParentTiming,
 ) !struct { sig.core.SlotConstants, SlotState } {
     var zone = tracy.Zone.init(@src(), .{ .name = "newSlotFromParent" });
@@ -687,7 +692,13 @@ pub fn newSlotFromParent(
     const ancestors_ns = ancestors_timer.read().asNanos();
 
     var feature_scan_timer = sig.time.Timer.start();
-    var feature_set = try getActiveFeatures(allocator, account_reader.forSlot(&ancestors), slot);
+    var feature_set = try featureSetForNewSlot(
+        allocator,
+        account_reader.forSlot(&ancestors),
+        slot,
+        &parent_constants.feature_set,
+        reuse_parent_feature_set,
+    );
     const feature_scan_ns = feature_scan_timer.read().asNanos();
 
     const parent_hash = parent_state.hash.readCopy().?;
@@ -777,6 +788,41 @@ pub fn getActiveFeatures(
         }
     }
     return features;
+}
+
+fn featureSetForNewSlot(
+    allocator: Allocator,
+    account_reader: sig.accounts_db.SlotAccountReader,
+    slot: Slot,
+    parent_feature_set: *const sig.core.FeatureSet,
+    reuse_parent_feature_set: bool,
+) !sig.core.FeatureSet {
+    if (reuse_parent_feature_set) return parent_feature_set.*;
+    return getActiveFeatures(allocator, account_reader, slot);
+}
+
+fn envBool(key: []const u8, default_value: bool) bool {
+    const allocator = std.heap.page_allocator;
+    const raw = std.process.getEnvVarOwned(allocator, key) catch return default_value;
+    defer allocator.free(raw);
+
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    if (trimmed.len == 0) return default_value;
+    if (std.ascii.eqlIgnoreCase(trimmed, "1") or
+        std.ascii.eqlIgnoreCase(trimmed, "true") or
+        std.ascii.eqlIgnoreCase(trimmed, "yes") or
+        std.ascii.eqlIgnoreCase(trimmed, "on"))
+    {
+        return true;
+    }
+    if (std.ascii.eqlIgnoreCase(trimmed, "0") or
+        std.ascii.eqlIgnoreCase(trimmed, "false") or
+        std.ascii.eqlIgnoreCase(trimmed, "no") or
+        std.ascii.eqlIgnoreCase(trimmed, "off"))
+    {
+        return false;
+    }
+    return default_value;
 }
 
 /// freezes any slots that were completed according to these replay results
@@ -943,6 +989,33 @@ test "getActiveFeatures rejects wrong ownership" {
 
     const features2 = try getActiveFeatures(allocator, .{ .account_map = &accounts }, 0);
     try std.testing.expect(features2.active(.system_transfer_zero_check, 1));
+}
+
+test "featureSetForNewSlot can reuse the parent set" {
+    const allocator = std.testing.allocator;
+    var accounts = sig.utils.collections.PubkeyMap(sig.core.Account).empty;
+    defer accounts.deinit(allocator);
+
+    var parent_feature_set: sig.core.FeatureSet = .ALL_DISABLED;
+    parent_feature_set.setSlot(.system_transfer_zero_check, 0);
+
+    const inherited = try featureSetForNewSlot(
+        allocator,
+        .{ .account_map = &accounts },
+        1,
+        &parent_feature_set,
+        true,
+    );
+    try std.testing.expect(inherited.active(.system_transfer_zero_check, 1));
+
+    const scanned = try featureSetForNewSlot(
+        allocator,
+        .{ .account_map = &accounts },
+        1,
+        &parent_feature_set,
+        false,
+    );
+    try std.testing.expect(!scanned.active(.system_transfer_zero_check, 1));
 }
 
 test trackNewSlots {

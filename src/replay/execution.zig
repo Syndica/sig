@@ -2421,6 +2421,7 @@ test "prepareSlot: empty and dead slots are handled correctly" {
         root.?.state(),
         .ZEROES,
         1,
+        false,
         null,
     );
 
