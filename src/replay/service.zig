@@ -488,6 +488,7 @@ pub fn trackNewSlots(
     var zone = tracy.Zone.init(@src(), .{ .name = "trackNewSlots" });
     defer zone.deinit();
 
+    var frozen_slots_timer = sig.time.Timer.start();
     const root = slot_tracker.root.load(.monotonic);
     var frozen_slots = try slot_tracker.frozenSlots(allocator);
     defer frozen_slots.deinit(allocator);
@@ -499,8 +500,11 @@ pub fn trackNewSlots(
     for (frozen_slots.keys()) |slot| if (slot >= root) {
         frozen_slots_since_root.appendAssumeCapacity(slot);
     };
+    const frozen_slots_ns = frozen_slots_timer.read().asNanos();
 
+    var ledger_children_timer = sig.time.Timer.start();
     var next_slots = try ledger.reader().getSlotsSince(allocator, frozen_slots_since_root.items);
+    const ledger_children_ns = ledger_children_timer.read().asNanos();
     defer {
         for (next_slots.values()) |*list| list.deinit(allocator);
         next_slots.deinit(allocator);
@@ -512,9 +516,12 @@ pub fn trackNewSlots(
         for (children.items) |slot| {
             if (slot_tracker.contains(slot)) continue;
             logger.info().logf("tracking new slot: {}", .{slot});
+            var child_timer = sig.time.Timer.start();
 
             // Constants are not constant at this point since processing new epochs
             // may modify the feature set.
+            var new_slot_timing: NewSlotFromParentTiming = .{};
+            var new_slot_timer = sig.time.Timer.start();
             var constants, var state = try newSlotFromParent(
                 allocator,
                 account_store.reader(),
@@ -524,7 +531,9 @@ pub fn trackNewSlots(
                 parent_info.state(),
                 slot_leaders.get(slot) orelse return error.UnknownLeader,
                 slot,
+                &new_slot_timing,
             );
+            const new_slot_ns = new_slot_timer.read().asNanos();
             errdefer constants.deinit(allocator);
             errdefer state.deinit(allocator);
 
@@ -532,6 +541,7 @@ pub fn trackNewSlots(
             const slot_epoch = epoch_tracker.epoch_schedule.getEpoch(slot);
             const store = account_store.forSlot(slot, &constants.ancestors);
 
+            var epoch_update_timer = sig.time.Timer.start();
             if (parent_epoch < slot_epoch) {
                 try replay.epoch_transitions.processNewEpoch(
                     allocator,
@@ -552,7 +562,9 @@ pub fn trackNewSlots(
                     epoch_tracker,
                 );
             }
+            const epoch_update_ns = epoch_update_timer.read().asNanos();
 
+            var rewards_timer = sig.time.Timer.start();
             try replay.rewards.distribution.distributePartitionedEpochRewards(
                 allocator,
                 slot,
@@ -568,7 +580,9 @@ pub fn trackNewSlots(
                     &epoch_tracker.epoch_schedule,
                 ),
             );
+            const rewards_ns = rewards_timer.read().asNanos();
 
+            var sysvars_timer = sig.time.Timer.start();
             const clock = try updateSysvarsForNewSlot(
                 allocator,
                 account_store,
@@ -578,20 +592,64 @@ pub fn trackNewSlots(
                 slot,
                 hard_forks,
             );
+            const sysvars_ns = sysvars_timer.read().asNanos();
+
+            var ledger_meta_timer = sig.time.Timer.start();
             try ledger.db.put(schema.blocktime, slot, clock.unix_timestamp);
             try ledger.db.put(schema.block_height, slot, constants.block_height);
+            const ledger_meta_ns = ledger_meta_timer.read().asNanos();
 
+            var tracker_put_timer = sig.time.Timer.start();
             try slot_tracker.put(allocator, slot, .{
                 .constants = constants,
                 .state = state,
                 .allocator = allocator,
             });
+            const tracker_put_ns = tracker_put_timer.read().asNanos();
+
+            var tree_record_timer = sig.time.Timer.start();
             try slot_tree.record(allocator, slot, constants.parent_slot);
+            const tree_record_ns = tree_record_timer.read().asNanos();
+
+            const total_ns = child_timer.read().asNanos();
+            const accounted_ns = new_slot_ns + epoch_update_ns + rewards_ns + sysvars_ns +
+                ledger_meta_ns + tracker_put_ns + tree_record_ns;
+            logger.info().logf(
+                "track_new_slot_timing slot={} parent_slot={} frozen_slots_ns={} ledger_children_ns={} new_slot_ns={} state_clone_ns={} ancestors_ns={} feature_scan_ns={} reserved_accounts_ns={} constants_finalize_ns={} epoch_update_ns={} rewards_ns={} sysvars_ns={} ledger_meta_ns={} tracker_put_ns={} tree_record_ns={} unattributed_ns={} total_ns={}",
+                .{
+                    slot,
+                    parent_slot,
+                    frozen_slots_ns,
+                    ledger_children_ns,
+                    new_slot_ns,
+                    new_slot_timing.state_clone_ns,
+                    new_slot_timing.ancestors_ns,
+                    new_slot_timing.feature_scan_ns,
+                    new_slot_timing.reserved_accounts_ns,
+                    new_slot_timing.constants_finalize_ns,
+                    epoch_update_ns,
+                    rewards_ns,
+                    sysvars_ns,
+                    ledger_meta_ns,
+                    tracker_put_ns,
+                    tree_record_ns,
+                    total_ns -| accounted_ns,
+                    total_ns,
+                },
+            );
 
             // TODO: update_fork_propagated_threshold_from_votes
         }
     }
 }
+
+pub const NewSlotFromParentTiming = struct {
+    state_clone_ns: u64 = 0,
+    ancestors_ns: u64 = 0,
+    feature_scan_ns: u64 = 0,
+    reserved_accounts_ns: u64 = 0,
+    constants_finalize_ns: u64 = 0,
+};
 
 /// Initializes the SlotConstants and SlotState from their parents and other
 /// dependencies.
@@ -610,33 +668,43 @@ pub fn newSlotFromParent(
     parent_state: *SlotState,
     leader: Pubkey,
     slot: Slot,
+    timing: ?*NewSlotFromParentTiming,
 ) !struct { sig.core.SlotConstants, SlotState } {
     var zone = tracy.Zone.init(@src(), .{ .name = "newSlotFromParent" });
     defer zone.deinit();
 
+    var state_clone_timer = sig.time.Timer.start();
     var state = try SlotState.fromFrozenParent(allocator, parent_state);
+    const state_clone_ns = state_clone_timer.read().asNanos();
     errdefer state.deinit(allocator);
 
+    var ancestors_timer = sig.time.Timer.start();
     var ancestors = try parent_constants.ancestors.clone(allocator);
     errdefer ancestors.deinit(allocator);
 
     try ancestors.addSlot(allocator, slot);
     ancestors.cleanup();
+    const ancestors_ns = ancestors_timer.read().asNanos();
 
+    var feature_scan_timer = sig.time.Timer.start();
     var feature_set = try getActiveFeatures(allocator, account_reader.forSlot(&ancestors), slot);
+    const feature_scan_ns = feature_scan_timer.read().asNanos();
 
     const parent_hash = parent_state.hash.readCopy().?;
 
     // This is inefficient, reserved accounts could live in epoch constants along with
     // the feature set since feature activations are only applied at epoch boundaries.
     // Then we only need to clone the map and update the reserved accounts once per epoch.
+    var reserved_accounts_timer = sig.time.Timer.start();
     const reserved_accounts = try sig.core.ReservedAccounts.initForSlot(
         allocator,
         &feature_set,
         slot,
     );
+    const reserved_accounts_ns = reserved_accounts_timer.read().asNanos();
     errdefer reserved_accounts.deinit(allocator);
 
+    var constants_finalize_timer = sig.time.Timer.start();
     const constants = sig.core.SlotConstants{
         .parent_slot = parent_slot,
         .parent_hash = parent_hash,
@@ -653,6 +721,15 @@ pub fn newSlotFromParent(
         .reserved_accounts = reserved_accounts,
         .inflation = parent_constants.inflation,
         .rent_collector = parent_constants.rent_collector,
+    };
+    const constants_finalize_ns = constants_finalize_timer.read().asNanos();
+
+    if (timing) |output| output.* = .{
+        .state_clone_ns = state_clone_ns,
+        .ancestors_ns = ancestors_ns,
+        .feature_scan_ns = feature_scan_ns,
+        .reserved_accounts_ns = reserved_accounts_ns,
+        .constants_finalize_ns = constants_finalize_ns,
     };
 
     return .{ constants, state };
