@@ -28,6 +28,7 @@ const assert = std.debug.assert;
 const verifyTicks = replay.execution.verifyTicks;
 const verifyPoh = core.entry.verifyPoh;
 const replayBatch = replay.execution.replayBatch;
+const replayBatchWithTempStackArena = replay.execution.replayBatchWithTempStackArena;
 const preprocessTransaction = replay.preprocess_transaction.preprocessTransaction;
 const PreprocessedTransaction = replay.execution.PreprocessedTransaction;
 
@@ -193,7 +194,7 @@ pub const ReplaySlotFuture = struct {
                 scheduler_stats.inline_ready_continuations,
             );
             self.logger.info().logf(
-                "slot_replay_scheduler_stats slot={} poh_entries={} poh_tasks={} poh_wall={D} poh_cpu={D} scheduler_build={D} preprocess_tasks={} preprocess_wall={D} preprocess_cpu={D} scheduler_execute_wall={D} workers={} dependency_edges={} initial_ready={} max_dependencies={} critical_path={} overlap_preprocess={} inline_ready_continuations={} inline_critical_chain={} inline_critical_chain_min_tail={} inline_critical_chain_continuations={}",
+                "slot_replay_scheduler_stats slot={} poh_entries={} poh_tasks={} poh_wall={D} poh_cpu={D} scheduler_build={D} preprocess_tasks={} preprocess_wall={D} preprocess_cpu={D} scheduler_execute_wall={D} workers={} dependency_edges={} initial_ready={} max_dependencies={} critical_path={} overlap_preprocess={} inline_ready_continuations={} inline_critical_chain={} inline_critical_chain_min_tail={} inline_critical_chain_continuations={} singleton_temp_stack_arena={}",
                 .{
                     slot,
                     poh_stats.entries,
@@ -215,6 +216,7 @@ pub const ReplaySlotFuture = struct {
                     scheduler_stats.inline_critical_chain,
                     scheduler_stats.inline_critical_chain_min_tail,
                     scheduler_stats.inline_critical_chain_continuations,
+                    scheduler_stats.singleton_temp_stack_arena,
                 },
             );
 
@@ -432,6 +434,7 @@ const TransactionScheduler = struct {
     inline_critical_chain: bool = false,
     inline_critical_chain_min_tail: u64 = 512,
     inline_critical_chain_continuations: Atomic(u64) = .init(0),
+    singleton_temp_stack_arena: bool = false,
     stats_sink: ?*Stats = null,
 
     const Error = Allocator.Error || error{ReplayBatchFailed};
@@ -487,6 +490,7 @@ const TransactionScheduler = struct {
         inline_critical_chain: bool,
         inline_critical_chain_min_tail: u64,
         inline_critical_chain_continuations: u64,
+        singleton_temp_stack_arena: bool,
     };
 
     const StartOptions = struct {
@@ -495,6 +499,7 @@ const TransactionScheduler = struct {
         inline_ready_continuation: ?bool = null,
         inline_critical_chain: ?bool = null,
         inline_critical_chain_min_tail: ?u64 = null,
+        singleton_temp_stack_arena: ?bool = null,
         stats_sink: ?*Stats = null,
     };
 
@@ -535,6 +540,8 @@ const TransactionScheduler = struct {
                 512,
             ),
         );
+        self.singleton_temp_stack_arena = options.singleton_temp_stack_arena orelse
+            envBool("SIG_REPLAY_SINGLETON_TEMP_STACK_ARENA", false);
         self.stats_sink = options.stats_sink;
 
         const allocator = self.future.arena.allocator();
@@ -907,6 +914,7 @@ const TransactionScheduler = struct {
             .inline_critical_chain = self.inline_critical_chain,
             .inline_critical_chain_min_tail = self.inline_critical_chain_min_tail,
             .inline_critical_chain_continuations = self.inline_critical_chain_continuations.load(.acquire),
+            .singleton_temp_stack_arena = self.singleton_temp_stack_arena,
         };
     }
 
@@ -1007,21 +1015,33 @@ const TransactionScheduler = struct {
                 return null;
             };
             const preprocessed_batch = [_]PreprocessedTransaction{preprocessed};
-            const outcome = replayBatch(
-                future.allocator, // cant use future's arena here as its multi-threaded
-                future.metrics,
-                &self.scheduler.svm_gateway,
-                self.scheduler.committer,
-                &.{self.transaction},
-                &preprocessed_batch,
-                &future.exit,
-            ) catch |err| {
+            const outcome = if (self.scheduler.singleton_temp_stack_arena)
+                replayBatchWithTempStackArena(
+                    future.allocator, // cant use future's arena here as its multi-threaded
+                    future.metrics,
+                    &self.scheduler.svm_gateway,
+                    self.scheduler.committer,
+                    &.{self.transaction},
+                    &preprocessed_batch,
+                    &future.exit,
+                )
+            else
+                replayBatch(
+                    future.allocator, // cant use future's arena here as its multi-threaded
+                    future.metrics,
+                    &self.scheduler.svm_gateway,
+                    self.scheduler.committer,
+                    &.{self.transaction},
+                    &preprocessed_batch,
+                    &future.exit,
+                );
+            const resolved_outcome = outcome catch |err| {
                 future.logger.err().logf("replayBatch failed with error: {}", .{err});
                 future.setError(Error.ReplayBatchFailed);
                 return null;
             };
-            self.scheduler.batch_stats.add(outcome.stats);
-            const result = outcome.result;
+            self.scheduler.batch_stats.add(resolved_outcome.stats);
+            const result = resolved_outcome.result;
 
             if (result == .failure) {
                 future.logger.err().logf(
@@ -1336,6 +1356,7 @@ test "TransactionScheduler: inline ready continuation preserves fanout and fanin
             ),
         );
         try std.testing.expectEqual(0, scheduler_stats.inline_ready_continuations);
+        try std.testing.expect(!scheduler_stats.singleton_temp_stack_arena);
     }
 
     {
@@ -1395,6 +1416,7 @@ test "TransactionScheduler: overlap preprocessing preserves fanout and fanin" {
                 .inline_ready_continuation = false,
                 .inline_critical_chain = true,
                 .inline_critical_chain_min_tail = 512,
+                .singleton_temp_stack_arena = true,
                 .stats_sink = &scheduler_stats,
             },
         ),
@@ -1405,6 +1427,7 @@ test "TransactionScheduler: overlap preprocessing preserves fanout and fanin" {
     try std.testing.expect(scheduler_stats.inline_critical_chain);
     try std.testing.expectEqual(512, scheduler_stats.inline_critical_chain_min_tail);
     try std.testing.expectEqual(0, scheduler_stats.inline_critical_chain_continuations);
+    try std.testing.expect(scheduler_stats.singleton_temp_stack_arena);
     try std.testing.expectEqual(4, scheduler_stats.workers);
     try std.testing.expectEqual(1, scheduler_stats.initial_ready);
     try std.testing.expectEqual(3, scheduler_stats.critical_path);

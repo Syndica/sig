@@ -667,6 +667,52 @@ pub fn replayBatch(
     preprocessed_transactions: ?[]const PreprocessedTransaction,
     exit: *Atomic(bool),
 ) !ReplayBatchOutcome {
+    return replayBatchWithArenaChild(
+        persistent_allocator,
+        persistent_allocator,
+        metrics,
+        svm_gateway,
+        committer,
+        transactions,
+        preprocessed_transactions,
+        exit,
+    );
+}
+
+/// Uses a small stack-backed child allocator for the temporary replay arena.
+/// The persistent allocator remains unchanged for state that outlives this call.
+pub fn replayBatchWithTempStackArena(
+    persistent_allocator: Allocator,
+    metrics: replay.service.Metrics,
+    svm_gateway: *SvmGateway,
+    committer: Committer,
+    transactions: []const ResolvedTransaction,
+    preprocessed_transactions: ?[]const PreprocessedTransaction,
+    exit: *Atomic(bool),
+) !ReplayBatchOutcome {
+    var stack_fallback = std.heap.stackFallback(64 * 1024, persistent_allocator);
+    return replayBatchWithArenaChild(
+        persistent_allocator,
+        stack_fallback.get(),
+        metrics,
+        svm_gateway,
+        committer,
+        transactions,
+        preprocessed_transactions,
+        exit,
+    );
+}
+
+fn replayBatchWithArenaChild(
+    persistent_allocator: Allocator,
+    arena_child_allocator: Allocator,
+    metrics: replay.service.Metrics,
+    svm_gateway: *SvmGateway,
+    committer: Committer,
+    transactions: []const ResolvedTransaction,
+    preprocessed_transactions: ?[]const PreprocessedTransaction,
+    exit: *Atomic(bool),
+) !ReplayBatchOutcome {
     var zone = tracy.Zone.init(@src(), .{ .name = "replayBatch" });
     zone.value(transactions.len);
     defer zone.deinit();
@@ -684,7 +730,7 @@ pub fn replayBatch(
     // - stakes_cache
     // - ProgramMap programs
     // Use this for all other allocations.
-    var arena = std.heap.ArenaAllocator.init(persistent_allocator);
+    var arena = std.heap.ArenaAllocator.init(arena_child_allocator);
     defer arena.deinit();
     const tmp_allocator = arena.allocator();
 
