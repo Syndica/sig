@@ -776,6 +776,10 @@ pub fn computeSlotCacheLtHashDelta(
 
     const db = cache.deferred_db orelse return error.MissingLtHashAccountsDb;
     const ancestors = cache.deferred_ancestors orelse return error.MissingLtHashAncestors;
+    var parent_ancestors = try ancestors.clone(allocator);
+    defer parent_ancestors.deinit(allocator);
+    if (!parent_ancestors.ancestors.swapRemove(cache.deferred_slot))
+        return error.MissingLtHashCurrentSlotAncestor;
     var unrooted_accounts: sig.utils.collections.PubkeyMap(AccountSharedData) = .{};
     defer {
         for (unrooted_accounts.values()) |*account| account.deinit(allocator);
@@ -784,7 +788,7 @@ pub fn computeSlotCacheLtHashDelta(
     const unrooted_result = try db.unrooted.batchLoad(
         allocator,
         selected_keys.items,
-        ancestors,
+        &parent_ancestors,
         &unrooted_accounts,
     );
 
@@ -856,8 +860,10 @@ test "slot cache LT hash delta preserves owned and borrowed previous values" {
     defer test_state.deinit();
     var ancestors: Ancestors = .{};
     defer ancestors.deinit(allocator);
+    try ancestors.ancestors.put(allocator, 0, {});
     cache.deferred_db = &test_state.db;
     cache.deferred_ancestors = &ancestors;
+    cache.deferred_slot = 0;
 
     const owned_key = sig.core.Pubkey{ .data = @splat(1) };
     const borrowed_key = sig.core.Pubkey{ .data = @splat(2) };
@@ -953,8 +959,10 @@ test "slot cache LT hash delta prefers unrooted ancestor over compressed value" 
     var ancestors: Ancestors = .{};
     defer ancestors.deinit(allocator);
     try ancestors.ancestors.put(allocator, 5, {});
+    try ancestors.ancestors.put(allocator, 6, {});
     cache.deferred_db = db;
     cache.deferred_ancestors = &ancestors;
+    cache.deferred_slot = 6;
 
     const key = sig.core.Pubkey{ .data = @splat(4) };
     var compressed_data = "compressed-root".*;
@@ -983,6 +991,7 @@ test "slot cache LT hash delta prefers unrooted ancestor over compressed value" 
     };
 
     try db.put(5, key, unrooted);
+    try db.put(6, key, current);
     try cache.borrowed_accounts.put(allocator, key, &compressed);
     try cache.accounts.put(allocator, key, try current.clone(allocator));
     try cache.deferred_dirty.put(allocator, key, {});
