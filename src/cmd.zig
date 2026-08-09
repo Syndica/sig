@@ -1845,6 +1845,30 @@ fn validator(
     };
     defer loaded_snapshot.deinit();
 
+    const reduced_checkpoint_root_slot_init_enabled = envBool(
+        "SIG_REDUCED_CHECKPOINT_INITIALIZE_ROOTED_SLOT",
+        false,
+    );
+    const previous_largest_rooted_slot = rooted_db.largest_rooted_slot;
+    const reduced_checkpoint_root_slot_initialized =
+        initializeReducedCheckpointLargestRootedSlot(
+            &rooted_db,
+            use_reduced_checkpoint,
+            reduced_checkpoint_root_slot_init_enabled,
+            loaded_snapshot.collapsed_manifest.bank_fields.slot,
+        );
+    app_base.logger.info().logf(
+        "reduced_checkpoint_root_slot_init use_reduced_checkpoint={} enabled={} previous_present={} previous_slot={} snapshot_root_slot={} initialized={}",
+        .{
+            use_reduced_checkpoint,
+            reduced_checkpoint_root_slot_init_enabled,
+            previous_largest_rooted_slot != null,
+            previous_largest_rooted_slot orelse 0,
+            loaded_snapshot.collapsed_manifest.bank_fields.slot,
+            reduced_checkpoint_root_slot_initialized,
+        },
+    );
+
     if (!use_reduced_checkpoint) {
         if (cfg.accounts_db.reduced_checkpoint_path) |checkpoint_path| {
             try sig.accounts_db.snapshot.writeReducedCheckpointFromManifest(
@@ -3409,6 +3433,69 @@ fn getTrustedValidators(
 }
 
 pub const panic = std.debug.FullPanic(loggingPanic);
+
+fn initializeReducedCheckpointLargestRootedSlot(
+    rooted: anytype,
+    use_reduced_checkpoint: bool,
+    enabled: bool,
+    snapshot_root_slot: sig.core.Slot,
+) bool {
+    if (!use_reduced_checkpoint or !enabled) return false;
+    rooted.largest_rooted_slot = snapshot_root_slot;
+    return true;
+}
+
+fn envBool(key: []const u8, default_value: bool) bool {
+    const allocator = std.heap.page_allocator;
+    const raw = std.process.getEnvVarOwned(allocator, key) catch return default_value;
+    defer allocator.free(raw);
+
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    if (trimmed.len == 0) return default_value;
+    if (std.ascii.eqlIgnoreCase(trimmed, "1") or
+        std.ascii.eqlIgnoreCase(trimmed, "true") or
+        std.ascii.eqlIgnoreCase(trimmed, "yes") or
+        std.ascii.eqlIgnoreCase(trimmed, "on"))
+    {
+        return true;
+    }
+    if (std.ascii.eqlIgnoreCase(trimmed, "0") or
+        std.ascii.eqlIgnoreCase(trimmed, "false") or
+        std.ascii.eqlIgnoreCase(trimmed, "no") or
+        std.ascii.eqlIgnoreCase(trimmed, "off"))
+    {
+        return false;
+    }
+    return default_value;
+}
+
+test "reduced checkpoint rooted slot initialization is opt in" {
+    var rooted = struct { largest_rooted_slot: ?sig.core.Slot = null }{};
+
+    try std.testing.expect(!initializeReducedCheckpointLargestRootedSlot(
+        &rooted,
+        false,
+        true,
+        99,
+    ));
+    try std.testing.expectEqual(null, rooted.largest_rooted_slot);
+
+    try std.testing.expect(!initializeReducedCheckpointLargestRootedSlot(
+        &rooted,
+        true,
+        false,
+        99,
+    ));
+    try std.testing.expectEqual(null, rooted.largest_rooted_slot);
+
+    try std.testing.expect(initializeReducedCheckpointLargestRootedSlot(
+        &rooted,
+        true,
+        true,
+        99,
+    ));
+    try std.testing.expectEqual(99, rooted.largest_rooted_slot.?);
+}
 
 fn loggingPanic(message: []const u8, first_trace_addr: ?usize) noreturn {
     std.debug.lockStdErr();
