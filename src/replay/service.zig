@@ -1045,7 +1045,7 @@ fn bypassConsensus(state: *ReplayState) !void {
 
         if (maybe_root_timing) |root_timing| {
             state.logger.info().logf(
-                "account_store_root_timing new_root={} slots_scanned={} populated_slots_scanned={} rooted_slots_flushed={} accounts_upserted={} accounts_cleared={} begin_ns={} scan_upsert_ns={} commit_ns={} db_release_ns={} global_release_ns={} pressure_relief_ns={} commit_total_ns={} unattributed_ns={} total_ns={} memory_relief={s} memory_relief_interval={} roots_since_relief={}",
+                "account_store_root_timing new_root={} slots_scanned={} populated_slots_scanned={} rooted_slots_flushed={} accounts_upserted={} accounts_cleared={} sqlite_memory_metric_batched={} sqlite_memory_metric_samples={} begin_ns={} scan_upsert_ns={} commit_ns={} db_release_ns={} global_release_ns={} pressure_relief_ns={} commit_total_ns={} unattributed_ns={} total_ns={} memory_relief={s} memory_relief_interval={} roots_since_relief={}",
                 .{
                     new_root,
                     root_timing.slots_scanned,
@@ -1053,6 +1053,8 @@ fn bypassConsensus(state: *ReplayState) !void {
                     root_timing.rooted_slots_flushed,
                     root_timing.accounts_upserted,
                     root_timing.accounts_cleared,
+                    root_timing.sqlite_memory_metric_batched,
+                    root_timing.sqlite_memory_metric_samples,
                     root_timing.begin_ns,
                     root_timing.scan_upsert_ns,
                     root_timing.commit.commit_ns,

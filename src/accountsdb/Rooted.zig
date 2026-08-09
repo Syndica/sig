@@ -30,6 +30,11 @@ compressed_account_store: ?CompressedAccountStore = null,
 largest_rooted_slot: ?Slot,
 /// Updates a prometheus counter for mem usage.
 sqlite_mem_used: ?*Gauge = null,
+/// When enabled, slot-root flushing samples SQLite memory once per transaction
+/// instead of once per rooted account. Account writes and commit behavior are
+/// unchanged.
+batch_put_memory_metric: bool = false,
+memory_metric_sample_count: u64 = 0,
 
 /// These aren't thread safe, but we can have as many as we want. Clean up with deinitThreadLocals
 /// on any threads that use put or get.
@@ -54,6 +59,7 @@ pub fn init(file_path: [:0]const u8) !Rooted {
         .handle = db,
         .snapshot_dir_path = try snapshotDirPathFromDbPath(file_path),
         .largest_rooted_slot = null,
+        .batch_put_memory_metric = envU64("SIG_ROOTED_SQLITE_BATCH_PUT_MEMORY_METRIC", 0) != 0,
     };
     errdefer std.heap.page_allocator.free(self.snapshot_dir_path);
 
@@ -169,6 +175,13 @@ pub fn deinitThreadLocals() void {
     }
 }
 
+pub fn recordMemoryUsed(self: *Rooted) void {
+    const mem_used = sql.sqlite3_memory_used();
+    tracy.plot(u48, "sqlite3_memory_used", @intCast(mem_used));
+    if (self.sqlite_mem_used) |gauge| gauge.set(@intCast(mem_used));
+    self.memory_metric_sample_count +%= 1;
+}
+
 pub fn count(self: *const Rooted) u64 {
     const query = "SELECT count(*) from entries";
 
@@ -212,11 +225,7 @@ pub fn get(
     const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.get" });
     defer zone.deinit();
 
-    {
-        const mem_used = sql.sqlite3_memory_used();
-        tracy.plot(u48, "sqlite3_memory_used", @intCast(mem_used));
-        if (self.sqlite_mem_used) |guage| guage.set(@intCast(mem_used));
-    }
+    self.recordMemoryUsed();
 
     const stmt: *sql.sqlite3_stmt = if (get_stmt) |stmt| stmt else blk: {
         const query =
@@ -824,11 +833,7 @@ pub fn put(self: *Rooted, address: Pubkey, slot: Slot, account: AccountSharedDat
     const zone = tracy.Zone.init(@src(), .{ .name = "Rooted.put" });
     defer zone.deinit();
 
-    {
-        const mem_used = sql.sqlite3_memory_used();
-        tracy.plot(u48, "sqlite3_memory_used", @intCast(mem_used));
-        if (self.sqlite_mem_used) |guage| guage.set(@intCast(mem_used));
-    }
+    if (!self.batch_put_memory_metric) self.recordMemoryUsed();
 
     const stmt: *sql.sqlite3_stmt = if (put_stmt) |stmt| stmt else blk: {
         // Insert or update only if last_modified_slot is greater (excluded = VALUES)

@@ -88,6 +88,8 @@ pub const RootSlotTiming = struct {
     rooted_slots_flushed: u64,
     accounts_upserted: u64,
     accounts_cleared: u64,
+    sqlite_memory_metric_batched: bool,
+    sqlite_memory_metric_samples: u64,
 };
 
 /// Roots the slot synchronously and always commits its account updates. The
@@ -100,6 +102,7 @@ pub fn onSlotRootedTimed(
 ) RootSlotTiming {
     var total_timer = sig.time.Timer.start();
     var phase_timer = sig.time.Timer.start();
+    const memory_metric_samples_before = self.rooted.memory_metric_sample_count;
     self.rooted.beginTransaction();
     const begin_ns = phase_timer.read().asNanos();
 
@@ -145,6 +148,10 @@ pub fn onSlotRootedTimed(
     }
     const scan_upsert_ns = phase_timer.read().asNanos();
 
+    if (self.rooted.batch_put_memory_metric) self.rooted.recordMemoryUsed();
+    const sqlite_memory_metric_samples =
+        self.rooted.memory_metric_sample_count -% memory_metric_samples_before;
+
     const commit = self.rooted.commitTransactionTimed(perform_memory_relief);
     self.rooted.largest_rooted_slot = newly_rooted_slot;
 
@@ -158,6 +165,8 @@ pub fn onSlotRootedTimed(
         .rooted_slots_flushed = rooted_slots_flushed,
         .accounts_upserted = accounts_upserted,
         .accounts_cleared = accounts_cleared,
+        .sqlite_memory_metric_batched = self.rooted.batch_put_memory_metric,
+        .sqlite_memory_metric_samples = sqlite_memory_metric_samples,
     };
 }
 
@@ -334,9 +343,44 @@ test "onSlotRootedTimed commits while memory relief is deferred" {
     try std.testing.expectEqual(@as(u64, 1), timing.rooted_slots_flushed);
     try std.testing.expectEqual(@as(u64, 1), timing.accounts_upserted);
     try std.testing.expectEqual(@as(u64, 1), timing.accounts_cleared);
+    try std.testing.expect(!timing.sqlite_memory_metric_batched);
+    try std.testing.expectEqual(@as(u64, 1), timing.sqlite_memory_metric_samples);
     try std.testing.expectEqual(@as(u64, 0), timing.commit.db_release_ns);
     try std.testing.expectEqual(@as(u64, 0), timing.commit.global_release_ns);
     try std.testing.expectEqual(@as(u64, 0), timing.commit.pressure_relief_ns);
+    try std.testing.expectEqual(@as(?Slot, 0), db.rooted.getLargestRootedSlot());
+
+    const account = (try db.get(allocator, .ZEROES, &ancestors)) orelse
+        return error.MissingCommittedAccount;
+    defer account.deinit(allocator);
+    try std.testing.expectEqual(@as(u64, 42), account.lamports);
+    try std.testing.expect(account.data.eqlSlice(&account_data));
+}
+
+test "onSlotRootedTimed batches SQLite memory metric without changing root commit" {
+    const allocator = std.testing.allocator;
+
+    var test_state = try Db.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+    db.rooted.batch_put_memory_metric = true;
+
+    var ancestors: Ancestors = try .initWithSlots(allocator, &.{0});
+    defer ancestors.deinit(allocator);
+
+    var account_data = [_]u8{ 1, 2, 3, 4 };
+    try db.put(0, .ZEROES, .{
+        .lamports = 42,
+        .data = &account_data,
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 7,
+    });
+
+    const timing = db.onSlotRootedTimed(0, &ancestors, false);
+    try std.testing.expect(timing.sqlite_memory_metric_batched);
+    try std.testing.expectEqual(@as(u64, 1), timing.sqlite_memory_metric_samples);
+    try std.testing.expectEqual(@as(u64, 1), timing.accounts_upserted);
     try std.testing.expectEqual(@as(?Slot, 0), db.rooted.getLargestRootedSlot());
 
     const account = (try db.get(allocator, .ZEROES, &ancestors)) orelse
