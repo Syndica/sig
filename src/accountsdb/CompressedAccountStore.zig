@@ -49,6 +49,10 @@ chunk_cache_index: std.AutoHashMapUnmanaged(u32, usize),
 chunk_cache_mutex: std.Thread.Mutex = .{},
 chunk_cache_clock: u64 = 0,
 chunk_cache_bytes: u64 = 0,
+chunk_cache_insert_count: u64 = 0,
+chunk_cache_eviction_count: u64 = 0,
+chunk_cache_byte_limit_eviction_count: u64 = 0,
+chunk_cache_entry_limit_eviction_count: u64 = 0,
 chunk_cache_max_bytes: u64,
 lookup_cache: sig.utils.collections.PubkeyMap(LookupCacheEntry),
 lookup_cache_mutex: std.Thread.Mutex = .{},
@@ -213,6 +217,14 @@ pub const BatchDecodeResult = struct {
     decoded_cache_skip_byte_limit_total: u64 = 0,
     decoded_cache_skip_oversize_total: u64 = 0,
     decoded_cache_skip_allocation_total: u64 = 0,
+    chunk_cache_entries: u64 = 0,
+    chunk_cache_bytes: u64 = 0,
+    chunk_cache_max_entries: u64 = 0,
+    chunk_cache_max_bytes: u64 = 0,
+    chunk_cache_insert_total: u64 = 0,
+    chunk_cache_eviction_total: u64 = 0,
+    chunk_cache_byte_limit_eviction_total: u64 = 0,
+    chunk_cache_entry_limit_eviction_total: u64 = 0,
     total_ns: u64 = 0,
     index_lookup_ns: u64 = 0,
     index_records_read: u64 = 0,
@@ -893,6 +905,7 @@ pub fn batchDecodeAccountsForPubkeys(
     if (!self.decodedAccountCacheEnabled()) {
         result.accounts_skipped = @intCast(pubkeys.len);
         self.snapshotDecodedAccountCache(&result);
+        self.snapshotChunkCache(&result);
         self.recordBatchDecodeResult(result);
         return result;
     }
@@ -974,6 +987,7 @@ pub fn batchDecodeAccountsForPubkeys(
     }
 
     self.snapshotDecodedAccountCache(&result);
+    self.snapshotChunkCache(&result);
     self.recordBatchDecodeResult(result);
     return result;
 }
@@ -1181,6 +1195,7 @@ fn batchLoadAccountsForPubkeysInternal(
     result.total_ns = timer.read().asNanos();
 
     self.snapshotDecodedAccountCache(&result);
+    self.snapshotChunkCache(&result);
     self.recordBatchDecodeResult(result);
     return result;
 }
@@ -1550,6 +1565,23 @@ fn snapshotDecodedAccountCache(
         self.decoded_account_cache_priority_insert_count.load(.monotonic);
     result.decoded_cache_priority_skip_total =
         self.decoded_account_cache_priority_skip_count.load(.monotonic);
+}
+
+fn snapshotChunkCache(
+    self: *CompressedAccountStore,
+    result: *BatchDecodeResult,
+) void {
+    self.chunk_cache_mutex.lock();
+    defer self.chunk_cache_mutex.unlock();
+
+    result.chunk_cache_entries = @intCast(self.chunk_cache_index.count());
+    result.chunk_cache_bytes = self.chunk_cache_bytes;
+    result.chunk_cache_max_entries = @intCast(self.chunk_cache.len);
+    result.chunk_cache_max_bytes = self.chunk_cache_max_bytes;
+    result.chunk_cache_insert_total = self.chunk_cache_insert_count;
+    result.chunk_cache_eviction_total = self.chunk_cache_eviction_count;
+    result.chunk_cache_byte_limit_eviction_total = self.chunk_cache_byte_limit_eviction_count;
+    result.chunk_cache_entry_limit_eviction_total = self.chunk_cache_entry_limit_eviction_count;
 }
 
 fn batchDecodeFromCachedChunk(
@@ -2075,6 +2107,7 @@ fn cacheRemoveEntry(self: *CompressedAccountStore, index: usize) void {
     self.metrics.cache_bytes.set(self.chunk_cache_bytes);
     self.metrics.cache_entries.set(@intCast(self.chunk_cache_index.count()));
     self.metrics.cache_eviction_count.inc();
+    self.chunk_cache_eviction_count +%= 1;
 }
 
 fn cacheAdoptEntry(
@@ -2104,6 +2137,7 @@ fn cacheAdoptEntry(
     self.metrics.cache_bytes.set(self.chunk_cache_bytes);
     self.metrics.cache_entries.set(@intCast(self.chunk_cache_index.count()));
     self.metrics.cache_insert_count.inc();
+    self.chunk_cache_insert_count +%= 1;
 }
 
 fn cacheRefreshExisting(
@@ -2147,13 +2181,16 @@ fn insertChunkAndReadAccountRecord(
     while (self.chunk_cache_bytes + decompressed.len > self.chunk_cache_max_bytes) {
         const victim = self.oldestCacheEntry() orelse break;
         self.cacheRemoveEntry(victim);
+        self.chunk_cache_byte_limit_eviction_count +%= 1;
     }
 
-    const target = self.emptyCacheEntry() orelse self.oldestCacheEntry() orelse {
+    const empty_target = self.emptyCacheEntry();
+    const target = empty_target orelse self.oldestCacheEntry() orelse {
         const account = try self.decodeAccountRecordFromChunkWithMetrics(allocator, address, record, decompressed);
         self.allocator.free(decompressed);
         return account;
     };
+    if (empty_target == null) self.chunk_cache_entry_limit_eviction_count +%= 1;
     try self.cacheAdoptEntry(target, record.chunk_id, decompressed);
     errdefer self.cacheRemoveEntry(target);
     return try self.decodeAccountRecordFromChunkWithMetrics(allocator, address, record, self.chunk_cache[target].bytes);
@@ -2238,12 +2275,15 @@ fn insertPrefetchedChunk(
     while (self.chunk_cache_bytes + decompressed.len > self.chunk_cache_max_bytes) {
         const victim = self.oldestCacheEntry() orelse break;
         self.cacheRemoveEntry(victim);
+        self.chunk_cache_byte_limit_eviction_count +%= 1;
     }
 
-    const target = self.emptyCacheEntry() orelse self.oldestCacheEntry() orelse {
+    const empty_target = self.emptyCacheEntry();
+    const target = empty_target orelse self.oldestCacheEntry() orelse {
         self.allocator.free(decompressed);
         return .skipped;
     };
+    if (empty_target == null) self.chunk_cache_entry_limit_eviction_count +%= 1;
     try self.cacheAdoptEntry(target, chunk_id, decompressed);
     return .loaded;
 }

@@ -1678,6 +1678,21 @@ fn logSlotReadFrameCompressedPhases(
             result.decoded_cache_skip_allocation_total,
         },
     );
+    logger.info().logf(
+        "slot_read_frame_chunk_cache slot={} scope={s} entries={} bytes={} max_entries={} max_bytes={} insert_total={} eviction_total={} byte_limit_eviction_total={} entry_limit_eviction_total={}",
+        .{
+            slot,
+            scope,
+            result.chunk_cache_entries,
+            result.chunk_cache_bytes,
+            result.chunk_cache_max_entries,
+            result.chunk_cache_max_bytes,
+            result.chunk_cache_insert_total,
+            result.chunk_cache_eviction_total,
+            result.chunk_cache_byte_limit_eviction_total,
+            result.chunk_cache_entry_limit_eviction_total,
+        },
+    );
 }
 
 fn collectLoaderV3ProgramDataPubkeys(
