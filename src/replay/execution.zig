@@ -15,6 +15,7 @@ const ThreadPool = sig.sync.ThreadPool;
 const Ancestors = core.Ancestors;
 const Entry = core.Entry;
 const Hash = core.Hash;
+const LtHash = core.LtHash;
 const Slot = core.Slot;
 
 const AccountStore = sig.accounts_db.AccountStore;
@@ -281,6 +282,8 @@ pub const SlotAccountCache = struct {
     stats: sig.accounts_db.SlotAccountCacheStats = .{},
     accounts: sig.utils.collections.PubkeyMap(AccountSharedData) = .{},
     borrowed_accounts: sig.utils.collections.PubkeyMap(*const AccountSharedData) = .{},
+    original_accounts: sig.utils.collections.PubkeyMap(AccountSharedData) = .{},
+    lt_hash_delta_excluded: sig.utils.collections.PubkeyMap(void) = .{},
     account_data_lens: sig.utils.collections.PubkeyMap(?usize) = .{},
     deferred_dirty: sig.utils.collections.PubkeyMap(void) = .{},
     defer_writes: bool = false,
@@ -295,6 +298,9 @@ pub const SlotAccountCache = struct {
         for (self.accounts.values()) |*account| account.deinit(self.allocator);
         self.accounts.deinit(self.allocator);
         self.borrowed_accounts.deinit(self.allocator);
+        for (self.original_accounts.values()) |*account| account.deinit(self.allocator);
+        self.original_accounts.deinit(self.allocator);
+        self.lt_hash_delta_excluded.deinit(self.allocator);
         self.account_data_lens.deinit(self.allocator);
         self.deferred_dirty.deinit(self.allocator);
         self.* = undefined;
@@ -654,6 +660,254 @@ pub fn flushDeferredSlotAccountCacheWrites(
             elapsed_ns,
         },
     );
+}
+
+pub const SlotCacheLtHashDeltaResult = struct {
+    delta: LtHash,
+    keys: []sig.core.Pubkey,
+    dirty_accounts: u64,
+    excluded_accounts: u64,
+    previous_owned: u64,
+    previous_borrowed: u64,
+    previous_missing: u64,
+    unchanged: u64,
+    current_missing: u64,
+};
+
+/// Computes the same per-slot lattice-hash delta as freeze.deltaLtHash, but
+/// reads each account's pre-slot value from the slot frame instead of looking
+/// it up again after replay. The slot cache retains the first owned value and
+/// already keeps compressed borrowed values alive for the lifetime of the DB.
+pub fn computeSlotCacheLtHashDelta(
+    allocator: Allocator,
+    thread_pool: *ThreadPool,
+    cache: *SlotAccountCache,
+) !SlotCacheLtHashDeltaResult {
+    const Worker = struct {
+        task: ThreadPool.Task = .{ .callback = run },
+        wg: *std.Thread.WaitGroup,
+        range: struct { usize, usize },
+        dirty_keys: []const sig.core.Pubkey,
+        current_accounts: *const sig.utils.collections.PubkeyMap(AccountSharedData),
+        original_accounts: *const sig.utils.collections.PubkeyMap(AccountSharedData),
+        borrowed_accounts: *const sig.utils.collections.PubkeyMap(*const AccountSharedData),
+        delta: LtHash = .IDENTITY,
+        previous_owned: u64 = 0,
+        previous_borrowed: u64 = 0,
+        previous_missing: u64 = 0,
+        unchanged: u64 = 0,
+        current_missing: u64 = 0,
+
+        fn run(task: *ThreadPool.Task) void {
+            const self: *@This() = @alignCast(@fieldParentPtr("task", task));
+            defer self.wg.finish();
+
+            for (self.dirty_keys[self.range[0]..self.range[1]]) |pubkey| {
+                const current = self.current_accounts.get(pubkey) orelse {
+                    self.current_missing += 1;
+                    continue;
+                };
+
+                const previous: ?AccountSharedData = if (self.original_accounts.get(pubkey)) |account| blk: {
+                    self.previous_owned += 1;
+                    break :blk account;
+                } else if (self.borrowed_accounts.get(pubkey)) |account| blk: {
+                    self.previous_borrowed += 1;
+                    break :blk account.*;
+                } else blk: {
+                    self.previous_missing += 1;
+                    break :blk null;
+                };
+
+                if (previous) |old| {
+                    if (old.equals(&current)) {
+                        self.unchanged += 1;
+                        continue;
+                    }
+                    const old_account = old.asAccount();
+                    self.delta.mixOut(old_account.ltHash(pubkey));
+                }
+                const current_account = current.asAccount();
+                self.delta.mixIn(current_account.ltHash(pubkey));
+            }
+        }
+    };
+
+    cache.lock.lockShared();
+    defer cache.lock.unlockShared();
+
+    const dirty_keys = cache.deferred_dirty.keys();
+    var selected_keys = std.ArrayListUnmanaged(sig.core.Pubkey){};
+    defer selected_keys.deinit(allocator);
+    try selected_keys.ensureTotalCapacity(allocator, dirty_keys.len);
+    var excluded_accounts: u64 = 0;
+    for (dirty_keys) |pubkey| {
+        if (cache.lt_hash_delta_excluded.contains(pubkey)) {
+            excluded_accounts += 1;
+        } else {
+            selected_keys.appendAssumeCapacity(pubkey);
+        }
+    }
+    std.mem.sort(sig.core.Pubkey, selected_keys.items, {}, struct {
+        fn lessThan(_: void, a: sig.core.Pubkey, b: sig.core.Pubkey) bool {
+            return comparePubkey(a, b) < 0;
+        }
+    }.lessThan);
+
+    if (selected_keys.items.len == 0) return .{
+        .delta = .IDENTITY,
+        .keys = try allocator.alloc(sig.core.Pubkey, 0),
+        .dirty_accounts = 0,
+        .excluded_accounts = excluded_accounts,
+        .previous_owned = 0,
+        .previous_borrowed = 0,
+        .previous_missing = 0,
+        .unchanged = 0,
+        .current_missing = 0,
+    };
+
+    const num_workers = @max(1, @min(selected_keys.items.len, thread_pool.max_threads));
+    const chunk_size = selected_keys.items.len / num_workers;
+    var workers: std.ArrayListUnmanaged(Worker) = try .initCapacity(allocator, num_workers);
+    defer workers.deinit(allocator);
+
+    {
+        var wg = std.Thread.WaitGroup{};
+        wg.startMany(num_workers);
+        defer wg.wait();
+
+        var batch = ThreadPool.Batch{};
+        defer thread_pool.schedule(batch);
+
+        var start_index: usize = 0;
+        for (0..num_workers) |i| {
+            const end_index = if (i == num_workers - 1)
+                selected_keys.items.len
+            else
+                start_index + chunk_size;
+            defer start_index = end_index;
+
+            const worker = workers.addOneAssumeCapacity();
+            worker.* = .{
+                .wg = &wg,
+                .range = .{ start_index, end_index },
+                .dirty_keys = selected_keys.items,
+                .current_accounts = &cache.accounts,
+                .original_accounts = &cache.original_accounts,
+                .borrowed_accounts = &cache.borrowed_accounts,
+            };
+            batch.push(.from(&worker.task));
+        }
+    }
+
+    var result = SlotCacheLtHashDeltaResult{
+        .delta = .IDENTITY,
+        .keys = try allocator.dupe(sig.core.Pubkey, selected_keys.items),
+        .dirty_accounts = @intCast(selected_keys.items.len),
+        .excluded_accounts = excluded_accounts,
+        .previous_owned = 0,
+        .previous_borrowed = 0,
+        .previous_missing = 0,
+        .unchanged = 0,
+        .current_missing = 0,
+    };
+    for (workers.items) |*worker| {
+        result.delta.mixIn(worker.delta);
+        result.previous_owned += worker.previous_owned;
+        result.previous_borrowed += worker.previous_borrowed;
+        result.previous_missing += worker.previous_missing;
+        result.unchanged += worker.unchanged;
+        result.current_missing += worker.current_missing;
+    }
+    return result;
+}
+
+test "slot cache LT hash delta preserves owned and borrowed previous values" {
+    const allocator = std.testing.allocator;
+    var cache = SlotAccountCache.init(allocator);
+    defer cache.deinit();
+
+    const owned_key = sig.core.Pubkey{ .data = @splat(1) };
+    const borrowed_key = sig.core.Pubkey{ .data = @splat(2) };
+    const created_key = sig.core.Pubkey{ .data = @splat(3) };
+    var owned_old_data = "owned-old".*;
+    var owned_new_data = "owned-new".*;
+    var borrowed_old_data = "borrowed-old".*;
+    var borrowed_new_data = "borrowed-new".*;
+    var created_data = "created".*;
+
+    const owned_old = AccountSharedData{
+        .lamports = 10,
+        .data = owned_old_data[0..],
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+    const owned_new = AccountSharedData{
+        .lamports = 11,
+        .data = owned_new_data[0..],
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+    const borrowed_old = AccountSharedData{
+        .lamports = 20,
+        .data = borrowed_old_data[0..],
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+    const borrowed_new = AccountSharedData{
+        .lamports = 21,
+        .data = borrowed_new_data[0..],
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+    const created = AccountSharedData{
+        .lamports = 30,
+        .data = created_data[0..],
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+
+    try cache.original_accounts.put(allocator, owned_key, try owned_old.clone(allocator));
+    try cache.accounts.put(allocator, owned_key, try owned_new.clone(allocator));
+    try cache.borrowed_accounts.put(allocator, borrowed_key, &borrowed_old);
+    try cache.accounts.put(allocator, borrowed_key, try borrowed_new.clone(allocator));
+    try cache.accounts.put(allocator, created_key, try created.clone(allocator));
+    try cache.deferred_dirty.put(allocator, owned_key, {});
+    try cache.deferred_dirty.put(allocator, borrowed_key, {});
+    try cache.deferred_dirty.put(allocator, created_key, {});
+
+    var thread_pool = ThreadPool.init(.{ .max_threads = 3 });
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
+
+    const result = try computeSlotCacheLtHashDelta(allocator, &thread_pool, &cache);
+    defer allocator.free(result.keys);
+    var expected = LtHash.IDENTITY;
+    const owned_old_account = owned_old.asAccount();
+    const owned_new_account = owned_new.asAccount();
+    const borrowed_old_account = borrowed_old.asAccount();
+    const borrowed_new_account = borrowed_new.asAccount();
+    const created_account = created.asAccount();
+    expected.mixOut(owned_old_account.ltHash(owned_key));
+    expected.mixIn(owned_new_account.ltHash(owned_key));
+    expected.mixOut(borrowed_old_account.ltHash(borrowed_key));
+    expected.mixIn(borrowed_new_account.ltHash(borrowed_key));
+    expected.mixIn(created_account.ltHash(created_key));
+
+    try std.testing.expectEqualSlices(u16, &expected.data, &result.delta.data);
+    try std.testing.expectEqual(@as(u64, 3), result.dirty_accounts);
+    try std.testing.expectEqual(@as(u64, 0), result.excluded_accounts);
+    try std.testing.expectEqual(@as(u64, 1), result.previous_owned);
+    try std.testing.expectEqual(@as(u64, 1), result.previous_borrowed);
+    try std.testing.expectEqual(@as(u64, 1), result.previous_missing);
+    try std.testing.expectEqual(@as(u64, 0), result.current_missing);
 }
 
 /// Processes a batch of transactions by verifying their signatures and
@@ -1131,6 +1385,7 @@ fn prepareSlot(
             slot_account_reader,
             resolved_txns,
             programdata_program_map,
+            slot_info.constants().collector_id,
             &slot_account_cache,
         )
     else if (envBool("SIG_REPLAY_SLOT_ACCOUNT_CACHE", false))
@@ -1242,6 +1497,7 @@ fn buildSlotReadFrameAccountStore(
     account_reader: sig.accounts_db.SlotAccountReader,
     transactions: []const ResolvedTransaction,
     programdata_program_map: ?*sig.runtime.program_loader.ProgramMap,
+    collector_id: sig.core.Pubkey,
     slot_account_cache: *?*SlotAccountCache,
 ) !sig.accounts_db.SlotAccountStore {
     const base_slot_account_store = account_store.forSlot(slot, ancestors);
@@ -1252,11 +1508,26 @@ fn buildSlotReadFrameAccountStore(
 
     const cache = try allocator.create(SlotAccountCache);
     cache.* = SlotAccountCache.init(allocator);
-    configureDeferredSlotAccountWrites(cache, db, slot);
     errdefer {
         cache.deinit();
         allocator.destroy(cache);
     }
+    const lt_hash_cache_delta = envBool("SIG_REPLAY_LT_HASH_SLOT_CACHE_DELTA", false);
+    if (lt_hash_cache_delta) {
+        try cache.lt_hash_delta_excluded.put(
+            allocator,
+            sig.runtime.sysvar.RecentBlockhashes.ID,
+            {},
+        );
+        try cache.lt_hash_delta_excluded.put(
+            allocator,
+            sig.runtime.sysvar.SlotHistory.ID,
+            {},
+        );
+        try cache.lt_hash_delta_excluded.put(allocator, sig.runtime.ids.INCINERATOR, {});
+        try cache.lt_hash_delta_excluded.put(allocator, collector_id, {});
+    }
+    configureDeferredSlotAccountWrites(cache, db, slot);
 
     try populateSlotReadFrame(
         allocator,
@@ -1278,10 +1549,12 @@ fn buildSlotReadFrameAccountStore(
         &cache.lock,
         &cache.accounts,
         &cache.borrowed_accounts,
+        &cache.original_accounts,
         &cache.account_data_lens,
         &cache.stats,
         &cache.deferred_dirty,
         cache.defer_writes,
+        lt_hash_cache_delta,
     } };
 }
 
@@ -2021,10 +2294,12 @@ fn buildCachedSlotAccountStore(
         &cache.lock,
         &cache.accounts,
         &cache.borrowed_accounts,
+        &cache.original_accounts,
         &cache.account_data_lens,
         &cache.stats,
         &cache.deferred_dirty,
         cache.defer_writes,
+        false,
     } };
 }
 

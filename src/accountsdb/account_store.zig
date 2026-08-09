@@ -307,9 +307,11 @@ pub const SlotAccountStore = union(enum) {
         *sig.sync.RwLock,
         *sig.utils.collections.PubkeyMap(AccountSharedData),
         *sig.utils.collections.PubkeyMap(*const AccountSharedData),
+        *sig.utils.collections.PubkeyMap(AccountSharedData),
         *sig.utils.collections.PubkeyMap(?usize),
         *SlotAccountCacheStats,
         *sig.utils.collections.PubkeyMap(void),
+        bool,
         bool,
     },
     /// Contains many versions of accounts and becomes fork-aware using
@@ -331,7 +333,7 @@ pub const SlotAccountStore = union(enum) {
                 try db.put(slot, address, account);
             },
             .cached_accounts_db => |tuple| {
-                const db, const slot, _, const allocator, const cache_lock, const cache, _, const account_data_lens, const stats, const deferred_dirty, const defer_writes = tuple;
+                const db, const slot, _, const allocator, const cache_lock, const cache, _, const original_accounts, const account_data_lens, const stats, const deferred_dirty, const defer_writes, const record_lt_hash_originals = tuple;
                 const cloned = try account.clone(allocator);
                 errdefer cloned.deinit(allocator);
 
@@ -342,17 +344,27 @@ pub const SlotAccountStore = union(enum) {
                 cache_lock.lock();
                 defer cache_lock.unlock();
 
+                var first_deferred_write = false;
                 if (defer_writes) {
                     const dirty_gop = try deferred_dirty.getOrPut(allocator, address);
                     if (!dirty_gop.found_existing) {
                         dirty_gop.value_ptr.* = {};
+                        first_deferred_write = true;
                         _ = stats.deferred_unique_writes.fetchAdd(1, .monotonic);
                     }
                     _ = stats.deferred_puts.fetchAdd(1, .monotonic);
                 }
 
                 const gop = try cache.getOrPut(allocator, address);
-                if (gop.found_existing) gop.value_ptr.deinit(allocator);
+                if (gop.found_existing) {
+                    if (first_deferred_write and record_lt_hash_originals) {
+                        const original_gop = try original_accounts.getOrPut(allocator, address);
+                        std.debug.assert(!original_gop.found_existing);
+                        original_gop.value_ptr.* = gop.value_ptr.*;
+                    } else {
+                        gop.value_ptr.deinit(allocator);
+                    }
+                }
                 gop.value_ptr.* = cloned;
                 try account_data_lens.put(
                     allocator,
@@ -383,7 +395,7 @@ pub const SlotAccountStore = union(enum) {
             .accounts_db => |tuple| .{ .accounts_db = .{ tuple[0], tuple[2] } },
             .cached_accounts_db => |tuple| .{
                 .cached_accounts_db = .{
-                    tuple[0], tuple[2], tuple[3], tuple[4], tuple[5], tuple[6], tuple[7], tuple[8],
+                    tuple[0], tuple[2], tuple[3], tuple[4], tuple[5], tuple[6], tuple[8], tuple[9],
                 },
             },
             .thread_safe_map => |tuple| .{ .thread_safe_map = .{ tuple[0], tuple[2] } },
@@ -1256,20 +1268,32 @@ test "cached SlotAccountStore can defer DB writes into dirty set" {
     var cache_lock: sig.sync.RwLock = .{};
     var cache: sig.utils.collections.PubkeyMap(AccountSharedData) = .{};
     var borrowed_cache: sig.utils.collections.PubkeyMap(*const AccountSharedData) = .{};
+    var original_accounts: sig.utils.collections.PubkeyMap(AccountSharedData) = .{};
     var account_data_lens: sig.utils.collections.PubkeyMap(?usize) = .{};
     var dirty: sig.utils.collections.PubkeyMap(void) = .{};
     defer {
         for (cache.values()) |*account| account.deinit(allocator);
         cache.deinit(allocator);
         borrowed_cache.deinit(allocator);
+        for (original_accounts.values()) |*account| account.deinit(allocator);
+        original_accounts.deinit(allocator);
         account_data_lens.deinit(allocator);
         dirty.deinit(allocator);
     }
     var stats = SlotAccountCacheStats{};
 
     const address = Pubkey{ .data = @splat(9) };
+    var original_data = "deferred-original".*;
     var first_data = "deferred-first".*;
     var second_data = "deferred-second".*;
+
+    try cache.put(allocator, address, try (AccountSharedData{
+        .lamports = 10,
+        .data = original_data[0..],
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    }).clone(allocator));
 
     const store: SlotAccountStore = .{ .cached_accounts_db = .{
         db,
@@ -1279,9 +1303,11 @@ test "cached SlotAccountStore can defer DB writes into dirty set" {
         &cache_lock,
         &cache,
         &borrowed_cache,
+        &original_accounts,
         &account_data_lens,
         &stats,
         &dirty,
+        true,
         true,
     } };
 
@@ -1308,6 +1334,10 @@ test "cached SlotAccountStore can defer DB writes into dirty set" {
         try store.reader().accountDataLen(allocator, address),
     );
     try std.testing.expectEqual(@as(usize, 1), dirty.count());
+    try std.testing.expectEqual(@as(usize, 1), original_accounts.count());
+    const original = original_accounts.get(address).?;
+    try std.testing.expectEqual(@as(u64, 10), original.lamports);
+    try std.testing.expectEqualStrings("deferred-original", original.data);
 
     if (try db.get(allocator, address, &ancestors)) |db_account| {
         defer db_account.deinit(allocator);
@@ -1316,7 +1346,7 @@ test "cached SlotAccountStore can defer DB writes into dirty set" {
 
     const snapshot = stats.snapshot();
     try std.testing.expectEqual(@as(u64, 2), snapshot.cache_puts);
-    try std.testing.expectEqual(@as(u64, 1), snapshot.cache_put_replacements);
+    try std.testing.expectEqual(@as(u64, 2), snapshot.cache_put_replacements);
     try std.testing.expectEqual(@as(u64, 2), snapshot.deferred_puts);
     try std.testing.expectEqual(@as(u64, 1), snapshot.deferred_unique_writes);
 }

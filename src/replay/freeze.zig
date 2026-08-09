@@ -68,6 +68,8 @@ pub const FreezeParams = struct {
                 .blockhash = blockhash,
                 .feature_set = &constants.feature_set,
                 .signature_count = state.signature_count.load(.monotonic),
+                .precomputed_delta_lt_hash = &state.replay_lt_hash_delta,
+                .precomputed_delta_lt_hash_keys = &state.replay_lt_hash_delta_keys,
             },
             .finalize_state = .{
                 .update_sysvar = .{
@@ -127,6 +129,10 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
     );
     const hash_slot_ns = phase_timer.read().asNanos();
     if (maybe_lt_hash) |lt_hash| params.accounts_lt_hash.set(lt_hash);
+    const lt_hash_delta_source = if (params.hash_slot.precomputed_delta_lt_hash.readCopy() != null)
+        "slot_cache"
+    else
+        "accounts_db";
 
     params.logger.info().logf(
         "froze slot {} with hash {s}",
@@ -137,7 +143,7 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
 
     const total_ns = total_timer.read().asNanos();
     params.logger.info().logf(
-        "replay_freeze_timing slot={} hash_lock_ns={} finalize_state_ns={} hash_slot_ns={} unattributed_ns={} total_ns={}",
+        "replay_freeze_timing slot={} hash_lock_ns={} finalize_state_ns={} hash_slot_ns={} unattributed_ns={} total_ns={} lt_hash_delta_source={s}",
         .{
             params.hash_slot.slot,
             hash_lock_ns,
@@ -145,6 +151,7 @@ pub fn freezeSlot(allocator: Allocator, params: FreezeParams) !void {
             hash_slot_ns,
             total_ns -| (hash_lock_ns + finalize_state_ns + hash_slot_ns),
             total_ns,
+            lt_hash_delta_source,
         },
     );
 
@@ -413,6 +420,8 @@ pub const HashSlotParams = struct {
     ancestors: *const Ancestors,
     blockhash: Hash,
     feature_set: *const sig.core.FeatureSet,
+    precomputed_delta_lt_hash: *sig.sync.Mux(?LtHash),
+    precomputed_delta_lt_hash_keys: *sig.sync.Mux(?[]Pubkey),
 };
 
 /// Calculates the slot hash (known as the "bank hash" in agave)
@@ -445,13 +454,27 @@ pub fn hashSlot(
         assert(parent_ancestors.ancestors.swapRemove(params.slot));
 
         var lt_hash = params.parent_lt_hash.* orelse return error.UnknownParentLtHash;
-        lt_hash.mixIn(try deltaLtHash(
+        const delta_lt_hash = if (params.precomputed_delta_lt_hash.readCopy()) |precomputed| blk: {
+            const covered_keys = params.precomputed_delta_lt_hash_keys.readCopy() orelse
+                return error.MissingPrecomputedLtHashDeltaKeys;
+            var combined = precomputed;
+            combined.mixIn(try deltaLtHashSkipping(
+                allocator,
+                thread_pool,
+                params.account_reader,
+                params.slot,
+                &parent_ancestors,
+                covered_keys,
+            ));
+            break :blk combined;
+        } else try deltaLtHash(
             allocator,
             thread_pool,
             params.account_reader,
             params.slot,
             &parent_ancestors,
-        ));
+        );
+        lt_hash.mixIn(delta_lt_hash);
 
         return .{
             lt_hash,
@@ -513,6 +536,24 @@ pub fn deltaLtHash(
     slot: Slot,
     parent_ancestors: *const Ancestors,
 ) !LtHash {
+    return deltaLtHashSkipping(
+        allocator,
+        thread_pool,
+        account_reader,
+        slot,
+        parent_ancestors,
+        &.{},
+    );
+}
+
+fn deltaLtHashSkipping(
+    allocator: std.mem.Allocator,
+    thread_pool: *sig.sync.ThreadPool,
+    account_reader: AccountReader,
+    slot: Slot,
+    parent_ancestors: *const Ancestors,
+    sorted_skip_keys: []const Pubkey,
+) !LtHash {
     assert(!parent_ancestors.containsSlot(slot));
 
     const zone = tracy.Zone.init(@src(), .{ .name = "deltaLtHash" });
@@ -527,6 +568,7 @@ pub fn deltaLtHash(
         slot_index: *sig.accounts_db.Db.Unrooted.SlotIndex,
         db: *sig.accounts_db.Db,
         ancestors: *const Ancestors,
+        sorted_skip_keys: []const Pubkey,
 
         fn run(task: *sig.sync.ThreadPool.Task) void {
             const worker_zone = tracy.Zone.init(@src(), .{ .name = "deltaLt worker" });
@@ -546,6 +588,7 @@ pub fn deltaLtHash(
                 entries.keys()[start_index..end_index],
             ) |data, key| {
                 defer _ = arena.reset(.retain_capacity);
+                if (containsSortedPubkey(self.sorted_skip_keys, key)) continue;
 
                 const account = data.asAccount();
 
@@ -599,6 +642,7 @@ pub fn deltaLtHash(
                 .slot_index = iterator.accounts_db.slot,
                 .db = account_reader.accounts_db,
                 .ancestors = parent_ancestors,
+                .sorted_skip_keys = sorted_skip_keys,
             };
             batch.push(.from(&worker.task));
         }
@@ -607,6 +651,21 @@ pub fn deltaLtHash(
     var final: LtHash = .IDENTITY;
     for (workers.items) |*worker| final = final.add(worker.hash);
     return final;
+}
+
+fn containsSortedPubkey(sorted_keys: []const Pubkey, needle: Pubkey) bool {
+    var low: usize = 0;
+    var high: usize = sorted_keys.len;
+    while (low < high) {
+        const mid = low + (high - low) / 2;
+        const order = std.mem.order(u8, &sorted_keys[mid].data, &needle.data);
+        switch (order) {
+            .lt => low = mid + 1,
+            .gt => high = mid,
+            .eq => return true,
+        }
+    }
+    return false;
 }
 
 test "deltaLtHash is identity for 0 accounts" {
@@ -752,6 +811,85 @@ test "freezeSlot: trivial e2e lattice hash test" {
         Hash.parse("B513RgkSxeiHv4hJ3aaBfkoveWKeB6575S3CtG64AirS"),
         state.hash.readCopy().?,
     );
+}
+
+test "precomputed LT hash delta plus skipped DB scan equals full DB delta" {
+    const allocator = std.testing.allocator;
+    var test_state = try sig.accounts_db.Db.initTest(allocator);
+    defer test_state.deinit();
+    const db = &test_state.db;
+
+    const transaction_key = Pubkey{ .data = @splat(21) };
+    const finalizer_key = Pubkey{ .data = @splat(22) };
+    var tx_old_data = "tx-old".*;
+    var tx_new_data = "tx-new".*;
+    var finalizer_old_data = "finalizer-old".*;
+    var finalizer_new_data = "finalizer-new".*;
+    const tx_old = AccountSharedData{
+        .lamports = 10,
+        .data = tx_old_data[0..],
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+    const tx_new = AccountSharedData{
+        .lamports = 11,
+        .data = tx_new_data[0..],
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+    const finalizer_old = AccountSharedData{
+        .lamports = 20,
+        .data = finalizer_old_data[0..],
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+    const finalizer_new = AccountSharedData{
+        .lamports = 21,
+        .data = finalizer_new_data[0..],
+        .owner = .ZEROES,
+        .executable = false,
+        .rent_epoch = 0,
+    };
+
+    try db.put(0, transaction_key, tx_old);
+    try db.put(0, finalizer_key, finalizer_old);
+    try db.put(1, transaction_key, tx_new);
+    try db.put(1, finalizer_key, finalizer_new);
+
+    var parent_ancestors: Ancestors = .{};
+    defer parent_ancestors.deinit(allocator);
+    try parent_ancestors.ancestors.put(allocator, 0, {});
+    var thread_pool: sig.sync.ThreadPool = .init(.{ .max_threads = 2 });
+    defer {
+        thread_pool.shutdown();
+        thread_pool.deinit();
+    }
+
+    const full_delta = try deltaLtHash(
+        allocator,
+        &thread_pool,
+        .{ .accounts_db = db },
+        1,
+        &parent_ancestors,
+    );
+    var combined_delta = LtHash.IDENTITY;
+    const tx_old_account = tx_old.asAccount();
+    const tx_new_account = tx_new.asAccount();
+    combined_delta.mixOut(tx_old_account.ltHash(transaction_key));
+    combined_delta.mixIn(tx_new_account.ltHash(transaction_key));
+    combined_delta.mixIn(try deltaLtHashSkipping(
+        allocator,
+        &thread_pool,
+        .{ .accounts_db = db },
+        1,
+        &parent_ancestors,
+        &.{transaction_key},
+    ));
+
+    try std.testing.expectEqualSlices(u16, &full_delta.data, &combined_delta.data);
 }
 
 // Ensures that the merkle and lattice hashes are both identical to agave for

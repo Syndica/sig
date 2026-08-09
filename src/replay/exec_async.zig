@@ -249,6 +249,63 @@ pub const ReplaySlotFuture = struct {
             }
             const deferred_flush_ns = phase_timer.read().asNanos();
             phase_timer.reset();
+            if (envBool("SIG_REPLAY_LT_HASH_SLOT_CACHE_DELTA", false)) {
+                if (self.slot_account_cache) |cache| {
+                    const delta_result = replay.execution.computeSlotCacheLtHashDelta(
+                        self.allocator,
+                        self.thread_pool,
+                        cache,
+                    ) catch |err| blk: {
+                        self.logger.err().logf(
+                            "slot_lt_hash_cache_delta status=error slot={} error={}",
+                            .{ slot, err },
+                        );
+                        self.setError(Error.ReplayBatchFailed);
+                        break :blk null;
+                    };
+                    if (delta_result) |result| {
+                        if (result.current_missing == 0) {
+                            std.debug.assert(
+                                self.txn_scheduler.committer.slot_state.replay_lt_hash_delta_keys.readCopy() == null,
+                            );
+                            self.txn_scheduler.committer.slot_state.replay_lt_hash_delta.set(
+                                result.delta,
+                            );
+                            self.txn_scheduler.committer.slot_state.replay_lt_hash_delta_keys.set(
+                                result.keys,
+                            );
+                            self.logger.info().logf(
+                                "slot_lt_hash_cache_delta status=pass slot={} dirty_accounts={} excluded_accounts={} previous_owned={} previous_borrowed={} previous_missing={} unchanged={} current_missing={}",
+                                .{
+                                    slot,
+                                    result.dirty_accounts,
+                                    result.excluded_accounts,
+                                    result.previous_owned,
+                                    result.previous_borrowed,
+                                    result.previous_missing,
+                                    result.unchanged,
+                                    result.current_missing,
+                                },
+                            );
+                        } else {
+                            self.allocator.free(result.keys);
+                            self.logger.err().logf(
+                                "slot_lt_hash_cache_delta status=error slot={} reason=current_account_missing count={}",
+                                .{ slot, result.current_missing },
+                            );
+                            self.setError(Error.ReplayBatchFailed);
+                        }
+                    }
+                } else {
+                    self.logger.err().logf(
+                        "slot_lt_hash_cache_delta status=error slot={} reason=slot_cache_missing",
+                        .{slot},
+                    );
+                    self.setError(Error.ReplayBatchFailed);
+                }
+            }
+            const lt_hash_delta_ns = phase_timer.read().asNanos();
+            phase_timer.reset();
             if (self.slot_account_cache) |cache| {
                 replay.execution.logSlotAccountCacheStats(
                     self.logger,
@@ -287,15 +344,16 @@ pub const ReplaySlotFuture = struct {
             const arena_deinit_ns = phase_timer.read().asNanos();
             const total_ns = finish_timer.read().asNanos();
             const known_ns = stats_log_ns + deferred_flush_ns + cache_stats_log_ns +
-                publish_result_ns + entries_deinit_ns + scheduler_deinit_ns + poh_deinit_ns +
+                lt_hash_delta_ns + publish_result_ns + entries_deinit_ns + scheduler_deinit_ns + poh_deinit_ns +
                 slot_cache_deinit_ns + arena_deinit_ns;
             const unattributed_ns = total_ns -| known_ns;
             logger.info().logf(
-                "replay_future_finish_timing slot={} stats_log_ns={} deferred_flush_ns={} cache_stats_log_ns={} publish_result_ns={} entries_deinit_ns={} scheduler_deinit_ns={} poh_deinit_ns={} slot_cache_deinit_ns={} arena_deinit_ns={} unattributed_ns={} total_ns={}",
+                "replay_future_finish_timing slot={} stats_log_ns={} deferred_flush_ns={} lt_hash_delta_ns={} cache_stats_log_ns={} publish_result_ns={} entries_deinit_ns={} scheduler_deinit_ns={} poh_deinit_ns={} slot_cache_deinit_ns={} arena_deinit_ns={} unattributed_ns={} total_ns={}",
                 .{
                     slot,
                     stats_log_ns,
                     deferred_flush_ns,
+                    lt_hash_delta_ns,
                     cache_stats_log_ns,
                     publish_result_ns,
                     entries_deinit_ns,

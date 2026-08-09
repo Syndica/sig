@@ -211,6 +211,14 @@ pub const SlotState = struct {
     /// The value is only meaningful after freezing.
     accounts_lt_hash: sig.sync.Mux(?LtHash),
 
+    /// Optional replay fast-path delta prepared from the slot account cache.
+    /// Freeze falls back to the AccountsDB scan when this is null.
+    replay_lt_hash_delta: sig.sync.Mux(?LtHash),
+
+    /// Sorted transaction-account keys covered by replay_lt_hash_delta.
+    /// Finalizer-owned keys are excluded so freeze can hash their final state.
+    replay_lt_hash_delta_keys: sig.sync.Mux(?[]Pubkey),
+
     stakes_cache: sig.core.StakesCache,
 
     /// 50% burned, 50% paid to leader
@@ -224,6 +232,7 @@ pub const SlotState = struct {
     reward_status: EpochRewardStatus,
 
     pub fn deinit(self: *SlotState, allocator: Allocator) void {
+        if (self.replay_lt_hash_delta_keys.readCopy()) |keys| allocator.free(keys);
         self.stakes_cache.deinit(allocator);
         self.reward_status.deinit(allocator);
 
@@ -242,6 +251,8 @@ pub const SlotState = struct {
         .tick_height = .init(0),
         .collected_rent = .init(0),
         .accounts_lt_hash = .init(.IDENTITY),
+        .replay_lt_hash_delta = .init(null),
+        .replay_lt_hash_delta_keys = .init(null),
         .stakes_cache = .EMPTY,
         .collected_transaction_fees = .init(0),
         .collected_priority_fees = .init(0),
@@ -269,6 +280,8 @@ pub const SlotState = struct {
             .tick_height = .init(bank_fields.tick_height),
             .collected_rent = .init(bank_fields.collected_rent),
             .accounts_lt_hash = .init(lt_hash),
+            .replay_lt_hash_delta = .init(null),
+            .replay_lt_hash_delta_keys = .init(null),
             .stakes_cache = .{ .stakes = .init(stakes) },
             .collected_transaction_fees = .init(0),
             .collected_priority_fees = .init(0),
@@ -305,6 +318,8 @@ pub const SlotState = struct {
             .tick_height = .init(parent.tick_height.load(.monotonic)),
             .collected_rent = .init(0),
             .accounts_lt_hash = .init(parent.accounts_lt_hash.readCopy()),
+            .replay_lt_hash_delta = .init(null),
+            .replay_lt_hash_delta_keys = .init(null),
             .stakes_cache = .{ .stakes = .init(stakes) },
             .collected_transaction_fees = .init(0),
             .collected_priority_fees = .init(0),
@@ -345,6 +360,8 @@ pub const SlotState = struct {
             .tick_height = .init(bank_fields.tick_height),
             .collected_rent = .init(bank_fields.collected_rent),
             .accounts_lt_hash = .init(lt_hash),
+            .replay_lt_hash_delta = .init(null),
+            .replay_lt_hash_delta_keys = .init(null),
             .stakes_cache = .{ .stakes = .init(stakes) },
             .collected_transaction_fees = .init(0),
             .collected_priority_fees = .init(0),

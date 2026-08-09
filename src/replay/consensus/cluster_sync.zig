@@ -1440,6 +1440,8 @@ const TestData = struct {
                     .tick_height = .init(random.int(u64)),
                     .collected_rent = .init(random.int(u64)),
                     .accounts_lt_hash = .init(.{ .data = @splat(random.int(u16)) }),
+                    .replay_lt_hash_delta = .init(null),
+                    .replay_lt_hash_delta_keys = .init(null),
                     .stakes_cache = .EMPTY,
                     .collected_transaction_fees = .init(random.int(u64)),
                     .collected_priority_fees = .init(random.int(u64)),
