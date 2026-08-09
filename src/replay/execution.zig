@@ -1516,6 +1516,18 @@ fn populateSlotReadFrame(
     }
     const programdata_tombstone_fill_ns = phase_timer.read().asNanos();
 
+    if (try replay.warm_manifest.maybeRecordFromEnv(
+        allocator,
+        slot,
+        frame_pubkeys.items,
+        programdata_rooted_pubkeys.items,
+    )) |recorded| {
+        logger.info().logf(
+            "replay_warm_manifest_recorded status=pass root_slot={} target_slot={} pubkeys={}",
+            .{ recorded.root_slot, recorded.target_slot, recorded.pubkeys },
+        );
+    }
+
     const programdata_unrooted_loaded = programdata_unrooted_result.loaded;
     const programdata_unrooted_missing = programdata_unrooted_result.tombstones;
 

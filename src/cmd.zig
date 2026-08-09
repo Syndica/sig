@@ -3230,6 +3230,28 @@ const ReplayAndConsensusServiceState = struct {
                 try .fromBankFields(allocator, bank_fields, lt_hash, account_reader);
             errdefer root_slot_state.deinit(allocator);
 
+            if (try replay.warm_manifest.maybeWarmFromEnv(
+                allocator,
+                bank_fields.slot,
+                account_reader,
+            )) |warm| {
+                params.app_base.logger.info().logf(
+                    "replay_boot_warm_manifest status=pass root_slot={} target_slot={} pubkeys={} compressed_pubkeys={} missing_pubkeys={} unique_chunks={} chunks_loaded={} chunks_cached={} chunks_skipped={} elapsed_ns={}",
+                    .{
+                        warm.root_slot,
+                        warm.target_slot,
+                        warm.pubkeys,
+                        warm.prefetch.compressed_pubkeys,
+                        warm.prefetch.missing_pubkeys,
+                        warm.prefetch.unique_chunks,
+                        warm.prefetch.chunks_loaded,
+                        warm.prefetch.chunks_cached,
+                        warm.prefetch.chunks_skipped,
+                        warm.elapsed_ns,
+                    },
+                );
+            }
+
             const hard_forks = try bank_fields.hard_forks.clone(allocator);
             errdefer hard_forks.deinit(allocator);
 
