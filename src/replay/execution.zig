@@ -1695,7 +1695,7 @@ fn logSlotReadFrameCompressedPhases(
     result: sig.accounts_db.CompressedAccountStore.BatchDecodeResult,
 ) void {
     logger.info().logf(
-        "slot_read_frame_compressed_phases slot={} scope={s} total={D} index_lookup={D} index_records_read={} chunk_plan={D} cached_chunk_load={D} cold_chunk_load={D} cold_decompress_wall={D} cold_account_materialize={D} chunk_cache_insert={D} materialized_data_bytes={} borrowed_data_bytes={} decoded_cache_entries={} decoded_cache_bytes={} decoded_cache_max_entries={} decoded_cache_priority_entries={} decoded_cache_priority_reserve_entries={} decoded_cache_effective_max_entries={} decoded_cache_max_bytes={} decoded_cache_move_borrowed={} decoded_cache_priority_insert_total={} decoded_cache_priority_skip_total={} decoded_cache_skip_entry_limit_total={} decoded_cache_skip_byte_limit_total={} decoded_cache_skip_oversize_total={} decoded_cache_skip_allocation_total={}",
+        "slot_read_frame_compressed_phases slot={} scope={s} total={D} index_lookup={D} index_records_read={} chunk_plan={D} cached_chunk_load={D} cold_chunk_load={D} cold_decompress_wall={D} cold_account_materialize={D} chunk_cache_insert={D} materialized_data_bytes={} borrowed_data_bytes={} decoded_cache_entries={} decoded_cache_bytes={} decoded_cache_max_entries={} decoded_cache_priority_entries={} decoded_cache_priority_reserve_entries={} decoded_cache_effective_max_entries={} decoded_cache_max_bytes={} decoded_cache_move_borrowed={} persistent_batch_pool={} decoded_cache_priority_insert_total={} decoded_cache_priority_skip_total={} decoded_cache_skip_entry_limit_total={} decoded_cache_skip_byte_limit_total={} decoded_cache_skip_oversize_total={} decoded_cache_skip_allocation_total={}",
         .{
             slot,
             scope,
@@ -1718,6 +1718,7 @@ fn logSlotReadFrameCompressedPhases(
             result.decoded_cache_effective_max_entries,
             result.decoded_cache_max_bytes,
             result.decoded_cache_move_borrowed,
+            result.persistent_batch_pool,
             result.decoded_cache_priority_insert_total,
             result.decoded_cache_priority_skip_total,
             result.decoded_cache_skip_entry_limit_total,

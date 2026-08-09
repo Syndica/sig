@@ -45,6 +45,7 @@ segments_file: std.fs.File,
 directory: []DirectoryEntry,
 chunk_table: []ChunkEntry,
 overlay_store: ?*CompressedAccountStore = null,
+persistent_batch_pool: ?sig.sync.ThreadPool = null,
 chunk_cache: []ChunkCacheEntry,
 chunk_cache_index: std.AutoHashMapUnmanaged(u32, usize),
 chunk_cache_mutex: std.Thread.Mutex = .{},
@@ -214,6 +215,7 @@ pub const BatchDecodeResult = struct {
     decoded_cache_effective_max_entries: u64 = 0,
     decoded_cache_max_bytes: u64 = 0,
     decoded_cache_move_borrowed: bool = false,
+    persistent_batch_pool: bool = false,
     decoded_cache_priority_insert_total: u64 = 0,
     decoded_cache_priority_skip_total: u64 = 0,
     decoded_cache_skip_entry_limit_total: u64 = 0,
@@ -302,6 +304,30 @@ const ParallelBatchLookupContext = struct {
     store: *CompressedAccountStore,
     results: []BatchLookupResult,
     next_index: std.atomic.Value(usize) = .init(0),
+};
+
+const PersistentBatchLookupTask = struct {
+    task: sig.sync.ThreadPool.Task = .{ .callback = run },
+    context: *ParallelBatchLookupContext,
+    wait_group: *std.Thread.WaitGroup,
+
+    fn run(task: *sig.sync.ThreadPool.Task) void {
+        const self: *@This() = @alignCast(@fieldParentPtr("task", task));
+        defer self.wait_group.finish();
+        parallelBatchLookupWorker(self.context);
+    }
+};
+
+const PersistentChunkDecodeTask = struct {
+    task: sig.sync.ThreadPool.Task = .{ .callback = run },
+    context: *ParallelChunkDecodeContext,
+    wait_group: *std.Thread.WaitGroup,
+
+    fn run(task: *sig.sync.ThreadPool.Task) void {
+        const self: *@This() = @alignCast(@fieldParentPtr("task", task));
+        defer self.wait_group.finish();
+        parallelChunkDecodeWorker(self.context);
+    }
 };
 
 const PrefetchChunkStatus = enum {
@@ -558,6 +584,31 @@ fn initWithRadix(
     metrics.decoded_account_cache_effective_max_entries.set(decoded_account_cache_effective_max_entries_u64);
     metrics.decoded_account_cache_max_bytes.set(decoded_account_cache_max_bytes);
 
+    const configured_decode_threads = @min(
+        envU64("SIG_COMPRESSED_ACCOUNT_STORE_BATCH_DECODE_THREADS", 1),
+        MAX_BATCH_DECODE_THREADS,
+    );
+    const configured_index_threads = @min(
+        envU64(
+            "SIG_COMPRESSED_ACCOUNT_STORE_BATCH_INDEX_THREADS",
+            configured_decode_threads,
+        ),
+        MAX_BATCH_DECODE_THREADS,
+    );
+    const persistent_batch_pool_threads = @max(
+        configured_decode_threads,
+        configured_index_threads,
+    );
+    var persistent_batch_pool: ?sig.sync.ThreadPool =
+        if (envBool("SIG_COMPRESSED_ACCOUNT_STORE_PERSISTENT_BATCH_POOL", false) and
+        persistent_batch_pool_threads > 1)
+            sig.sync.ThreadPool.init(.{
+                .max_threads = @intCast(persistent_batch_pool_threads),
+            })
+        else
+            null;
+    errdefer if (persistent_batch_pool) |*pool| pool.deinit();
+
     return .{
         .allocator = allocator,
         .index_file = index_file,
@@ -568,6 +619,7 @@ fn initWithRadix(
         .directory = directory,
         .chunk_table = chunk_table,
         .overlay_store = null,
+        .persistent_batch_pool = persistent_batch_pool,
         .chunk_cache = chunk_cache,
         .chunk_cache_index = chunk_cache_index,
         .chunk_cache_max_bytes = chunk_cache_max_bytes,
@@ -677,6 +729,7 @@ pub fn initFromEnv(allocator: std.mem.Allocator) !?CompressedAccountStore {
 }
 
 pub fn deinit(self: *CompressedAccountStore) void {
+    if (self.persistent_batch_pool) |*pool| pool.deinit();
     if (self.overlay_store) |overlay| {
         overlay.deinit();
         self.allocator.destroy(overlay);
@@ -908,7 +961,10 @@ pub fn batchDecodeAccountsForPubkeys(
     var timer = sig.time.Timer.start();
     defer self.metrics.batch_decode_time.observe(timer.read().asNanos());
 
-    var result: BatchDecodeResult = .{ .pubkeys = @intCast(pubkeys.len) };
+    var result: BatchDecodeResult = .{
+        .pubkeys = @intCast(pubkeys.len),
+        .persistent_batch_pool = self.persistent_batch_pool != null,
+    };
     if (!self.decodedAccountCacheEnabled()) {
         result.accounts_skipped = @intCast(pubkeys.len);
         self.snapshotDecodedAccountCache(&result);
@@ -1057,7 +1113,10 @@ fn batchLoadAccountsForPubkeysInternal(
     var timer = sig.time.Timer.start();
     defer self.metrics.batch_decode_time.observe(timer.read().asNanos());
 
-    var result: BatchDecodeResult = .{ .pubkeys = @intCast(pubkeys.len) };
+    var result: BatchDecodeResult = .{
+        .pubkeys = @intCast(pubkeys.len),
+        .persistent_batch_pool = self.persistent_batch_pool != null,
+    };
 
     var unique_pubkeys: sig.utils.collections.PubkeyMap(void) = .{};
     defer unique_pubkeys.deinit(allocator);
@@ -1230,17 +1289,34 @@ fn resolveBatchLookups(
         .results = results,
     };
     const worker_count = @min(max_threads, results.len);
-    const threads = try allocator.alloc(std.Thread, worker_count);
-    defer allocator.free(threads);
+    if (self.persistent_batch_pool) |*pool| {
+        const tasks = try allocator.alloc(PersistentBatchLookupTask, worker_count);
+        defer allocator.free(tasks);
+        var wait_group = std.Thread.WaitGroup{};
+        wait_group.startMany(worker_count);
+        var batch = sig.sync.ThreadPool.Batch{};
+        for (tasks) |*task| {
+            task.* = .{
+                .context = &context,
+                .wait_group = &wait_group,
+            };
+            batch.push(.from(&task.task));
+        }
+        pool.schedule(batch);
+        wait_group.wait();
+    } else {
+        const threads = try allocator.alloc(std.Thread, worker_count);
+        defer allocator.free(threads);
 
-    var spawned: usize = 0;
-    errdefer {
+        var spawned: usize = 0;
+        errdefer {
+            for (threads[0..spawned]) |*thread| thread.join();
+        }
+        while (spawned < worker_count) : (spawned += 1) {
+            threads[spawned] = try std.Thread.spawn(.{}, parallelBatchLookupWorker, .{&context});
+        }
         for (threads[0..spawned]) |*thread| thread.join();
     }
-    while (spawned < worker_count) : (spawned += 1) {
-        threads[spawned] = try std.Thread.spawn(.{}, parallelBatchLookupWorker, .{&context});
-    }
-    for (threads[0..spawned]) |*thread| thread.join();
 }
 
 fn parallelBatchLookupWorker(context: *ParallelBatchLookupContext) void {
@@ -1860,18 +1936,35 @@ fn batchLoadColdChunkGroupsParallel(
         .results = parallel_results,
     };
 
-    const threads = try allocator.alloc(std.Thread, worker_count);
-    defer allocator.free(threads);
-
     var decompress_wall_timer = sig.time.Timer.start();
-    var spawned: usize = 0;
-    errdefer {
+    if (self.persistent_batch_pool) |*pool| {
+        const tasks = try allocator.alloc(PersistentChunkDecodeTask, worker_count);
+        defer allocator.free(tasks);
+        var wait_group = std.Thread.WaitGroup{};
+        wait_group.startMany(worker_count);
+        var batch = sig.sync.ThreadPool.Batch{};
+        for (tasks) |*task| {
+            task.* = .{
+                .context = &context,
+                .wait_group = &wait_group,
+            };
+            batch.push(.from(&task.task));
+        }
+        pool.schedule(batch);
+        wait_group.wait();
+    } else {
+        const threads = try allocator.alloc(std.Thread, worker_count);
+        defer allocator.free(threads);
+
+        var spawned: usize = 0;
+        errdefer {
+            for (threads[0..spawned]) |*thread| thread.join();
+        }
+        while (spawned < worker_count) : (spawned += 1) {
+            threads[spawned] = try std.Thread.spawn(.{}, parallelChunkDecodeWorker, .{&context});
+        }
         for (threads[0..spawned]) |*thread| thread.join();
     }
-    while (spawned < worker_count) : (spawned += 1) {
-        threads[spawned] = try std.Thread.spawn(.{}, parallelChunkDecodeWorker, .{&context});
-    }
-    for (threads[0..spawned]) |*thread| thread.join();
     result.cold_decompress_wall_ns += decompress_wall_timer.read().asNanos();
 
     for (groups, parallel_results) |group, *parallel_result| {
