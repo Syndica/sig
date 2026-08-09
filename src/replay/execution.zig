@@ -1051,37 +1051,6 @@ fn prepareSlot(
     const post_resolve_ns = phase_timer.read().asNanos();
     phase_timer.reset();
 
-    var slot_account_cache: ?*SlotAccountCache = null;
-    errdefer destroySlotAccountCache(state.allocator, slot_account_cache);
-
-    const execution_account_store = if (envBool("SIG_REPLAY_SLOT_READ_FRAME", false))
-        try buildSlotReadFrameAccountStore(
-            state.allocator,
-            .from(state.logger),
-            metrics,
-            slot,
-            state.account_store,
-            &slot_info.constants().ancestors,
-            slot_account_reader,
-            resolved_txns,
-            &slot_account_cache,
-        )
-    else if (envBool("SIG_REPLAY_SLOT_ACCOUNT_CACHE", false))
-        try buildCachedSlotAccountStore(
-            state.allocator,
-            metrics,
-            slot,
-            state.account_store,
-            &slot_info.constants().ancestors,
-            slot_account_reader,
-            resolved_txns,
-            &slot_account_cache,
-        )
-    else
-        state.account_store.forSlot(slot, &slot_info.constants().ancestors);
-    const read_frame_ns = phase_timer.read().asNanos();
-    phase_timer.reset();
-
     const persistent_program_map = if (use_persistent_program_cache) blk: {
         const parent_slot = slot_info.constants().parent_slot;
         const epoch = epoch_tracker.epoch_schedule.getEpoch(slot);
@@ -1099,6 +1068,39 @@ fn prepareSlot(
         );
         break :blk preparation.map;
     } else null;
+    const programdata_program_map = if (envBool("SIG_REPLAY_SLOT_READ_FRAME_SKIP_CACHED_PROGRAMDATA", false)) persistent_program_map else null;
+
+    var slot_account_cache: ?*SlotAccountCache = null;
+    errdefer destroySlotAccountCache(state.allocator, slot_account_cache);
+
+    const execution_account_store = if (envBool("SIG_REPLAY_SLOT_READ_FRAME", false))
+        try buildSlotReadFrameAccountStore(
+            state.allocator,
+            .from(state.logger),
+            metrics,
+            slot,
+            state.account_store,
+            &slot_info.constants().ancestors,
+            slot_account_reader,
+            resolved_txns,
+            programdata_program_map,
+            &slot_account_cache,
+        )
+    else if (envBool("SIG_REPLAY_SLOT_ACCOUNT_CACHE", false))
+        try buildCachedSlotAccountStore(
+            state.allocator,
+            metrics,
+            slot,
+            state.account_store,
+            &slot_info.constants().ancestors,
+            slot_account_reader,
+            resolved_txns,
+            &slot_account_cache,
+        )
+    else
+        state.account_store.forSlot(slot, &slot_info.constants().ancestors);
+    const read_frame_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
 
     var svm_gateway = try SvmGateway.init(state.allocator, .{
         .slot = slot,
@@ -1192,6 +1194,7 @@ fn buildSlotReadFrameAccountStore(
     ancestors: *const Ancestors,
     account_reader: sig.accounts_db.SlotAccountReader,
     transactions: []const ResolvedTransaction,
+    programdata_program_map: ?*sig.runtime.program_loader.ProgramMap,
     slot_account_cache: *?*SlotAccountCache,
 ) !sig.accounts_db.SlotAccountStore {
     const base_slot_account_store = account_store.forSlot(slot, ancestors);
@@ -1216,6 +1219,7 @@ fn buildSlotReadFrameAccountStore(
         cache,
         account_reader,
         transactions,
+        programdata_program_map,
     );
 
     slot_account_cache.* = cache;
@@ -1242,6 +1246,7 @@ fn populateSlotReadFrame(
     cache: *SlotAccountCache,
     account_reader: sig.accounts_db.SlotAccountReader,
     transactions: []const ResolvedTransaction,
+    programdata_program_map: ?*sig.runtime.program_loader.ProgramMap,
 ) !void {
     var timer = sig.time.Timer.start();
     var phase_timer = sig.time.Timer.start();
@@ -1412,9 +1417,12 @@ fn populateSlotReadFrame(
     defer programdata_seen.deinit(allocator);
     var programdata_pubkeys: std.ArrayListUnmanaged(sig.core.Pubkey) = .{};
     defer programdata_pubkeys.deinit(allocator);
+    var cached_programs_skipped: u64 = 0;
     try collectLoaderV3ProgramDataPubkeys(
         allocator,
         cache,
+        programdata_program_map,
+        &cached_programs_skipped,
         &programdata_seen,
         &programdata_pubkeys,
     );
@@ -1572,9 +1580,11 @@ fn populateSlotReadFrame(
         },
     );
     logger.info().logf(
-        "slot_read_frame_programdata slot={} metadata_pubkeys={} metadata_found={} metadata_missing={} preload_enabled={} preload_pubkeys={} unrooted_pubkeys={} unrooted_loaded={} unrooted_missing={} tombstone_pubkeys={} compressed_pubkeys={} missing_pubkeys={} unique_chunks={} chunks_decoded={} chunks_cached={} accounts_loaded={} accounts_cached={} accounts_borrowed={} accounts_skipped={}",
+        "slot_read_frame_programdata slot={} program_cache_filter_enabled={} cached_programs_skipped={} metadata_pubkeys={} metadata_found={} metadata_missing={} preload_enabled={} preload_pubkeys={} unrooted_pubkeys={} unrooted_loaded={} unrooted_missing={} tombstone_pubkeys={} compressed_pubkeys={} missing_pubkeys={} unique_chunks={} chunks_decoded={} chunks_cached={} accounts_loaded={} accounts_cached={} accounts_borrowed={} accounts_skipped={}",
         .{
             slot,
+            programdata_program_map != null,
+            cached_programs_skipped,
             programdata_metadata_pubkeys,
             programdata_data_len_found,
             programdata_data_len_missing,
@@ -1661,20 +1671,43 @@ fn logSlotReadFrameCompressedPhases(
 fn collectLoaderV3ProgramDataPubkeys(
     allocator: Allocator,
     cache: *const SlotAccountCache,
+    program_map: ?*sig.runtime.program_loader.ProgramMap,
+    cached_programs_skipped: *u64,
     seen: *sig.utils.collections.PubkeyMap(void),
     out: *std.ArrayListUnmanaged(sig.core.Pubkey),
 ) !void {
-    for (cache.accounts.values()) |*account| {
-        try collectLoaderV3ProgramDataPubkey(allocator, cache, account, seen, out);
+    for (cache.accounts.keys(), cache.accounts.values()) |program_address, *account| {
+        try collectLoaderV3ProgramDataPubkey(
+            allocator,
+            cache,
+            program_map,
+            cached_programs_skipped,
+            program_address,
+            account,
+            seen,
+            out,
+        );
     }
-    for (cache.borrowed_accounts.values()) |account| {
-        try collectLoaderV3ProgramDataPubkey(allocator, cache, account, seen, out);
+    for (cache.borrowed_accounts.keys(), cache.borrowed_accounts.values()) |program_address, account| {
+        try collectLoaderV3ProgramDataPubkey(
+            allocator,
+            cache,
+            program_map,
+            cached_programs_skipped,
+            program_address,
+            account,
+            seen,
+            out,
+        );
     }
 }
 
 fn collectLoaderV3ProgramDataPubkey(
     allocator: Allocator,
     cache: *const SlotAccountCache,
+    program_map: ?*sig.runtime.program_loader.ProgramMap,
+    cached_programs_skipped: *u64,
+    program_address: sig.core.Pubkey,
     account: *const AccountSharedData,
     seen: *sig.utils.collections.PubkeyMap(void),
     out: *std.ArrayListUnmanaged(sig.core.Pubkey),
@@ -1682,6 +1715,15 @@ fn collectLoaderV3ProgramDataPubkey(
     if (account.lamports == 0) return;
     if (!account.executable) return;
     if (!account.owner.equals(&bpf_loader.v3.ID)) return;
+    // Transaction-listed ProgramData accounts are already part of the main
+    // read frame. This only suppresses the derived secondary preload when the
+    // fork-aware map already owns a successfully compiled program.
+    if (program_map) |programs| {
+        if (programs.containsLoaded(program_address)) {
+            cached_programs_skipped.* += 1;
+            return;
+        }
+    }
 
     const state = sig.bincode.readFromSlice(
         failing_allocator,
@@ -1700,6 +1742,125 @@ fn collectLoaderV3ProgramDataPubkey(
     if (gop.found_existing) return;
     gop.value_ptr.* = {};
     try out.append(allocator, programdata_address);
+}
+
+test "slot read frame skips ProgramData only for loaded persistent programs" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0x4348494d455241);
+    const random = prng.random();
+    const program_address = sig.core.Pubkey.initRandom(random);
+    const programdata_address = sig.core.Pubkey.initRandom(random);
+
+    const program_elf = try std.fs.cwd().readFileAlloc(
+        allocator,
+        sig.ELF_DATA_DIR ++ "hello_world.so",
+        std.math.maxInt(usize),
+    );
+    defer allocator.free(program_elf);
+    const program_bytes, const programdata_bytes =
+        try sig.runtime.program_loader.createV3ProgramAccountData(
+            allocator,
+            programdata_address,
+            42,
+            null,
+            program_elf,
+        );
+    defer allocator.free(program_bytes);
+    defer allocator.free(programdata_bytes);
+
+    const program_account = AccountSharedData{
+        .lamports = 1,
+        .owner = bpf_loader.v3.ID,
+        .data = program_bytes,
+        .executable = true,
+        .rent_epoch = std.math.maxInt(u64),
+    };
+    const programdata_account = AccountSharedData{
+        .lamports = 1,
+        .owner = program_address,
+        .data = programdata_bytes,
+        .executable = false,
+        .rent_epoch = std.math.maxInt(u64),
+    };
+
+    var source_accounts = sig.utils.collections.PubkeyMap(AccountSharedData){};
+    defer source_accounts.deinit(allocator);
+    try source_accounts.put(allocator, program_address, program_account);
+    try source_accounts.put(allocator, programdata_address, programdata_account);
+
+    var loaded_programs = try sig.runtime.program_loader.testLoad(
+        allocator,
+        &source_accounts,
+        &.ALL_ENABLED,
+        43,
+    );
+    defer loaded_programs.deinit(allocator);
+    try std.testing.expect(loaded_programs.containsLoaded(program_address));
+
+    var cache = SlotAccountCache.init(allocator);
+    defer cache.deinit();
+    try cache.borrowed_accounts.put(allocator, program_address, &program_account);
+
+    var seen: sig.utils.collections.PubkeyMap(void) = .{};
+    defer seen.deinit(allocator);
+    var out: std.ArrayListUnmanaged(sig.core.Pubkey) = .{};
+    defer out.deinit(allocator);
+
+    var skipped: u64 = 0;
+    try collectLoaderV3ProgramDataPubkeys(
+        allocator,
+        &cache,
+        &loaded_programs,
+        &skipped,
+        &seen,
+        &out,
+    );
+    try std.testing.expectEqual(1, skipped);
+    try std.testing.expectEqual(0, out.items.len);
+
+    var failed_programs = sig.runtime.program_loader.ProgramMap.empty;
+    defer failed_programs.deinit(allocator);
+    try std.testing.expect(try failed_programs.putIfAbsent(
+        allocator,
+        program_address,
+        .failed,
+    ));
+    seen.clearRetainingCapacity();
+    out.clearRetainingCapacity();
+    skipped = 0;
+    try collectLoaderV3ProgramDataPubkeys(
+        allocator,
+        &cache,
+        &failed_programs,
+        &skipped,
+        &seen,
+        &out,
+    );
+    try std.testing.expectEqual(0, skipped);
+    try std.testing.expectEqualSlices(
+        sig.core.Pubkey,
+        &.{programdata_address},
+        out.items,
+    );
+
+    try cache.borrowed_accounts.put(
+        allocator,
+        programdata_address,
+        &programdata_account,
+    );
+    seen.clearRetainingCapacity();
+    out.clearRetainingCapacity();
+    skipped = 0;
+    try collectLoaderV3ProgramDataPubkeys(
+        allocator,
+        &cache,
+        null,
+        &skipped,
+        &seen,
+        &out,
+    );
+    try std.testing.expectEqual(0, skipped);
+    try std.testing.expectEqual(0, out.items.len);
 }
 
 const SlotReadFrameChunkHotness = struct {

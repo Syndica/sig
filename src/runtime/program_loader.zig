@@ -70,6 +70,19 @@ pub const ProgramMap = struct {
         return self.inner.contains(address);
     }
 
+    /// Returns true only for a successfully compiled program. Failed entries
+    /// are same-slot invalidation sentinels and must never suppress account
+    /// reads needed to reload the program in a child slot.
+    pub fn containsLoaded(self: *ProgramMap, address: Pubkey) bool {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+        const program = self.inner.getPtr(address) orelse return false;
+        return switch (program.*) {
+            .loaded => true,
+            .failed => false,
+        };
+    }
+
     pub fn loadStats(self: *const ProgramMap) ProgramLoadStats.Snapshot {
         return self.load_stats.snapshot();
     }
@@ -414,6 +427,7 @@ test "ProgramMap.putIfAbsent does not replace existing entry" {
     try std.testing.expect(try programs.putIfAbsent(allocator, key, .failed));
     try std.testing.expect(!try programs.putIfAbsent(allocator, key, .failed));
     try std.testing.expectEqual(1, programs.inner.count());
+    try std.testing.expect(!programs.containsLoaded(key));
 }
 
 test "ProgramMap removes failed child-slot sentinels" {
@@ -500,6 +514,7 @@ test "loadPrograms: load v1, v2 program" {
             .failed => return error.FailedToLoadProgram,
             .loaded => {},
         }
+        try std.testing.expect(loaded_programs.containsLoaded(program_v1_key));
 
         switch (loaded_programs.get(program_v2_key).?) {
             .failed => return error.FailedToLoadProgram,
