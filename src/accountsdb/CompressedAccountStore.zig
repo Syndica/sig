@@ -33,6 +33,7 @@ const DEFAULT_DECODED_ACCOUNT_CACHE_ENTRIES: u64 = 16_384;
 const DEFAULT_DECODED_ACCOUNT_CACHE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const DEFAULT_DECODED_ACCOUNT_CACHE_PRIORITY_ENTRIES: u64 = 0;
 const DEFAULT_DECODED_ACCOUNT_CACHE_CLEAR_EACH_BATCH = true;
+const DEFAULT_DECODED_ACCOUNT_CACHE_MOVE_BORROWED = false;
 const MAX_BATCH_DECODE_THREADS: u64 = 64;
 
 allocator: std.mem.Allocator,
@@ -64,6 +65,7 @@ decoded_account_cache_max_entries: usize,
 decoded_account_cache_priority_reserve_entries: usize,
 decoded_account_cache_max_bytes: u64,
 decoded_account_cache_clear_each_batch: bool,
+decoded_account_cache_move_borrowed: bool,
 decoded_account_cache_bytes: u64 = 0,
 decoded_account_cache_priority_entries: u64 = 0,
 decoded_account_cache_priority_insert_count: std.atomic.Value(u64) = .init(0),
@@ -211,6 +213,7 @@ pub const BatchDecodeResult = struct {
     decoded_cache_priority_reserve_entries: u64 = 0,
     decoded_cache_effective_max_entries: u64 = 0,
     decoded_cache_max_bytes: u64 = 0,
+    decoded_cache_move_borrowed: bool = false,
     decoded_cache_priority_insert_total: u64 = 0,
     decoded_cache_priority_skip_total: u64 = 0,
     decoded_cache_skip_entry_limit_total: u64 = 0,
@@ -580,6 +583,10 @@ fn initWithRadix(
         .decoded_account_cache_clear_each_batch = envBool(
             "SIG_COMPRESSED_ACCOUNT_STORE_DECODED_ACCOUNT_CACHE_CLEAR_EACH_BATCH",
             DEFAULT_DECODED_ACCOUNT_CACHE_CLEAR_EACH_BATCH,
+        ),
+        .decoded_account_cache_move_borrowed = envBool(
+            "SIG_COMPRESSED_ACCOUNT_STORE_DECODED_ACCOUNT_CACHE_MOVE_BORROWED",
+            DEFAULT_DECODED_ACCOUNT_CACHE_MOVE_BORROWED,
         ),
         .metrics = metrics,
         .shard_prefix_bits = shard_prefix_bits,
@@ -1375,13 +1382,14 @@ fn decodedAccountCacheContains(
 fn decodedAccountCachePutOwned(
     self: *CompressedAccountStore,
     address: Pubkey,
-    account_arg: AccountSharedData,
+    account: *AccountSharedData,
+    policy: DecodedAccountCacheInsertPolicy,
 ) !?*const AccountSharedData {
     if (!self.decodedAccountCacheEnabled()) return null;
-    var account = account_arg;
     const account_bytes: u64 = @intCast(account.data.len);
     if (account_bytes > self.decoded_account_cache_max_bytes) {
         self.recordDecodedAccountCacheSkipReason(.oversize);
+        self.recordDecodedAccountCachePrioritySkip(policy);
         return null;
     }
 
@@ -1390,26 +1398,36 @@ fn decodedAccountCachePutOwned(
 
     if (self.decoded_account_cache.get(address)) |stored| {
         account.deinit(self.allocator);
+        account.* = undefined;
         return stored;
     }
-    if (!self.decodedAccountCacheHasEntryCapacity(.normal)) {
+    if (!self.decodedAccountCacheHasEntryCapacity(policy)) {
         self.recordDecodedAccountCacheSkipReason(.entry_limit);
+        self.recordDecodedAccountCachePrioritySkip(policy);
         return null;
     }
     if (account_bytes > self.decoded_account_cache_max_bytes - self.decoded_account_cache_bytes) {
         self.recordDecodedAccountCacheSkipReason(.byte_limit);
+        self.recordDecodedAccountCachePrioritySkip(policy);
         return null;
     }
 
     try self.decoded_account_cache.ensureUnusedCapacity(self.allocator, 1);
     const stored = try self.decoded_account_cache_headers.allocator().create(AccountSharedData);
-    stored.* = account;
+    stored.* = account.*;
+    account.* = undefined;
     self.decoded_account_cache.putAssumeCapacityNoClobber(address, stored);
     self.decoded_account_cache_bytes += account_bytes;
 
     self.metrics.decoded_account_cache_insert_count.inc();
     self.metrics.decoded_account_cache_entries.set(@intCast(self.decoded_account_cache.count()));
     self.metrics.decoded_account_cache_bytes.set(self.decoded_account_cache_bytes);
+    if (policy == .priority) {
+        self.decoded_account_cache_priority_entries += 1;
+        _ = self.decoded_account_cache_priority_insert_count.fetchAdd(1, .monotonic);
+        self.metrics.decoded_account_cache_priority_insert_count.inc();
+        self.metrics.decoded_account_cache_priority_entries.set(self.decoded_account_cache_priority_entries);
+    }
     return stored;
 }
 
@@ -1551,6 +1569,7 @@ fn snapshotDecodedAccountCache(
         self.decoded_account_cache_max_entries + self.decoded_account_cache_priority_reserve_entries,
     );
     result.decoded_cache_max_bytes = self.decoded_account_cache_max_bytes;
+    result.decoded_cache_move_borrowed = self.decoded_account_cache_move_borrowed;
     self.decoded_account_cache_mutex.unlock();
 
     result.decoded_cache_skip_entry_limit_total =
@@ -1619,7 +1638,7 @@ fn batchDecodeFromCachedChunk(
         );
         var owns_account = true;
         errdefer if (owns_account) account.deinit(self.allocator);
-        if (try self.decodedAccountCachePutOwned(candidate.pubkey, account) != null) {
+        if (try self.decodedAccountCachePutOwned(candidate.pubkey, &account, .normal) != null) {
             owns_account = false;
             result.accounts_loaded += 1;
         } else {
@@ -1649,7 +1668,7 @@ fn batchDecodeFromChunkBytes(
         );
         var owns_account = true;
         errdefer if (owns_account) account.deinit(self.allocator);
-        if (try self.decodedAccountCachePutOwned(candidate.pubkey, account) != null) {
+        if (try self.decodedAccountCachePutOwned(candidate.pubkey, &account, .normal) != null) {
             owns_account = false;
             result.accounts_loaded += 1;
         } else {
@@ -1918,17 +1937,34 @@ fn placeLoadedAccount(
     result.materialized_data_bytes += @intCast(account.data.len);
 
     if (borrowed_accounts) |borrowed| {
-        if (self.decodedAccountCachePutClone(pubkey, account, cache_insert_policy)) |cached_account| {
-            putBorrowedAccount(allocator, borrowed, pubkey, cached_account) catch |err| {
-                account.deinit(allocator);
-                account.* = undefined;
+        const move_borrowed = self.decoded_account_cache_move_borrowed and
+            self.decodedAccountCacheBatchLoadEnabled();
+        const cached_account = if (move_borrowed)
+            self.decodedAccountCachePutOwned(pubkey, account, cache_insert_policy) catch blk: {
+                self.recordDecodedAccountCacheSkipReason(.allocation);
+                self.recordDecodedAccountCachePrioritySkip(cache_insert_policy);
+                break :blk null;
+            }
+        else
+            self.decodedAccountCachePutClone(pubkey, account, cache_insert_policy);
+        if (cached_account) |stable_account| {
+            putBorrowedAccount(allocator, borrowed, pubkey, stable_account) catch |err| {
+                if (!move_borrowed) {
+                    account.deinit(allocator);
+                    account.* = undefined;
+                }
                 return err;
             };
             result.accounts_borrowed += 1;
-            result.borrowed_data_bytes += @intCast(cached_account.data.len);
-            account.deinit(allocator);
-            account.* = undefined;
+            result.borrowed_data_bytes += @intCast(stable_account.data.len);
+            if (!move_borrowed) {
+                account.deinit(allocator);
+                account.* = undefined;
+            }
             return;
+        }
+        if (move_borrowed) {
+            self.metrics.decoded_account_cache_skip_count.inc();
         }
     } else {
         _ = self.decodedAccountCachePutClone(pubkey, account, cache_insert_policy);
@@ -2578,4 +2614,67 @@ test "decoded account cache priority reserve preserves the normal quota" {
     try std.testing.expect(decodedAccountCacheHasCapacityForPolicy(4, 0, 3, 3, .priority));
     try std.testing.expect(!decodedAccountCacheHasCapacityForPolicy(4, 0, 4, 4, .normal));
     try std.testing.expect(!decodedAccountCacheHasCapacityForPolicy(4, 0, 4, 4, .priority));
+}
+
+test "decoded account cache adopts owned data without cloning" {
+    const allocator = std.testing.allocator;
+    var registry = sig.prometheus.Registry(.{}).init(allocator);
+    defer registry.deinit();
+
+    var store: CompressedAccountStore = undefined;
+    store.allocator = allocator;
+    store.decoded_account_cache = .{};
+    defer store.decoded_account_cache.deinit(allocator);
+    store.decoded_account_cache_headers = std.heap.ArenaAllocator.init(allocator);
+    defer store.decoded_account_cache_headers.deinit();
+    store.decoded_account_cache_mutex = .{};
+    store.decoded_account_cache_max_entries = 2;
+    store.decoded_account_cache_priority_reserve_entries = 0;
+    store.decoded_account_cache_max_bytes = 1024;
+    store.decoded_account_cache_bytes = 0;
+    store.decoded_account_cache_priority_entries = 0;
+    store.metrics = try registry.initStruct(Metrics);
+
+    const address = Pubkey.ZEROES;
+    var account: AccountSharedData = .{
+        .lamports = 42,
+        .data = try allocator.dupe(u8, "owned-root-account"),
+        .owner = Pubkey.ZEROES,
+        .executable = false,
+        .rent_epoch = 7,
+    };
+    var account_owned = true;
+    defer if (account_owned) account.deinit(allocator);
+    const original_data_ptr = account.data.ptr;
+
+    const stored = (try store.decodedAccountCachePutOwned(
+        address,
+        &account,
+        .normal,
+    )).?;
+    account_owned = false;
+    defer stored.deinit(allocator);
+
+    try std.testing.expectEqual(original_data_ptr, stored.data.ptr);
+    try std.testing.expectEqualSlices(u8, "owned-root-account", stored.data);
+    try std.testing.expectEqual(@as(usize, 1), store.decoded_account_cache.count());
+    try std.testing.expectEqual(@as(u64, stored.data.len), store.decoded_account_cache_bytes);
+
+    var duplicate: AccountSharedData = .{
+        .lamports = 99,
+        .data = try allocator.dupe(u8, "duplicate"),
+        .owner = Pubkey.ZEROES,
+        .executable = false,
+        .rent_epoch = 8,
+    };
+    var duplicate_owned = true;
+    defer if (duplicate_owned) duplicate.deinit(allocator);
+    const existing = (try store.decodedAccountCachePutOwned(
+        address,
+        &duplicate,
+        .normal,
+    )).?;
+    duplicate_owned = false;
+    try std.testing.expectEqual(stored, existing);
+    try std.testing.expectEqual(@as(usize, 1), store.decoded_account_cache.count());
 }
