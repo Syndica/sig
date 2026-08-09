@@ -127,6 +127,7 @@ pub const ProgramLoadStats = struct {
     load_races: std.atomic.Value(u64) = .init(0),
     executable_bytes: std.atomic.Value(u64) = .init(0),
     programdata_reads: std.atomic.Value(u64) = .init(0),
+    borrowed_direct_programdata_reads: std.atomic.Value(u64) = .init(0),
     programdata_bytes: std.atomic.Value(u64) = .init(0),
     programdata_read_ns: std.atomic.Value(u64) = .init(0),
     elf_load_ns: std.atomic.Value(u64) = .init(0),
@@ -142,6 +143,7 @@ pub const ProgramLoadStats = struct {
         load_races: u64,
         executable_bytes: u64,
         programdata_reads: u64,
+        borrowed_direct_programdata_reads: u64,
         programdata_bytes: u64,
         programdata_read_ns: u64,
         elf_load_ns: u64,
@@ -158,6 +160,8 @@ pub const ProgramLoadStats = struct {
                 .load_races = self.load_races -| earlier.load_races,
                 .executable_bytes = self.executable_bytes -| earlier.executable_bytes,
                 .programdata_reads = self.programdata_reads -| earlier.programdata_reads,
+                .borrowed_direct_programdata_reads = self.borrowed_direct_programdata_reads -|
+                    earlier.borrowed_direct_programdata_reads,
                 .programdata_bytes = self.programdata_bytes -| earlier.programdata_bytes,
                 .programdata_read_ns = self.programdata_read_ns -| earlier.programdata_read_ns,
                 .elf_load_ns = self.elf_load_ns -| earlier.elf_load_ns,
@@ -179,6 +183,10 @@ pub const ProgramLoadStats = struct {
             self.load_failures.fetchAdd(1, .monotonic);
         _ = self.executable_bytes.fetchAdd(measurement.executable_bytes, .monotonic);
         _ = self.programdata_reads.fetchAdd(measurement.programdata_reads, .monotonic);
+        _ = self.borrowed_direct_programdata_reads.fetchAdd(
+            measurement.borrowed_direct_programdata_reads,
+            .monotonic,
+        );
         _ = self.programdata_bytes.fetchAdd(measurement.programdata_bytes, .monotonic);
         _ = self.programdata_read_ns.fetchAdd(measurement.programdata_read_ns, .monotonic);
         _ = self.elf_load_ns.fetchAdd(measurement.elf_load_ns, .monotonic);
@@ -196,6 +204,7 @@ pub const ProgramLoadStats = struct {
             .load_races = self.load_races.load(.monotonic),
             .executable_bytes = self.executable_bytes.load(.monotonic),
             .programdata_reads = self.programdata_reads.load(.monotonic),
+            .borrowed_direct_programdata_reads = self.borrowed_direct_programdata_reads.load(.monotonic),
             .programdata_bytes = self.programdata_bytes.load(.monotonic),
             .programdata_read_ns = self.programdata_read_ns.load(.monotonic),
             .elf_load_ns = self.elf_load_ns.load(.monotonic),
@@ -208,6 +217,7 @@ pub const ProgramLoadStats = struct {
 const ProgramLoadMeasurement = struct {
     executable_bytes: u64 = 0,
     programdata_reads: u64 = 0,
+    borrowed_direct_programdata_reads: u64 = 0,
     programdata_bytes: u64 = 0,
     programdata_read_ns: u64 = 0,
     elf_load_ns: u64 = 0,
@@ -300,6 +310,7 @@ fn loadProgram(
         account,
         accounts,
         measurement,
+        envBool("SIG_REPLAY_PROGRAMDATA_DIRECT_BORROWED_READ", false),
     ) orelse return .failed;
     defer allocator.free(executable_bytes); // freed unless returned
 
@@ -338,6 +349,7 @@ fn loadDeploymentSlotAndExecutableBytes(
     account: *const AccountSharedData,
     accounts: SlotAccountReader,
     measurement: *ProgramLoadMeasurement,
+    direct_borrowed_programdata_read: bool,
 ) AccountLoadError!?struct { ?u64, []u8 } {
     if (account.owner.equals(&bpf_loader.v1.ID) or account.owner.equals(&bpf_loader.v2.ID)) {
         return .{ null, try allocator.dupe(u8, account.data) };
@@ -355,6 +367,31 @@ fn loadDeploymentSlotAndExecutableBytes(
         };
 
         measurement.programdata_reads += 1;
+        if (direct_borrowed_programdata_read) {
+            if (accounts.getStableBorrowedAccountSharedData(program_data_key)) |program_data| {
+                var read_timer = sig.time.Timer.start();
+                defer measurement.programdata_read_ns += read_timer.read().asNanos();
+                measurement.borrowed_direct_programdata_reads += 1;
+                const meta_size = bpf_loader.v3.State.PROGRAM_DATA_METADATA_SIZE;
+                measurement.programdata_bytes += @intCast(program_data.data.len);
+                if (program_data.data.len < meta_size) return null;
+
+                const program_metadata = sig.bincode.readFromSlice(
+                    failing_allocator,
+                    bpf_loader.v3.State,
+                    program_data.data[0..meta_size],
+                    .{},
+                ) catch return null;
+                const deployment_slot = switch (program_metadata) {
+                    .program_data => |data| data.slot,
+                    else => return null,
+                };
+                return .{
+                    deployment_slot,
+                    try allocator.dupe(u8, program_data.data[meta_size..]),
+                };
+            }
+        }
         const program_data_account = blk: {
             var read_timer = sig.time.Timer.start();
             defer measurement.programdata_read_ns += read_timer.read().asNanos();
@@ -415,6 +452,30 @@ fn loadDeploymentSlotAndExecutableBytes(
     }
 }
 
+fn envBool(key: []const u8, default_value: bool) bool {
+    const allocator = std.heap.page_allocator;
+    const raw = std.process.getEnvVarOwned(allocator, key) catch return default_value;
+    defer allocator.free(raw);
+
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    if (trimmed.len == 0) return default_value;
+    if (std.ascii.eqlIgnoreCase(trimmed, "1") or
+        std.ascii.eqlIgnoreCase(trimmed, "true") or
+        std.ascii.eqlIgnoreCase(trimmed, "yes") or
+        std.ascii.eqlIgnoreCase(trimmed, "on"))
+    {
+        return true;
+    }
+    if (std.ascii.eqlIgnoreCase(trimmed, "0") or
+        std.ascii.eqlIgnoreCase(trimmed, "false") or
+        std.ascii.eqlIgnoreCase(trimmed, "no") or
+        std.ascii.eqlIgnoreCase(trimmed, "off"))
+    {
+        return false;
+    }
+    return default_value;
+}
+
 test "ProgramMap.putIfAbsent does not replace existing entry" {
     const allocator = std.testing.allocator;
     var programs = ProgramMap.empty;
@@ -456,12 +517,14 @@ test "ProgramLoadStats snapshot subtraction reports per-slot delta" {
     _ = stats.cache_hits.fetchAdd(7, .monotonic);
     _ = stats.cache_misses.fetchAdd(2, .monotonic);
     _ = stats.load_attempts.fetchAdd(2, .monotonic);
+    _ = stats.borrowed_direct_programdata_reads.fetchAdd(3, .monotonic);
     _ = stats.load_total_ns.fetchAdd(123, .monotonic);
 
     const delta = stats.snapshot().subtract(start);
     try std.testing.expectEqual(7, delta.cache_hits);
     try std.testing.expectEqual(2, delta.cache_misses);
     try std.testing.expectEqual(2, delta.load_attempts);
+    try std.testing.expectEqual(3, delta.borrowed_direct_programdata_reads);
     try std.testing.expectEqual(123, delta.load_total_ns);
 }
 
@@ -621,8 +684,32 @@ test "loadPrograms: load v3 program" {
         try std.testing.expectEqual(1, stats.load_attempts);
         try std.testing.expectEqual(1, stats.load_successes);
         try std.testing.expectEqual(1, stats.programdata_reads);
+        try std.testing.expectEqual(0, stats.borrowed_direct_programdata_reads);
         try std.testing.expectEqual(@as(u64, @intCast(program_data_bytes.len)), stats.programdata_bytes);
         try std.testing.expectEqual(@as(u64, @intCast(program_elf.len)), stats.executable_bytes);
+    }
+
+    { // Stable borrowed ProgramData avoids the intermediate account clone.
+        const program_account = accounts.get(program_key).?;
+        var measurement = ProgramLoadMeasurement{};
+        const result = (try loadDeploymentSlotAndExecutableBytes(
+            allocator,
+            &program_account,
+            .{ .account_shared_data_map = &accounts },
+            &measurement,
+            true,
+        )) orelse return error.TestFailed;
+        const deployment_slot, const executable_bytes = result;
+        defer allocator.free(executable_bytes);
+
+        try std.testing.expectEqual(program_deployment_slot, deployment_slot.?);
+        try std.testing.expectEqualSlices(u8, program_elf, executable_bytes);
+        try std.testing.expectEqual(1, measurement.programdata_reads);
+        try std.testing.expectEqual(1, measurement.borrowed_direct_programdata_reads);
+        try std.testing.expectEqual(
+            @as(u64, @intCast(program_data_bytes.len)),
+            measurement.programdata_bytes,
+        );
     }
 
     { // Delay visibility failure

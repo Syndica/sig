@@ -510,6 +510,37 @@ pub const SlotAccountReader = union(enum) {
         };
     }
 
+    /// Returns a shallow immutable view only when the account's backing data
+    /// has a lifetime independent of the slot cache's hash-table storage.
+    /// The compressed decoded-account cache owns borrowed entries until the
+    /// AccountsDB is deinitialized, so callers can consume the returned data
+    /// after the cache lock is released without cloning the allocation.
+    pub fn getStableBorrowedAccountSharedData(
+        self: SlotAccountReader,
+        address: Pubkey,
+    ) ?AccountSharedData {
+        return switch (self) {
+            .cached_accounts_db => |tuple| blk: {
+                const cache_lock = tuple[3];
+                const borrowed_cache = tuple[5];
+                cache_lock.lockShared();
+                defer cache_lock.unlockShared();
+
+                const account = borrowed_cache.get(address) orelse break :blk null;
+                if (account.lamports == 0) break :blk null;
+                break :blk account.*;
+            },
+            // This variant is immutable for the lifetime of the reader and is
+            // useful for exercising the same no-clone path in unit tests.
+            .account_shared_data_map => |map| blk: {
+                const account = map.get(address) orelse break :blk null;
+                if (account.lamports == 0) break :blk null;
+                break :blk account;
+            },
+            else => null,
+        };
+    }
+
     pub fn accountDataLen(
         self: SlotAccountReader,
         alloc: std.mem.Allocator,

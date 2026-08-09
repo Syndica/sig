@@ -564,7 +564,7 @@ pub fn logProgramLoadStats(
     metrics.program_load_total_time.observe(stats.load_total_ns);
 
     logger.info().logf(
-        "slot_program_load_stats slot={} cache_hits={} cache_misses={} load_attempts={} load_successes={} load_failures={} load_races={} executable_bytes={} programdata_reads={} programdata_bytes={} programdata_read={D} elf_load={D} verify={D} load_total={D}",
+        "slot_program_load_stats slot={} cache_hits={} cache_misses={} load_attempts={} load_successes={} load_failures={} load_races={} executable_bytes={} programdata_reads={} borrowed_direct_programdata_reads={} programdata_bytes={} programdata_read={D} elf_load={D} verify={D} load_total={D}",
         .{
             slot,
             stats.cache_hits,
@@ -575,6 +575,7 @@ pub fn logProgramLoadStats(
             stats.load_races,
             stats.executable_bytes,
             stats.programdata_reads,
+            stats.borrowed_direct_programdata_reads,
             stats.programdata_bytes,
             stats.programdata_read_ns,
             stats.elf_load_ns,
