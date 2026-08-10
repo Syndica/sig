@@ -54,6 +54,8 @@ const tracy = @import("tracy");
 const services = @import("services");
 const shred = @import("shred");
 
+const tel = lib.telemetry;
+
 const Receiver = shred.Receiver;
 
 comptime {
@@ -71,6 +73,22 @@ var scratch_memory: [1024 * 1024 * 1024]u8 = undefined;
 const max_in_progress = 8192;
 const max_done = 65536;
 
+const Metrics = struct {
+    /// Packets handed to the receiver, and their total size on the wire.
+    packets_received: tel.Counter,
+    bytes_received: tel.Counter,
+
+    /// Outcome of every packet the receiver accepted.
+    statuses: tel.Variant(Receiver.NonErrorStatus),
+    /// Why the receiver rejected a packet.
+    rejections: tel.Variant(Receiver.RejectReason),
+
+    /// Occupancy of the two FEC set maps. Both are fixed-capacity and evict
+    /// under pressure, so sustained saturation means shreds are being dropped.
+    in_progress_fec_sets: tel.Gauge,
+    done_fec_sets: tel.Gauge,
+};
+
 pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !noreturn {
     const zone = tracy.Zone.init(@src(), .{ .name = @tagName(name) });
     defer zone.deinit();
@@ -79,6 +97,9 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
     const allocator = fba.allocator();
 
     const logger = rw.tel.acquireLogger(@tagName(name), "main");
+    const metrics = rw.tel.metricAppender().appendFields(Metrics, .{
+        .prefix = @tagName(name),
+    });
     rw.tel.signalReady();
     logger.info().logf("Waiting for shreds on port {}", .{rw.tvu_socket.port});
 
@@ -104,6 +125,9 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
             defer packet_iter.markUsed();
             try runner.activity.signalActive();
 
+            metrics.packets_received.increment(1);
+            metrics.bytes_received.increment(packet.len);
+
             const result = receiver.processPacket(
                 &ro.config.leader_schedule,
                 ro.config.shred_version,
@@ -111,10 +135,14 @@ pub fn serviceMain(runner: lib.runner.Connection, ro: ReadOnly, rw: ReadWrite) !
                 &deshred_out,
                 logger.withScope("processPacket"),
             ) catch |err| {
+                metrics.rejections.increment(Receiver.rejectReason(err), 1);
                 std.log.warn("packet failed with {}", .{err});
                 continue;
             };
-            _ = result;
+
+            metrics.statuses.increment(result, 1);
+            metrics.in_progress_fec_sets.set(receiver.inProgressCount());
+            metrics.done_fec_sets.set(receiver.doneCount());
         }
     }
 }
