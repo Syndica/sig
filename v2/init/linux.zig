@@ -175,6 +175,11 @@ pub const Memfd = extern struct {
 
     pub const Access = enum { rw, ro };
 
+    /// Smallest transparent huge page Linux offers on the architectures we
+    /// target. Mappings below this cannot be backed by one, so they are not
+    /// worth the `madvise` call.
+    pub const huge_page_size = 2 * 1024 * 1024;
+
     pub const MapArgs = struct {
         at_ptr: ?[*]align(page_size_min) u8 = null,
         populate: bool = false,
@@ -212,8 +217,7 @@ pub const Memfd = extern struct {
         };
         defer if (close_fd) std.posix.close(fd);
 
-        // TODO: HUGEPAGE support
-        return try std.posix.mmap(
+        const buf = try std.posix.mmap(
             args.at_ptr,
             self.size,
             prot,
@@ -221,6 +225,27 @@ pub const Memfd = extern struct {
             fd,
             0,
         );
+
+        // The large regions (accounts db, replay) span multiple GiB, so backing them with
+        // 2 MiB pages instead of 4 KiB ones cuts the number of TLB entries they need by
+        // 512x. Below `huge_page_size` there is nothing to gain.
+        //
+        // This is best effort. Huge pages for shared memory are opt-in per system via
+        // /sys/kernel/mm/transparent_hugepage/shmem_enabled, which defaults to `never` on
+        // most distributions; the kernel reports EINVAL when the advice cannot be applied.
+        // Falling back to base pages costs throughput, not correctness, so a failure here
+        // must not take the node down.
+        //
+        // NOTE: `madvise` is deliberately absent from the seccomp filter in
+        // `topology.seccompFilters`. Every caller reaches this before the filter is
+        // installed. Anything mapping a memfd after that point will trap.
+        if (self.size >= huge_page_size) {
+            std.posix.madvise(buf.ptr, buf.len, linux.MADV.HUGEPAGE) catch |err| {
+                std.log.debug("no huge pages for this mapping: {t}", .{err});
+            };
+        }
+
+        return buf;
     }
 
     pub fn MapTypedArgs(comptime T: type) type {
@@ -307,6 +332,26 @@ pub const Memfd = extern struct {
         }
     }
 };
+
+test "Memfd: huge page advice leaves the mapping usable" {
+    const size = 4 * Memfd.huge_page_size;
+
+    const memfd: Memfd = try .init(.{ .name = "sig-huge-page-test", .size = size });
+    defer std.posix.close(memfd.fd);
+
+    const buf = try memfd.mmapRaw(.rw, .{});
+    defer std.posix.munmap(buf);
+
+    // Whether the kernel honours the advice depends on the host's
+    // transparent_hugepage settings, so what is asserted here is that asking for
+    // it still yields a mapping of the requested size that reads and writes.
+    try std.testing.expectEqual(size, buf.len);
+
+    buf[0] = 0xaa;
+    buf[size - 1] = 0xbb;
+    try std.testing.expectEqual(0xaa, buf[0]);
+    try std.testing.expectEqual(0xbb, buf[size - 1]);
+}
 
 pub const bpf = struct {
     const SECCOMP = std.os.linux.SECCOMP;
