@@ -1,5 +1,10 @@
 const std = @import("std");
 const lib = @import("lib");
+const shred = @import("shred_api");
+
+pub const DeshreddedFecSet = shred.DeshreddedFecSet;
+pub const FecSetId = shred.FecSetId;
+pub const data_payload_max = shred.Shred.data_payload_max;
 
 // This is a bit large currently because of the unrooted store
 pub const scratch_buffer_size = 3 * 1024 * 1024 * 1024;

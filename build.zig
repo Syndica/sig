@@ -370,6 +370,11 @@ const Sig = struct {
             }
         }
 
+        if (components.get("replay")) |replay| {
+            const shred_component = components.get("shred").?;
+            replay.api.addImport("shred_api", shred_component.api);
+        }
+
         // runtime is special cased because it needs codegen and a bunch of extra deps that
         // no other component uses.
         const runtime = addRuntime(b, config, deps, unit_tests, lib, features_zon, feature_set_id);
