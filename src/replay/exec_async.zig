@@ -194,7 +194,7 @@ pub const ReplaySlotFuture = struct {
                 scheduler_stats.inline_ready_continuations,
             );
             self.logger.info().logf(
-                "slot_replay_scheduler_stats slot={} poh_entries={} poh_tasks={} poh_wall={D} poh_cpu={D} scheduler_build={D} preprocess_tasks={} preprocess_wall={D} preprocess_cpu={D} scheduler_execute_wall={D} workers={} dependency_edges={} initial_ready={} max_dependencies={} critical_path={} overlap_preprocess={} inline_ready_continuations={} inline_critical_chain={} inline_critical_chain_min_tail={} inline_critical_chain_continuations={} singleton_temp_stack_arena={}",
+                "slot_replay_scheduler_stats slot={} poh_entries={} poh_tasks={} poh_wall={D} poh_cpu={D} scheduler_build={D} preprocess_tasks={} preprocess_wall={D} preprocess_cpu={D} scheduler_execute_wall={D} workers={} dependency_edges={} initial_ready={} max_dependencies={} critical_path={} overlap_preprocess={} priority_critical_preprocess={} priority_critical_preprocess_first_worker={} priority_critical_preprocess_first_tail={} inline_ready_continuations={} inline_critical_chain={} inline_critical_chain_min_tail={} inline_critical_chain_continuations={} singleton_temp_stack_arena={}",
                 .{
                     slot,
                     poh_stats.entries,
@@ -212,6 +212,9 @@ pub const ReplaySlotFuture = struct {
                     scheduler_stats.max_dependencies,
                     scheduler_stats.critical_path,
                     scheduler_stats.overlap_preprocess,
+                    scheduler_stats.priority_critical_preprocess,
+                    scheduler_stats.priority_critical_preprocess_first_worker,
+                    scheduler_stats.priority_critical_preprocess_first_tail,
                     scheduler_stats.inline_ready_continuations,
                     scheduler_stats.inline_critical_chain,
                     scheduler_stats.inline_critical_chain_min_tail,
@@ -473,6 +476,7 @@ const TransactionScheduler = struct {
     committer: Committer,
     workers: std.ArrayListUnmanaged(Worker) = .{},
     preprocess_workers: std.ArrayListUnmanaged(PreprocessWorker) = .{},
+    preprocess_order: std.ArrayListUnmanaged(u32) = .{},
     batch_stats: replay.execution.AtomicReplayBatchStats = .{},
     build_ns: u64 = 0,
     dependency_edges: u64 = 0,
@@ -489,6 +493,9 @@ const TransactionScheduler = struct {
     remaining: Atomic(u64) = .init(0),
     execute_wall_ns: Atomic(u64) = .init(0),
     overlap_preprocess: bool = false,
+    priority_critical_preprocess: bool = false,
+    priority_critical_preprocess_first_worker: u64 = 0,
+    priority_critical_preprocess_first_tail: u64 = 0,
     inline_ready_continuation: bool = false,
     inline_ready_continuations: Atomic(u64) = .init(0),
     inline_critical_chain: bool = false,
@@ -546,6 +553,9 @@ const TransactionScheduler = struct {
         max_dependencies: u64,
         critical_path: u64,
         overlap_preprocess: bool,
+        priority_critical_preprocess: bool,
+        priority_critical_preprocess_first_worker: u64,
+        priority_critical_preprocess_first_tail: u64,
         inline_ready_continuations: u64,
         inline_critical_chain: bool,
         inline_critical_chain_min_tail: u64,
@@ -556,6 +566,7 @@ const TransactionScheduler = struct {
     const StartOptions = struct {
         overlap_preprocess: ?bool = null,
         overlap_preprocess_workers: ?usize = null,
+        priority_critical_preprocess: ?bool = null,
         inline_ready_continuation: ?bool = null,
         inline_critical_chain: ?bool = null,
         inline_critical_chain_min_tail: ?u64 = null,
@@ -574,6 +585,7 @@ const TransactionScheduler = struct {
         allocator = self.future.arena.allocator(); // this came from Future's local arena.
         self.workers.deinit(allocator);
         self.preprocess_workers.deinit(allocator);
+        self.preprocess_order.deinit(allocator);
     }
 
     fn start(self: *TransactionScheduler) Error!void {
@@ -587,6 +599,8 @@ const TransactionScheduler = struct {
 
         self.overlap_preprocess = options.overlap_preprocess orelse
             envBool("SIG_REPLAY_SCHEDULER_OVERLAP_PREPROCESS", false);
+        self.priority_critical_preprocess = options.priority_critical_preprocess orelse
+            envBool("SIG_REPLAY_SCHEDULER_PRIORITY_CRITICAL_PREPROCESS", false);
         self.inline_ready_continuation = options.inline_ready_continuation orelse
             envBool("SIG_REPLAY_SCHEDULER_INLINE_READY_CONTINUATION", false);
         const inline_critical_chain_requested = options.inline_critical_chain orelse
@@ -792,7 +806,7 @@ const TransactionScheduler = struct {
         // Dependencies always point from an earlier worker to a later worker, so a reverse
         // pass computes the longest remaining dependency tail without changing ready order.
         // Keep this work behind the opt-in flag so the disabled control remains unchanged.
-        if (self.inline_critical_chain) {
+        if (self.inline_critical_chain or self.priority_critical_preprocess) {
             for (0..self.workers.items.len) |reverse_index| {
                 const worker_index = self.workers.items.len - 1 - reverse_index;
                 const worker = &self.workers.items[worker_index];
@@ -802,6 +816,28 @@ const TransactionScheduler = struct {
                         self.workers.items[waiter_id].critical_tail + 1,
                     );
                 }
+            }
+        }
+
+        // The disabled path keeps the original sequential preprocessing order exactly.
+        // When enabled, prepare the longest dependency tails first so their roots can
+        // begin executing early and their successors are ready as dependencies release.
+        if (self.priority_critical_preprocess) {
+            try self.preprocess_order.ensureTotalCapacity(allocator, self.workers.items.len);
+            for (0..self.workers.items.len) |worker_id| {
+                self.preprocess_order.appendAssumeCapacity(@intCast(worker_id));
+            }
+            std.mem.sort(
+                u32,
+                self.preprocess_order.items,
+                self,
+                criticalPreprocessLessThan,
+            );
+            if (self.preprocess_order.items.len > 0) {
+                const first_worker = self.preprocess_order.items[0];
+                self.priority_critical_preprocess_first_worker = first_worker;
+                self.priority_critical_preprocess_first_tail =
+                    self.workers.items[first_worker].critical_tail;
             }
         }
 
@@ -970,6 +1006,9 @@ const TransactionScheduler = struct {
             .max_dependencies = self.max_dependencies,
             .critical_path = self.critical_path,
             .overlap_preprocess = self.overlap_preprocess,
+            .priority_critical_preprocess = self.priority_critical_preprocess,
+            .priority_critical_preprocess_first_worker = self.priority_critical_preprocess_first_worker,
+            .priority_critical_preprocess_first_tail = self.priority_critical_preprocess_first_tail,
             .inline_ready_continuations = self.inline_ready_continuations.load(.acquire),
             .inline_critical_chain = self.inline_critical_chain,
             .inline_critical_chain_min_tail = self.inline_critical_chain_min_tail,
@@ -1004,7 +1043,11 @@ const TransactionScheduler = struct {
                 const index = self.scheduler.preprocess_next.fetchAdd(1, .monotonic);
                 if (index >= self.scheduler.workers.items.len) break;
 
-                const worker = &self.scheduler.workers.items[index];
+                const worker_id: usize = if (self.scheduler.priority_critical_preprocess)
+                    self.scheduler.preprocess_order.items[index]
+                else
+                    index;
+                const worker = &self.scheduler.workers.items[worker_id];
                 var preprocess_timer = sig.time.Timer.start();
                 worker.preprocessed = .{
                     .result = preprocessTransaction(
@@ -1027,6 +1070,17 @@ const TransactionScheduler = struct {
             }
         }
     };
+
+    fn criticalPreprocessLessThan(
+        self: *const TransactionScheduler,
+        lhs_id: u32,
+        rhs_id: u32,
+    ) bool {
+        const lhs_tail = self.workers.items[lhs_id].critical_tail;
+        const rhs_tail = self.workers.items[rhs_id].critical_tail;
+        if (lhs_tail != rhs_tail) return lhs_tail > rhs_tail;
+        return lhs_id < rhs_id;
+    }
 
     const Worker = struct {
         task: ThreadPool.Task = .{ .callback = run },
@@ -1483,6 +1537,9 @@ test "TransactionScheduler: overlap preprocessing preserves fanout and fanin" {
     );
     try std.testing.expect(scheduler_stats.overlap_preprocess);
     try std.testing.expectEqual(1, scheduler_stats.preprocess_tasks);
+    try std.testing.expect(!scheduler_stats.priority_critical_preprocess);
+    try std.testing.expectEqual(0, scheduler_stats.priority_critical_preprocess_first_worker);
+    try std.testing.expectEqual(0, scheduler_stats.priority_critical_preprocess_first_tail);
     try std.testing.expectEqual(0, scheduler_stats.inline_ready_continuations);
     try std.testing.expect(scheduler_stats.inline_critical_chain);
     try std.testing.expectEqual(512, scheduler_stats.inline_critical_chain_min_tail);
@@ -1491,6 +1548,61 @@ test "TransactionScheduler: overlap preprocessing preserves fanout and fanin" {
     try std.testing.expectEqual(4, scheduler_stats.workers);
     try std.testing.expectEqual(1, scheduler_stats.initial_ready);
     try std.testing.expectEqual(3, scheduler_stats.critical_path);
+}
+
+test "TransactionScheduler: critical preprocessing priority starts the longest tail" {
+    const allocator = std.testing.allocator;
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const independent_account = Pubkey.initRandom(rng.random());
+    const chain_account = Pubkey.initRandom(rng.random());
+
+    var transactions = [_]Transaction{
+        try initSchedulerAccessTransaction(
+            allocator,
+            rng.random(),
+            1,
+            independent_account,
+            true,
+        ),
+        try initSchedulerAccessTransaction(allocator, rng.random(), 2, chain_account, true),
+        try initSchedulerAccessTransaction(allocator, rng.random(), 3, chain_account, true),
+        try initSchedulerAccessTransaction(allocator, rng.random(), 4, chain_account, true),
+    };
+    defer for (transactions) |transaction| transaction.deinit(allocator);
+
+    const batches = [_][]const Transaction{
+        transactions[0..1],
+        transactions[1..2],
+        transactions[2..3],
+        transactions[3..4],
+    };
+
+    var state = try replay.execution.TestState.init(allocator);
+    defer state.deinit(allocator);
+    var scheduler_stats: TransactionScheduler.Stats = undefined;
+
+    try std.testing.expectEqual(
+        null,
+        try testSchedulerForBatchesWithOptions(
+            allocator,
+            &state,
+            &batches,
+            .{
+                .overlap_preprocess = true,
+                .overlap_preprocess_workers = 1,
+                .priority_critical_preprocess = true,
+                .stats_sink = &scheduler_stats,
+            },
+        ),
+    );
+    try std.testing.expect(scheduler_stats.priority_critical_preprocess);
+    try std.testing.expectEqual(4, scheduler_stats.workers);
+    try std.testing.expectEqual(2, scheduler_stats.initial_ready);
+    try std.testing.expectEqual(3, scheduler_stats.critical_path);
+    try std.testing.expectEqual(1, scheduler_stats.priority_critical_preprocess_first_worker);
+    try std.testing.expectEqual(3, scheduler_stats.priority_critical_preprocess_first_tail);
+    try std.testing.expectEqual(0, scheduler_stats.inline_ready_continuations);
+    try std.testing.expectEqual(0, scheduler_stats.inline_critical_chain_continuations);
 }
 
 test "TransactionScheduler: inline ready continuation handles a long writable chain" {
