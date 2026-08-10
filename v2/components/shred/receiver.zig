@@ -83,7 +83,6 @@ pub const Receiver = struct {
         // TODO: this is where we would add code to prune entries outside of the new range.
     }
 
-    // TODO: report return values to observability
     // TODO: report back equivocating shreds, so that we can construct and send out duplicate proofs
     pub fn processPacket(
         state: *Receiver,
@@ -408,6 +407,110 @@ pub const Receiver = struct {
         fec_set_already_finished,
         shred_already_seen,
     };
+
+    /// Why `processPacket` rejected a packet, grouped into the operational
+    /// conditions an operator can act on. The layout checks are lumped together
+    /// because an individually malformed field tells you nothing the group
+    /// doesn't; the rest each point at a distinct network or cluster problem.
+    pub const RejectReason = error{
+        /// Packet is not a well-formed shred: bad size, header, or variant.
+        InvalidLayout,
+        /// Shred belongs to a slot at or below the root we track.
+        ShredOlderThanRoot,
+        /// Shred belongs to a slot above the highest slot we track.
+        ShredTooNew,
+        /// Shred was produced for a different cluster.
+        ShredVersionMismatch,
+        /// An index or count field is outside the bounds SIMD-0317 mandates.
+        InvalidShredIndex,
+        /// Data-complete flag set on a shred that is not last in its FEC set.
+        UnexpectedDataCompleteShred,
+        /// Merkle proof is deeper than the supported layer count.
+        MerkleCountTooLarge,
+        /// Merkle root could not be recomputed from the shred.
+        InvalidMerkleProof,
+        /// No leader in the schedule for the shred's slot.
+        UnknownLeader,
+        /// Signature does not verify against the slot leader.
+        SignatureVerifyFailed,
+        /// Shred does not match the FEC set already being assembled under its
+        /// signature (different variant or merkle root).
+        FecSetMismatch,
+        /// Two conflicting FEC sets seen for the same `FecSetId`.
+        Equivocation,
+        /// Not one of the above; should stay at zero in practice.
+        Other,
+    };
+
+    /// Maps a `processPacket` error onto its `RejectReason`. Unlisted errors
+    /// fall through to `Other` so that new errors cannot break the mapping.
+    pub fn rejectReason(err: anyerror) RejectReason {
+        return switch (err) {
+            // layout validation, all from `Shred.fromPacketChecked`
+            error.PacketUnderMinHeaderSize,
+            error.UnsupportedVariant,
+            error.PacketUnderHeaderSize,
+            error.DataSmallerThanHeader,
+            error.DataPacketUnderMinSize,
+            error.DataEffectiveSizeTooSmall,
+            error.CodeShredOverMaxSize,
+            error.PacketSizeUnderExpected3,
+            error.DataShredMarkedCompleteIsNotLastInSet,
+            error.BadOffset,
+            error.BadSlotOrParentOffset,
+            error.NoCodeOrDataCount,
+            error.CodeOrDataCountTooLarge,
+            => error.InvalidLayout,
+
+            error.ShredOlderThanRoot => error.ShredOlderThanRoot,
+            error.ShredTooNew => error.ShredTooNew,
+            error.ShredVersionMismatch => error.ShredVersionMismatch,
+
+            error.FecSetIndexTooHigh,
+            error.SlotIndexTooHigh,
+            error.BadDataShredCount,
+            error.BadCodeShredCount,
+            error.BadCodeShredIdx,
+            error.BadSlotIdx,
+            error.InvalidFecSetIdx,
+            error.ShredIdxTooLarge,
+            => error.InvalidShredIndex,
+
+            error.UnexpectedDataCompleteShred => error.UnexpectedDataCompleteShred,
+            error.MerkleCountTooLarge => error.MerkleCountTooLarge,
+            error.InvalidMerkleProof => error.InvalidMerkleProof,
+            error.UnknownLeader => error.UnknownLeader,
+
+            // `Signature.verify`, via `lib.crypto.ed25519.verifySignature`
+            error.InvalidSignature,
+            error.NonCanonical,
+            error.InvalidEncoding,
+            error.WeakPublicKey,
+            error.IdentityElement,
+            error.NotSquare,
+            => error.SignatureVerifyFailed,
+
+            error.VariantMismatchFromFecSet,
+            error.MismatchedMerkleRoot,
+            => error.FecSetMismatch,
+
+            error.EquivocationDifferentHashForSameFecSetId,
+            error.EquivocationMatchingFecSetWithDifferentSignatureAlreadyInProgress,
+            => error.Equivocation,
+
+            else => error.Other,
+        };
+    }
+
+    /// Number of FEC sets currently being assembled.
+    pub fn inProgressCount(self: *const Receiver) u32 {
+        return @intCast(self.in_progress.eviction.items.len);
+    }
+
+    /// Number of completed FEC sets retained for equivocation checks.
+    pub fn doneCount(self: *const Receiver) u32 {
+        return @intCast(self.done.eviction.items.len);
+    }
 };
 
 /// Represents a FEC (Forward Error Correction) set which has yet to be reconstructed.
@@ -799,6 +902,54 @@ test "shred.receiver: shred version mismatch" {
             .noop,
         ),
     );
+}
+
+test "shred.receiver: reject reasons" {
+    const allocator = std.testing.allocator;
+
+    var receiver: Receiver = try .init(allocator, 1, 1);
+    defer receiver.deinit(allocator);
+
+    const leader_schedule: *const lib.solana.LeaderSchedule = undefined;
+    var deshred_writer: DeshredRing.Iterator(.writer) = undefined;
+
+    // layout failures are reported as one reason
+    {
+        var packet: Packet = undefined;
+        packet.len = 0;
+
+        const err = receiver.processPacket(leader_schedule, 0, &packet, &deshred_writer, .noop);
+        try std.testing.expectError(error.PacketUnderMinHeaderSize, err);
+        try std.testing.expectEqual(
+            error.InvalidLayout,
+            Receiver.rejectReason(error.PacketUnderMinHeaderSize),
+        );
+    }
+
+    // shreds from another cluster keep their own reason
+    {
+        var packet: Packet = undefined;
+        initTestDataPacket(&packet, 1);
+
+        const err = receiver.processPacket(leader_schedule, 2, &packet, &deshred_writer, .noop);
+        try std.testing.expectError(error.ShredVersionMismatch, err);
+        try std.testing.expectEqual(
+            error.ShredVersionMismatch,
+            Receiver.rejectReason(error.ShredVersionMismatch),
+        );
+    }
+
+    try std.testing.expectEqual(
+        error.Equivocation,
+        Receiver.rejectReason(error.EquivocationDifferentHashForSameFecSetId),
+    );
+    try std.testing.expectEqual(
+        error.SignatureVerifyFailed,
+        Receiver.rejectReason(error.InvalidSignature),
+    );
+
+    // errors outside the mapping must not break it
+    try std.testing.expectEqual(error.Other, Receiver.rejectReason(error.OutOfMemory));
 }
 
 test "shred.receiver: one shred (unfinished fec set)" {
