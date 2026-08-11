@@ -1110,6 +1110,61 @@ fn batchLoadAccountsForPubkeysInternal(
     borrowed_accounts: ?*sig.utils.collections.PubkeyMap(*const AccountSharedData),
     cache_insert_policy: DecodedAccountCacheInsertPolicy,
 ) !BatchDecodeResult {
+    const overlay = self.overlay_store orelse return self.batchLoadAccountsForPubkeysLocal(
+        allocator,
+        pubkeys,
+        accounts,
+        borrowed_accounts,
+        cache_insert_policy,
+    );
+
+    var timer = sig.time.Timer.start();
+    const overlay_result = try overlay.batchLoadAccountsForPubkeysLocal(
+        allocator,
+        pubkeys,
+        accounts,
+        borrowed_accounts,
+        cache_insert_policy,
+    );
+
+    var base_pubkeys: std.ArrayListUnmanaged(Pubkey) = .{};
+    defer base_pubkeys.deinit(allocator);
+    try base_pubkeys.ensureTotalCapacity(allocator, pubkeys.len);
+    for (pubkeys) |pubkey| {
+        if (accounts.contains(pubkey)) continue;
+        if (borrowed_accounts) |borrowed| {
+            if (borrowed.contains(pubkey)) continue;
+        }
+        base_pubkeys.appendAssumeCapacity(pubkey);
+    }
+
+    const base_result = try self.batchLoadAccountsForPubkeysLocal(
+        allocator,
+        base_pubkeys.items,
+        accounts,
+        borrowed_accounts,
+        cache_insert_policy,
+    );
+    const result = mergeLayeredBatchDecodeResults(
+        overlay_result,
+        base_result,
+        timer.read().asNanos(),
+    );
+    self.recordBatchDecodeResult(result);
+    return result;
+}
+
+/// Resolves one physical compressed store only. The public batch paths call
+/// this once for the overlay and then once for the unresolved base pubkeys so
+/// batched reads preserve the same overlay-first semantics as `get`.
+fn batchLoadAccountsForPubkeysLocal(
+    self: *CompressedAccountStore,
+    allocator: std.mem.Allocator,
+    pubkeys: []const Pubkey,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    borrowed_accounts: ?*sig.utils.collections.PubkeyMap(*const AccountSharedData),
+    cache_insert_policy: DecodedAccountCacheInsertPolicy,
+) !BatchDecodeResult {
     var timer = sig.time.Timer.start();
     defer self.metrics.batch_decode_time.observe(timer.read().asNanos());
 
@@ -1263,6 +1318,61 @@ fn batchLoadAccountsForPubkeysInternal(
     self.snapshotDecodedAccountCache(&result);
     self.snapshotChunkCache(&result);
     self.recordBatchDecodeResult(result);
+    return result;
+}
+
+fn mergeLayeredBatchDecodeResults(
+    overlay: BatchDecodeResult,
+    base: BatchDecodeResult,
+    total_ns: u64,
+) BatchDecodeResult {
+    var result = base;
+    result.pubkeys = overlay.pubkeys;
+    result.compressed_pubkeys += overlay.compressed_pubkeys;
+    // Overlay misses are fallthrough candidates, not final misses.
+    result.missing_pubkeys = base.missing_pubkeys;
+    result.unique_chunks += overlay.unique_chunks;
+    result.chunks_decoded += overlay.chunks_decoded;
+    result.chunks_cached += overlay.chunks_cached;
+    result.accounts_loaded += overlay.accounts_loaded;
+    result.accounts_cached += overlay.accounts_cached;
+    result.accounts_borrowed += overlay.accounts_borrowed;
+    result.accounts_skipped += overlay.accounts_skipped;
+    result.materialized_data_bytes += overlay.materialized_data_bytes;
+    result.borrowed_data_bytes += overlay.borrowed_data_bytes;
+    result.decoded_cache_entries += overlay.decoded_cache_entries;
+    result.decoded_cache_bytes += overlay.decoded_cache_bytes;
+    result.decoded_cache_max_entries += overlay.decoded_cache_max_entries;
+    result.decoded_cache_priority_entries += overlay.decoded_cache_priority_entries;
+    result.decoded_cache_priority_reserve_entries += overlay.decoded_cache_priority_reserve_entries;
+    result.decoded_cache_effective_max_entries += overlay.decoded_cache_effective_max_entries;
+    result.decoded_cache_max_bytes += overlay.decoded_cache_max_bytes;
+    result.decoded_cache_move_borrowed = result.decoded_cache_move_borrowed or
+        overlay.decoded_cache_move_borrowed;
+    result.persistent_batch_pool = result.persistent_batch_pool or overlay.persistent_batch_pool;
+    result.decoded_cache_priority_insert_total += overlay.decoded_cache_priority_insert_total;
+    result.decoded_cache_priority_skip_total += overlay.decoded_cache_priority_skip_total;
+    result.decoded_cache_skip_entry_limit_total += overlay.decoded_cache_skip_entry_limit_total;
+    result.decoded_cache_skip_byte_limit_total += overlay.decoded_cache_skip_byte_limit_total;
+    result.decoded_cache_skip_oversize_total += overlay.decoded_cache_skip_oversize_total;
+    result.decoded_cache_skip_allocation_total += overlay.decoded_cache_skip_allocation_total;
+    result.chunk_cache_entries += overlay.chunk_cache_entries;
+    result.chunk_cache_bytes += overlay.chunk_cache_bytes;
+    result.chunk_cache_max_entries += overlay.chunk_cache_max_entries;
+    result.chunk_cache_max_bytes += overlay.chunk_cache_max_bytes;
+    result.chunk_cache_insert_total += overlay.chunk_cache_insert_total;
+    result.chunk_cache_eviction_total += overlay.chunk_cache_eviction_total;
+    result.chunk_cache_byte_limit_eviction_total += overlay.chunk_cache_byte_limit_eviction_total;
+    result.chunk_cache_entry_limit_eviction_total += overlay.chunk_cache_entry_limit_eviction_total;
+    result.total_ns = total_ns;
+    result.index_lookup_ns += overlay.index_lookup_ns;
+    result.index_records_read += overlay.index_records_read;
+    result.chunk_plan_ns += overlay.chunk_plan_ns;
+    result.cached_chunk_load_ns += overlay.cached_chunk_load_ns;
+    result.cold_chunk_load_ns += overlay.cold_chunk_load_ns;
+    result.cold_decompress_wall_ns += overlay.cold_decompress_wall_ns;
+    result.cold_account_materialize_ns += overlay.cold_account_materialize_ns;
+    result.chunk_cache_insert_ns += overlay.chunk_cache_insert_ns;
     return result;
 }
 
@@ -2770,4 +2880,37 @@ test "decoded account cache adopts owned data without cloning" {
     duplicate_owned = false;
     try std.testing.expectEqual(stored, existing);
     try std.testing.expectEqual(@as(usize, 1), store.decoded_account_cache.count());
+}
+
+test "layered batch result treats overlay misses as base fallthrough" {
+    const overlay: BatchDecodeResult = .{
+        .pubkeys = 3,
+        .compressed_pubkeys = 2,
+        .missing_pubkeys = 1,
+        .unique_chunks = 2,
+        .chunks_decoded = 2,
+        .accounts_loaded = 2,
+        .index_records_read = 10,
+        .index_lookup_ns = 20,
+    };
+    const base: BatchDecodeResult = .{
+        .pubkeys = 1,
+        .compressed_pubkeys = 1,
+        .missing_pubkeys = 0,
+        .unique_chunks = 1,
+        .chunks_decoded = 1,
+        .accounts_loaded = 1,
+        .index_records_read = 5,
+        .index_lookup_ns = 10,
+    };
+
+    const result = mergeLayeredBatchDecodeResults(overlay, base, 42);
+    try std.testing.expectEqual(@as(u64, 3), result.pubkeys);
+    try std.testing.expectEqual(@as(u64, 3), result.compressed_pubkeys);
+    try std.testing.expectEqual(@as(u64, 0), result.missing_pubkeys);
+    try std.testing.expectEqual(@as(u64, 3), result.unique_chunks);
+    try std.testing.expectEqual(@as(u64, 3), result.accounts_loaded);
+    try std.testing.expectEqual(@as(u64, 15), result.index_records_read);
+    try std.testing.expectEqual(@as(u64, 30), result.index_lookup_ns);
+    try std.testing.expectEqual(@as(u64, 42), result.total_ns);
 }
