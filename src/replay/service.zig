@@ -9,6 +9,7 @@ const Allocator = std.mem.Allocator;
 const Channel = sig.sync.Channel;
 const ThreadPool = sig.sync.ThreadPool;
 
+const Ancestors = sig.core.Ancestors;
 const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
@@ -586,6 +587,13 @@ pub fn trackNewSlots(
         for (children.items) |slot| {
             if (slot_tracker.contains(slot)) continue;
             logger.info().logf("tracking new slot: {}", .{slot});
+            logEpochTrackerSlotLookup(
+                logger,
+                epoch_tracker,
+                slot,
+                &parent_info.constants().ancestors,
+                "before_new_slot_from_parent",
+            );
             var child_timer = sig.time.Timer.start();
             const parent_epoch = epoch_tracker.epoch_schedule.getEpoch(parent_slot);
             const slot_epoch = epoch_tracker.epoch_schedule.getEpoch(slot);
@@ -595,7 +603,7 @@ pub fn trackNewSlots(
             // may modify the feature set.
             var new_slot_timing: NewSlotFromParentTiming = .{};
             var new_slot_timer = sig.time.Timer.start();
-            var constants, var state = try newSlotFromParent(
+            var constants, var state = newSlotFromParent(
                 allocator,
                 account_store.reader(),
                 epoch_tracker.cluster.ticks_per_slot,
@@ -606,16 +614,29 @@ pub fn trackNewSlots(
                 slot,
                 use_parent_feature_set,
                 &new_slot_timing,
-            );
+            ) catch |err| {
+                logger.err().logf(
+                    "track_new_slot_error stage=new_slot_from_parent slot={} parent_slot={} err={s}",
+                    .{ slot, parent_slot, @errorName(err) },
+                );
+                return err;
+            };
             const new_slot_ns = new_slot_timer.read().asNanos();
             errdefer constants.deinit(allocator);
             errdefer state.deinit(allocator);
+            logEpochTrackerSlotLookup(
+                logger,
+                epoch_tracker,
+                slot,
+                &constants.ancestors,
+                "after_new_slot_from_parent",
+            );
 
             const store = account_store.forSlot(slot, &constants.ancestors);
 
             var epoch_update_timer = sig.time.Timer.start();
             if (parent_epoch < slot_epoch) {
-                try replay.epoch_transitions.processNewEpoch(
+                replay.epoch_transitions.processNewEpoch(
                     allocator,
                     slot,
                     &constants,
@@ -623,16 +644,28 @@ pub fn trackNewSlots(
                     store,
                     epoch_tracker,
                     .from(logger),
-                );
+                ) catch |err| {
+                    logger.err().logf(
+                        "track_new_slot_error stage=process_new_epoch slot={} parent_slot={} parent_epoch={} slot_epoch={} err={s}",
+                        .{ slot, parent_slot, parent_epoch, slot_epoch, @errorName(err) },
+                    );
+                    return err;
+                };
             } else {
-                try replay.epoch_transitions.updateEpochStakes(
+                replay.epoch_transitions.updateEpochStakes(
                     allocator,
                     slot,
                     &constants.ancestors,
                     &constants.feature_set,
                     &state.stakes_cache,
                     epoch_tracker,
-                );
+                ) catch |err| {
+                    logger.err().logf(
+                        "track_new_slot_error stage=update_epoch_stakes slot={} parent_slot={} parent_epoch={} slot_epoch={} err={s}",
+                        .{ slot, parent_slot, parent_epoch, slot_epoch, @errorName(err) },
+                    );
+                    return err;
+                };
             }
             const epoch_update_ns = epoch_update_timer.read().asNanos();
 
@@ -713,6 +746,27 @@ pub fn trackNewSlots(
 
             // TODO: update_fork_propagated_threshold_from_votes
         }
+    }
+}
+
+fn logEpochTrackerSlotLookup(
+    logger: Logger,
+    epoch_tracker: *sig.core.EpochTracker,
+    slot: Slot,
+    ancestors: *const Ancestors,
+    stage: []const u8,
+) void {
+    if (epoch_tracker.getEpochInfoNoOffset(slot, ancestors)) |epoch_info| {
+        logger.info().logf(
+            "epoch_tracker_replay_check stage={s} status=pass slot={} stake_epoch={}",
+            .{ stage, slot, epoch_info.stakes.stakes.epoch },
+        );
+        epoch_info.release();
+    } else |err| {
+        logger.err().logf(
+            "epoch_tracker_replay_check stage={s} status=fail slot={} err={s}",
+            .{ stage, slot, @errorName(err) },
+        );
     }
 }
 

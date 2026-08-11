@@ -81,6 +81,11 @@ pub const RepairService = struct {
     continuity_repair_bottom_peer_fanout: usize,
     continuity_repair_bottom_rotate_cursor: bool,
     targeted_repair_plan: ArrayList(RepairRequest),
+    targeted_repair_plan_path: ?[]u8,
+    targeted_repair_plan_file_size: u64,
+    targeted_repair_plan_file_mtime: i128,
+    targeted_repair_plan_reload_interval_ms: u64,
+    targeted_repair_plan_last_check_ms: i64,
     targeted_repair_next_index: usize,
     targeted_repair_max_per_loop: usize,
     targeted_repair_peer_fanout: usize,
@@ -100,6 +105,11 @@ pub const RepairService = struct {
         batch_process_time: *Histogram,
         last_batch_size: *Gauge(u64),
         last_batch_process_time: *Gauge(f64),
+        targeted_plan_request_count: *Gauge(u64),
+        targeted_plan_min_slot: *Gauge(u64),
+        targeted_plan_max_slot: *Gauge(u64),
+        targeted_plan_reload_count: *Counter,
+        targeted_plan_reload_failure_count: *Counter,
 
         pub const prefix = "repair_service";
 
@@ -200,6 +210,11 @@ pub const RepairService = struct {
             "SIG_TARGETED_REPAIR_PLAN_ONLY",
             false,
         );
+        const targeted_repair_plan_reload_interval_ms = try readEnvU64(
+            allocator,
+            "SIG_TARGETED_REPAIR_PLAN_RELOAD_INTERVAL_MS",
+            0,
+        );
         const max_addressed_requests_per_loop = try readEnvUsize(
             allocator,
             "SIG_REPAIR_MAX_ADDRESSED_REQUESTS_PER_LOOP",
@@ -210,8 +225,10 @@ pub const RepairService = struct {
         errdefer targeted_repair_plan.deinit();
         var targeted_repair_min_slot: ?Slot = null;
         var targeted_repair_max_slot: ?Slot = null;
+        var targeted_repair_plan_file_size: u64 = 0;
+        var targeted_repair_plan_file_mtime: i128 = 0;
         const targeted_plan_path = try readOptionalEnvOwned(allocator, "SIG_TARGETED_REPAIR_PLAN_PATH");
-        defer if (targeted_plan_path) |path| allocator.free(path);
+        errdefer if (targeted_plan_path) |plan_path| allocator.free(plan_path);
         if (targeted_plan_path) |path| {
             const plan_stats = try loadTargetedRepairPlan(
                 allocator,
@@ -220,8 +237,10 @@ pub const RepairService = struct {
             );
             targeted_repair_min_slot = plan_stats.min_slot;
             targeted_repair_max_slot = plan_stats.max_slot;
+            targeted_repair_plan_file_size = plan_stats.file_size;
+            targeted_repair_plan_file_mtime = plan_stats.file_mtime;
             logger.info().logf(
-                "targeted repair plan loaded path={s} request_count={} min_slot={?} max_slot={?} max_per_loop={} peer_fanout={} plan_only={}",
+                "targeted repair plan loaded path={s} request_count={} min_slot={?} max_slot={?} max_per_loop={} peer_fanout={} plan_only={} reload_interval_ms={}",
                 .{
                     path,
                     plan_stats.request_count,
@@ -230,6 +249,7 @@ pub const RepairService = struct {
                     targeted_repair_max_per_loop,
                     targeted_repair_peer_fanout,
                     targeted_repair_plan_only,
+                    targeted_repair_plan_reload_interval_ms,
                 },
             );
         }
@@ -254,6 +274,11 @@ pub const RepairService = struct {
             },
         );
 
+        const metrics = try registry.initStruct(Metrics);
+        metrics.targeted_plan_request_count.set(targeted_repair_plan.items.len);
+        metrics.targeted_plan_min_slot.set(targeted_repair_min_slot orelse 0);
+        metrics.targeted_plan_max_slot.set(targeted_repair_max_slot orelse 0);
+
         return RepairService{
             .allocator = allocator,
             .requester = requester,
@@ -263,7 +288,7 @@ pub const RepairService = struct {
             .exit = exit,
             .report = MultiSlotReport.init(allocator),
             .thread_pool = thread_pool,
-            .metrics = try registry.initStruct(Metrics),
+            .metrics = metrics,
             .prng = std.Random.DefaultPrng.init(repair_jitter_seed),
             .debug_logged_repair_slots = AutoHashMap(Slot, void).init(allocator),
             .debug_logged_assignment_slots = AutoHashMap(Slot, void).init(allocator),
@@ -282,6 +307,11 @@ pub const RepairService = struct {
             .continuity_repair_bottom_peer_fanout = continuity_repair_bottom_peer_fanout,
             .continuity_repair_bottom_rotate_cursor = continuity_repair_bottom_rotate_cursor,
             .targeted_repair_plan = targeted_repair_plan,
+            .targeted_repair_plan_path = targeted_plan_path,
+            .targeted_repair_plan_file_size = targeted_repair_plan_file_size,
+            .targeted_repair_plan_file_mtime = targeted_repair_plan_file_mtime,
+            .targeted_repair_plan_reload_interval_ms = targeted_repair_plan_reload_interval_ms,
+            .targeted_repair_plan_last_check_ms = std.time.milliTimestamp(),
             .targeted_repair_next_index = 0,
             .targeted_repair_max_per_loop = targeted_repair_max_per_loop,
             .targeted_repair_peer_fanout = targeted_repair_peer_fanout,
@@ -306,6 +336,7 @@ pub const RepairService = struct {
         self.debug_logged_send_slots.deinit();
         self.continuity_repair_next_index_by_slot.deinit();
         self.targeted_repair_plan.deinit();
+        if (self.targeted_repair_plan_path) |path| self.allocator.free(path);
     }
 
     pub fn run(self: *Self) !void {
@@ -392,6 +423,8 @@ pub const RepairService = struct {
     fn getRepairs(self: *Self) !ArrayList(RepairRequest) {
         const zone = tracy.Zone.init(@src(), .{ .name = "getRepairs" });
         defer zone.deinit();
+
+        self.maybeReloadTargetedRepairPlan();
 
         var oldest_slot_needing_repair: u64 = 0;
         var newest_slot_needing_repair: u64 = 0;
@@ -538,6 +571,69 @@ pub const RepairService = struct {
         self.targeted_repair_next_index =
             (self.targeted_repair_next_index + limit) % self.targeted_repair_plan.items.len;
         return limit;
+    }
+
+    fn maybeReloadTargetedRepairPlan(self: *Self) void {
+        const reload_interval_ms = self.targeted_repair_plan_reload_interval_ms;
+        if (reload_interval_ms == 0) return;
+        const plan_path = self.targeted_repair_plan_path orelse return;
+
+        const now_ms = std.time.milliTimestamp();
+        const elapsed_ms = now_ms - self.targeted_repair_plan_last_check_ms;
+        if (elapsed_ms >= 0 and @as(u64, @intCast(elapsed_ms)) < reload_interval_ms) return;
+        self.targeted_repair_plan_last_check_ms = now_ms;
+
+        const file_stats = statTargetedRepairPlanFile(plan_path) catch |err| {
+            self.metrics.targeted_plan_reload_failure_count.inc();
+            self.logger.warn().logf(
+                "targeted repair plan reload stat failed path={s} error={s}; retaining current plan",
+                .{ plan_path, @errorName(err) },
+            );
+            return;
+        };
+        if (!targetedRepairPlanFileChanged(
+            self.targeted_repair_plan_file_size,
+            self.targeted_repair_plan_file_mtime,
+            file_stats.size,
+            file_stats.mtime,
+        )) return;
+
+        var next_plan = ArrayList(RepairRequest).init(self.allocator);
+        const plan_stats = loadTargetedRepairPlan(
+            self.allocator,
+            plan_path,
+            &next_plan,
+        ) catch |err| {
+            next_plan.deinit();
+            self.metrics.targeted_plan_reload_failure_count.inc();
+            self.logger.warn().logf(
+                "targeted repair plan reload failed path={s} error={s}; retaining current plan",
+                .{ plan_path, @errorName(err) },
+            );
+            return;
+        };
+
+        self.targeted_repair_plan.deinit();
+        self.targeted_repair_plan = next_plan;
+        self.targeted_repair_next_index = 0;
+        self.targeted_repair_min_slot = plan_stats.min_slot;
+        self.targeted_repair_max_slot = plan_stats.max_slot;
+        self.targeted_repair_plan_file_size = plan_stats.file_size;
+        self.targeted_repair_plan_file_mtime = plan_stats.file_mtime;
+        self.metrics.targeted_plan_request_count.set(plan_stats.request_count);
+        self.metrics.targeted_plan_min_slot.set(plan_stats.min_slot orelse 0);
+        self.metrics.targeted_plan_max_slot.set(plan_stats.max_slot orelse 0);
+        self.metrics.targeted_plan_reload_count.inc();
+        self.logger.warn().logf(
+            "targeted repair plan reloaded path={s} request_count={} min_slot={?} max_slot={?} reload_interval_ms={}",
+            .{
+                plan_path,
+                plan_stats.request_count,
+                plan_stats.min_slot,
+                plan_stats.max_slot,
+                reload_interval_ms,
+            },
+        );
     }
 
     fn isTargetedRepairPlanSlot(self: *const Self, slot: Slot) bool {
@@ -772,6 +868,13 @@ const TargetedRepairPlanStats = struct {
     request_count: usize = 0,
     min_slot: ?Slot = null,
     max_slot: ?Slot = null,
+    file_size: u64 = 0,
+    file_mtime: i128 = 0,
+};
+
+const TargetedRepairPlanFileStats = struct {
+    size: u64,
+    mtime: i128,
 };
 
 fn readOptionalEnvOwned(allocator: Allocator, key: []const u8) !?[]u8 {
@@ -788,13 +891,31 @@ fn openRepairPlanFile(path: []const u8) !std.fs.File {
     return try std.fs.cwd().openFile(path, .{ .mode = .read_only });
 }
 
+fn statTargetedRepairPlanFile(path: []const u8) !TargetedRepairPlanFileStats {
+    var file = try openRepairPlanFile(path);
+    defer file.close();
+    const file_stats = try file.stat();
+    return .{ .size = file_stats.size, .mtime = file_stats.mtime };
+}
+
+fn targetedRepairPlanFileChanged(
+    current_size: u64,
+    current_mtime: i128,
+    next_size: u64,
+    next_mtime: i128,
+) bool {
+    return current_size != next_size or current_mtime != next_mtime;
+}
+
 fn parseTargetedRepairPlanLine(line: []const u8) !?RepairRequest {
     const trimmed = std.mem.trim(u8, line, " \t\r\n");
     if (trimmed.len == 0 or trimmed[0] == '#') return null;
 
     var tokens = std.mem.tokenizeAny(u8, trimmed, " \t");
     const record_type = tokens.next() orelse return null;
-    if (!std.mem.eql(u8, record_type, "repair_data_shred")) return null;
+    const is_data_shred = std.mem.eql(u8, record_type, "repair_data_shred");
+    const is_highest_shred = std.mem.eql(u8, record_type, "repair_highest_shred");
+    if (!is_data_shred and !is_highest_shred) return null;
 
     var slot: ?Slot = null;
     var index: ?u64 = null;
@@ -809,10 +930,12 @@ fn parseTargetedRepairPlanLine(line: []const u8) !?RepairRequest {
         }
     }
 
-    return .{ .Shred = .{
-        slot orelse return error.MissingTargetedRepairSlot,
-        index orelse return error.MissingTargetedRepairIndex,
-    } };
+    const request_slot = slot orelse return error.MissingTargetedRepairSlot;
+    const request_index = index orelse return error.MissingTargetedRepairIndex;
+    if (is_highest_shred) {
+        return .{ .HighestShred = .{ request_slot, request_index } };
+    }
+    return .{ .Shred = .{ request_slot, request_index } };
 }
 
 fn loadTargetedRepairPlan(
@@ -823,10 +946,15 @@ fn loadTargetedRepairPlan(
     var file = try openRepairPlanFile(path);
     defer file.close();
 
+    const file_stats = try file.stat();
+
     const contents = try file.readToEndAlloc(allocator, 64 * 1024 * 1024);
     defer allocator.free(contents);
 
-    var stats: TargetedRepairPlanStats = .{};
+    var stats: TargetedRepairPlanStats = .{
+        .file_size = file_stats.size,
+        .file_mtime = file_stats.mtime,
+    };
     var lines = std.mem.splitScalar(u8, contents, '\n');
     while (lines.next()) |line| {
         const request = (try parseTargetedRepairPlanLine(line)) orelse continue;
@@ -1603,6 +1731,14 @@ test "targeted repair plan parser accepts fec probe lines" {
     )).?;
     try std.testing.expectEqual(RepairRequest{ .Shred = .{ 427540109, 64 } }, request);
 
+    const highest_request = (try parseTargetedRepairPlanLine(
+        "repair_highest_shred slot=427540110 index=0",
+    )).?;
+    try std.testing.expectEqual(
+        RepairRequest{ .HighestShred = .{ 427540110, 0 } },
+        highest_request,
+    );
+
     try std.testing.expectEqual(@as(?RepairRequest, null), try parseTargetedRepairPlanLine("# comment"));
     try std.testing.expectEqual(@as(?RepairRequest, null), try parseTargetedRepairPlanLine(""));
 }
@@ -1617,9 +1753,9 @@ test "targeted repair plan loader tracks request slot range" {
         var file = try tmp.dir.createFile(path, .{});
         defer file.close();
         try file.writeAll(
-            \\# repair_data_shred lines are Agave-style Shred(slot,index) data-repair candidates
+            \\# repair_data_shred and repair_highest_shred lines are targeted repair candidates
             \\repair_data_shred slot=10 index=1 fec_set_index=0 data_seen=1 code_seen=0 expected_data=null expected_code=null unique_shards=1
-            \\repair_data_shred slot=12 index=7 fec_set_index=0 data_seen=1 code_seen=0 expected_data=null expected_code=null unique_shards=1
+            \\repair_highest_shred slot=12 index=7
             \\
         );
     }
@@ -1635,8 +1771,18 @@ test "targeted repair plan loader tracks request slot range" {
     try std.testing.expectEqual(@as(usize, 2), stats.request_count);
     try std.testing.expectEqual(@as(?Slot, 10), stats.min_slot);
     try std.testing.expectEqual(@as(?Slot, 12), stats.max_slot);
+    try std.testing.expect(stats.file_size > 0);
     try std.testing.expectEqual(RepairRequest{ .Shred = .{ 10, 1 } }, requests.items[0]);
-    try std.testing.expectEqual(RepairRequest{ .Shred = .{ 12, 7 } }, requests.items[1]);
+    try std.testing.expectEqual(
+        RepairRequest{ .HighestShred = .{ 12, 7 } },
+        requests.items[1],
+    );
+}
+
+test "targeted repair plan file fingerprint detects atomic replacement" {
+    try std.testing.expect(!targetedRepairPlanFileChanged(100, 200, 100, 200));
+    try std.testing.expect(targetedRepairPlanFileChanged(100, 200, 101, 200));
+    try std.testing.expect(targetedRepairPlanFileChanged(100, 200, 100, 201));
 }
 
 test "continuity exact repair cursor resumes after the prior chunk" {

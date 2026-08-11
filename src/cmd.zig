@@ -1928,6 +1928,21 @@ fn validator(
         &feature_set,
     );
     defer epoch_tracker.deinit();
+    if (epoch_tracker.getEpochInfoNoOffset(
+        snapshot_root_slot,
+        &collapsed_manifest.bank_fields.ancestors,
+    )) |epoch_info| {
+        app_base.logger.info().logf(
+            "epoch_tracker_boot_check stage=after_tracker_init status=pass slot={} stake_epoch={}",
+            .{ snapshot_root_slot, epoch_info.stakes.stakes.epoch },
+        );
+        epoch_info.release();
+    } else |err| {
+        app_base.logger.err().logf(
+            "epoch_tracker_boot_check stage=after_tracker_init status=fail slot={} err={s}",
+            .{ snapshot_root_slot, @errorName(err) },
+        );
+    }
 
     const turbine_config = cfg.turbine;
 
@@ -1978,6 +1993,21 @@ fn validator(
         .geyser_writer = geyser_writer,
     });
     defer replay_service_state.deinit(allocator);
+    if (epoch_tracker.getEpochInfoNoOffset(
+        snapshot_root_slot,
+        &collapsed_manifest.bank_fields.ancestors,
+    )) |epoch_info| {
+        app_base.logger.info().logf(
+            "epoch_tracker_boot_check stage=after_replay_state_init status=pass slot={} stake_epoch={}",
+            .{ snapshot_root_slot, epoch_info.stakes.stakes.epoch },
+        );
+        epoch_info.release();
+    } else |err| {
+        app_base.logger.err().logf(
+            "epoch_tracker_boot_check stage=after_replay_state_init status=fail slot={} err={s}",
+            .{ snapshot_root_slot, @errorName(err) },
+        );
+    }
 
     try app_base.rpc_hooks.set(allocator, sig.rpc.methods.RpcHookContext{
         .slot_tracker = &replay_service_state.replay_state.slot_tracker,
@@ -1995,13 +2025,6 @@ fn validator(
             .slot_tracker = &replay_service_state.replay_state.slot_tracker,
             .account_reader = replay_service_state.replay_state.account_store.reader(),
         },
-    );
-
-    const replay_thread = try replay_service_state.spawnService(
-        &app_base,
-        if (maybe_vote_sockets) |*vs| vs else null,
-        &gossip_votes,
-        &gossip_service.gossip_table_rw,
     );
 
     if (warm_capture_manager) |*manager| {
@@ -2063,6 +2086,16 @@ fn validator(
         })
     else
         null;
+
+    // Start replay only after every fallible runtime initialization succeeds.
+    // Otherwise an initialization error unwinds the validator and deinitializes
+    // replay-owned state while the replay thread can still be using it.
+    const replay_thread = try replay_service_state.spawnService(
+        &app_base,
+        if (maybe_vote_sockets) |*vs| vs else null,
+        &gossip_votes,
+        &gossip_service.gossip_table_rw,
+    );
 
     if (rpc_server_thread) |thread| thread.join();
     replay_thread.join();

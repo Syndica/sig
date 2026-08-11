@@ -185,6 +185,15 @@ pub const EpochTracker = struct {
             var lock = epoch_tracker.rooted_epochs.write();
             defer lock.unlock();
             try lock.mut().seed(epoch_stakes.stakes.epoch, epoch_info_ptr);
+            std.debug.print(
+                "epoch_tracker_manifest_seed map_epoch={} embedded_epoch={} index={} rooted_epoch={}\n",
+                .{
+                    epoch,
+                    epoch_stakes.stakes.epoch,
+                    epoch_stakes.stakes.epoch % RootedEpochBuffer.BUF_LEN,
+                    lock.get().root,
+                },
+            );
         }
 
         return epoch_tracker;
@@ -228,7 +237,24 @@ pub const EpochTracker = struct {
         {
             var lock = self.rooted_epochs.read();
             defer lock.unlock();
-            if (lock.get().getEpochInfoRef(epoch)) |info| return info else |_| {}
+            if (lock.get().getEpochInfoRef(epoch)) |info| {
+                return info;
+            } else |err| {
+                const rooted = lock.get();
+                const entry = rooted.buf[epoch % rooted.buf.len];
+                std.debug.print(
+                    "epoch_tracker_rooted_lookup_miss slot={} requested_epoch={} rooted_epoch={} index={} entry_present={} entry_stakes_epoch={} err={s}\n",
+                    .{
+                        slot,
+                        epoch,
+                        rooted.root,
+                        epoch % rooted.buf.len,
+                        entry != null,
+                        if (entry) |info| info.stakes.stakes.epoch else 0,
+                        @errorName(err),
+                    },
+                );
+            }
         }
         return self.unrooted_epochs.getEpochInfoRef(ancestors);
     }
@@ -362,13 +388,25 @@ pub const EpochTracker = struct {
     ) !*const EpochInfo {
         const epoch = self.epoch_schedule.getEpoch(slot);
         const leader_schedule_epoch = self.epoch_schedule.getLeaderScheduleEpoch(slot);
-        if (epoch != epoch_stakes.stakes.epoch) return error.InvalidInsert;
-        const is_next = blk: {
+        if (epoch != epoch_stakes.stakes.epoch) {
+            std.debug.print(
+                "epoch_tracker_invalid_insert reason=epoch_mismatch slot={} slot_epoch={} leader_schedule_epoch={} stakes_epoch={}\n",
+                .{ slot, epoch, leader_schedule_epoch, epoch_stakes.stakes.epoch },
+            );
+            return error.InvalidInsert;
+        }
+        const is_next, const rooted_epoch = blk: {
             var lock = self.rooted_epochs.read();
             defer lock.unlock();
-            break :blk lock.get().isNext(epoch);
+            break :blk .{ lock.get().isNext(epoch), lock.get().root };
         };
-        if (!is_next) return error.InvalidInsert;
+        if (!is_next) {
+            std.debug.print(
+                "epoch_tracker_invalid_insert reason=non_sequential slot={} slot_epoch={} stakes_epoch={} rooted_epoch={}\n",
+                .{ slot, epoch, epoch_stakes.stakes.epoch, rooted_epoch },
+            );
+            return error.InvalidInsert;
+        }
 
         const leaders = try LeaderSchedule.init(
             allocator,
@@ -575,7 +613,13 @@ const RootedEpochBuffer = struct {
         epoch: Epoch,
         value: *const EpochInfo,
     ) !void {
-        if (!self.isNext(epoch)) return error.InvalidInsert;
+        if (!self.isNext(epoch)) {
+            std.debug.print(
+                "epoch_tracker_invalid_insert reason=rooted_non_sequential requested_epoch={} embedded_epoch={} rooted_epoch={}\n",
+                .{ epoch, value.stakes.stakes.epoch, self.root },
+            );
+            return error.InvalidInsert;
+        }
 
         const index = epoch % self.buf.len;
         if (self.buf[index]) |old_value| {

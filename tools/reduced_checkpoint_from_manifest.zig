@@ -53,6 +53,60 @@ pub fn main() !void {
                 bank_fields.capitalization,
             },
         );
+        std.debug.print(
+            "reduced_checkpoint_epoch_stakes count={}\n",
+            .{checkpoint.bank_extra.versioned_epoch_stakes.count()},
+        );
+        for (
+            checkpoint.bank_extra.versioned_epoch_stakes.keys(),
+            checkpoint.bank_extra.versioned_epoch_stakes.values(),
+        ) |map_epoch, value| {
+            std.debug.print(
+                "reduced_checkpoint_epoch_stake map_epoch={} embedded_epoch={}\n",
+                .{ map_epoch, value.current.stakes.epoch },
+            );
+        }
+        var manifest = try checkpoint.toManifest(allocator);
+        defer manifest.deinit(allocator);
+        std.debug.print(
+            "reduced_checkpoint_bank_stakes epoch={} vote_accounts={} stake_accounts={}\n",
+            .{
+                manifest.bank_fields.stakes.epoch,
+                manifest.bank_fields.stakes.vote_accounts.vote_accounts.count(),
+                manifest.bank_fields.stakes.stake_accounts.count(),
+            },
+        );
+        var epoch_tracker = try sig.core.EpochTracker.initFromManifest(
+            allocator,
+            &manifest,
+            &.ALL_DISABLED,
+        );
+        defer epoch_tracker.deinit();
+        const next_slot = bank_fields.slot + 1;
+        const next_epoch_info = try epoch_tracker.getEpochInfoNoOffset(
+            next_slot,
+            &manifest.bank_fields.ancestors,
+        );
+        defer next_epoch_info.release();
+        std.debug.print(
+            "reduced_checkpoint_epoch_tracker next_slot={} next_slot_epoch={} stake_epoch={}\n",
+            .{
+                next_slot,
+                bank_fields.epoch_schedule.getEpoch(next_slot),
+                next_epoch_info.stakes.stakes.epoch,
+            },
+        );
+        var leader_schedules = try epoch_tracker.getLeaderSchedules();
+        defer leader_schedules.release();
+        const after_leader_lookup = try epoch_tracker.getEpochInfoNoOffset(
+            next_slot,
+            &manifest.bank_fields.ancestors,
+        );
+        defer after_leader_lookup.release();
+        std.debug.print(
+            "reduced_checkpoint_epoch_tracker_after_leader_schedules next_slot={} stake_epoch={}\n",
+            .{ next_slot, after_leader_lookup.stakes.stakes.epoch },
+        );
         return;
     }
 

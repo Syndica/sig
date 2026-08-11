@@ -16,6 +16,7 @@ const InspectMode = enum {
     full,
     summary,
     tx_check,
+    repair_plan,
 };
 
 pub fn main() !void {
@@ -35,13 +36,15 @@ pub fn main() !void {
         .summary
     else if (args.len > 1 and std.mem.eql(u8, args[1], "--tx-check"))
         .tx_check
+    else if (args.len > 1 and std.mem.eql(u8, args[1], "--repair-plan"))
+        .repair_plan
     else
         .full;
     const first_positional_arg: usize = if (mode == .full) 1 else 2;
 
     if (args.len < first_positional_arg + 3) {
         std.debug.print(
-            "usage: ledger-inspect [--summary|--tx-check] <ledger-path> <start-slot> <end-slot>\n",
+            "usage: ledger-inspect [--summary|--tx-check|--repair-plan] <ledger-path> <start-slot> <end-slot>\n",
             .{},
         );
         return;
@@ -57,14 +60,101 @@ pub fn main() !void {
     std.debug.print("ledger_path={s}\n", .{ledger_path});
     std.debug.print("slot_range={}..{}\n", .{ start_slot, end_slot });
 
+    var repair_plan_requests: usize = 0;
+    var repair_plan_slots: usize = 0;
+    var repair_plan_meta_missing: usize = 0;
+    var repair_plan_last_index_missing: usize = 0;
     var slot: Slot = start_slot;
     while (slot <= end_slot) : (slot += 1) {
         switch (mode) {
             .summary => try inspectSlotSummary(allocator, &ledger, slot),
             .tx_check => try inspectSlotTransactions(allocator, &ledger, slot),
             .full => try inspectSlot(allocator, &ledger, slot),
+            .repair_plan => {
+                const stats = try inspectSlotRepairPlan(allocator, &ledger, slot);
+                repair_plan_requests += stats.requests;
+                repair_plan_slots += @intFromBool(stats.requests > 0);
+                repair_plan_meta_missing += @intFromBool(stats.meta_missing);
+                repair_plan_last_index_missing += @intFromBool(stats.last_index_missing);
+            },
         }
     }
+    if (mode == .repair_plan) {
+        std.debug.print(
+            "repair_plan_summary start_slot={} end_slot={} repair_slots={} repair_requests={} meta_missing_slots={} last_index_missing_slots={}\n",
+            .{
+                start_slot,
+                end_slot,
+                repair_plan_slots,
+                repair_plan_requests,
+                repair_plan_meta_missing,
+                repair_plan_last_index_missing,
+            },
+        );
+    }
+}
+
+const RepairPlanSlotStats = struct {
+    requests: usize = 0,
+    meta_missing: bool = false,
+    last_index_missing: bool = false,
+};
+
+fn inspectSlotRepairPlan(
+    allocator: std.mem.Allocator,
+    ledger: *Ledger,
+    slot: Slot,
+) !RepairPlanSlotStats {
+    var meta_value = try ledger.db.get(allocator, schema.slot_meta, slot) orelse {
+        printHighestShredRepair(slot);
+        return .{ .requests = 1, .meta_missing = true };
+    };
+    defer meta_value.deinit();
+
+    if (meta_value.isFull()) return .{};
+    const last_index = meta_value.last_index orelse {
+        printHighestShredRepair(slot);
+        return .{ .requests = 1, .last_index_missing = true };
+    };
+    const end_exclusive = last_index + 1;
+
+    var iter = try ledger.db.iterator(schema.data_shred, .forward, .{ slot, 0 });
+    defer iter.deinit();
+
+    var stats: RepairPlanSlotStats = .{};
+    var expected: u64 = 0;
+    while (try iter.nextBytes()) |entry| {
+        const key, const payload = entry;
+        defer key.deinit();
+        defer payload.deinit();
+
+        const found_slot, const index = try key_serializer.deserialize(
+            schema.data_shred.Key,
+            allocator,
+            key.data,
+        );
+        if (found_slot != slot or index >= end_exclusive) break;
+        if (index > expected) {
+            stats.requests += printRepairPlanRange(slot, expected, index);
+        }
+        expected = @max(expected, index + 1);
+    }
+    if (expected < end_exclusive) {
+        stats.requests += printRepairPlanRange(slot, expected, end_exclusive);
+    }
+    return stats;
+}
+
+fn printHighestShredRepair(slot: Slot) void {
+    std.debug.print("repair_highest_shred slot={} index=0\n", .{slot});
+}
+
+fn printRepairPlanRange(slot: Slot, start: u64, end: u64) usize {
+    var index = start;
+    while (index < end) : (index += 1) {
+        std.debug.print("repair_data_shred slot={} index={}\n", .{ slot, index });
+    }
+    return @intCast(end - start);
 }
 
 fn inspectSlotSummary(allocator: std.mem.Allocator, ledger: *Ledger, slot: Slot) !void {

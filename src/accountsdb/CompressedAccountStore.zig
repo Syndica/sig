@@ -607,7 +607,10 @@ fn initWithRadix(
             })
         else
             null;
-    errdefer if (persistent_batch_pool) |*pool| pool.deinit();
+    errdefer if (persistent_batch_pool) |*pool| {
+        pool.shutdown();
+        pool.deinit();
+    };
 
     return .{
         .allocator = allocator,
@@ -729,7 +732,10 @@ pub fn initFromEnv(allocator: std.mem.Allocator) !?CompressedAccountStore {
 }
 
 pub fn deinit(self: *CompressedAccountStore) void {
-    if (self.persistent_batch_pool) |*pool| pool.deinit();
+    if (self.persistent_batch_pool) |*pool| {
+        pool.shutdown();
+        pool.deinit();
+    }
     if (self.overlay_store) |overlay| {
         overlay.deinit();
         self.allocator.destroy(overlay);
@@ -912,6 +918,37 @@ pub fn prefetchChunksForPubkeys(
     allocator: std.mem.Allocator,
     pubkeys: []const Pubkey,
 ) !PrefetchResult {
+    const overlay = self.overlay_store orelse return self.prefetchChunksForPubkeysLocal(
+        allocator,
+        pubkeys,
+        null,
+    );
+
+    var base_pubkeys: std.ArrayListUnmanaged(Pubkey) = .{};
+    defer base_pubkeys.deinit(allocator);
+    try base_pubkeys.ensureTotalCapacity(allocator, pubkeys.len);
+
+    const overlay_result = try overlay.prefetchChunksForPubkeysLocal(
+        allocator,
+        pubkeys,
+        &base_pubkeys,
+    );
+    const base_result = try self.prefetchChunksForPubkeysLocal(
+        allocator,
+        base_pubkeys.items,
+        null,
+    );
+    return mergeLayeredPrefetchResults(overlay_result, base_result);
+}
+
+/// Prefetches one physical compressed store. Missing pubkeys can be returned
+/// to the layered caller so it can resolve them against the base store.
+fn prefetchChunksForPubkeysLocal(
+    self: *CompressedAccountStore,
+    allocator: std.mem.Allocator,
+    pubkeys: []const Pubkey,
+    unresolved_pubkeys: ?*std.ArrayListUnmanaged(Pubkey),
+) !PrefetchResult {
     var result: PrefetchResult = .{ .pubkeys = @intCast(pubkeys.len) };
     if (self.chunk_cache.len == 0 or self.chunk_cache_max_bytes == 0) return result;
 
@@ -925,6 +962,7 @@ pub fn prefetchChunksForPubkeys(
     for (pubkeys) |pubkey| {
         const record = try self.lookup(pubkey) orelse {
             result.missing_pubkeys += 1;
+            if (unresolved_pubkeys) |unresolved| unresolved.appendAssumeCapacity(pubkey);
             continue;
         };
         const gop = try unique_chunks.getOrPut(allocator, record.chunk_id);
@@ -951,6 +989,22 @@ pub fn prefetchChunksForPubkeys(
     }
 
     return result;
+}
+
+fn mergeLayeredPrefetchResults(
+    overlay: PrefetchResult,
+    base: PrefetchResult,
+) PrefetchResult {
+    return .{
+        .pubkeys = overlay.pubkeys,
+        .compressed_pubkeys = overlay.compressed_pubkeys + base.compressed_pubkeys,
+        // Overlay misses are fallthrough candidates, not final misses.
+        .missing_pubkeys = base.missing_pubkeys,
+        .unique_chunks = overlay.unique_chunks + base.unique_chunks,
+        .chunks_loaded = overlay.chunks_loaded + base.chunks_loaded,
+        .chunks_cached = overlay.chunks_cached + base.chunks_cached,
+        .chunks_skipped = overlay.chunks_skipped + base.chunks_skipped,
+    };
 }
 
 pub fn batchDecodeAccountsForPubkeys(
@@ -2913,4 +2967,30 @@ test "layered batch result treats overlay misses as base fallthrough" {
     try std.testing.expectEqual(@as(u64, 15), result.index_records_read);
     try std.testing.expectEqual(@as(u64, 30), result.index_lookup_ns);
     try std.testing.expectEqual(@as(u64, 42), result.total_ns);
+}
+
+test "layered prefetch result treats overlay misses as base fallthrough" {
+    const overlay: PrefetchResult = .{
+        .pubkeys = 4,
+        .compressed_pubkeys = 3,
+        .missing_pubkeys = 1,
+        .unique_chunks = 2,
+        .chunks_loaded = 1,
+        .chunks_cached = 1,
+    };
+    const base: PrefetchResult = .{
+        .pubkeys = 1,
+        .compressed_pubkeys = 1,
+        .missing_pubkeys = 0,
+        .unique_chunks = 1,
+        .chunks_loaded = 1,
+    };
+
+    const result = mergeLayeredPrefetchResults(overlay, base);
+    try std.testing.expectEqual(@as(u64, 4), result.pubkeys);
+    try std.testing.expectEqual(@as(u64, 4), result.compressed_pubkeys);
+    try std.testing.expectEqual(@as(u64, 0), result.missing_pubkeys);
+    try std.testing.expectEqual(@as(u64, 3), result.unique_chunks);
+    try std.testing.expectEqual(@as(u64, 2), result.chunks_loaded);
+    try std.testing.expectEqual(@as(u64, 1), result.chunks_cached);
 }
