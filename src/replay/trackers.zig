@@ -364,6 +364,33 @@ pub const SlotTree = struct {
         return max_slot;
     }
 
+    /// Returns whether a slot remains on one of the fork branches retained by
+    /// this tree. Bypass rooting can prune a stale branch before SlotTracker's
+    /// frozen-slot map drops every member of that branch.
+    pub fn contains(self: *const SlotTree, slot: Slot) bool {
+        return self.root.find(slot) != null;
+    }
+
+    /// Removes a dead fork leaf while preserving every competing branch.
+    ///
+    /// Replay can prove a newly tracked leaf invalid before bypass consensus
+    /// has enough slot-distance to discard it. Leaving that leaf in the tree
+    /// prevents `reRoot` from following the valid branch. A sole leaf cannot
+    /// be removed because there is no surviving fork to promote.
+    pub fn pruneLeaf(self: *SlotTree, allocator: Allocator, slot: Slot) bool {
+        if (self.leaves.items.len <= 1) return false;
+
+        for (self.leaves.items, 0..) |leaf, index| {
+            if (leaf.slot != slot) continue;
+
+            const removed = self.leaves.swapRemove(index);
+            std.debug.assert(removed == leaf);
+            std.debug.assert(leaf.pruneUpstreamToFork(allocator));
+            return true;
+        }
+        return false;
+    }
+
     pub fn deinit(const_self: SlotTree, allocator: Allocator) void {
         var self = const_self;
         self.root.destroyRecursivelyDownstream(allocator);
@@ -712,10 +739,34 @@ test "SlotTree: 4 forks with large gap roots properly" {
     for (62..71) |i| try tree.record(allocator, i, i - 1);
 
     try expectSlotTree(&tree, 0, &.{ 10, 20, 60, 70 });
+    try std.testing.expect(tree.contains(10));
+    try std.testing.expect(tree.contains(20));
 
     try std.testing.expectEqual(26, tree.reRoot(allocator).?);
 
     try expectSlotTree(&tree, 26, &.{ 60, 70 });
+    try std.testing.expect(!tree.contains(10));
+    try std.testing.expect(!tree.contains(20));
+    try std.testing.expect(tree.contains(26));
+    try std.testing.expect(tree.contains(60));
+    try std.testing.expect(tree.contains(70));
+}
+
+test "SlotTree: prune dead leaf preserves competing fork" {
+    const allocator = std.testing.allocator;
+    var tree = try SlotTree.init(allocator, 0);
+    defer tree.deinit(allocator);
+
+    try tree.record(allocator, 1, 0);
+    try tree.record(allocator, 2, 1);
+    try tree.record(allocator, 3, 1);
+
+    try std.testing.expect(tree.contains(2));
+    try std.testing.expect(tree.contains(3));
+    try std.testing.expect(tree.pruneLeaf(allocator, 3));
+    try std.testing.expect(tree.contains(2));
+    try std.testing.expect(!tree.contains(3));
+    try std.testing.expect(!tree.pruneLeaf(allocator, 2));
 }
 
 fn expectSlotTree(tree: *const SlotTree, root: Slot, leaves: []const Slot) !void {

@@ -71,13 +71,17 @@ pub fn pushInstruction(
 
     // [agave] https://github.com/anza-xyz/agave/blob/92b11cd2eef1d3f5434d6af702f7d7a85ffcfca9/program-runtime/src/invoke_context.rs#L245-L283
     // [fd] https://github.com/firedancer-io/firedancer/blob/dfadb7d33683aa8711dfe837282ad0983d3173a0/src/flamenco/runtime/fd_executor.c#L1048-L1070
-    for (tc.instruction_stack.constSlice(), 0..) |ic, level| {
-        // If the program is on the stack, it must be the last entry otherwise it is a reentrancy violation
-        if (program_id.equals(&ic.ixn_info.program_meta.pubkey) and
-            level != tc.instruction_stack.len - 1)
-        {
-            return InstructionError.ReentrancyNotAllowed;
-        }
+    const instruction_stack = tc.instruction_stack.constSlice();
+    if (instruction_stack.len != 0) {
+        const contains = for (instruction_stack) |ic| {
+            if (program_id.equals(&ic.ixn_info.program_meta.pubkey)) break true;
+        } else false;
+        const is_last = program_id.equals(
+            &instruction_stack[instruction_stack.len - 1].ixn_info.program_meta.pubkey,
+        );
+        // Re-entry through another program is forbidden, but a caller may
+        // invoke itself recursively at consecutive stack levels.
+        if (contains and !is_last) return InstructionError.ReentrancyNotAllowed;
     }
 
     // Push to transaction context():
@@ -378,6 +382,7 @@ test pushInstruction {
 
     const allocator = std.testing.allocator;
     var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const other_program_id = Pubkey.initRandom(prng.random());
 
     const cache, var tc = try testing.createTransactionContext(
         allocator,
@@ -387,6 +392,7 @@ test pushInstruction {
                 .{ .lamports = 2_000, .owner = system_program.ID },
                 .{ .lamports = 0 },
                 .{ .pubkey = system_program.ID },
+                .{ .pubkey = other_program_id },
             },
         },
     );
@@ -408,12 +414,8 @@ test pushInstruction {
             .{ .index_in_transaction = 1 },
         },
     );
-    // NOTE: instruction_info is not deinitialized here because it gets copied into
-    // tc.instruction_trace multiple times (sharing the same account_metas memory).
-    // The trace entry with depth > 1 will be cleaned up by tc.deinit(), which frees
-    // the shared account_metas. The depth == 1 entry is not cleaned up by tc.deinit()
-    // (as it's considered owned externally), but since both share the same memory,
-    // it's already freed when the depth > 1 entry is cleaned up.
+    // The depth-one trace entry remains caller-owned.
+    defer instruction_info.deinit(allocator);
 
     // Success
     try pushInstruction(&tc, instruction_info);
@@ -438,19 +440,62 @@ test pushInstruction {
         );
     }
 
-    // Success
-    try pushInstruction(&tc, instruction_info);
+    const recursive_instruction_info_1 = try testing.createInstructionInfo(
+        &tc,
+        system_program.ID,
+        system_program.Instruction{ .transfer = .{ .lamports = 1_000 } },
+        &.{
+            .{ .index_in_transaction = 0, .is_writable = true },
+            .{ .index_in_transaction = 1 },
+        },
+    );
+    // Success: direct self-CPI.
+    try pushInstruction(&tc, recursive_instruction_info_1);
     try std.testing.expectEqual(
         2,
         tc.instruction_stack.len,
     );
 
-    // Failure: ReentrancyNotAllowed
-    // Pushing an instruction to the stack causes a reentrancy violation if there is already
-    // an instruction context on the stack with the same program id that is not the last entry
+    const recursive_instruction_info_2 = try testing.createInstructionInfo(
+        &tc,
+        system_program.ID,
+        system_program.Instruction{ .transfer = .{ .lamports = 1_000 } },
+        &.{
+            .{ .index_in_transaction = 0, .is_writable = true },
+            .{ .index_in_transaction = 1 },
+        },
+    );
+    // Success: a third consecutive invocation of the same program is still
+    // direct recursion because the current stack top is the same program.
+    try pushInstruction(&tc, recursive_instruction_info_2);
+    try std.testing.expectEqual(3, tc.instruction_stack.len);
+
+    const other_instruction_info = try testing.createInstructionInfo(
+        &tc,
+        other_program_id,
+        system_program.Instruction{ .transfer = .{ .lamports = 1_000 } },
+        &.{
+            .{ .index_in_transaction = 0, .is_writable = true },
+            .{ .index_in_transaction = 1 },
+        },
+    );
+    try pushInstruction(&tc, other_instruction_info);
+    try std.testing.expectEqual(4, tc.instruction_stack.len);
+
+    const reentrant_instruction_info = try testing.createInstructionInfo(
+        &tc,
+        system_program.ID,
+        system_program.Instruction{ .transfer = .{ .lamports = 1_000 } },
+        &.{
+            .{ .index_in_transaction = 0, .is_writable = true },
+            .{ .index_in_transaction = 1 },
+        },
+    );
+    defer reentrant_instruction_info.deinit(allocator);
+    // Failure: A -> B -> A re-enters A through a different current caller.
     try std.testing.expectError(
         InstructionError.ReentrancyNotAllowed,
-        pushInstruction(&tc, instruction_info),
+        pushInstruction(&tc, reentrant_instruction_info),
     );
 }
 

@@ -14,8 +14,6 @@ const Executable = lib.Executable;
 
 const elf = std.elf;
 
-const expect = std.testing.expect;
-
 pub const LoadError = error{
     UnsupportedSBPFVersion,
     WrongClass,
@@ -96,32 +94,28 @@ pub fn load(
         return error.UnsupportedSBPFVersion;
     }
 
-    return if (version.enableStricterVerification())
+    return if (version.enableStricterElfHeaders())
         try parseStrict(allocator, bytes, version, config)
     else
         try parseLenient(allocator, bytes, config, loader, version);
 }
 
+/// Load an ELF file for SBPF v3 and later.
+///
+/// [sbpf] https://github.com/anza-xyz/sbpf/blob/v0.21.1/src/elf.rs#L488
 fn parseStrict(
     allocator: std.mem.Allocator,
-    bytes: []u8,
+    bytes: []const u8,
     sbpf_version: sbpf.Version,
     config: Config,
 ) LoadError!Executable {
     if (bytes.len < @sizeOf(elf.Elf64_Ehdr)) return error.OutOfBounds;
     const header: elf.Elf64_Ehdr = @bitCast(bytes[0..@sizeOf(elf.Elf64_Ehdr)].*);
 
-    // A list of the first 4 expected program headers.
-    // Since this is a stricter parsing scheme, we need them to match exactly.
-    const expected_phdrs: [4]struct { u32, u64 } = .{
-        .{ elf.PF_X, memory.BYTECODE_START }, // byte code
-        .{ elf.PF_R, memory.RODATA_START }, // read only data
-        .{ elf.PF_R | elf.PF_W, memory.STACK_START }, // stack
-        .{ elf.PF_R | elf.PF_W, memory.HEAP_START }, // heap
-    };
-
     const ident: ElfIdent = @bitCast(header.e_ident);
-    const phdr_table_end = (@sizeOf(elf.Elf64_Phdr) *| header.e_phnum) +| @sizeOf(elf.Elf64_Ehdr);
+    const phdr_table_end = (@sizeOf(elf.Elf64_Phdr) *|
+        @as(u64, header.e_phnum)) +|
+        @sizeOf(elf.Elf64_Ehdr);
     if (!std.mem.eql(u8, ident.magic[0..4], elf.MAGIC) or
         ident.class != elf.ELFCLASS64 or
         ident.data != elf.ELFDATA2LSB or
@@ -129,16 +123,13 @@ fn parseStrict(
         ident.osabi != elf.OSABI.NONE or
         ident.abiversion != 0x00 or
         !std.mem.allEqual(u8, &ident.padding, 0) or
-        @intFromEnum(header.e_machine) != sbpf.EM_SBPF or
-        header.e_type != .DYN or
+        @intFromEnum(header.e_machine) != @intFromEnum(elf.EM.BPF) or
         header.e_version != 1 or
         header.e_phoff != @sizeOf(elf.Elf64_Ehdr) or
         header.e_ehsize != @sizeOf(elf.Elf64_Ehdr) or
         header.e_phentsize != @sizeOf(elf.Elf64_Phdr) or
-        header.e_phnum < expected_phdrs.len or
-        phdr_table_end >= bytes.len or
-        header.e_shentsize != @sizeOf(elf.Elf64_Shdr) or
-        header.e_shstrndx >= header.e_shnum)
+        header.e_phnum == 0 or
+        phdr_table_end > bytes.len)
     {
         return error.InvalidFileHeader;
     }
@@ -147,61 +138,71 @@ fn parseStrict(
         elf.Elf64_Phdr,
         bytes[@sizeOf(elf.Elf64_Ehdr)..phdr_table_end],
     );
-    for (expected_phdrs, phdrs[0..expected_phdrs.len]) |entry, phdr| {
-        const p_flags, const p_vaddr = entry;
-        // For writable sections, (those with the PF_W bit set), we expect their
-        // value for p_filesz to be zero.
-        const p_filesz = if (p_flags & elf.PF_W != 0) 0 else phdr.p_memsz;
+    const skip_rodata = phdrs[0].p_flags != elf.PF_R;
+    const expected: []const struct { u32, u64 } = if (skip_rodata)
+        &.{.{ elf.PF_X, memory.BYTECODE_START }}
+    else if (header.e_phnum >= 2)
+        &.{ .{ elf.PF_R, memory.RODATA_START }, .{ elf.PF_X, memory.BYTECODE_START } }
+    else
+        return error.InvalidFileHeader;
 
+    var expected_offset: u64 = phdr_table_end;
+    for (expected, phdrs[0..expected.len]) |entry, phdr| {
+        const p_flags, const p_vaddr = entry;
         if (phdr.p_type != elf.PT_LOAD or
             phdr.p_flags != p_flags or
-            phdr.p_offset < phdr_table_end or
+            phdr.p_offset != expected_offset or
             phdr.p_offset >= bytes.len or
             phdr.p_offset % 8 != 0 or
             phdr.p_vaddr != p_vaddr or
             phdr.p_paddr != p_vaddr or
-            phdr.p_filesz != p_filesz or
+            phdr.p_filesz != phdr.p_memsz or
             phdr.p_filesz > bytes.len -| phdr.p_offset or
-            phdr.p_memsz >= memory.RODATA_START // larger than one region
-        ) {
+            phdr.p_filesz % 8 != 0 or
+            phdr.p_memsz >= memory.REGION_SIZE)
+        {
             return error.InvalidProgramHeader;
         }
+        expected_offset = expected_offset +| phdr.p_filesz;
     }
 
-    const bytecode_header = phdrs[0];
+    const ro_section_start, const ro_section_end = if (skip_rodata)
+        .{ phdr_table_end, phdr_table_end }
+    else if (phdrs[0].p_type == elf.PT_LOAD)
+        .{ phdrs[0].p_offset, phdrs[0].p_offset +| phdrs[0].p_filesz }
+    else
+        .{ 0, 0 };
+    const ro_section: Section = .{ .borrowed = .{
+        .offset = memory.RODATA_START,
+        .start = ro_section_start,
+        .end = ro_section_end,
+    } };
+
+    const bytecode_header = phdrs[expected.len - 1];
     const vm_range_start = bytecode_header.p_vaddr;
-    const vm_range_end = bytecode_header.p_vaddr +% bytecode_header.p_memsz;
-    const entry_chk = header.e_entry +% 7;
-    if (!(vm_range_start <= entry_chk and entry_chk < vm_range_end) or
+    const vm_range_end = bytecode_header.p_vaddr +| bytecode_header.p_memsz;
+    const entry_chk = header.e_entry +| 7;
+    if (entry_chk < vm_range_start or
+        entry_chk >= vm_range_end or
         header.e_entry % 8 != 0)
     {
         return error.InvalidFileHeader;
     }
 
     const entry_pc = (header.e_entry -| bytecode_header.p_vaddr) / 8;
-    const entry_inst: sbpf.Instruction = @bitCast(bytes[bytecode_header.p_offset..][0..8].*);
-    if (!entry_inst.isFunctionStartMarker()) {
-        return error.InvalidFileHeader;
-    }
-
     var function_registry: Registry = .{};
     errdefer function_registry.deinit(allocator);
-
-    const rodata_header = phdrs[1];
 
     return .{
         .bytes = bytes,
         .version = sbpf_version,
         .entry_pc = entry_pc,
         .from_asm = false,
-        .ro_section = .{ .borrowed = .{
-            .offset = rodata_header.p_vaddr,
-            .start = rodata_header.p_offset,
-            .end = rodata_header.p_offset +| rodata_header.p_filesz,
-        } },
+        .ro_section = ro_section,
         .text_vaddr = vm_range_start,
         .config = config,
         .function_registry = function_registry,
+        .text_section_len = bytecode_header.p_filesz,
         .instructions = std.mem.bytesAsSlice(sbpf.Instruction, try safeSlice(
             bytes,
             bytecode_header.p_offset,
@@ -234,7 +235,7 @@ fn parseLenient(
     const text_shdr = try parsed.validate();
 
     // [agave] https://github.com/anza-xyz/sbpf/blob/v0.12.2/src/elf.rs#L620-L638
-    const text_section_vaddr = text_shdr.sh_addr +| memory.RODATA_START;
+    const text_section_vaddr = text_shdr.sh_addr +| memory.BYTECODE_START;
     const vaddr_end = text_section_vaddr;
 
     // [agave] https://github.com/anza-xyz/sbpf/blob/v0.12.2/src/elf.rs#L632-L638
@@ -285,6 +286,7 @@ fn parseLenient(
         .instructions = instructions,
         .ro_section = ro_section,
         .text_vaddr = text_section_vaddr,
+        .text_section_len = text_range.hi - text_range.lo,
         .version = version,
     };
 }
@@ -808,8 +810,8 @@ const Elf64 = struct {
                     const symbol = symbol_table[reloc.r_sym()];
 
                     var addr = symbol.st_value +| ref_addr;
-                    if (addr < memory.RODATA_START) {
-                        addr +|= memory.RODATA_START;
+                    if (addr < memory.BYTECODE_START) {
+                        addr +|= memory.BYTECODE_START;
                     }
 
                     // This is a LDDW instruction, which takes up the space of two regular instructions.
@@ -846,8 +848,8 @@ const Elf64 = struct {
                         // Combine both halfs to get the full 64-bit address.
                         var addr = (@as(u64, va_high) << 32) | va_low;
                         if (addr == 0) return error.InvalidVirtualAddress;
-                        if (addr < memory.RODATA_START) {
-                            addr +|= memory.RODATA_START;
+                        if (addr < memory.BYTECODE_START) {
+                            addr +|= memory.BYTECODE_START;
                         }
 
                         {
@@ -864,7 +866,7 @@ const Elf64 = struct {
                             break :address std.mem.readInt(u32, slice[0..4], .little);
                         };
                         const slice = try safeSlice(bytes, r_offset, @sizeOf(u64));
-                        std.mem.writeInt(u64, slice[0..8], address +| memory.RODATA_START, .little);
+                        std.mem.writeInt(u64, slice[0..8], address +| memory.BYTECODE_START, .little);
                     }
                 },
                 .@"32" => {
@@ -982,7 +984,7 @@ const Elf64 = struct {
             if (!invalid_offsets and shdr.sh_addr != shdr.sh_offset) {
                 invalid_offsets = true;
             }
-            const vaddr_end = shdr.sh_addr +| memory.RODATA_START;
+            const vaddr_end = shdr.sh_addr +| memory.BYTECODE_START;
             // [agave] https://github.com/anza-xyz/sbpf/blob/v0.13.0/src/elf.rs#L801
             if ((config.reject_broken_elfs and invalid_offsets) or vaddr_end > memory.STACK_START) {
                 return error.OutOfBounds;
@@ -1006,10 +1008,10 @@ const Elf64 = struct {
         const can_borrow = !invalid_offsets and
             last_ro_section +| 1 -| first_ro_section == ro_sections;
         const ro_section: Section = if (config.optimize_rodata and can_borrow) ro: {
-            const addr_offset = if (lowest_addr >= memory.RODATA_START)
+            const addr_offset = if (lowest_addr >= memory.BYTECODE_START)
                 lowest_addr
             else
-                lowest_addr +| memory.RODATA_START;
+                lowest_addr +| memory.BYTECODE_START;
 
             break :ro .{ .borrowed = .{
                 .offset = addr_offset,
@@ -1035,10 +1037,10 @@ const Elf64 = struct {
                 const buf_offset_start = section_addr -| lowest_addr;
                 @memcpy(ro_section[buf_offset_start..][0..slice.len], slice);
             }
-            const addr_offset = if (lowest_addr >= memory.RODATA_START)
+            const addr_offset = if (lowest_addr >= memory.BYTECODE_START)
                 lowest_addr
             else
-                lowest_addr +| memory.RODATA_START;
+                lowest_addr +| memory.BYTECODE_START;
             break :ro .{ .owned = .{ .offset = addr_offset, .data = ro_section } };
         };
 
@@ -1149,7 +1151,7 @@ fn newSection(
         .sh_offset = std.math.sub(
             u64,
             sh_addr,
-            memory.RODATA_START,
+            memory.BYTECODE_START,
         ) catch sh_addr,
         .sh_flags = 0,
         .sh_link = 0,

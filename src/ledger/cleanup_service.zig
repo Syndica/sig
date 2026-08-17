@@ -57,17 +57,23 @@ pub fn runWithRootSlot(
     exit: *AtomicBool,
     root_slot: *const std.atomic.Value(Slot),
 ) !void {
-    logger.info().log("Starting replay-rooted ledger cleanup service");
+    const replay_bounded = readEnvBool("SIG_LEDGER_CLEANUP_REPLAY_BOUNDED", false);
+    const purge_interval: u64 = if (replay_bounded) 64 else DEFAULT_CLEANUP_SLOT_INTERVAL;
+    logger.info().logf(
+        "Starting replay-rooted ledger cleanup service replay_bounded={} purge_interval={}",
+        .{ replay_bounded, purge_interval },
+    );
 
     var last_purge_slot: Slot = 0;
     while (!exit.load(.acquire)) {
-        last_purge_slot = try cleanLedgerWithMaxRoot(
+        last_purge_slot = try cleanLedgerWithMaxRootOptions(
             logger,
             ledger_state,
             max_ledger_shreds,
             last_purge_slot,
-            DEFAULT_CLEANUP_SLOT_INTERVAL,
+            purge_interval,
             root_slot.load(.monotonic),
+            .{ .compact_purged_shreds = replay_bounded },
         );
         _ = sig.utils.thread.sleep(LOOP_LIMITER, .{ .signal = exit });
     }
@@ -127,6 +133,30 @@ pub fn cleanLedgerWithMaxRoot(
     purge_interval: u64,
     root: Slot,
 ) !Slot {
+    return cleanLedgerWithMaxRootOptions(
+        logger,
+        ledger_state,
+        max_ledger_shreds,
+        last_purge_slot,
+        purge_interval,
+        root,
+        .{},
+    );
+}
+
+const CleanLedgerOptions = struct {
+    compact_purged_shreds: bool = false,
+};
+
+fn cleanLedgerWithMaxRootOptions(
+    logger: Logger,
+    ledger_state: *sig.ledger.Ledger,
+    max_ledger_shreds: u64,
+    last_purge_slot: u64,
+    purge_interval: u64,
+    root: Slot,
+    options: CleanLedgerOptions,
+) !Slot {
     if (root - last_purge_slot <= purge_interval) return last_purge_slot;
 
     const result = try findSlotsToClean(ledger_state, root, max_ledger_shreds);
@@ -139,6 +169,18 @@ pub fn cleanLedgerWithMaxRoot(
         const did_purge = try purgeSlots(&ledger_state.db, 0, result.highest_slot_to_purge);
         if (did_purge) {
             logger.info().log("Purged slots...");
+            if (options.compact_purged_shreds) {
+                var timer = sig.time.Timer.start();
+                logger.info().logf(
+                    "ledger_cleanup_compact_purged_shreds status=start from_slot=0 to_slot={}",
+                    .{result.highest_slot_to_purge},
+                );
+                try compactPurgedShreds(&ledger_state.db, 0, result.highest_slot_to_purge);
+                logger.info().logf(
+                    "ledger_cleanup_compact_purged_shreds status=pass from_slot=0 to_slot={} elapsed_ms={}",
+                    .{ result.highest_slot_to_purge, timer.read().asMillis() },
+                );
+            }
         } else {
             logger.info().log("No slots purged");
         }
@@ -256,6 +298,31 @@ pub fn purgeSlots(db: *LedgerDB, from_slot: Slot, to_slot: Slot) !bool {
     }
 
     return did_purge;
+}
+
+pub fn compactPurgedShreds(db: *LedgerDB, from_slot: Slot, to_slot: Slot) !void {
+    const compact_to_slot = to_slot + 1;
+
+    // A WAL cannot be retired until every column family containing records
+    // from it has flushed. Cleanup touches every ledger column family, so
+    // flush all of them before compacting the two payload-heavy families.
+    inline for (ledger.schema.list) |cf| try db.flush(cf);
+
+    try db.compactRange(schema.data_shred, .{ from_slot, 0 }, .{ compact_to_slot, 0 });
+    try db.compactRange(schema.code_shred, .{ from_slot, 0 }, .{ compact_to_slot, 0 });
+}
+
+fn readEnvBool(name: [:0]const u8, default: bool) bool {
+    const raw = std.posix.getenv(name) orelse return default;
+    if (std.ascii.eqlIgnoreCase(raw, "1") or
+        std.ascii.eqlIgnoreCase(raw, "true") or
+        std.ascii.eqlIgnoreCase(raw, "yes") or
+        std.ascii.eqlIgnoreCase(raw, "on")) return true;
+    if (std.ascii.eqlIgnoreCase(raw, "0") or
+        std.ascii.eqlIgnoreCase(raw, "false") or
+        std.ascii.eqlIgnoreCase(raw, "no") or
+        std.ascii.eqlIgnoreCase(raw, "off")) return false;
+    return default;
 }
 
 /// NOTE: this purges the range within [from_slot, to_slot) exclusive
@@ -531,6 +598,7 @@ test "purgeSlots" {
     // purge the range [0, 5]
     const did_purge = try purgeSlots(&state.db, 0, 5);
     try std.testing.expectEqual(true, did_purge);
+    try compactPurgedShreds(&state.db, 0, 5);
 
     for (0..5 + 1) |slot| {
         const is_root = try state.db.get(allocator, schema.rooted_slots, slot) orelse false;

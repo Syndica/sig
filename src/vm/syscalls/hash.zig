@@ -298,11 +298,11 @@ test sha256 {
             memory.Region.init(.constant, bytes2,                               bytes_to_hash[1].ptr),
         },
         &.{
-            .{ .{ memory.RODATA_START,     2, memory.STACK_START,     0, 0 }, 0 },
-            .{ .{ memory.RODATA_START - 1, 2, memory.STACK_START,     0, 0 }, error.AccessViolation },
-            .{ .{ memory.RODATA_START,     3, memory.STACK_START,     0, 0 }, error.AccessViolation }, 
-            .{ .{ memory.RODATA_START,     2, memory.STACK_START - 1, 0, 0 }, error.AccessViolation }, 
-            .{ .{ memory.RODATA_START,     2, memory.STACK_START,     0, 0 }, error.ComputationalBudgetExceeded },
+            .{ .{ memory.BYTECODE_START,     2, memory.STACK_START,     0, 0 }, 0 },
+            .{ .{ memory.BYTECODE_START - 1, 2, memory.STACK_START,     0, 0 }, error.AccessViolation },
+            .{ .{ memory.BYTECODE_START,     3, memory.STACK_START,     0, 0 }, error.AccessViolation },
+            .{ .{ memory.BYTECODE_START,     2, memory.STACK_START - 1, 0, 0 }, error.AccessViolation },
+            .{ .{ memory.BYTECODE_START,     2, memory.STACK_START,     0, 0 }, error.ComputationalBudgetExceeded },
         },
         // zig fmt: on
         struct {

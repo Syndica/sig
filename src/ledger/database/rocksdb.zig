@@ -16,6 +16,15 @@ const value_serializer = database.interface.value_serializer;
 
 const Logger = sig.trace.Logger("rocksdb");
 
+extern fn rocksdb_compact_range_cf(
+    db: *anyopaque,
+    column_family: *anyopaque,
+    start_key: [*]const u8,
+    start_key_len: usize,
+    limit_key: [*]const u8,
+    limit_key_len: usize,
+) callconv(.c) void;
+
 pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
     return struct {
         allocator: Allocator,
@@ -192,6 +201,28 @@ pub fn RocksDB(comptime column_families: []const ColumnFamily) type {
                 self.logger,
                 rocks.DB.deleteFilesInRange,
                 .{ &self.db, self.cf_handles[cf.find(column_families)], start_bytes.data, end_bytes.data },
+            );
+        }
+
+        pub fn compactRange(
+            self: *Self,
+            comptime cf: ColumnFamily,
+            start: cf.Key,
+            end: cf.Key,
+        ) anyerror!void {
+            const start_bytes = try key_serializer.serializeToRef(self.allocator, start);
+            defer start_bytes.deinit();
+
+            const end_bytes = try key_serializer.serializeToRef(self.allocator, end);
+            defer end_bytes.deinit();
+
+            rocksdb_compact_range_cf(
+                @ptrCast(self.db.db),
+                @ptrCast(self.cf_handles[cf.find(column_families)]),
+                start_bytes.data.ptr,
+                start_bytes.data.len,
+                end_bytes.data.ptr,
+                end_bytes.data.len,
             );
         }
 

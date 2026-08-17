@@ -205,6 +205,26 @@ pub const Instruction = union(enum) {
     ///   0. `[WRITE]` Nonce account
     upgrade_nonce_account,
 
+    /// Create a new account without requiring its current lamport balance to be zero.
+    ///
+    /// # Account references
+    /// When `lamports > 0`:
+    ///   0. `[WRITE, SIGNER]` New account
+    ///   1. `[WRITE, SIGNER]` Funding account
+    ///
+    /// When `lamports == 0`:
+    ///   0. `[WRITE, SIGNER]` New account
+    create_account_allow_prefund: struct {
+        /// Number of additional lamports to transfer to the new account.
+        lamports: u64,
+
+        /// Number of bytes of memory to allocate.
+        space: u64,
+
+        /// Address of the program that will own the new account.
+        owner: Pubkey,
+    },
+
     pub fn deinit(self: Instruction, allocator: std.mem.Allocator) void {
         switch (self) {
             .create_account => {},
@@ -216,6 +236,7 @@ pub const Instruction = union(enum) {
             .authorize_nonce_account => {},
             .allocate => {},
             .upgrade_nonce_account => {},
+            .create_account_allow_prefund => {},
 
             inline //
             .create_account_with_seed,
@@ -226,3 +247,35 @@ pub const Instruction = union(enum) {
         }
     }
 };
+
+test "deserialize create account allow prefund mainnet instruction" {
+    const bytes = [_]u8{
+        0x0d, 0x00, 0x00, 0x00, // SystemInstruction tag 13
+        0x10, 0x42, 0x17, 0x00, 0x00, 0x00, 0x00, 0x00, // 1_524_240 lamports
+        0x5b, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // 91 bytes
+        0xa0, 0x93, 0x3e, 0xfd, 0x66, 0x5b, 0x34, 0x7f,
+        0xad, 0x5c, 0x5a, 0xa0, 0xfb, 0x00, 0x79, 0xd2,
+        0xf8, 0x3b, 0x36, 0xe9, 0x37, 0x17, 0xcd, 0xcb,
+        0x1e, 0x8a, 0x9b, 0xd4, 0x6e, 0x08, 0xc5, 0xe8,
+    };
+
+    const instruction = try bincode.readFromSlice(
+        std.testing.allocator,
+        Instruction,
+        &bytes,
+        .{},
+    );
+    const args = instruction.create_account_allow_prefund;
+    try std.testing.expectEqual(@as(u64, 1_524_240), args.lamports);
+    try std.testing.expectEqual(@as(u64, 91), args.space);
+    try std.testing.expectEqualSlices(u8, bytes[20..52], &args.owner.data);
+
+    if (bincode.readFromSlice(
+        std.testing.allocator,
+        Instruction,
+        bytes[0 .. bytes.len - 1],
+        .{},
+    )) |_| {
+        return error.TestExpectedError;
+    } else |_| {}
+}

@@ -2152,7 +2152,7 @@ pub fn verifyProgram(
     };
     defer executable.deinit(allocator);
 
-    executable.verify(&environment.loader) catch |err| {
+    executable.verify() catch |err| {
         if (log_collector) |lc| try lc.log(allocator, "{s}", .{@errorName(err)});
         return InstructionError.InvalidAccountData;
     };

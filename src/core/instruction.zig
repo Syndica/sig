@@ -426,7 +426,7 @@ pub const InstructionErrorEnum = union(enum(u32)) {
         }
     }
 
-    pub fn fromError(err: InstructionError, custom: ?u32, borsh_io: ?[]u8) !InstructionErrorEnum {
+    pub fn fromError(err: InstructionError, custom: ?u32) InstructionErrorEnum {
         return switch (err) {
             error.GenericError => .GenericError,
             error.InvalidArgument => .InvalidArgument,
@@ -472,9 +472,7 @@ pub const InstructionErrorEnum = union(enum(u32)) {
             error.ProgramFailedToCompile => .ProgramFailedToCompile,
             error.Immutable => .Immutable,
             error.IncorrectAuthority => .IncorrectAuthority,
-            error.BorshIoError => .{
-                .BorshIoError = borsh_io orelse return error.MissingBorshIoError,
-            },
+            error.BorshIoError => .{ .BorshIoError = &.{} },
             error.AccountNotRentExempt => .AccountNotRentExempt,
             error.InvalidAccountOwner => .InvalidAccountOwner,
             error.ProgramArithmeticOverflow => .ProgramArithmeticOverflow,
@@ -487,3 +485,11 @@ pub const InstructionErrorEnum = union(enum(u32)) {
         };
     }
 };
+
+test "InstructionErrorEnum.fromError handles BorshIoError" {
+    const converted = InstructionErrorEnum.fromError(error.BorshIoError, null);
+    switch (converted) {
+        .BorshIoError => |payload| try std.testing.expectEqual(@as(usize, 0), payload.len),
+        else => return error.TestUnexpectedResult,
+    }
+}

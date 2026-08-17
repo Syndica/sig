@@ -223,6 +223,7 @@ pub fn build(b: *Build) !void {
     const rpc_ledger_bridge_step = b.step("rpc_ledger_bridge", "Build a synthetic replay bridge from finalized RPC blocks");
     const repair_lab_step = b.step("repair_lab", "Inspect per-FEC repair/recovery state for a ledger slot");
     const fec_capture_probe_step = b.step("fec_capture_probe", "Probe FEC completion from raw Chimera shred spool files");
+    const chrs_ledger_ingest_step = b.step("chrs_ledger_ingest", "Insert authentic Chimera raw shred spool frames directly into an isolated ledger");
     const compressed_store_smoke_step = b.step("compressed_store_smoke", "Smoke-test Rooted.get through compressed account store");
     const compressed_index_radix_step = b.step("compressed_index_radix", "Build a dense radix sidecar for a compressed account index");
     const reduced_checkpoint_from_manifest_step = b.step("reduced_checkpoint_from_manifest", "Write reduced checkpoint metadata from snapshot manifest bincode files");
@@ -471,6 +472,27 @@ pub fn build(b: *Build) !void {
         .hashmap => {},
     }
     addInstallAndRun(b, fec_capture_probe_step, fec_capture_probe_exe, config);
+
+    const chrs_ledger_ingest_exe = b.addExecutable(.{
+        .name = "chrs-ledger-ingest",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/chrs_ledger_ingest.zig"),
+            .target = config.target,
+            .optimize = config.optimize,
+            .imports = imports,
+            .error_tracing = config.error_tracing,
+            .link_libc = true,
+        }),
+        .use_llvm = config.use_llvm,
+    });
+    chrs_ledger_ingest_exe.root_module.addImport("sig", sig_mod);
+    chrs_ledger_ingest_exe.root_module.addImport("std14", std14_mod);
+    chrs_ledger_ingest_exe.root_module.addObject(memcpy);
+    switch (config.ledger_db) {
+        .rocksdb => chrs_ledger_ingest_exe.root_module.addImport("rocksdb", rocksdb_mod),
+        .hashmap => {},
+    }
+    addInstallAndRun(b, chrs_ledger_ingest_step, chrs_ledger_ingest_exe, config);
 
     const compressed_store_smoke_exe = b.addExecutable(.{
         .name = "compressed-account-store-smoke",

@@ -1094,10 +1094,31 @@ pub fn getSlotEntriesWithShredInfo(
     start_index: u64,
     allow_dead_slots: bool,
 ) !struct { []Entry, u64, bool } {
+    return self.getSlotEntriesWithShredInfoMaxCompletedRanges(
+        allocator,
+        slot,
+        start_index,
+        allow_dead_slots,
+        null,
+    );
+}
+
+/// Equivalent to getSlotEntriesWithShredInfo, with an optional cap on the
+/// completed data ranges returned in one call. Replay uses this guarded mode
+/// to prove that a complete-ledger restart is invariant to live data-set
+/// arrival boundaries.
+pub fn getSlotEntriesWithShredInfoMaxCompletedRanges(
+    self: *const Reader,
+    allocator: Allocator,
+    slot: Slot,
+    start_index: u64,
+    allow_dead_slots: bool,
+    max_completed_ranges: ?usize,
+) !struct { []Entry, u64, bool } {
     const zone = tracy.Zone.init(@src(), .{ .name = "getSlotEntriesWithShredInfo" });
     defer zone.deinit();
 
-    const completed_ranges, const maybe_slot_meta =
+    var completed_ranges, const maybe_slot_meta =
         try self.getCompletedRanges(allocator, slot, start_index);
     defer completed_ranges.deinit();
 
@@ -1112,9 +1133,16 @@ pub fn getSlotEntriesWithShredInfo(
         return .{ &.{}, 0, false };
     }
 
+    if (max_completed_ranges) |maximum| {
+        if (maximum > 0 and completed_ranges.items.len > maximum) {
+            completed_ranges.shrinkRetainingCapacity(maximum);
+        }
+    }
+
     const slot_meta = maybe_slot_meta.?;
     _, const end_index = completed_ranges.items[completed_ranges.items.len - 1];
     const num_shreds = end_index - start_index;
+    const returned_slot_end = end_index == slot_meta.consecutive_received_from_0;
 
     const entries = try getSlotEntriesInBlock(
         self,
@@ -1123,7 +1151,7 @@ pub fn getSlotEntriesWithShredInfo(
         completed_ranges,
         &slot_meta,
     );
-    return .{ entries, num_shreds, slot_meta.isFull() };
+    return .{ entries, num_shreds, slot_meta.isFull() and returned_slot_end };
 }
 
 /// agave: get_completed_ranges

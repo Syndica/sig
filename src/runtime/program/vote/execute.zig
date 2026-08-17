@@ -30,6 +30,171 @@ const SlotHashes = sig.runtime.sysvar.SlotHashes;
 const VoteProgramInstruction = vote_instruction.Instruction;
 const VoteVersion = vote_instruction.Version;
 
+var tower_sync_fingerprint_emitted = std.atomic.Value(bool).init(false);
+var tower_sync_attestations_enabled = std.atomic.Value(u8).init(0);
+
+pub const ReplayTowerSyncAttestation = struct {
+    observed_slot: u64,
+    attested_slot: u64,
+    bank_hash: sig.core.Hash,
+    winning_votes: u32,
+    total_votes: u32,
+    conflicting_votes: u32,
+    distinct_candidates: u32,
+    overflowed_candidates: u32,
+};
+
+const TowerSyncAttestationCollector = struct {
+    const max_observed_slots = 8;
+    const max_candidates_per_slot = 32;
+
+    const Candidate = struct {
+        attested_slot: u64 = 0,
+        bank_hash: sig.core.Hash = sig.core.Hash.ZEROES,
+        votes: u32 = 0,
+    };
+
+    const ObservedSlot = struct {
+        slot: u64 = 0,
+        total_votes: u32 = 0,
+        overflowed_candidates: u32 = 0,
+        candidates_len: usize = 0,
+        candidates: [max_candidates_per_slot]Candidate =
+            [_]Candidate{.{}} ** max_candidates_per_slot,
+    };
+
+    mutex: std.Thread.Mutex = .{},
+    slots_len: usize = 0,
+    slots: [max_observed_slots]ObservedSlot =
+        [_]ObservedSlot{.{}} ** max_observed_slots,
+
+    fn record(
+        self: *TowerSyncAttestationCollector,
+        observed_slot: u64,
+        attested_slot: u64,
+        bank_hash: sig.core.Hash,
+    ) void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        var observed_index: ?usize = null;
+        for (self.slots[0..self.slots_len], 0..) |slot, index| {
+            if (slot.slot == observed_slot) {
+                observed_index = index;
+                break;
+            }
+        }
+        if (observed_index == null) {
+            if (self.slots_len == self.slots.len) return;
+            observed_index = self.slots_len;
+            self.slots[observed_index.?] = .{ .slot = observed_slot };
+            self.slots_len += 1;
+        }
+
+        const observed = &self.slots[observed_index.?];
+        observed.total_votes +|= 1;
+        for (observed.candidates[0..observed.candidates_len]) |*candidate| {
+            if (candidate.attested_slot == attested_slot and
+                candidate.bank_hash.eql(bank_hash))
+            {
+                candidate.votes +|= 1;
+                return;
+            }
+        }
+        if (observed.candidates_len == observed.candidates.len) {
+            observed.overflowed_candidates +|= 1;
+            return;
+        }
+        observed.candidates[observed.candidates_len] = .{
+            .attested_slot = attested_slot,
+            .bank_hash = bank_hash,
+            .votes = 1,
+        };
+        observed.candidates_len += 1;
+    }
+
+    fn take(
+        self: *TowerSyncAttestationCollector,
+        observed_slot: u64,
+    ) ?ReplayTowerSyncAttestation {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
+        var observed_index: ?usize = null;
+        for (self.slots[0..self.slots_len], 0..) |slot, index| {
+            if (slot.slot == observed_slot) {
+                observed_index = index;
+                break;
+            }
+        }
+        const index = observed_index orelse return null;
+        const observed = self.slots[index];
+        if (observed.candidates_len == 0) {
+            self.remove(index);
+            return null;
+        }
+
+        var winner = observed.candidates[0];
+        for (observed.candidates[1..observed.candidates_len]) |candidate| {
+            if (candidate.votes > winner.votes) winner = candidate;
+        }
+        const result: ReplayTowerSyncAttestation = .{
+            .observed_slot = observed.slot,
+            .attested_slot = winner.attested_slot,
+            .bank_hash = winner.bank_hash,
+            .winning_votes = winner.votes,
+            .total_votes = observed.total_votes,
+            .conflicting_votes = observed.total_votes -| winner.votes,
+            .distinct_candidates = @intCast(observed.candidates_len),
+            .overflowed_candidates = observed.overflowed_candidates,
+        };
+        self.remove(index);
+        return result;
+    }
+
+    fn remove(self: *TowerSyncAttestationCollector, index: usize) void {
+        std.debug.assert(index < self.slots_len);
+        self.slots_len -= 1;
+        if (index != self.slots_len) self.slots[index] = self.slots[self.slots_len];
+        self.slots[self.slots_len] = .{};
+    }
+};
+
+var tower_sync_attestation_collector: TowerSyncAttestationCollector = .{};
+
+pub fn takeReplayTowerSyncAttestation(observed_slot: u64) ?ReplayTowerSyncAttestation {
+    return tower_sync_attestation_collector.take(observed_slot);
+}
+
+test "vote program: TowerSync attestation collector chooses dominant hash per observed slot" {
+    var collector: TowerSyncAttestationCollector = .{};
+    const canonical_hash = sig.core.Hash.init("canonical");
+    const conflicting_hash = sig.core.Hash.init("conflicting");
+
+    collector.record(100, 99, canonical_hash);
+    collector.record(101, 100, conflicting_hash);
+    collector.record(100, 99, canonical_hash);
+    collector.record(100, 98, conflicting_hash);
+
+    const first = collector.take(100).?;
+    try std.testing.expectEqual(100, first.observed_slot);
+    try std.testing.expectEqual(99, first.attested_slot);
+    try std.testing.expect(first.bank_hash.eql(canonical_hash));
+    try std.testing.expectEqual(2, first.winning_votes);
+    try std.testing.expectEqual(3, first.total_votes);
+    try std.testing.expectEqual(1, first.conflicting_votes);
+    try std.testing.expectEqual(2, first.distinct_candidates);
+    try std.testing.expectEqual(0, first.overflowed_candidates);
+    try std.testing.expectEqual(null, collector.take(100));
+
+    const second = collector.take(101).?;
+    try std.testing.expectEqual(100, second.attested_slot);
+    try std.testing.expect(second.bank_hash.eql(conflicting_hash));
+    try std.testing.expectEqual(1, second.winning_votes);
+    try std.testing.expectEqual(1, second.total_votes);
+    try std.testing.expectEqual(null, collector.take(101));
+}
+
 /// [agave] https://github.com/anza-xyz/agave/blob/2b0966de426597399ed4570d4e6c0635db2f80bf/programs/vote/src/vote_processor.rs#L54
 pub fn execute(
     allocator: std.mem.Allocator,
@@ -928,6 +1093,8 @@ fn executeTowerSync(
     const slot_hashes = try ic.tc.sysvar_cache.get(SlotHashes);
     const clock = try ic.tc.sysvar_cache.get(Clock);
 
+    logTowerSyncFingerprint(allocator, ic.tc.slot, &tower_sync_mut, &slot_hashes);
+
     try towerSync(
         allocator,
         ic,
@@ -935,6 +1102,93 @@ fn executeTowerSync(
         slot_hashes,
         clock,
         &tower_sync_mut,
+    );
+
+    if (towerSyncAttestationsEnabled() and tower_sync_mut.lockouts.items.len > 0) {
+        tower_sync_attestation_collector.record(
+            ic.tc.slot,
+            tower_sync_mut.lockouts.items[tower_sync_mut.lockouts.items.len - 1].slot,
+            tower_sync_mut.hash,
+        );
+    }
+}
+
+fn towerSyncAttestationsEnabled() bool {
+    const cached = tower_sync_attestations_enabled.load(.acquire);
+    if (cached != 0) return cached == 2;
+
+    const allocator = std.heap.page_allocator;
+    const raw = std.process.getEnvVarOwned(
+        allocator,
+        "SIG_REPLAY_TOWER_SYNC_ATTESTATIONS",
+    ) catch {
+        _ = tower_sync_attestations_enabled.cmpxchgStrong(0, 1, .acq_rel, .acquire);
+        return false;
+    };
+    defer allocator.free(raw);
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    const enabled = std.ascii.eqlIgnoreCase(trimmed, "1") or
+        std.ascii.eqlIgnoreCase(trimmed, "true") or
+        std.ascii.eqlIgnoreCase(trimmed, "yes") or
+        std.ascii.eqlIgnoreCase(trimmed, "on");
+    const desired: u8 = if (enabled) 2 else 1;
+    _ = tower_sync_attestations_enabled.cmpxchgStrong(0, desired, .acq_rel, .acquire);
+    return tower_sync_attestations_enabled.load(.acquire) == 2;
+}
+
+fn logTowerSyncFingerprint(
+    allocator: std.mem.Allocator,
+    slot: u64,
+    tower_sync: *const TowerSync,
+    slot_hashes: *const SlotHashes,
+) void {
+    const raw_target = std.process.getEnvVarOwned(
+        allocator,
+        "SIG_REPLAY_TOWER_SYNC_FINGERPRINT_SLOT",
+    ) catch return;
+    defer allocator.free(raw_target);
+    const target = std.fmt.parseUnsigned(
+        u64,
+        std.mem.trim(u8, raw_target, " \t\r\n"),
+        10,
+    ) catch return;
+    if (target != slot or tower_sync_fingerprint_emitted.swap(true, .acq_rel)) return;
+
+    const entries = slot_hashes.entries.constSlice();
+    var first_missing: ?u64 = null;
+    for (tower_sync.lockouts.items) |lockout| {
+        if (slot_hashes.get(lockout.slot) == null) {
+            first_missing = lockout.slot;
+            break;
+        }
+    }
+
+    const first_lockout = if (tower_sync.lockouts.items.len == 0)
+        null
+    else
+        tower_sync.lockouts.items[0].slot;
+    const last_lockout = if (tower_sync.lockouts.items.len == 0)
+        null
+    else
+        tower_sync.lockouts.items[tower_sync.lockouts.items.len - 1].slot;
+    const newest_slot = if (entries.len == 0) null else entries[0].slot;
+    const oldest_slot = if (entries.len == 0) null else entries[entries.len - 1].slot;
+
+    std.log.info(
+        "replay_tower_sync_fingerprint slot={} root={?} lockouts={} first_lockout={?} last_lockout={?} proposed_hash={s} block_id={s} slot_hashes={} newest_slot={?} oldest_slot={?} first_missing={?}",
+        .{
+            slot,
+            tower_sync.root,
+            tower_sync.lockouts.items.len,
+            first_lockout,
+            last_lockout,
+            tower_sync.hash.base58String().constSlice(),
+            tower_sync.block_id.base58String().constSlice(),
+            entries.len,
+            newest_slot,
+            oldest_slot,
+            first_missing,
+        },
     );
 }
 

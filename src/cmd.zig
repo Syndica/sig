@@ -1928,6 +1928,18 @@ fn validator(
         &feature_set,
     );
     defer epoch_tracker.deinit();
+    // A reduced checkpoint can carry epoch-stakes data that reconstructs a
+    // different leader schedule than the live cluster. Honor the explicit
+    // CLI schedule for the final validator too, not only for warm capture and
+    // the standalone shred-network command. Otherwise authentic live shreds
+    // are rejected and FEC-recovered shreds are silently discarded.
+    if (try getLeaderScheduleFromCli(allocator, cfg)) |leaders| {
+        app_base.logger.info().logf(
+            "validator: overriding rooted leader schedule from CLI start={} end={}",
+            .{ leaders.start, leaders.end },
+        );
+        try epoch_tracker.seedRootedLeaderSchedule(allocator, leaders);
+    }
     if (epoch_tracker.getEpochInfoNoOffset(
         snapshot_root_slot,
         &collapsed_manifest.bank_fields.ancestors,
@@ -3036,8 +3048,25 @@ const AppBase = struct {
         const my_keypair = try sig.identity.getOrInit(allocator, .from(logger));
         const my_pubkey = Pubkey.fromPublicKey(&my_keypair.public_key);
 
-        const entrypoints = cfg.gossip.getEntrypointAddrs(try cfg.getCluster(), allocator) catch |err| blk: {
-            logger.warn().logf("failed to resolve gossip entrypoints; continuing without entrypoints: {}", .{err});
+        const entrypoints = cfg.gossip.getEntrypointAddrs(try cfg.getCluster(), allocator) catch |cluster_err| blk: {
+            if (cfg.gossip.entrypoints.len != 0) {
+                const explicit_entrypoints = cfg.gossip.getEntrypointAddrs(null, allocator) catch |explicit_err| {
+                    logger.warn().logf(
+                        "failed to resolve cluster and explicit gossip entrypoints; continuing without entrypoints: cluster_error={} explicit_error={}",
+                        .{ cluster_err, explicit_err },
+                    );
+                    break :blk try allocator.alloc(SocketAddr, 0);
+                };
+                logger.warn().logf(
+                    "failed to resolve cluster gossip entrypoints; using {} explicit entrypoint(s): {}",
+                    .{ explicit_entrypoints.len, cluster_err },
+                );
+                break :blk explicit_entrypoints;
+            }
+            logger.warn().logf(
+                "failed to resolve gossip entrypoints; continuing without entrypoints: {}",
+                .{cluster_err},
+            );
             break :blk try allocator.alloc(SocketAddr, 0);
         };
         errdefer allocator.free(entrypoints);
@@ -3245,23 +3274,92 @@ const ReplayAndConsensusServiceState = struct {
             const account_store = params.account_store;
             const manifest = &params.loaded_snapshot.collapsed_manifest;
             const bank_fields = &manifest.bank_fields;
+            const account_reader = account_store.reader().forSlot(&bank_fields.ancestors);
 
             const feature_set = try sig.replay.service.getActiveFeatures(
                 allocator,
-                account_store.reader().forSlot(&bank_fields.ancestors),
+                account_reader,
                 bank_fields.slot,
             );
 
-            const root_slot_constants: sig.core.SlotConstants =
+            var root_slot_constants: sig.core.SlotConstants =
                 try .fromBankFields(allocator, bank_fields, feature_set);
             errdefer root_slot_constants.deinit(allocator);
 
+            const checkpoint_rent = root_slot_constants.rent_collector.rent;
+            const rent_hydrated = try replay.service.hydrateRootRentCollector(
+                allocator,
+                &root_slot_constants.rent_collector,
+                account_reader,
+            );
+            const hydrated_rent = root_slot_constants.rent_collector.rent;
+            params.app_base.logger.info().logf(
+                "replay_root_rent_hydration root_slot={} found={} previous_lamports_per_byte_year={} previous_exemption_threshold={} previous_burn_percent={} hydrated_lamports_per_byte_year={} hydrated_exemption_threshold={} hydrated_burn_percent={}",
+                .{
+                    bank_fields.slot,
+                    rent_hydrated,
+                    checkpoint_rent.lamports_per_byte_year,
+                    checkpoint_rent.exemption_threshold,
+                    checkpoint_rent.burn_percent,
+                    hydrated_rent.lamports_per_byte_year,
+                    hydrated_rent.exemption_threshold,
+                    hydrated_rent.burn_percent,
+                },
+            );
+            if (!rent_hydrated and
+                bank_fields.stakes.vote_accounts.vote_accounts.count() == 0 and
+                (checkpoint_rent.lamports_per_byte_year == 0 or
+                    checkpoint_rent.exemption_threshold == 0))
+            {
+                params.app_base.logger.err().logf(
+                    "replay_root_rent_hydration status=fail root_slot={} reason=invalid_reduced_checkpoint_rent_and_missing_root_sysvar",
+                    .{bank_fields.slot},
+                );
+                return error.InvalidReducedCheckpointRent;
+            }
+
             const lt_hash = manifest.bank_extra.accounts_lt_hash;
 
-            const account_reader = account_store.reader().forSlot(&bank_fields.ancestors);
             var root_slot_state: sig.core.SlotState =
                 try .fromBankFields(allocator, bank_fields, lt_hash, account_reader);
             errdefer root_slot_state.deinit(allocator);
+
+            // A reduced checkpoint omits the heavyweight current Stakes cache.
+            // Rebuild its current vote-state subset from root AccountsDB before
+            // constructing the first child; otherwise stake-weighted Clock
+            // calculation sees no vote timestamps and silently reuses the
+            // parent's unix_timestamp.
+            if (bank_fields.stakes.vote_accounts.vote_accounts.count() == 0) {
+                const next_slot = bank_fields.slot +| 1;
+                const epoch_info = try params.epoch_tracker.getEpochInfo(next_slot);
+                defer epoch_info.release();
+                const vote_pubkeys = epoch_info.stakes.stakes.vote_accounts.vote_accounts.keys();
+                var hydration_timer = sig.time.Timer.start();
+                const hydration = try replay.service.hydrateRootVoteAccounts(
+                    allocator,
+                    &root_slot_state,
+                    account_reader,
+                    vote_pubkeys,
+                    feature_set.newWarmupCooldownRateEpoch(&bank_fields.epoch_schedule),
+                );
+                const current_vote_accounts = blk: {
+                    const stakes, var guard = root_slot_state.stakes_cache.stakes.readWithLock();
+                    defer guard.unlock();
+                    break :blk stakes.vote_accounts.vote_accounts.count();
+                };
+                params.app_base.logger.info().logf(
+                    "replay_root_vote_account_hydration root_slot={} next_slot={} requested={} loaded={} missing={} current_vote_accounts={} elapsed_ns={}",
+                    .{
+                        bank_fields.slot,
+                        next_slot,
+                        hydration.requested,
+                        hydration.loaded,
+                        hydration.missing,
+                        current_vote_accounts,
+                        hydration_timer.read().asNanos(),
+                    },
+                );
+            }
 
             if (try replay.warm_manifest.maybeWarmFromEnv(
                 allocator,
@@ -3319,6 +3417,7 @@ const ReplayAndConsensusServiceState = struct {
                 .disable_transaction_status_writes = params.disable_transaction_status_writes,
                 .stop_at_slot = params.stop_at_slot,
                 .geyser_writer = params.geyser_writer,
+                .checkpoint_manifest = manifest,
             }, if (params.disable_consensus) .disabled else .enabled);
         };
         errdefer replay_state.deinit();

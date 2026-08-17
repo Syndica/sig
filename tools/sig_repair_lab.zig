@@ -20,6 +20,7 @@ const SAMPLE_LIMIT = 32;
 const Args = struct {
     ledger_path: []const u8,
     slot: Slot,
+    fec_set: ?u64,
 };
 
 const ShredGroup = struct {
@@ -51,7 +52,7 @@ pub fn main() !void {
 
     const args = parseArgs(raw_args) catch |err| {
         std.debug.print(
-            "usage: sig-repair-lab --ledger <ledger-path> --slot <slot>\nerror: {s}\n",
+            "usage: sig-repair-lab --ledger <ledger-path> --slot <slot> [--fec-set <index>]\nerror: {s}\n",
             .{@errorName(err)},
         );
         return err;
@@ -62,6 +63,7 @@ pub fn main() !void {
 
     std.debug.print("ledger_path={s}\n", .{args.ledger_path});
     std.debug.print("slot={}\n", .{args.slot});
+    std.debug.print("fec_set_filter={?}\n", .{args.fec_set});
 
     try printSlotMeta(allocator, &ledger, args.slot);
 
@@ -90,6 +92,9 @@ pub fn main() !void {
 
     std.debug.print("fec_set_count={}\n", .{set_indexes.items.len});
     for (set_indexes.items) |set_index| {
+        if (args.fec_set) |wanted| {
+            if (set_index != wanted) continue;
+        }
         try printFecSet(allocator, &ledger, args.slot, set_index, index, groups.getPtr(set_index).?);
     }
 }
@@ -99,11 +104,13 @@ fn parseArgs(args: []const []const u8) !Args {
         return .{
             .ledger_path = args[1],
             .slot = try std.fmt.parseUnsigned(Slot, args[2], 10),
+            .fec_set = null,
         };
     }
 
     var ledger_path: ?[]const u8 = null;
     var slot: ?Slot = null;
+    var fec_set: ?u64 = null;
 
     var i: usize = 1;
     while (i < args.len) : (i += 1) {
@@ -115,6 +122,10 @@ fn parseArgs(args: []const []const u8) !Args {
             i += 1;
             if (i >= args.len) return error.MissingSlot;
             slot = try std.fmt.parseUnsigned(Slot, args[i], 10);
+        } else if (std.mem.eql(u8, args[i], "--fec-set")) {
+            i += 1;
+            if (i >= args.len) return error.MissingFecSet;
+            fec_set = try std.fmt.parseUnsigned(u64, args[i], 10);
         } else {
             return error.UnknownArgument;
         }
@@ -123,6 +134,7 @@ fn parseArgs(args: []const []const u8) !Args {
     return .{
         .ledger_path = ledger_path orelse return error.MissingLedgerPath,
         .slot = slot orelse return error.MissingSlot,
+        .fec_set = fec_set,
     };
 }
 
@@ -275,6 +287,7 @@ fn printFecSet(
                 );
             },
             .can_recover => {
+                try printFecShardLengths(allocator, ledger, slot, &erasure_meta);
                 try printDryRunRecovery(allocator, ledger, slot, &erasure_meta);
             },
             .still_need => |needed| {
@@ -295,6 +308,65 @@ fn printFecSet(
             .{},
         );
     }
+}
+
+fn printFecShardLengths(
+    allocator: Allocator,
+    ledger: *Ledger,
+    slot: Slot,
+    erasure_meta: *const ErasureMeta,
+) !void {
+    var data_payload_min: usize = std.math.maxInt(usize);
+    var data_payload_max: usize = 0;
+    var data_shard_min: usize = std.math.maxInt(usize);
+    var data_shard_max: usize = 0;
+    var data_count: usize = 0;
+    const data_start, const data_end = erasure_meta.dataShredsIndices();
+    for (data_start..data_end) |i| {
+        if (try loadShred(allocator, ledger, .data, slot, i)) |shred| {
+            defer shred.deinit();
+            const shard = try shred.erasureShardAsSlice();
+            data_payload_min = @min(data_payload_min, shred.payload().len);
+            data_payload_max = @max(data_payload_max, shred.payload().len);
+            data_shard_min = @min(data_shard_min, shard.len);
+            data_shard_max = @max(data_shard_max, shard.len);
+            data_count += 1;
+        }
+    }
+
+    var code_payload_min: usize = std.math.maxInt(usize);
+    var code_payload_max: usize = 0;
+    var code_shard_min: usize = std.math.maxInt(usize);
+    var code_shard_max: usize = 0;
+    var code_count: usize = 0;
+    const code_start, const code_end = erasure_meta.codeShredsIndices();
+    for (code_start..code_end) |i| {
+        if (try loadShred(allocator, ledger, .code, slot, i)) |shred| {
+            defer shred.deinit();
+            const shard = try shred.erasureShardAsSlice();
+            code_payload_min = @min(code_payload_min, shred.payload().len);
+            code_payload_max = @max(code_payload_max, shred.payload().len);
+            code_shard_min = @min(code_shard_min, shard.len);
+            code_shard_max = @max(code_shard_max, shard.len);
+            code_count += 1;
+        }
+    }
+
+    std.debug.print(
+        "  shard_lengths data_count={} data_payload={}..{} data_erasure={}..{} code_count={} code_payload={}..{} code_erasure={}..{}\n",
+        .{
+            data_count,
+            if (data_count == 0) 0 else data_payload_min,
+            data_payload_max,
+            if (data_count == 0) 0 else data_shard_min,
+            data_shard_max,
+            code_count,
+            if (code_count == 0) 0 else code_payload_min,
+            code_payload_max,
+            if (code_count == 0) 0 else code_shard_min,
+            code_shard_max,
+        },
+    );
 }
 
 fn printDryRunRecovery(

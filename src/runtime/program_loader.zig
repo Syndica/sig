@@ -215,6 +215,9 @@ pub const ProgramLoadStats = struct {
 };
 
 const ProgramLoadMeasurement = struct {
+    failure_stage: ProgramLoadFailureStage = .none,
+    failure_detail: []const u8 = "none",
+    deployment_slot: ?u64 = null,
     executable_bytes: u64 = 0,
     programdata_reads: u64 = 0,
     borrowed_direct_programdata_reads: u64 = 0,
@@ -223,6 +226,14 @@ const ProgramLoadMeasurement = struct {
     elf_load_ns: u64 = 0,
     verify_ns: u64 = 0,
     load_total_ns: u64 = 0,
+};
+
+const ProgramLoadFailureStage = enum {
+    none,
+    deployment_state,
+    deployment_slot,
+    elf_load,
+    elf_verify,
 };
 
 pub const LoadedProgram = union(enum(u8)) {
@@ -277,6 +288,12 @@ pub fn loadIfProgram(
     ) catch |err| {
         measurement.load_total_ns = load_timer.read().asNanos();
         programs.load_stats.recordLoad(measurement, false);
+        if (envBool("SIG_REPLAY_PROGRAM_LOAD_FAILURE_FINGERPRINT", false)) {
+            std.debug.print(
+                "program_load_failure_fingerprint address={any} slot={} stage=account_read error={s} owner={any} executable={} account_data_len={}\n",
+                .{ address, slot, @errorName(err), account.owner, account.executable, account.data.len },
+            );
+        }
         return err;
     };
     measurement.load_total_ns = load_timer.read().asNanos();
@@ -284,6 +301,25 @@ pub fn loadIfProgram(
         .loaded => true,
         .failed => false,
     });
+
+    if (loaded_program == .failed and
+        envBool("SIG_REPLAY_PROGRAM_LOAD_FAILURE_FINGERPRINT", false))
+    {
+        std.debug.print(
+            "program_load_failure_fingerprint address={any} slot={} stage={s} detail={s} deployment_slot={?} owner={any} executable={} account_data_len={} executable_bytes={}\n",
+            .{
+                address,
+                slot,
+                @tagName(measurement.failure_stage),
+                measurement.failure_detail,
+                measurement.deployment_slot,
+                account.owner,
+                account.executable,
+                account.data.len,
+                measurement.executable_bytes,
+            },
+        );
+    }
 
     errdefer loaded_program.deinit(programs_allocator);
 
@@ -311,11 +347,18 @@ fn loadProgram(
         accounts,
         measurement,
         envBool("SIG_REPLAY_PROGRAMDATA_DIRECT_BORROWED_READ", false),
-    ) orelse return .failed;
+    ) orelse {
+        measurement.failure_stage = .deployment_state;
+        return .failed;
+    };
     defer allocator.free(executable_bytes); // freed unless returned
 
     measurement.executable_bytes = @intCast(executable_bytes.len);
-    if (maybe_deployment_slot) |ds| if (ds >= slot) return .failed;
+    measurement.deployment_slot = maybe_deployment_slot;
+    if (maybe_deployment_slot) |ds| if (ds >= slot) {
+        measurement.failure_stage = .deployment_slot;
+        return .failed;
+    };
 
     const executable = blk: {
         var elf_timer = sig.time.Timer.start();
@@ -325,14 +368,26 @@ fn loadProgram(
             executable_bytes,
             &environment.loader,
             environment.config,
-        ) catch return .failed;
+        ) catch |err| {
+            measurement.failure_stage = .elf_load;
+            measurement.failure_detail = @errorName(err);
+            if (envBool("SIG_REPLAY_PROGRAM_LOAD_FAILURE_FINGERPRINT", false)) {
+                std.debug.print(
+                    "program_elf_load_failure_detail error={s}\n",
+                    .{@errorName(err)},
+                );
+            }
+            return .failed;
+        };
     };
 
     {
         var verify_timer = sig.time.Timer.start();
         defer measurement.verify_ns = verify_timer.read().asNanos();
-        executable.verify(&environment.loader) catch {
+        executable.verify() catch |err| {
             executable.deinit(allocator);
+            measurement.failure_stage = .elf_verify;
+            measurement.failure_detail = @errorName(err);
             return .failed;
         };
     }

@@ -14,10 +14,14 @@ const Pubkey = sig.core.Pubkey;
 const Slot = sig.core.Slot;
 const SlotLeaders = sig.core.leader_schedule.SlotLeaders;
 const SlotState = sig.core.bank.SlotState;
+const Epoch = sig.core.Epoch;
+const RentCollector = sig.core.RentCollector;
 
 const AccountStore = sig.accounts_db.AccountStore;
 const AccountReader = sig.accounts_db.AccountReader;
 const ProgramMap = sig.runtime.program_loader.ProgramMap;
+const Rent = sig.runtime.sysvar.Rent;
+const SlotHashes = sig.runtime.sysvar.SlotHashes;
 
 const Ledger = sig.ledger.Ledger;
 
@@ -38,6 +42,192 @@ const schema = sig.ledger.schema.schema;
 const updateSysvarsForNewSlot = replay.update_sysvar.updateSysvarsForNewSlot;
 
 pub const Logger = sig.trace.Logger("replay");
+
+pub const RootVoteAccountHydrationResult = struct {
+    requested: u64,
+    loaded: u64,
+    missing: u64,
+};
+
+/// Bank metadata in a reduced checkpoint can omit or zero the runtime rent
+/// configuration even though the canonical Rent sysvar is still present in
+/// the rooted account store. Prefer that rooted account truth before replaying
+/// the first child so transaction rent-state transitions use cluster values.
+pub fn hydrateRootRentCollector(
+    allocator: Allocator,
+    rent_collector: *RentCollector,
+    account_reader: sig.accounts_db.SlotAccountReader,
+) !bool {
+    const rent = try replay.update_sysvar.getSysvarFromAccount(
+        Rent,
+        allocator,
+        account_reader,
+    ) orelse return false;
+    rent_collector.rent = rent;
+    return true;
+}
+
+test "hydrateRootRentCollector restores reduced checkpoint rent semantics" {
+    const allocator = std.testing.allocator;
+
+    var accounts: sig.utils.collections.PubkeyMap(sig.runtime.AccountSharedData) = .{};
+    defer {
+        for (accounts.values()) |*account| account.deinit(allocator);
+        accounts.deinit(allocator);
+    }
+
+    const rent_data = try sig.runtime.sysvar.serialize(allocator, Rent.INIT);
+    errdefer allocator.free(rent_data);
+    try accounts.put(allocator, Rent.ID, .{
+        .lamports = 1,
+        .data = rent_data,
+        .owner = sig.runtime.sysvar.OWNER_ID,
+        .executable = false,
+        .rent_epoch = std.math.maxInt(Epoch),
+    });
+
+    var rent_collector = RentCollector.DEFAULT;
+    rent_collector.rent = Rent.FREE;
+    try std.testing.expect(try hydrateRootRentCollector(
+        allocator,
+        &rent_collector,
+        .{ .account_shared_data_map = &accounts },
+    ));
+    try std.testing.expectEqual(
+        Rent.INIT.lamports_per_byte_year,
+        rent_collector.rent.lamports_per_byte_year,
+    );
+    try std.testing.expectEqual(
+        Rent.INIT.exemption_threshold,
+        rent_collector.rent.exemption_threshold,
+    );
+    try std.testing.expectEqual(
+        Rent.INIT.burn_percent,
+        rent_collector.rent.burn_percent,
+    );
+
+    const pre = rent_collector.getAccountRentState(1_454_111, 0);
+    const post = rent_collector.getAccountRentState(729_189, 0);
+    try std.testing.expect(pre == .rent_exempt);
+    try std.testing.expect(post == .rent_paying);
+    try std.testing.expect(!RentCollector.transitionAllowed(pre, post));
+}
+
+/// Reduced checkpoints intentionally omit `BankFields.stakes`, but replay's
+/// stake-weighted Clock update needs the current vote-account timestamps. The
+/// epoch-stakes payload supplies the weighted vote-account key set; hydrate
+/// those keys from the root account store so the root cache contains current
+/// vote states rather than an empty cache (or epoch-boundary vote states).
+pub fn hydrateRootVoteAccounts(
+    allocator: Allocator,
+    state: *SlotState,
+    account_reader: sig.accounts_db.SlotAccountReader,
+    vote_pubkeys: []const Pubkey,
+    new_rate_activation_epoch: ?Epoch,
+) !RootVoteAccountHydrationResult {
+    var result = RootVoteAccountHydrationResult{
+        .requested = @intCast(vote_pubkeys.len),
+        .loaded = 0,
+        .missing = 0,
+    };
+
+    var compressed_accounts: sig.utils.collections.PubkeyMap(sig.runtime.AccountSharedData) = .{};
+    defer {
+        for (compressed_accounts.values()) |*account| account.deinit(allocator);
+        compressed_accounts.deinit(allocator);
+    }
+    _ = try account_reader.batchLoadCompressedAccounts(
+        allocator,
+        vote_pubkeys,
+        &compressed_accounts,
+    );
+
+    for (vote_pubkeys) |pubkey| {
+        if (compressed_accounts.get(pubkey)) |account| {
+            if (account.lamports == 0) {
+                result.missing += 1;
+                continue;
+            }
+            try state.stakes_cache.checkAndStore(
+                allocator,
+                pubkey,
+                account,
+                new_rate_activation_epoch,
+            );
+            result.loaded += 1;
+            continue;
+        }
+
+        const maybe_account = try account_reader.get(allocator, pubkey);
+        const account = maybe_account orelse {
+            result.missing += 1;
+            continue;
+        };
+        defer account.deinit(allocator);
+
+        var account_shared_data = try sig.runtime.AccountSharedData.fromAccount(
+            allocator,
+            &account,
+        );
+        defer account_shared_data.deinit(allocator);
+
+        try state.stakes_cache.checkAndStore(
+            allocator,
+            pubkey,
+            account_shared_data,
+            new_rate_activation_epoch,
+        );
+        result.loaded += 1;
+    }
+
+    return result;
+}
+
+test "hydrateRootVoteAccounts restores current weighted vote states" {
+    const allocator = std.testing.allocator;
+    const vote_pubkey: Pubkey = .parse("PUFFiNkUHF2DMfbKeUcYTSQckDDtkswfxZCDv5WQqwp");
+    const missing_pubkey: Pubkey = .parse("Vote111111111111111111111111111111111111111");
+    const node_pubkey: Pubkey = .parse("puffinQSvKFriPbyE5atyx1ptfnyytovbzxybr1jsyy");
+
+    var accounts: sig.utils.collections.PubkeyMap(sig.runtime.AccountSharedData) = .{};
+    defer {
+        for (accounts.values()) |*account| account.deinit(allocator);
+        accounts.deinit(allocator);
+    }
+    try accounts.put(
+        allocator,
+        vote_pubkey,
+        try sig.runtime.program.vote.state.createTestVoteAccount(
+            allocator,
+            node_pubkey,
+            vote_pubkey,
+            0,
+            480_309_940,
+            1015,
+        ),
+    );
+
+    var state: SlotState = .GENESIS;
+    defer state.deinit(allocator);
+    const result = try hydrateRootVoteAccounts(
+        allocator,
+        &state,
+        .{ .account_shared_data_map = &accounts },
+        &.{ vote_pubkey, missing_pubkey },
+        null,
+    );
+
+    try std.testing.expectEqual(@as(u64, 2), result.requested);
+    try std.testing.expectEqual(@as(u64, 1), result.loaded);
+    try std.testing.expectEqual(@as(u64, 1), result.missing);
+    const stakes, var guard = state.stakes_cache.stakes.readWithLock();
+    defer guard.unlock();
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        stakes.vote_accounts.vote_accounts.count(),
+    );
+    try std.testing.expect(stakes.vote_accounts.vote_accounts.contains(vote_pubkey));
+}
 
 pub const Metrics = struct {
     slot_execution_time: *sig.prometheus.Histogram,
@@ -315,11 +505,90 @@ pub const Dependencies = struct {
     disable_transaction_status_writes: bool = false,
     stop_at_slot: ?Slot,
     geyser_writer: ?*sig.geyser.GeyserWriter = null,
+    /// Borrowed only during ReplayState.init to seed the optional rolling
+    /// reduced-checkpoint template.
+    checkpoint_manifest: ?*const sig.accounts_db.snapshot.Manifest = null,
 };
 
 pub const ConsensusStatus = enum {
     enabled,
     disabled,
+};
+
+const RollingCheckpoint = struct {
+    path: []u8,
+    interval_slots: u64,
+    last_written_slot: Slot,
+    template: sig.accounts_db.snapshot.ReducedCheckpoint,
+
+    fn init(
+        allocator: Allocator,
+        manifest: ?*const sig.accounts_db.snapshot.Manifest,
+    ) !?RollingCheckpoint {
+        const path = std.process.getEnvVarOwned(
+            allocator,
+            "SIG_REPLAY_ROLLING_REDUCED_CHECKPOINT_PATH",
+        ) catch return null;
+        errdefer allocator.free(path);
+
+        if (path.len == 0) {
+            allocator.free(path);
+            return null;
+        }
+        if (std.mem.eql(u8, path, "/Volumes") or std.mem.startsWith(u8, path, "/Volumes/")) {
+            return error.RollingCheckpointExternalStorageForbidden;
+        }
+
+        const interval_slots = envU64(
+            "SIG_REPLAY_ROLLING_REDUCED_CHECKPOINT_INTERVAL_SLOTS",
+            0,
+        );
+        if (interval_slots == 0) {
+            allocator.free(path);
+            return null;
+        }
+
+        const checkpoint_manifest = manifest orelse
+            return error.RollingCheckpointManifestMissing;
+        return .{
+            .path = path,
+            .interval_slots = interval_slots,
+            .last_written_slot = checkpoint_manifest.bank_fields.slot,
+            .template = try .fromManifest(allocator, checkpoint_manifest),
+        };
+    }
+
+    fn deinit(self: *RollingCheckpoint, allocator: Allocator) void {
+        allocator.free(self.path);
+        self.template.deinit(allocator);
+    }
+
+    fn shouldWrite(self: *const RollingCheckpoint, slot: Slot) bool {
+        return slot > self.last_written_slot and
+            slot - self.last_written_slot >= self.interval_slots;
+    }
+
+    fn write(
+        self: *RollingCheckpoint,
+        allocator: Allocator,
+        slot: Slot,
+        constants: *const sig.core.SlotConstants,
+        state: *SlotState,
+        hard_forks: *const sig.core.HardForks,
+    ) !void {
+        var checkpoint = try sig.accounts_db.snapshot.ReducedCheckpoint.fromFrozenReplaySlot(
+            allocator,
+            &self.template,
+            slot,
+            constants,
+            state,
+            hard_forks,
+        );
+        defer checkpoint.deinit(allocator);
+
+        try checkpoint.writeToFilePathAtomic(allocator, self.path);
+        self.last_written_slot = slot;
+    }
 };
 
 pub const ReplayState = struct {
@@ -347,9 +616,11 @@ pub const ReplayState = struct {
     persistent_program_map_pending_slot: ?Slot,
     root_memory_relief_interval: u64,
     rooted_slots_since_memory_relief: u64,
+    rolling_checkpoint: ?RollingCheckpoint,
 
     pub fn deinit(self: *ReplayState) void {
         self.thread_pool.shutdown();
+        self.writeFinalRollingCheckpoint();
         self.thread_pool.deinit();
 
         self.persistent_program_map.deinit(self.allocator);
@@ -365,6 +636,62 @@ pub const ReplayState = struct {
         self.slot_tree.deinit(self.allocator);
         self.status_cache.deinit(self.allocator);
         self.hard_forks.deinit(self.allocator);
+        if (self.rolling_checkpoint) |*checkpoint| checkpoint.deinit(self.allocator);
+    }
+
+    /// The periodic rolling checkpoint deliberately runs after the rooted
+    /// AccountsDB transaction commits. On a graceful stop, write once more at
+    /// the current committed root so a restart bundle cannot pair an older
+    /// checkpoint with a newer rooted SQLite overlay.
+    fn writeFinalRollingCheckpoint(self: *ReplayState) void {
+        const checkpoint = if (self.rolling_checkpoint) |*value| value else return;
+        if (!envBool("SIG_REPLAY_ROLLING_REDUCED_CHECKPOINT_WRITE_FINAL_ON_DEINIT", true)) {
+            self.logger.info().log(
+                "rolling_reduced_checkpoint_final_write status=skipped reason=disabled",
+            );
+            return;
+        }
+
+        const root = self.slot_tracker.root.load(.monotonic);
+        if (root <= checkpoint.last_written_slot) {
+            self.logger.info().logf(
+                "rolling_reduced_checkpoint_final_write status=skipped reason=already_current root={} last_written_slot={}",
+                .{ root, checkpoint.last_written_slot },
+            );
+            return;
+        }
+
+        const root_slot = self.slot_tracker.get(root) orelse {
+            self.logger.err().logf(
+                "rolling_reduced_checkpoint_final_write status=fail reason=root_slot_missing root={} path={s}",
+                .{ root, checkpoint.path },
+            );
+            return;
+        };
+        defer root_slot.release();
+
+        checkpoint.write(
+            self.allocator,
+            root,
+            root_slot.constants(),
+            root_slot.state(),
+            &self.hard_forks,
+        ) catch |err| {
+            self.logger.err().logf(
+                "rolling_reduced_checkpoint_final_write status=fail root={} path={s} err={s}",
+                .{ root, checkpoint.path, @errorName(err) },
+            );
+            return;
+        };
+
+        const checkpoint_size = if (std.fs.cwd().statFile(checkpoint.path)) |stat|
+            stat.size
+        else |_|
+            0;
+        self.logger.info().logf(
+            "rolling_reduced_checkpoint_final_write status=pass root={} path={s} bytes={}",
+            .{ root, checkpoint.path, checkpoint_size },
+        );
     }
 
     pub fn init(deps: Dependencies, consensus_status: ConsensusStatus) !ReplayState {
@@ -406,6 +733,47 @@ pub const ReplayState = struct {
         const slot_tree = try SlotTree.init(deps.allocator, deps.root.slot);
         errdefer slot_tree.deinit(deps.allocator);
 
+        const rolling_checkpoint = try RollingCheckpoint.init(
+            deps.allocator,
+            deps.checkpoint_manifest,
+        );
+        errdefer if (rolling_checkpoint) |checkpoint_value| {
+            var checkpoint = checkpoint_value;
+            checkpoint.deinit(deps.allocator);
+        };
+
+        if (rolling_checkpoint) |checkpoint| {
+            deps.logger.info().logf(
+                "rolling_reduced_checkpoint_config enabled=true path={s} interval_slots={} initial_slot={}",
+                .{ checkpoint.path, checkpoint.interval_slots, checkpoint.last_written_slot },
+            );
+        } else {
+            deps.logger.info().log("rolling_reduced_checkpoint_config enabled=false");
+        }
+
+        const feature_fingerprint_slot = envU64(
+            "SIG_REPLAY_FEATURE_FINGERPRINT_SLOT",
+            std.math.maxInt(Slot),
+        );
+        if (feature_fingerprint_slot == deps.root.slot or
+            feature_fingerprint_slot == deps.root.slot +| 1)
+        {
+            const tower_sync_activation =
+                deps.root.constants.feature_set.get(.enable_tower_sync_ix);
+            deps.logger.info().logf(
+                "replay_feature_fingerprint stage=root root_slot={} target_slot={} enable_tower_sync_activation={?} enable_tower_sync_active_at_target={}",
+                .{
+                    deps.root.slot,
+                    feature_fingerprint_slot,
+                    tower_sync_activation,
+                    deps.root.constants.feature_set.active(
+                        .enable_tower_sync_ix,
+                        feature_fingerprint_slot,
+                    ),
+                },
+            );
+        }
+
         return .{
             .allocator = deps.allocator,
             .logger = .from(deps.logger),
@@ -433,6 +801,7 @@ pub const ReplayState = struct {
                 envU64("SIG_REPLAY_ROOT_MEMORY_RELIEF_INTERVAL", 1),
             ),
             .rooted_slots_since_memory_relief = 0,
+            .rolling_checkpoint = rolling_checkpoint,
         };
     }
 
@@ -537,6 +906,11 @@ pub const FrozenSlotsSortCtx = struct {
     }
 };
 
+fn replayChildSlotGapAllowed(parent_slot: Slot, child_slot: Slot, max_gap: u64) bool {
+    if (max_gap == 0) return true;
+    return child_slot > parent_slot and child_slot - parent_slot <= max_gap;
+}
+
 /// Identifies new slots in the ledger and starts tracking them in the slot
 /// tracker.
 ///
@@ -558,6 +932,9 @@ pub fn trackNewSlots(
     var zone = tracy.Zone.init(@src(), .{ .name = "trackNewSlots" });
     defer zone.deinit();
     const reuse_parent_feature_set = envBool("SIG_REPLAY_REUSE_PARENT_FEATURE_SET", false);
+    const skip_pruned_parent_children =
+        envBool("SIG_REPLAY_SKIP_PRUNED_PARENT_CHILDREN", false);
+    const max_child_slot_gap = envU64("SIG_REPLAY_MAX_CHILD_SLOT_GAP", 0);
 
     var frozen_slots_timer = sig.time.Timer.start();
     const root = slot_tracker.root.load(.monotonic);
@@ -581,10 +958,76 @@ pub fn trackNewSlots(
         next_slots.deinit(allocator);
     }
 
+    // Targeted repair can reconstruct an older parent after its already-full
+    // child was written. In that order, the child's parent_slot is correct but
+    // the parent's child_slots list is never rebuilt, leaving replay with zero
+    // active slots after a restart. Keep the normal child-list path unchanged;
+    // the bounded scan is opt-in for recovery and only runs for parents whose
+    // persisted child list is empty.
+    const child_fallback_scan_slots =
+        envU64("SIG_REPLAY_LEDGER_CHILD_FALLBACK_SCAN_SLOTS", 0);
+    if (child_fallback_scan_slots != 0) {
+        for (frozen_slots_since_root.items) |parent_slot| {
+            const children = next_slots.getPtr(parent_slot) orelse children: {
+                // A missing persisted child list omits the parent from
+                // getSlotsSince entirely. Treat that as the same recovery
+                // case as an empty list so the bounded metadata scan can
+                // reconstruct the direct edge.
+                const entry = try next_slots.getOrPut(allocator, parent_slot);
+                std.debug.assert(!entry.found_existing);
+                entry.value_ptr.* = .empty;
+                break :children entry.value_ptr;
+            };
+            if (children.items.len != 0) continue;
+
+            const scan_end = parent_slot +| child_fallback_scan_slots;
+            var iterator = try ledger.reader().slotMetaIterator(parent_slot +| 1);
+            defer iterator.deinit();
+
+            var recovered_children: u64 = 0;
+            while (try iterator.next()) |entry| {
+                const child_slot, var child_meta = entry;
+                defer child_meta.deinit();
+
+                if (child_slot <= parent_slot) continue;
+                if (child_slot > scan_end) break;
+                if (child_meta.parent_slot == parent_slot and child_meta.isFull()) {
+                    try children.append(allocator, child_slot);
+                    recovered_children += 1;
+                }
+            }
+            if (recovered_children != 0) {
+                logger.info().logf(
+                    "replay_child_link_fallback parent_slot={} recovered_children={} scan_end={}",
+                    .{ parent_slot, recovered_children, scan_end },
+                );
+            }
+        }
+    }
+
     for (next_slots.keys(), next_slots.values()) |parent_slot, children| {
+        // Bypass rooting may already have removed a stale fork from SlotTree
+        // while SlotTracker still reports that fork's frozen banks. Its later
+        // repaired children are not descendants of the retained root and must
+        // not terminate replay with ParentNotFound. Keep this recovery behavior
+        // default-off so the normal fork-tracking contract remains fail-closed.
+        if (skip_pruned_parent_children and !slot_tree.contains(parent_slot)) {
+            logger.debug().logf(
+                "replay_skip_pruned_parent_children parent_slot={} children={}",
+                .{ parent_slot, children.items.len },
+            );
+            continue;
+        }
         const parent_info = frozen_slots.get(parent_slot) orelse return error.MissingParent;
 
         for (children.items) |slot| {
+            if (!replayChildSlotGapAllowed(parent_slot, slot, max_child_slot_gap)) {
+                logger.warn().logf(
+                    "replay_skip_child_slot_gap parent_slot={} child_slot={} gap={} max_gap={}",
+                    .{ parent_slot, slot, slot -| parent_slot, max_child_slot_gap },
+                );
+                continue;
+            }
             if (slot_tracker.contains(slot)) continue;
             logger.info().logf("tracking new slot: {}", .{slot});
             logEpochTrackerSlotLookup(
@@ -631,6 +1074,21 @@ pub fn trackNewSlots(
                 &constants.ancestors,
                 "after_new_slot_from_parent",
             );
+            if (envU64(
+                "SIG_REPLAY_FEATURE_FINGERPRINT_SLOT",
+                std.math.maxInt(Slot),
+            ) == slot) {
+                logger.info().logf(
+                    "replay_feature_fingerprint stage=child slot={} parent_slot={} feature_source={s} enable_tower_sync_activation={?} enable_tower_sync_active={}",
+                    .{
+                        slot,
+                        parent_slot,
+                        if (use_parent_feature_set) "parent" else "accountsdb",
+                        constants.feature_set.get(.enable_tower_sync_ix),
+                        constants.feature_set.active(.enable_tower_sync_ix, slot),
+                    },
+                );
+            }
 
             const store = account_store.forSlot(slot, &constants.ancestors);
 
@@ -698,6 +1156,55 @@ pub fn trackNewSlots(
                 hard_forks,
             );
             const sysvars_ns = sysvars_timer.read().asNanos();
+            if (envU64(
+                "SIG_REPLAY_SLOT_HASHES_FINGERPRINT_SLOT",
+                std.math.maxInt(Slot),
+            ) == slot) {
+                const maybe_slot_hashes = try replay.update_sysvar.getSysvarFromAccount(
+                    SlotHashes,
+                    allocator,
+                    store.reader(),
+                );
+                if (maybe_slot_hashes) |slot_hashes| {
+                    const newest = slot_hashes.entries.get(0);
+                    if (slot_hashes.get(constants.parent_slot)) |actual_parent_hash| {
+                        logger.info().logf(
+                            "replay_slot_hashes_fingerprint slot={} entries={} newest_slot={} newest_hash={s} parent_slot={} expected_parent_hash={s} actual_parent_hash={s} parent_match={}",
+                            .{
+                                slot,
+                                slot_hashes.entries.len,
+                                newest.slot,
+                                newest.hash.base58String().constSlice(),
+                                constants.parent_slot,
+                                constants.parent_hash.base58String().constSlice(),
+                                actual_parent_hash.base58String().constSlice(),
+                                actual_parent_hash.eql(constants.parent_hash),
+                            },
+                        );
+                    } else {
+                        logger.info().logf(
+                            "replay_slot_hashes_fingerprint slot={} entries={} newest_slot={} newest_hash={s} parent_slot={} expected_parent_hash={s} actual_parent_hash=missing parent_match=false",
+                            .{
+                                slot,
+                                slot_hashes.entries.len,
+                                newest.slot,
+                                newest.hash.base58String().constSlice(),
+                                constants.parent_slot,
+                                constants.parent_hash.base58String().constSlice(),
+                            },
+                        );
+                    }
+                } else {
+                    logger.info().logf(
+                        "replay_slot_hashes_fingerprint slot={} status=missing_or_invalid parent_slot={} expected_parent_hash={s}",
+                        .{
+                            slot,
+                            constants.parent_slot,
+                            constants.parent_hash.base58String().constSlice(),
+                        },
+                    );
+                }
+            }
 
             var ledger_meta_timer = sig.time.Timer.start();
             try ledger.db.put(schema.blocktime, slot, clock.unix_timestamp);
@@ -992,6 +1499,17 @@ fn freezeCompletedSlots(
     for (results) |result| switch (result.output) {
         .err => |err| {
             state.discardPersistentProgramMap(result.slot);
+            if (envBool("SIG_REPLAY_PRUNE_DEAD_FORKS", false)) {
+                const fork_progress = state.progress_map.getForkProgress(result.slot) orelse
+                    return error.MissingBankProgress;
+                fork_progress.is_dead = true;
+                try state.ledger.resultWriter().setDeadSlot(result.slot);
+                const pruned = state.slot_tree.pruneLeaf(state.allocator, result.slot);
+                state.logger.warn().logf(
+                    "replay_bypass_dead_fork slot={} pruned_leaf={}",
+                    .{ result.slot, pruned },
+                );
+            }
             state.logger.logf(
                 switch (err) {
                     // invalid_block may be a non-issue and simply indicate that
@@ -1016,6 +1534,10 @@ fn freezeCompletedSlots(
             defer slot_info.release();
             if (slot_info.state().tickHeight() == slot_info.constants().max_tick_height) {
                 state.logger.info().logf("finished replaying slot: {}", .{slot});
+                state.logger.info().logf(
+                    "replay_entry_hash slot={} last_entry_hash={s}",
+                    .{ slot, last_entry_hash.base58String().constSlice() },
+                );
                 var freeze_timer = sig.time.Timer.start();
                 try replay.freeze.freezeSlot(state.allocator, .init(
                     .from(state.logger),
@@ -1095,6 +1617,34 @@ fn bypassConsensus(state: *ReplayState) !void {
         );
         state.rooted_slots_since_memory_relief = memory_relief.next_roots_since_relief;
         const account_store_root_ns = phase_timer.read().asNanos();
+
+        phase_timer.reset();
+        if (state.rolling_checkpoint) |*checkpoint| {
+            if (checkpoint.shouldWrite(new_root)) {
+                if (checkpoint.write(
+                    state.allocator,
+                    new_root,
+                    slot_constants.constants(),
+                    slot_constants.state(),
+                    &state.hard_forks,
+                )) |_| {
+                    const checkpoint_size = if (std.fs.cwd().statFile(checkpoint.path)) |stat|
+                        stat.size
+                    else |_|
+                        0;
+                    state.logger.info().logf(
+                        "rolling_reduced_checkpoint_write status=pass slot={} path={s} bytes={}",
+                        .{ new_root, checkpoint.path, checkpoint_size },
+                    );
+                } else |err| {
+                    state.logger.err().logf(
+                        "rolling_reduced_checkpoint_write status=fail slot={} path={s} err={s}",
+                        .{ new_root, checkpoint.path, @errorName(err) },
+                    );
+                }
+            }
+        }
+        const rolling_checkpoint_ns = phase_timer.read().asNanos();
         const total_ns = total_timer.read().asNanos();
 
         if (maybe_root_timing) |root_timing| {
@@ -1126,7 +1676,7 @@ fn bypassConsensus(state: *ReplayState) !void {
         }
 
         state.logger.info().logf(
-            "replay_bypass_consensus_timing root_changed=true new_root={} processed_tip_ns={} reroot_ns={} root_store_ns={} prune_non_rooted_ns={} status_cache_ns={} account_store_root_ns={} unattributed_ns={} total_ns={}",
+            "replay_bypass_consensus_timing root_changed=true new_root={} processed_tip_ns={} reroot_ns={} root_store_ns={} prune_non_rooted_ns={} status_cache_ns={} account_store_root_ns={} rolling_checkpoint_ns={} unattributed_ns={} total_ns={}",
             .{
                 new_root,
                 processed_tip_ns,
@@ -1135,13 +1685,18 @@ fn bypassConsensus(state: *ReplayState) !void {
                 prune_non_rooted_ns,
                 status_cache_ns,
                 account_store_root_ns,
-                total_ns -| (processed_tip_ns + reroot_ns + root_store_ns + prune_non_rooted_ns + status_cache_ns + account_store_root_ns),
+                rolling_checkpoint_ns,
+                total_ns -| (processed_tip_ns + reroot_ns + root_store_ns + prune_non_rooted_ns + status_cache_ns + account_store_root_ns + rolling_checkpoint_ns),
                 total_ns,
             },
         );
     } else {
         const total_ns = total_timer.read().asNanos();
-        state.logger.info().logf(
+        // The no-root path runs on every replay-service poll, including while
+        // waiting for the next complete slot. Keep the per-poll timing
+        // available for targeted debug sessions without growing production
+        // catch-up logs while the feed is idle or back-pressured.
+        state.logger.debug().logf(
             "replay_bypass_consensus_timing root_changed=false new_root=0 processed_tip_ns={} reroot_ns={} root_store_ns=0 prune_non_rooted_ns=0 status_cache_ns=0 account_store_root_ns=0 unattributed_ns={} total_ns={}",
             .{
                 processed_tip_ns,
@@ -1151,6 +1706,14 @@ fn bypassConsensus(state: *ReplayState) !void {
             },
         );
     }
+}
+
+test "bounded replay child slot gap rejects distant repaired fork edges" {
+    try std.testing.expect(replayChildSlotGapAllowed(100, 500, 0));
+    try std.testing.expect(replayChildSlotGapAllowed(100, 101, 64));
+    try std.testing.expect(replayChildSlotGapAllowed(100, 164, 64));
+    try std.testing.expect(!replayChildSlotGapAllowed(100, 165, 64));
+    try std.testing.expect(!replayChildSlotGapAllowed(100, 100, 64));
 }
 
 test "getActiveFeatures rejects wrong ownership" {

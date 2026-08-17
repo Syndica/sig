@@ -16,6 +16,7 @@ const Ancestors = core.Ancestors;
 const Entry = core.Entry;
 const Hash = core.Hash;
 const LtHash = core.LtHash;
+const Pubkey = core.Pubkey;
 const Slot = core.Slot;
 
 const AccountStore = sig.accounts_db.AccountStore;
@@ -677,6 +678,163 @@ pub const SlotCacheLtHashDeltaResult = struct {
     current_missing: u64,
 };
 
+pub const SlotCacheLtHashDeltaAccumulation = struct {
+    had_previous: bool,
+    covered_keys: usize,
+};
+
+/// Adds one replay invocation's LT-hash delta to the slot-wide precomputed
+/// delta. A slot may be replayed more than once as completed data sets arrive,
+/// so replacing these fields would make the frozen bank hash depend on whether
+/// the ledger was already complete at startup.
+///
+/// Takes ownership of `new_keys` on success. On error, the caller retains it.
+pub fn accumulateSlotCacheLtHashDelta(
+    allocator: Allocator,
+    delta_mux: *sig.sync.Mux(?LtHash),
+    keys_mux: *sig.sync.Mux(?[]Pubkey),
+    new_delta: LtHash,
+    new_keys: []Pubkey,
+) (Allocator.Error || error{InconsistentLtHashAccumulator})!SlotCacheLtHashDeltaAccumulation {
+    var delta_guard = delta_mux.lock();
+    defer delta_guard.unlock();
+    var keys_guard = keys_mux.lock();
+    defer keys_guard.unlock();
+
+    const maybe_delta = delta_guard.get().*;
+    const maybe_keys = keys_guard.get().*;
+    if ((maybe_delta == null) != (maybe_keys == null)) {
+        return error.InconsistentLtHashAccumulator;
+    }
+
+    if (maybe_delta == null) {
+        delta_guard.mut().* = new_delta;
+        keys_guard.mut().* = new_keys;
+        return .{ .had_previous = false, .covered_keys = new_keys.len };
+    }
+
+    const old_keys = maybe_keys.?;
+    const merged_keys = try mergeSortedUniquePubkeys(allocator, old_keys, new_keys);
+
+    var merged_delta = maybe_delta.?;
+    merged_delta.mixIn(new_delta);
+    delta_guard.mut().* = merged_delta;
+    keys_guard.mut().* = merged_keys;
+    allocator.free(old_keys);
+    allocator.free(new_keys);
+
+    return .{ .had_previous = true, .covered_keys = merged_keys.len };
+}
+
+fn mergeSortedUniquePubkeys(
+    allocator: Allocator,
+    a: []const Pubkey,
+    b: []const Pubkey,
+) Allocator.Error![]Pubkey {
+    var unique_count: usize = 0;
+    var a_index: usize = 0;
+    var b_index: usize = 0;
+    while (a_index < a.len or b_index < b.len) : (unique_count += 1) {
+        if (a_index == a.len) {
+            b_index += 1;
+        } else if (b_index == b.len) {
+            a_index += 1;
+        } else switch (comparePubkey(a[a_index], b[b_index])) {
+            -1 => a_index += 1,
+            0 => {
+                a_index += 1;
+                b_index += 1;
+            },
+            1 => b_index += 1,
+            else => unreachable,
+        }
+    }
+
+    const merged = try allocator.alloc(Pubkey, unique_count);
+    a_index = 0;
+    b_index = 0;
+    var output_index: usize = 0;
+    while (a_index < a.len or b_index < b.len) : (output_index += 1) {
+        if (a_index == a.len) {
+            merged[output_index] = b[b_index];
+            b_index += 1;
+        } else if (b_index == b.len) {
+            merged[output_index] = a[a_index];
+            a_index += 1;
+        } else switch (comparePubkey(a[a_index], b[b_index])) {
+            -1 => {
+                merged[output_index] = a[a_index];
+                a_index += 1;
+            },
+            0 => {
+                merged[output_index] = a[a_index];
+                a_index += 1;
+                b_index += 1;
+            },
+            1 => {
+                merged[output_index] = b[b_index];
+                b_index += 1;
+            },
+            else => unreachable,
+        }
+    }
+    std.debug.assert(output_index == merged.len);
+    return merged;
+}
+
+test "slot cache LT hash delta accumulates across partial replay invocations" {
+    const allocator = std.testing.allocator;
+    var delta_mux = sig.sync.Mux(?LtHash).init(null);
+    var keys_mux = sig.sync.Mux(?[]Pubkey).init(null);
+    defer if (keys_mux.readCopy()) |keys| allocator.free(keys);
+
+    const key_1 = Pubkey{ .data = @splat(1) };
+    const key_2 = Pubkey{ .data = @splat(2) };
+    const key_3 = Pubkey{ .data = @splat(3) };
+    const first_keys = try allocator.dupe(Pubkey, &.{ key_1, key_3 });
+    const second_keys = try allocator.dupe(Pubkey, &.{ key_2, key_3 });
+
+    var first_delta = LtHash.IDENTITY;
+    first_delta.data[0] = 11;
+    var second_delta = LtHash.IDENTITY;
+    second_delta.data[0] = 17;
+
+    const first = try accumulateSlotCacheLtHashDelta(
+        allocator,
+        &delta_mux,
+        &keys_mux,
+        first_delta,
+        first_keys,
+    );
+    try std.testing.expect(!first.had_previous);
+    try std.testing.expectEqual(@as(usize, 2), first.covered_keys);
+
+    const second = try accumulateSlotCacheLtHashDelta(
+        allocator,
+        &delta_mux,
+        &keys_mux,
+        second_delta,
+        second_keys,
+    );
+    try std.testing.expect(second.had_previous);
+    try std.testing.expectEqual(@as(usize, 3), second.covered_keys);
+
+    var expected_delta = first_delta;
+    expected_delta.mixIn(second_delta);
+    const actual_delta = delta_mux.readCopy() orelse return error.TestUnexpectedResult;
+    const actual_keys = keys_mux.readCopy() orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualSlices(
+        u16,
+        &expected_delta.data,
+        &actual_delta.data,
+    );
+    try std.testing.expectEqualSlices(
+        Pubkey,
+        &.{ key_1, key_2, key_3 },
+        actual_keys,
+    );
+}
+
 /// Computes the same per-slot lattice-hash delta as freeze.deltaLtHash, but
 /// reads each account's pre-slot value from batched unrooted/rooted overlays,
 /// then falls back to the retained slot-frame snapshot value. This preserves
@@ -1195,6 +1353,20 @@ fn replayBatchWithArenaChild(
     var arena = std.heap.ArenaAllocator.init(arena_child_allocator);
     defer arena.deinit();
     const tmp_allocator = arena.allocator();
+    const log_transaction_fingerprints = transactionFingerprintSlotEnabled(
+        tmp_allocator,
+        svm_gateway.params.slot,
+    );
+    const transaction_log_fingerprint_signatures = if (log_transaction_fingerprints)
+        std.process.getEnvVarOwned(
+            tmp_allocator,
+            "SIG_REPLAY_TRANSACTION_LOG_FINGERPRINT_SIGNATURES",
+        ) catch null
+    else
+        null;
+    defer if (transaction_log_fingerprint_signatures) |signatures| {
+        tmp_allocator.free(signatures);
+    };
 
     // TODO: maybe do a MultiArrayList {Hash, ProcessedTransaction, ResolvedTransaction}
 
@@ -1284,6 +1456,97 @@ fn replayBatchWithArenaChild(
 
         switch (transaction_result) {
             .ok => |result| {
+                if (log_transaction_fingerprints) {
+                    const signature = transaction.transaction.signatures[0].base58String();
+                    const error_name = if (result.err) |err| @tagName(err) else "none";
+                    var instruction_error_index: i16 = -1;
+                    var instruction_error_name: []const u8 = "none";
+                    var instruction_custom_error: i64 = -1;
+                    if (result.err) |err| switch (err) {
+                        .InstructionError => |instruction_error| {
+                            instruction_error_index = instruction_error.@"0";
+                            instruction_error_name = @tagName(instruction_error.@"1");
+                            switch (instruction_error.@"1") {
+                                .Custom => |custom_error| {
+                                    instruction_custom_error = custom_error;
+                                },
+                                else => {},
+                            }
+                        },
+                        else => {},
+                    };
+                    committer.logger.info().logf(
+                        "replay_transaction_fingerprint slot={} signature={s} failed={} error={s} instruction_error_index={} instruction_error={s} instruction_custom_error={} writes={} transaction_fee={} priority_fee={} cost_units={}",
+                        .{
+                            svm_gateway.params.slot,
+                            signature.constSlice(),
+                            result.err != null,
+                            error_name,
+                            instruction_error_index,
+                            instruction_error_name,
+                            instruction_custom_error,
+                            result.writes.len,
+                            result.fees.transaction_fee,
+                            result.fees.prioritization_fee,
+                            result.cost_units,
+                        },
+                    );
+                    if (result.err != null and
+                        transaction_log_fingerprint_signatures != null and
+                        commaSeparatedTokenContains(
+                            transaction_log_fingerprint_signatures.?,
+                            signature.constSlice(),
+                        ))
+                    {
+                        if (result.outputs) |outputs| {
+                            if (outputs.log_collector) |log_collector| {
+                                var log_iterator = log_collector.iterator();
+                                var log_index: u64 = 0;
+                                while (log_iterator.next()) |message| : (log_index += 1) {
+                                    committer.logger.info().logf(
+                                        "replay_transaction_program_log_fingerprint slot={} signature={s} index={} message={s}",
+                                        .{
+                                            svm_gateway.params.slot,
+                                            signature.constSlice(),
+                                            log_index,
+                                            message,
+                                        },
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    const account_pubkeys = transaction.accounts.items(.pubkey);
+                    const account_writable = transaction.accounts.items(.is_writable);
+                    for (result.pre_balances.constSlice(), 0..) |pre_balance, account_index| {
+                        if (!account_writable[account_index]) continue;
+                        committer.logger.info().logf(
+                            "replay_transaction_pre_account_fingerprint slot={} signature={s} account_index={} pubkey={s} lamports={} writable=true",
+                            .{
+                                svm_gateway.params.slot,
+                                signature.constSlice(),
+                                account_index,
+                                account_pubkeys[account_index].base58String().constSlice(),
+                                pre_balance,
+                            },
+                        );
+                    }
+                    for (result.writes.constSlice()) |write| {
+                        committer.logger.info().logf(
+                            "replay_transaction_account_fingerprint slot={} signature={s} pubkey={s} lamports={} data_len={} owner={s} executable={} rent_epoch={}",
+                            .{
+                                svm_gateway.params.slot,
+                                signature.constSlice(),
+                                write.pubkey.base58String().constSlice(),
+                                write.account.lamports,
+                                write.account.data.len,
+                                write.account.owner.base58String().constSlice(),
+                                write.account.executable,
+                                write.account.rent_epoch,
+                            },
+                        );
+                    }
+                }
                 successful_txs[populated_count] = transaction;
                 results[populated_count] = .{ hash, result };
                 populated_count += 1;
@@ -1313,6 +1576,35 @@ fn replayBatchWithArenaChild(
     stats.total_ns = batch_timer.read().asNanos() +
         if (preprocessed_transactions != null) stats.preprocess_ns else 0;
     return .{ .result = .success, .stats = stats };
+}
+
+fn transactionFingerprintSlotEnabled(allocator: Allocator, slot: Slot) bool {
+    const raw_target = std.process.getEnvVarOwned(
+        allocator,
+        "SIG_REPLAY_TRANSACTION_FINGERPRINT_SLOT",
+    ) catch return false;
+    defer allocator.free(raw_target);
+    const target = std.fmt.parseUnsigned(
+        Slot,
+        std.mem.trim(u8, raw_target, " \t\r\n"),
+        10,
+    ) catch return false;
+    return target == slot;
+}
+
+fn commaSeparatedTokenContains(raw: []const u8, needle: []const u8) bool {
+    var tokens = std.mem.tokenizeScalar(u8, raw, ',');
+    while (tokens.next()) |token| {
+        if (std.mem.eql(u8, std.mem.trim(u8, token, " \t\r\n"), needle)) return true;
+    }
+    return false;
+}
+
+test "comma-separated transaction log fingerprint filter matches exact signatures" {
+    try std.testing.expect(commaSeparatedTokenContains("SigA, SigB\n", "SigA"));
+    try std.testing.expect(commaSeparatedTokenContains("SigA, SigB\n", "SigB"));
+    try std.testing.expect(!commaSeparatedTokenContains("SigA, SigB\n", "Sig"));
+    try std.testing.expect(!commaSeparatedTokenContains("SigA, SigB\n", "SigC"));
 }
 
 const PreparedSlot = union(enum) {
@@ -1414,13 +1706,39 @@ fn prepareSlot(
     phase_timer.reset();
 
     const previous_last_entry = confirmation_progress.last_entry;
+    const continuing_partial_slot = confirmation_progress.num_shreds != 0;
+    const require_slot_full_before_execution = envBool(
+        "SIG_REPLAY_REQUIRE_SLOT_FULL_BEFORE_EXECUTION",
+        false,
+    );
+    if (require_slot_full_before_execution and
+        !try state.ledger.reader().isFull(state.allocator, slot))
+    {
+        // A scheduler is constructed for each prepareSlot invocation. Starting
+        // execution from a merely completed data set therefore makes the
+        // account-dependency DAG depend on live shred arrival boundaries.
+        // Keep the slot untouched until its last shred is present, then feed
+        // the complete slot to one scheduler invocation.
+        return .empty;
+    }
     const entries, const slot_is_full = blk: {
+        const max_completed_data_sets_configured = envU64(
+            "SIG_REPLAY_MAX_COMPLETED_DATA_SETS_PER_INVOCATION",
+            0,
+        );
+        const max_completed_data_sets: ?usize = if (require_slot_full_before_execution or
+            max_completed_data_sets_configured == 0)
+            null
+        else
+            std.math.cast(usize, max_completed_data_sets_configured) orelse
+                std.math.maxInt(usize);
         const entries, const num_shreds, const slot_is_full =
-            state.ledger.reader().getSlotEntriesWithShredInfo(
+            state.ledger.reader().getSlotEntriesWithShredInfoMaxCompletedRanges(
                 state.allocator,
                 slot,
                 confirmation_progress.num_shreds,
                 false,
+                max_completed_data_sets,
             ) catch |err| switch (err) {
                 error.DeadSlot => {
                     state.logger.info().logf("slot is dead: {}", .{slot});
@@ -1434,6 +1752,24 @@ fn prepareSlot(
         }
 
         state.execution_log_helper.logEntryCount(entries.len, slot);
+        if (require_slot_full_before_execution) {
+            state.logger.info().logf(
+                "slot_full_execution_gate_pass slot={} start_shred={} returned_shreds={} slot_is_full={}",
+                .{ slot, confirmation_progress.num_shreds, num_shreds, slot_is_full },
+            );
+        }
+        if (max_completed_data_sets) |maximum| {
+            state.logger.info().logf(
+                "slot_entry_batching slot={} max_completed_data_sets={} start_shred={} returned_shreds={} slot_is_full={}",
+                .{
+                    slot,
+                    maximum,
+                    confirmation_progress.num_shreds,
+                    num_shreds,
+                    slot_is_full,
+                },
+            );
+        }
 
         if (entries.len == 0) {
             return .empty;
@@ -1592,6 +1928,7 @@ fn prepareSlot(
             &slot_info.constants().ancestors,
             slot_account_reader,
             resolved_txns,
+            continuing_partial_slot,
             programdata_program_map,
             slot_info.constants().collector_id,
             &slot_account_cache,
@@ -1704,6 +2041,7 @@ fn buildSlotReadFrameAccountStore(
     ancestors: *const Ancestors,
     account_reader: sig.accounts_db.SlotAccountReader,
     transactions: []const ResolvedTransaction,
+    continuing_partial_slot: bool,
     programdata_program_map: ?*sig.runtime.program_loader.ProgramMap,
     collector_id: sig.core.Pubkey,
     slot_account_cache: *?*SlotAccountCache,
@@ -1745,6 +2083,7 @@ fn buildSlotReadFrameAccountStore(
         cache,
         account_reader,
         transactions,
+        continuing_partial_slot,
         programdata_program_map,
     );
 
@@ -1774,6 +2113,7 @@ fn populateSlotReadFrame(
     cache: *SlotAccountCache,
     account_reader: sig.accounts_db.SlotAccountReader,
     transactions: []const ResolvedTransaction,
+    continuing_partial_slot: bool,
     programdata_program_map: ?*sig.runtime.program_loader.ProgramMap,
 ) !void {
     var timer = sig.time.Timer.start();
@@ -1880,27 +2220,44 @@ fn populateSlotReadFrame(
     const select_pubkeys_ns = phase_timer.read().asNanos();
     phase_timer.reset();
 
-    const batch_unrooted =
-        envBool("SIG_REPLAY_SLOT_READ_FRAME_BATCH_UNROOTED", false);
+    // Every read frame must prefer the latest account version visible on its
+    // fork, including writes from parent slots and current-slot initialization.
+    // Falling back to rooted compressed state after checking only the current
+    // slot silently replays the second child from stale root state.
+    const batch_unrooted = true;
     const borrow_decoded_account_cache =
         envBool("SIG_REPLAY_SLOT_READ_FRAME_BORROW_DECODED_ACCOUNT_CACHE", false);
-    const unrooted_result = if (batch_unrooted)
-        try account_reader.batchLoadUnrootedAccounts(
-            allocator,
-            selected_pubkeys.items,
-            &cache.accounts,
-        )
-    else
-        sig.accounts_db.Unrooted.BatchLoadResult{
-            .pubkeys = @intCast(selected_pubkeys.items.len),
-        };
+    const unrooted_result = try preloadSlotReadFrameUnrootedAccounts(
+        allocator,
+        account_reader,
+        selected_pubkeys.items,
+        &cache.accounts,
+    );
     const unrooted_preload_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
+
+    var rooted_overlay_pubkeys: std.ArrayListUnmanaged(sig.core.Pubkey) = .{};
+    defer rooted_overlay_pubkeys.deinit(allocator);
+    try rooted_overlay_pubkeys.ensureTotalCapacity(allocator, selected_pubkeys.items.len);
+    for (selected_pubkeys.items) |pubkey| {
+        if (!cache.containsAccount(pubkey)) rooted_overlay_pubkeys.appendAssumeCapacity(pubkey);
+    }
+    const rooted_overlay_filter_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
+
+    const rooted_overlay_result = try preloadSlotReadFrameRootedOverlayAccounts(
+        allocator,
+        account_reader,
+        rooted_overlay_pubkeys.items,
+        &cache.accounts,
+    );
+    const rooted_overlay_load_ns = phase_timer.read().asNanos();
     phase_timer.reset();
 
     var frame_pubkeys: std.ArrayListUnmanaged(sig.core.Pubkey) = .{};
     defer frame_pubkeys.deinit(allocator);
-    try frame_pubkeys.ensureTotalCapacity(allocator, selected_pubkeys.items.len);
-    for (selected_pubkeys.items) |pubkey| {
+    try frame_pubkeys.ensureTotalCapacity(allocator, rooted_overlay_pubkeys.items.len);
+    for (rooted_overlay_pubkeys.items) |pubkey| {
         if (!cache.containsAccount(pubkey)) frame_pubkeys.appendAssumeCapacity(pubkey);
     }
     const frame_filter_ns = phase_timer.read().asNanos();
@@ -1932,7 +2289,10 @@ fn populateSlotReadFrame(
     const unrooted_skipped = unrooted_result.resolved;
     const unrooted_accounts_loaded = unrooted_result.loaded;
     const unrooted_accounts_missing = unrooted_result.tombstones;
-    var tombstone_pubkeys: u64 = unrooted_result.tombstones;
+    const rooted_overlay_accounts_loaded =
+        rooted_overlay_result.resolved - rooted_overlay_result.tombstones;
+    var tombstone_pubkeys: u64 =
+        unrooted_result.tombstones + rooted_overlay_result.tombstones;
     for (frame_pubkeys.items) |pubkey| {
         if (cache.containsAccount(pubkey)) continue;
         try cache.accounts.put(allocator, pubkey, AccountSharedData.EMPTY);
@@ -1990,9 +2350,10 @@ fn populateSlotReadFrame(
     const programdata_data_len_ns = phase_timer.read().asNanos();
     phase_timer.reset();
 
-    const programdata_unrooted_result = if (preload_programdata_accounts and batch_unrooted)
-        try account_reader.batchLoadUnrootedAccounts(
+    const programdata_unrooted_result = if (preload_programdata_accounts)
+        try preloadSlotReadFrameUnrootedAccounts(
             allocator,
+            account_reader,
             programdata_missing_pubkeys.items,
             &cache.accounts,
         )
@@ -2006,12 +2367,42 @@ fn populateSlotReadFrame(
     const programdata_unrooted_ns = phase_timer.read().asNanos();
     phase_timer.reset();
 
-    var programdata_rooted_pubkeys: std.ArrayListUnmanaged(sig.core.Pubkey) = .{};
-    defer programdata_rooted_pubkeys.deinit(allocator);
-    try programdata_rooted_pubkeys.ensureTotalCapacity(allocator, programdata_missing_pubkeys.items.len);
+    var programdata_rooted_overlay_pubkeys: std.ArrayListUnmanaged(sig.core.Pubkey) = .{};
+    defer programdata_rooted_overlay_pubkeys.deinit(allocator);
+    try programdata_rooted_overlay_pubkeys.ensureTotalCapacity(
+        allocator,
+        programdata_missing_pubkeys.items.len,
+    );
     if (preload_programdata_accounts) {
         for (programdata_missing_pubkeys.items) |pubkey| {
-            if (!cache.containsAccount(pubkey)) programdata_rooted_pubkeys.appendAssumeCapacity(pubkey);
+            if (!cache.containsAccount(pubkey))
+                programdata_rooted_overlay_pubkeys.appendAssumeCapacity(pubkey);
+        }
+    }
+    const programdata_rooted_overlay_filter_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
+
+    const programdata_rooted_overlay_result = if (preload_programdata_accounts)
+        try preloadSlotReadFrameRootedOverlayAccounts(
+            allocator,
+            account_reader,
+            programdata_rooted_overlay_pubkeys.items,
+            &cache.accounts,
+        )
+    else
+        sig.accounts_db.Rooted.BatchLoadOverlayResult{};
+    const programdata_rooted_overlay_load_ns = phase_timer.read().asNanos();
+    phase_timer.reset();
+
+    var programdata_frame_pubkeys: std.ArrayListUnmanaged(sig.core.Pubkey) = .{};
+    defer programdata_frame_pubkeys.deinit(allocator);
+    try programdata_frame_pubkeys.ensureTotalCapacity(
+        allocator,
+        programdata_rooted_overlay_pubkeys.items.len,
+    );
+    if (preload_programdata_accounts) {
+        for (programdata_rooted_overlay_pubkeys.items) |pubkey| {
+            if (!cache.containsAccount(pubkey)) programdata_frame_pubkeys.appendAssumeCapacity(pubkey);
         }
     }
     const programdata_filter_ns = phase_timer.read().asNanos();
@@ -2020,14 +2411,14 @@ fn populateSlotReadFrame(
     const programdata_result = if (preload_programdata_accounts and borrow_decoded_account_cache)
         try account_reader.batchLoadCompressedAccountsBorrowedPriority(
             allocator,
-            programdata_rooted_pubkeys.items,
+            programdata_frame_pubkeys.items,
             &cache.accounts,
             &cache.borrowed_accounts,
         )
     else if (preload_programdata_accounts)
         try account_reader.batchLoadCompressedAccounts(
             allocator,
-            programdata_rooted_pubkeys.items,
+            programdata_frame_pubkeys.items,
             &cache.accounts,
         )
     else
@@ -2035,8 +2426,11 @@ fn populateSlotReadFrame(
     const programdata_compressed_load_ns = phase_timer.read().asNanos();
     phase_timer.reset();
 
-    var programdata_tombstone_pubkeys: u64 = programdata_unrooted_result.tombstones;
-    for (programdata_rooted_pubkeys.items) |pubkey| {
+    const programdata_rooted_overlay_accounts_loaded =
+        programdata_rooted_overlay_result.resolved - programdata_rooted_overlay_result.tombstones;
+    var programdata_tombstone_pubkeys: u64 = programdata_unrooted_result.tombstones +
+        programdata_rooted_overlay_result.tombstones;
+    for (programdata_frame_pubkeys.items) |pubkey| {
         if (cache.containsAccount(pubkey)) continue;
         try cache.accounts.put(allocator, pubkey, AccountSharedData.EMPTY);
         tombstone_pubkeys += 1;
@@ -2048,7 +2442,7 @@ fn populateSlotReadFrame(
         allocator,
         slot,
         frame_pubkeys.items,
-        programdata_rooted_pubkeys.items,
+        programdata_frame_pubkeys.items,
     )) |recorded| {
         logger.info().logf(
             "replay_warm_manifest_recorded status=pass root_slot={} target_slot={} pubkeys={}",
@@ -2088,7 +2482,7 @@ fn populateSlotReadFrame(
     const elapsed_ns = timer.read().asNanos();
     metrics.slot_read_frame_time.observe(elapsed_ns);
     logger.info().logf(
-        "slot_read_frame slot={} time={D} account_refs={} unique_pubkeys={} preload_pubkeys={} readonly_pubkeys={} writable_included_pubkeys={} writable_skipped_pubkeys={} writable_hot_min_refs={} writable_hot_max_pubkeys={} writable_hot_candidates={} unrooted_skipped_pubkeys={} unrooted_preload_pubkeys={} unrooted_accounts_loaded={} unrooted_accounts_missing={} tombstone_pubkeys={} compressed_pubkeys={} missing_pubkeys={} unique_chunks={} chunks_hot_before_load={} chunks_cold_before_load={} chunks_decoded={} chunks_cached={} accounts_loaded={} accounts_cached={} accounts_borrowed={} accounts_skipped={}",
+        "slot_read_frame slot={} time={D} account_refs={} unique_pubkeys={} preload_pubkeys={} readonly_pubkeys={} writable_included_pubkeys={} writable_skipped_pubkeys={} writable_hot_min_refs={} writable_hot_max_pubkeys={} writable_hot_candidates={} continuing_partial_slot={} batch_unrooted={} unrooted_skipped_pubkeys={} unrooted_preload_pubkeys={} unrooted_accounts_loaded={} unrooted_accounts_missing={} tombstone_pubkeys={} compressed_pubkeys={} missing_pubkeys={} unique_chunks={} chunks_hot_before_load={} chunks_cold_before_load={} chunks_decoded={} chunks_cached={} accounts_loaded={} accounts_cached={} accounts_borrowed={} accounts_skipped={}",
         .{
             slot,
             elapsed_ns,
@@ -2101,6 +2495,8 @@ fn populateSlotReadFrame(
             writable_min_refs,
             writable_max_pubkeys,
             writable_hot_candidates,
+            continuing_partial_slot,
+            batch_unrooted,
             unrooted_skipped,
             unrooted_result.resolved,
             unrooted_accounts_loaded,
@@ -2146,13 +2542,39 @@ fn populateSlotReadFrame(
         },
     );
     logger.info().logf(
-        "slot_read_frame_phases slot={} total={D} collect_needs={D} select_pubkeys={D} unrooted_preload={D} frame_filter={D} chunk_hotness={D} compressed_load={D} tombstone_fill={D} programdata_collect={D} programdata_data_len={D} programdata_unrooted={D} programdata_filter={D} programdata_compressed_load={D} programdata_tombstone_fill={D}",
+        "slot_read_frame_rooted_overlay slot={} scope=main pubkeys={} resolved={} loaded={} tombstones={} filter={D} load={D}",
+        .{
+            slot,
+            rooted_overlay_result.pubkeys,
+            rooted_overlay_result.resolved,
+            rooted_overlay_accounts_loaded,
+            rooted_overlay_result.tombstones,
+            rooted_overlay_filter_ns,
+            rooted_overlay_load_ns,
+        },
+    );
+    logger.info().logf(
+        "slot_read_frame_rooted_overlay slot={} scope=programdata pubkeys={} resolved={} loaded={} tombstones={} filter={D} load={D}",
+        .{
+            slot,
+            programdata_rooted_overlay_result.pubkeys,
+            programdata_rooted_overlay_result.resolved,
+            programdata_rooted_overlay_accounts_loaded,
+            programdata_rooted_overlay_result.tombstones,
+            programdata_rooted_overlay_filter_ns,
+            programdata_rooted_overlay_load_ns,
+        },
+    );
+    logger.info().logf(
+        "slot_read_frame_phases slot={} total={D} collect_needs={D} select_pubkeys={D} unrooted_preload={D} rooted_overlay_filter={D} rooted_overlay_load={D} frame_filter={D} chunk_hotness={D} compressed_load={D} tombstone_fill={D} programdata_collect={D} programdata_data_len={D} programdata_unrooted={D} programdata_rooted_overlay_filter={D} programdata_rooted_overlay_load={D} programdata_filter={D} programdata_compressed_load={D} programdata_tombstone_fill={D}",
         .{
             slot,
             elapsed_ns,
             collect_needs_ns,
             select_pubkeys_ns,
             unrooted_preload_ns,
+            rooted_overlay_filter_ns,
+            rooted_overlay_load_ns,
             frame_filter_ns,
             chunk_hotness_ns,
             compressed_load_ns,
@@ -2160,6 +2582,8 @@ fn populateSlotReadFrame(
             programdata_collect_ns,
             programdata_data_len_ns,
             programdata_unrooted_ns,
+            programdata_rooted_overlay_filter_ns,
+            programdata_rooted_overlay_load_ns,
             programdata_filter_ns,
             programdata_compressed_load_ns,
             programdata_tombstone_fill_ns,
@@ -2167,6 +2591,161 @@ fn populateSlotReadFrame(
     );
     logSlotReadFrameCompressedPhases(logger, slot, "main", result);
     logSlotReadFrameCompressedPhases(logger, slot, "programdata", programdata_result);
+}
+
+fn preloadSlotReadFrameUnrootedAccounts(
+    allocator: Allocator,
+    account_reader: sig.accounts_db.SlotAccountReader,
+    pubkeys: []const Pubkey,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+) !sig.accounts_db.Unrooted.BatchLoadResult {
+    return account_reader.batchLoadUnrootedAccounts(allocator, pubkeys, accounts);
+}
+
+fn preloadSlotReadFrameRootedOverlayAccounts(
+    allocator: Allocator,
+    account_reader: sig.accounts_db.SlotAccountReader,
+    pubkeys: []const Pubkey,
+    accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+) !sig.accounts_db.Rooted.BatchLoadOverlayResult {
+    return account_reader.batchLoadRootedOverlayAccounts(allocator, pubkeys, accounts);
+}
+
+test "slot read frame preload preserves full-fork unrooted precedence" {
+    const allocator = std.testing.allocator;
+    var test_context = try sig.accounts_db.Db.initTest(allocator);
+    defer test_context.deinit();
+
+    const parent_slot: Slot = 10;
+    const current_slot: Slot = 11;
+    const parent_only: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    const current_override: Pubkey = .parse("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk");
+    const current_tombstone: Pubkey = .parse("7EqfdGiB5UZgLWc1U9xYbKdy9Ky9NoYcMbEwUq9aAWR6");
+
+    try test_context.db.put(parent_slot, parent_only, .{
+        .data = &.{},
+        .executable = false,
+        .lamports = 10,
+        .owner = .ZEROES,
+        .rent_epoch = 0,
+    });
+    try test_context.db.put(parent_slot, current_override, .{
+        .data = &.{},
+        .executable = false,
+        .lamports = 20,
+        .owner = .ZEROES,
+        .rent_epoch = 0,
+    });
+    try test_context.db.put(current_slot, current_override, .{
+        .data = &.{},
+        .executable = false,
+        .lamports = 21,
+        .owner = .ZEROES,
+        .rent_epoch = 0,
+    });
+    try test_context.db.put(parent_slot, current_tombstone, .{
+        .data = &.{},
+        .executable = false,
+        .lamports = 30,
+        .owner = .ZEROES,
+        .rent_epoch = 0,
+    });
+    try test_context.db.put(current_slot, current_tombstone, .EMPTY);
+
+    var ancestors = try Ancestors.initWithSlots(
+        allocator,
+        &.{ parent_slot, current_slot },
+    );
+    defer ancestors.deinit(allocator);
+
+    var accounts: sig.utils.collections.PubkeyMap(AccountSharedData) = .{};
+    defer {
+        for (accounts.values()) |*account| account.deinit(allocator);
+        accounts.deinit(allocator);
+    }
+
+    const result = try preloadSlotReadFrameUnrootedAccounts(
+        allocator,
+        .{ .accounts_db = .{ &test_context.db, &ancestors } },
+        &.{ parent_only, current_override, current_tombstone },
+        &accounts,
+    );
+
+    try std.testing.expectEqual(@as(u64, 3), result.resolved);
+    try std.testing.expectEqual(@as(u64, 2), result.loaded);
+    try std.testing.expectEqual(@as(u64, 1), result.tombstones);
+    try std.testing.expectEqual(@as(u64, 10), accounts.get(parent_only).?.lamports);
+    try std.testing.expectEqual(@as(u64, 21), accounts.get(current_override).?.lamports);
+    try std.testing.expectEqual(@as(u64, 0), accounts.get(current_tombstone).?.lamports);
+}
+
+test "slot read frame preload preserves unrooted then rooted-overlay precedence" {
+    const allocator = std.testing.allocator;
+    var test_context = try sig.accounts_db.Db.initTest(allocator);
+    defer test_context.deinit();
+
+    const unrooted_winner: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    const rooted_value: Pubkey = .parse("Fd7btgySsrjuo25CJCj7oE7VPMyezDhnx7pZkj2v69Nk");
+    const rooted_tombstone: Pubkey = .parse("7EqfdGiB5UZgLWc1U9xYbKdy9Ky9NoYcMbEwUq9aAWR6");
+    const compressed_fallback: Pubkey = .parse("9xQeWvG816bUx9EPjHmaT23yvVM3PjH7GhUVyKDU9rhw");
+
+    test_context.db.rooted.put(unrooted_winner, 9, .{
+        .data = &.{},
+        .executable = false,
+        .lamports = 90,
+        .owner = .ZEROES,
+        .rent_epoch = 0,
+    });
+    test_context.db.rooted.put(rooted_value, 9, .{
+        .data = &.{},
+        .executable = false,
+        .lamports = 40,
+        .owner = .ZEROES,
+        .rent_epoch = 0,
+    });
+    test_context.db.rooted.put(rooted_tombstone, 9, .EMPTY);
+
+    var accounts: sig.utils.collections.PubkeyMap(AccountSharedData) = .{};
+    defer {
+        for (accounts.values()) |*account| account.deinit(allocator);
+        accounts.deinit(allocator);
+    }
+    try accounts.put(allocator, unrooted_winner, .{
+        .data = try allocator.dupe(u8, &.{}),
+        .executable = false,
+        .lamports = 100,
+        .owner = .ZEROES,
+        .rent_epoch = 0,
+    });
+
+    const selected = [_]Pubkey{
+        unrooted_winner,
+        rooted_value,
+        rooted_tombstone,
+        compressed_fallback,
+    };
+    var rooted_overlay_pubkeys: std.ArrayListUnmanaged(Pubkey) = .{};
+    defer rooted_overlay_pubkeys.deinit(allocator);
+    for (selected) |pubkey| {
+        if (!accounts.contains(pubkey)) try rooted_overlay_pubkeys.append(allocator, pubkey);
+    }
+
+    var ancestors = try Ancestors.initWithSlots(allocator, &.{10});
+    defer ancestors.deinit(allocator);
+    const result = try preloadSlotReadFrameRootedOverlayAccounts(
+        allocator,
+        .{ .accounts_db = .{ &test_context.db, &ancestors } },
+        rooted_overlay_pubkeys.items,
+        &accounts,
+    );
+
+    try std.testing.expectEqual(@as(u64, 3), result.pubkeys);
+    try std.testing.expectEqual(@as(u64, 2), result.resolved);
+    try std.testing.expectEqual(@as(u64, 1), result.tombstones);
+    try std.testing.expectEqual(@as(u64, 100), accounts.get(unrooted_winner).?.lamports);
+    try std.testing.expectEqual(@as(u64, 40), accounts.get(rooted_value).?.lamports);
+    try std.testing.expectEqual(@as(u64, 0), accounts.get(rooted_tombstone).?.lamports);
+    try std.testing.expect(!accounts.contains(compressed_fallback));
 }
 
 fn logSlotReadFrameCompressedPhases(

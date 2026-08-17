@@ -196,6 +196,13 @@ pub fn SharedHashMapDB(comptime column_families: []const ColumnFamily) type {
             _ = end;
         }
 
+        pub fn compactRange(
+            _: *Self,
+            comptime _: ColumnFamily,
+            _: anytype,
+            _: anytype,
+        ) anyerror!void {}
+
         pub fn initWriteBatch(self: *Self) Allocator.Error!WriteBatch {
             const executed = try self.fast_allocator.create(bool);
             executed.* = false;

@@ -18,6 +18,8 @@ const LtHash = sig.core.hash.LtHash;
 const Manifest = @import("data.zig").Manifest;
 const Pubkey = sig.core.Pubkey;
 const RentCollector = sig.core.RentCollector;
+const SlotConstants = sig.core.SlotConstants;
+const SlotState = sig.core.SlotState;
 const StakeHistory = sig.runtime.sysvar.StakeHistory;
 const Stakes = sig.core.Stakes;
 const StakeStateV2 = sig.runtime.program.stake.state.StakeStateV2;
@@ -531,6 +533,18 @@ pub const ReducedCheckpoint = struct {
         self.bank_extra.deinit(allocator);
     }
 
+    pub fn clone(
+        self: *const ReducedCheckpoint,
+        allocator: Allocator,
+    ) Allocator.Error!ReducedCheckpoint {
+        const bank_fields = try self.bank_fields.clone(allocator);
+        errdefer bank_fields.deinit(allocator);
+        return .{
+            .bank_fields = bank_fields,
+            .bank_extra = try self.bank_extra.clone(allocator),
+        };
+    }
+
     pub fn fromManifest(
         allocator: Allocator,
         manifest: *const Manifest,
@@ -538,6 +552,79 @@ pub const ReducedCheckpoint = struct {
         return .{
             .bank_fields = try .fromBankFields(allocator, &manifest.bank_fields),
             .bank_extra = try .fromExtraFields(allocator, &manifest.bank_extra),
+        };
+    }
+
+    /// Builds restart metadata from a frozen, rooted replay slot while retaining
+    /// the snapshot-scoped constants and epoch-stakes payload from `template`.
+    /// Epoch-boundary rollover is intentionally rejected until the live epoch
+    /// tracker can be serialized into the reduced schema.
+    pub fn fromFrozenReplaySlot(
+        allocator: Allocator,
+        template: *const ReducedCheckpoint,
+        slot: sig.core.Slot,
+        constants: *const SlotConstants,
+        state: *SlotState,
+        hard_forks: *const HardForks,
+    ) !ReducedCheckpoint {
+        if (!state.isFrozen()) return error.RollingCheckpointSlotNotFrozen;
+
+        const epoch = template.bank_fields.epoch_schedule.getEpoch(slot);
+        if (epoch != template.bank_fields.epoch) {
+            return error.RollingCheckpointEpochBoundaryUnsupported;
+        }
+
+        const hash = state.hash.readCopy() orelse
+            return error.RollingCheckpointSlotNotFrozen;
+        const accounts_lt_hash = state.accounts_lt_hash.readCopy() orelse
+            return error.RollingCheckpointMissingLtHash;
+
+        const blockhash_queue = blk: {
+            var guard = state.blockhash_queue.read();
+            defer guard.unlock();
+            break :blk try guard.get().clone(allocator);
+        };
+        errdefer blockhash_queue.deinit(allocator);
+
+        const ancestors = try constants.ancestors.clone(allocator);
+        errdefer ancestors.deinit(allocator);
+
+        const cloned_hard_forks = try hard_forks.clone(allocator);
+        errdefer cloned_hard_forks.deinit(allocator);
+
+        var bank_extra = try template.bank_extra.clone(allocator);
+        errdefer bank_extra.deinit(allocator);
+        bank_extra.accounts_lt_hash = accounts_lt_hash;
+
+        return .{
+            .bank_fields = .{
+                .blockhash_queue = blockhash_queue,
+                .ancestors = ancestors,
+                .hash = hash,
+                .parent_hash = constants.parent_hash,
+                .parent_slot = constants.parent_slot,
+                .hard_forks = cloned_hard_forks,
+                .transaction_count = state.transaction_count.load(.monotonic),
+                .tick_height = state.tick_height.load(.monotonic),
+                .signature_count = state.signature_count.load(.monotonic),
+                .capitalization = state.capitalization.load(.monotonic),
+                .max_tick_height = constants.max_tick_height,
+                .hashes_per_tick = template.bank_fields.hashes_per_tick,
+                .ticks_per_slot = template.bank_fields.ticks_per_slot,
+                .ns_per_slot = template.bank_fields.ns_per_slot,
+                .genesis_creation_time = template.bank_fields.genesis_creation_time,
+                .slots_per_year = template.bank_fields.slots_per_year,
+                .slot = slot,
+                .epoch = epoch,
+                .block_height = constants.block_height,
+                .collector_id = constants.collector_id,
+                .fee_rate_governor = constants.fee_rate_governor,
+                .collected_rent = state.collected_rent.load(.monotonic),
+                .rent_collector = constants.rent_collector,
+                .epoch_schedule = template.bank_fields.epoch_schedule,
+                .inflation = constants.inflation,
+            },
+            .bank_extra = bank_extra,
         };
     }
 
@@ -590,6 +677,20 @@ pub const ReducedCheckpoint = struct {
         var writer = file.writer(&write_buf);
         try bincode.write(&writer.interface, self.*, .{});
         try writer.end();
+        try file.sync();
+    }
+
+    pub fn writeToFilePathAtomic(
+        self: *const ReducedCheckpoint,
+        allocator: Allocator,
+        path: []const u8,
+    ) !void {
+        const next_path = try std.fmt.allocPrint(allocator, "{s}.next", .{path});
+        defer allocator.free(next_path);
+        errdefer std.fs.cwd().deleteFile(next_path) catch {};
+
+        try self.writeToFilePath(next_path);
+        try std.fs.cwd().rename(next_path, path);
     }
 };
 
@@ -794,4 +895,83 @@ test "writeManifestToFilePath persists reduced checkpoint metadata" {
     try std.testing.expectEqual(manifest.bank_fields.slot, checkpoint.bank_fields.slot);
     try std.testing.expectEqual(manifest.bank_fields.parent_slot, checkpoint.bank_fields.parent_slot);
     try std.testing.expect(manifest.bank_extra.accounts_lt_hash.eql(checkpoint.bank_extra.accounts_lt_hash));
+}
+
+test "ReducedCheckpoint rolls a frozen replay slot and replaces atomically" {
+    const allocator = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(314_159);
+    const random = prng.random();
+
+    var bank_fields = try BankFields.initRandom(allocator, random, 3);
+    defer bank_fields.deinit(allocator);
+
+    var lt_hash: LtHash = undefined;
+    random.bytes(std.mem.asBytes(&lt_hash));
+    var manifest: Manifest = .{
+        .bank_fields = bank_fields,
+        .accounts_db_fields = .{
+            .file_map = .{},
+            .stored_meta_write_version = 0,
+            .slot = bank_fields.slot,
+            .bank_hash_info = .{ .stats = .zero_init },
+            .rooted_slots = &.{},
+            .rooted_slot_hashes = &.{},
+        },
+        .bank_extra = .{
+            .lamports_per_signature = 0,
+            .snapshot_persistence = null,
+            .epoch_accounts_hash = null,
+            .versioned_epoch_stakes = .{},
+            .accounts_lt_hash = lt_hash,
+        },
+    };
+
+    var template = try ReducedCheckpoint.fromManifest(allocator, &manifest);
+    defer template.deinit(allocator);
+    var constants = try SlotConstants.fromBankFields(
+        allocator,
+        &bank_fields,
+        .ALL_DISABLED,
+    );
+    defer constants.deinit(allocator);
+    var state = try SlotState.fromBankFieldsForTest(allocator, &bank_fields, lt_hash);
+    defer state.deinit(allocator);
+
+    var rolled = try ReducedCheckpoint.fromFrozenReplaySlot(
+        allocator,
+        &template,
+        bank_fields.slot,
+        &constants,
+        &state,
+        &bank_fields.hard_forks,
+    );
+    defer rolled.deinit(allocator);
+
+    try std.testing.expectEqual(bank_fields.slot, rolled.bank_fields.slot);
+    try std.testing.expectEqual(bank_fields.parent_slot, rolled.bank_fields.parent_slot);
+    try std.testing.expectEqual(bank_fields.block_height, rolled.bank_fields.block_height);
+    try std.testing.expect(bank_fields.hash.eql(rolled.bank_fields.hash));
+    try std.testing.expect(lt_hash.eql(rolled.bank_extra.accounts_lt_hash));
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const tmp_path = try tmp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(tmp_path);
+    const checkpoint_path = try std.fs.path.join(
+        allocator,
+        &.{ tmp_path, "rolling-reduced-checkpoint.bin" },
+    );
+    defer allocator.free(checkpoint_path);
+
+    try rolled.writeToFilePathAtomic(allocator, checkpoint_path);
+    rolled.bank_fields.block_height +%= 1;
+    try rolled.writeToFilePathAtomic(allocator, checkpoint_path);
+
+    var loaded = try ReducedCheckpoint.readFromFilePath(allocator, checkpoint_path);
+    defer loaded.deinit(allocator);
+    try std.testing.expectEqual(rolled.bank_fields.block_height, loaded.bank_fields.block_height);
+
+    const next_path = try std.fmt.allocPrint(allocator, "{s}.next", .{checkpoint_path});
+    defer allocator.free(next_path);
+    try std.testing.expectError(error.FileNotFound, std.fs.cwd().access(next_path, .{}));
 }

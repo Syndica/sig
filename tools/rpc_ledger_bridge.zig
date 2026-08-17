@@ -15,10 +15,15 @@ const schema = sig.ledger.schema.schema;
 const DATA_SHRED_CAPACITY = sig.ledger.shred.DataShred.constants.payload_size -
     sig.ledger.shred.DataShred.constants.headers_size;
 const DATA_SHREDS_PER_FEC_SET: u32 = 32;
+const MERKLE_PROOF_ENTRY_SIZE: usize = 20;
 const MAX_RPC_ATTEMPTS = 6;
+const RPC_SKIPPED_SLOT_CODE: i64 = -32007;
+const RPC_LONG_TERM_STORAGE_SKIPPED_SLOT_CODE: i64 = -32009;
 
 const Args = struct {
     write: bool,
+    udp_target: ?[]const u8,
+    shred_version: ?u16,
     hashes_per_tick_override: ?u64,
     ledger_path: []const u8,
     rpc_url: []const u8,
@@ -98,11 +103,18 @@ pub fn main() !void {
         );
         return error.WriteRequiresHashesPerTick;
     }
+    if (args.udp_target != null and args.hashes_per_tick_override == null) {
+        std.debug.print(
+            "refusing_udp=true reason=missing_effective_hashes_per_tick genesis_hashes_per_tick={}\n",
+            .{genesis_hashes_per_tick},
+        );
+        return error.UdpRequiresHashesPerTick;
+    }
 
     std.debug.print(
         "mode={s} ledger_path={s} root_slot={} end_slot={} ticks_per_slot={} genesis_hashes_per_tick={} hashes_per_tick={} hashes_per_tick_source={s}\n",
         .{
-            if (args.write) "write" else "dry-run",
+            if (args.write) "write" else if (args.udp_target != null) "udp" else "dry-run",
             args.ledger_path,
             args.root_slot,
             args.end_slot,
@@ -127,19 +139,97 @@ pub fn main() !void {
     const root_block = root_response.block;
     std.debug.print("root_slot={} root_blockhash={f}\n", .{ args.root_slot, root_block.blockhash });
 
-    if (!args.write) {
-        try processDryRunSlot(
-            allocator,
-            &rpc_client,
-            genesis.ticks_per_slot,
-            hashes_per_tick,
-            args.root_slot + 1,
-            args.root_slot,
-            root_block.blockhash,
-        );
+    if (!args.write and args.udp_target == null) {
+        var slot = args.root_slot + 1;
+        while (slot <= args.end_slot) : (slot += 1) {
+            processDryRunSlot(
+                allocator,
+                &rpc_client,
+                genesis.ticks_per_slot,
+                hashes_per_tick,
+                slot,
+                args.root_slot,
+                root_block.blockhash,
+            ) catch |err| switch (err) {
+                error.SkippedSlot => {
+                    std.debug.print("slot={} dry_run=skipped rpc_status=skipped\n", .{slot});
+                    continue;
+                },
+                else => return err,
+            };
+            std.debug.print(
+                "dry_run=pass ledger_opened=false ledger_mutated=false probed_slot={} requested_end_slot={}\n",
+                .{ slot, args.end_slot },
+            );
+            return;
+        }
+        return error.NoProducedSlots;
+    }
+
+    if (args.udp_target) |target_text| {
+        const target = try sig.net.SocketAddr.parse(target_text);
+        var socket = try sig.net.UdpSocket.create(switch (target) {
+            .V4 => .ipv4,
+            .V6 => .ipv6,
+        });
+        defer socket.close();
+
+        var previous_slot = args.root_slot;
+        var previous_hash = root_block.blockhash;
+        var slot = args.root_slot + 1;
+        var sent_slots: usize = 0;
+        var skipped_slots: usize = 0;
+        var total_transactions: usize = 0;
+        var total_shreds: usize = 0;
+        var total_bytes: usize = 0;
+        var first_sent_slot: ?Slot = null;
+        while (slot <= args.end_slot) : (slot += 1) {
+            const stats = fetchBuildAndSendSlot(
+                allocator,
+                &rpc_client,
+                genesis.ticks_per_slot,
+                hashes_per_tick,
+                &socket,
+                target.toAddress(),
+                args.shred_version orelse return error.UdpRequiresShredVersion,
+                slot,
+                previous_slot,
+                previous_hash,
+            ) catch |err| switch (err) {
+                error.SkippedSlot => {
+                    skipped_slots += 1;
+                    std.debug.print(
+                        "slot={} udp=skipped rpc_status=skipped previous_produced_slot={}\n",
+                        .{ slot, previous_slot },
+                    );
+                    continue;
+                },
+                else => return err,
+            };
+            if (first_sent_slot == null) first_sent_slot = slot;
+            previous_slot = slot;
+            previous_hash = stats.blockhash;
+            sent_slots += 1;
+            total_transactions += stats.transaction_count;
+            total_shreds += stats.shred_count;
+            total_bytes += stats.sent_bytes;
+        }
+
         std.debug.print(
-            "dry_run=pass ledger_opened=false ledger_mutated=false probed_slots=1 requested_end_slot={}\n",
-            .{args.end_slot},
+            "bridge_udp=pass target={s} shred_version={} slots={} skipped_slots={} transactions={} data_shreds={} bytes={} first_slot={} last_slot={} requested_end_slot={} final_blockhash={f}\n",
+            .{
+                target_text,
+                args.shred_version.?,
+                sent_slots,
+                skipped_slots,
+                total_transactions,
+                total_shreds,
+                total_bytes,
+                first_sent_slot orelse return error.NoProducedSlots,
+                previous_slot,
+                args.end_slot,
+                previous_hash,
+            },
         );
         return;
     }
@@ -167,10 +257,12 @@ pub fn main() !void {
     var previous_hash = root_block.blockhash;
     var slot = args.root_slot + 1;
     var written_slots: usize = 0;
+    var skipped_slots: usize = 0;
     var total_transactions: usize = 0;
     var total_shreds: usize = 0;
+    var first_written_slot: ?Slot = null;
     while (slot <= args.end_slot) : (slot += 1) {
-        const stats = try fetchBuildAndInsertSlot(
+        const stats = fetchBuildAndInsertSlot(
             allocator,
             &rpc_client,
             genesis.ticks_per_slot,
@@ -179,7 +271,18 @@ pub fn main() !void {
             slot,
             previous_slot,
             previous_hash,
-        );
+        ) catch |err| switch (err) {
+            error.SkippedSlot => {
+                skipped_slots += 1;
+                std.debug.print(
+                    "slot={} insert=skipped rpc_status=skipped previous_produced_slot={}\n",
+                    .{ slot, previous_slot },
+                );
+                continue;
+            },
+            else => return err,
+        };
+        if (first_written_slot == null) first_written_slot = slot;
         previous_slot = slot;
         previous_hash = stats.blockhash;
         written_slots += 1;
@@ -188,12 +291,14 @@ pub fn main() !void {
     }
 
     std.debug.print(
-        "bridge_write=pass slots={} transactions={} data_shreds={} first_slot={} last_slot={} final_blockhash={f}\n",
+        "bridge_write=pass slots={} skipped_slots={} transactions={} data_shreds={} first_slot={} last_slot={} requested_end_slot={} final_blockhash={f}\n",
         .{
             written_slots,
+            skipped_slots,
             total_transactions,
             total_shreds,
-            args.root_slot + 1,
+            first_written_slot orelse return error.NoProducedSlots,
+            previous_slot,
             args.end_slot,
             previous_hash,
         },
@@ -202,16 +307,20 @@ pub fn main() !void {
 
 fn printUsage() void {
     std.debug.print(
-        "usage: rpc-ledger-bridge [--write] [--hashes-per-tick <count>] <ledger-path> <rpc-url> <genesis-path> <root-slot> <end-slot>\n" ++
+        "usage: rpc-ledger-bridge [--write | --udp-target <ip:port> --shred-version <version>] [--hashes-per-tick <count>] <ledger-path> <rpc-url> <genesis-path> <root-slot> <end-slot>\n" ++
             "  default: fetch and validate root+first slot without opening the ledger\n" ++
             "  --write: purge and replace root+1..end in an isolated clone path containing 'rpc-bridge'\n" ++
-            "  --hashes-per-tick: effective runtime-bank value; required with --write\n",
+            "  --udp-target: send canonical RPC transactions in synthetic data shreds to a live Sig UDP receiver\n" ++
+            "  --shred-version: required with --udp-target and must match the live cluster\n" ++
+            "  --hashes-per-tick: effective runtime-bank value; required with --write or --udp-target\n",
         .{},
     );
 }
 
 fn parseArgs(raw_args: []const []const u8) !Args {
     var write = false;
+    var udp_target: ?[]const u8 = null;
+    var shred_version: ?u16 = null;
     var hashes_per_tick_override: ?u64 = null;
     var positional: [5][]const u8 = undefined;
     var positional_count: usize = 0;
@@ -221,7 +330,25 @@ fn parseArgs(raw_args: []const []const u8) !Args {
         const arg = raw_args[arg_index];
         if (std.mem.eql(u8, arg, "--write")) {
             if (write) return error.DuplicateWriteFlag;
+            if (udp_target != null) return error.ConflictingOutputModes;
             write = true;
+            arg_index += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--udp-target")) {
+            if (udp_target != null) return error.DuplicateUdpTarget;
+            if (write) return error.ConflictingOutputModes;
+            arg_index += 1;
+            if (arg_index >= raw_args.len) return error.MissingUdpTarget;
+            udp_target = raw_args[arg_index];
+            arg_index += 1;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--shred-version")) {
+            if (shred_version != null) return error.DuplicateShredVersion;
+            arg_index += 1;
+            if (arg_index >= raw_args.len) return error.MissingShredVersion;
+            shred_version = try std.fmt.parseUnsigned(u16, raw_args[arg_index], 10);
             arg_index += 1;
             continue;
         }
@@ -249,9 +376,13 @@ fn parseArgs(raw_args: []const []const u8) !Args {
     const end_slot = try std.fmt.parseUnsigned(Slot, positional[4], 10);
     if (root_slot == std.math.maxInt(Slot)) return error.RootSlotOverflow;
     if (end_slot < root_slot + 1) return error.EmptyBridgeRange;
+    if (udp_target != null and shred_version == null) return error.UdpRequiresShredVersion;
+    if (udp_target == null and shred_version != null) return error.ShredVersionRequiresUdp;
 
     return .{
         .write = write,
+        .udp_target = udp_target,
+        .shred_version = shred_version,
         .hashes_per_tick_override = hashes_per_tick_override,
         .ledger_path = positional[0],
         .rpc_url = positional[1],
@@ -334,6 +465,15 @@ fn fetchBlock(
         if (envelope.result) |block| return .{ .arena = arena, .block = block };
 
         if (envelope.@"error") |rpc_error| {
+            if (isSkippedSlotRpcCode(rpc_error.code)) {
+                std.debug.print(
+                    "rpc_fetch_skipped slot={} rpc_code={} message={s}\n",
+                    .{ slot, rpc_error.code, rpc_error.message },
+                );
+                arena.deinit();
+                allocator.destroy(arena);
+                return error.SkippedSlot;
+            }
             std.debug.print(
                 "rpc_fetch_retry slot={} attempt={}/{} rpc_code={} message={s}\n",
                 .{ slot, attempt, MAX_RPC_ATTEMPTS, rpc_error.code, rpc_error.message },
@@ -350,6 +490,11 @@ fn fetchBlock(
         std.Thread.sleep(@as(u64, @intCast(@min(attempt, 5))) * std.time.ns_per_s);
     }
     unreachable;
+}
+
+fn isSkippedSlotRpcCode(code: i64) bool {
+    return code == RPC_SKIPPED_SLOT_CODE or
+        code == RPC_LONG_TERM_STORAGE_SKIPPED_SLOT_CODE;
 }
 
 fn processDryRunSlot(
@@ -372,9 +517,14 @@ fn processDryRunSlot(
     );
     defer deinitTransactions(allocator, transactions);
 
+    const expected_ticks = try expectedTicksForProducedSlot(
+        ticks_per_slot,
+        slot,
+        expected_parent_slot,
+    );
     const entries = try buildSyntheticEntries(
         allocator,
-        ticks_per_slot,
+        expected_ticks,
         hashes_per_tick,
         expected_previous_hash,
         block.blockhash,
@@ -388,15 +538,19 @@ fn processDryRunSlot(
         allocator,
         slot,
         expected_parent_slot,
+        0,
+        0,
+        DATA_SHREDS_PER_FEC_SET,
         serialized_entries,
     );
     defer deinitShreds(allocator, shreds);
 
     std.debug.print(
-        "slot={} dry_run=pass parent={} transactions={} entries={} ticks={} serialized_entry_bytes={} data_shreds={} previous_blockhash={f} blockhash={f}\n",
+        "slot={} dry_run=pass parent={} slot_span={} transactions={} entries={} ticks={} serialized_entry_bytes={} data_shreds={} previous_blockhash={f} blockhash={f}\n",
         .{
             slot,
             block.parentSlot,
+            slot - block.parentSlot,
             transactions.len,
             entries.len,
             sig.core.entry.tickCount(entries),
@@ -412,7 +566,103 @@ const InsertStats = struct {
     blockhash: Hash,
     transaction_count: usize,
     shred_count: usize,
+    sent_bytes: usize = 0,
 };
+
+fn fetchBuildAndSendSlot(
+    allocator: Allocator,
+    rpc_client: *sig.rpc.Client,
+    ticks_per_slot: u64,
+    hashes_per_tick: u64,
+    socket: *const sig.net.UdpSocket,
+    target: std.net.Address,
+    shred_version: u16,
+    slot: Slot,
+    expected_parent_slot: Slot,
+    expected_previous_hash: Hash,
+) !InsertStats {
+    var timer = try std.time.Timer.start();
+    var response = try fetchBlock(rpc_client, slot, true);
+    defer response.deinit();
+    const fetch_ms = timer.read() / std.time.ns_per_ms;
+    const block = response.block;
+    try validateBlockChain(slot, block, expected_parent_slot, expected_previous_hash);
+
+    const transactions = try decodeTransactions(
+        allocator,
+        block.transactions orelse return error.MissingTransactions,
+    );
+    defer deinitTransactions(allocator, transactions);
+
+    const expected_ticks = try expectedTicksForProducedSlot(
+        ticks_per_slot,
+        slot,
+        expected_parent_slot,
+    );
+    const entries = try buildSyntheticEntries(
+        allocator,
+        expected_ticks,
+        hashes_per_tick,
+        expected_previous_hash,
+        block.blockhash,
+        transactions,
+    );
+    defer allocator.free(entries);
+
+    const serialized_entries = try sig.bincode.writeAlloc(allocator, entries, .{});
+    defer allocator.free(serialized_entries);
+    const shreds = try buildDataShreds(
+        allocator,
+        slot,
+        expected_parent_slot,
+        shred_version,
+        0,
+        1,
+        serialized_entries,
+    );
+    defer deinitShreds(allocator, shreds);
+
+    var sent_bytes: usize = 0;
+    for (shreds, 0..) |shred, i| {
+        const payload = shred.payload();
+        _ = sig.ledger.shred.layout.merkleRoot(payload) orelse
+            return error.MissingUdpMerkleRoot;
+        const sent = try socket.sendTo(target, payload);
+        if (sent != payload.len) return error.PartialUdpShredSend;
+        sent_bytes += sent;
+
+        // Avoid overflowing the live receiver's packet batch with a single local burst.
+        if ((i + 1) % 128 == 0) std.Thread.sleep(std.time.ns_per_ms);
+    }
+
+    const total_ms = timer.read() / std.time.ns_per_ms;
+    std.debug.print(
+        "slot={} udp=sent parent={} slot_span={} shred_version={} transactions={} entries={} ticks={} serialized_entry_bytes={} data_shreds={} bytes={} fetch_ms={} total_ms={} previous_blockhash={f} blockhash={f}\n",
+        .{
+            slot,
+            block.parentSlot,
+            slot - block.parentSlot,
+            shred_version,
+            transactions.len,
+            entries.len,
+            sig.core.entry.tickCount(entries),
+            serialized_entries.len,
+            shreds.len,
+            sent_bytes,
+            fetch_ms,
+            total_ms,
+            block.previousBlockhash,
+            block.blockhash,
+        },
+    );
+
+    return .{
+        .blockhash = block.blockhash,
+        .transaction_count = transactions.len,
+        .shred_count = shreds.len,
+        .sent_bytes = sent_bytes,
+    };
+}
 
 fn fetchBuildAndInsertSlot(
     allocator: Allocator,
@@ -437,9 +687,14 @@ fn fetchBuildAndInsertSlot(
     );
     defer deinitTransactions(allocator, transactions);
 
+    const expected_ticks = try expectedTicksForProducedSlot(
+        ticks_per_slot,
+        slot,
+        expected_parent_slot,
+    );
     const entries = try buildSyntheticEntries(
         allocator,
-        ticks_per_slot,
+        expected_ticks,
         hashes_per_tick,
         expected_previous_hash,
         block.blockhash,
@@ -453,6 +708,9 @@ fn fetchBuildAndInsertSlot(
         allocator,
         slot,
         expected_parent_slot,
+        0,
+        0,
+        DATA_SHREDS_PER_FEC_SET,
         serialized_entries,
     );
     defer deinitShreds(allocator, shreds);
@@ -479,10 +737,11 @@ fn fetchBuildAndInsertSlot(
 
     const total_ms = timer.read() / std.time.ns_per_ms;
     std.debug.print(
-        "slot={} insert=pass parent={} transactions={} entries={} ticks={} serialized_entry_bytes={} data_shreds={} completed_sets={} duplicates={} fetch_ms={} total_ms={} previous_blockhash={f} blockhash={f}\n",
+        "slot={} insert=pass parent={} slot_span={} transactions={} entries={} ticks={} serialized_entry_bytes={} data_shreds={} completed_sets={} duplicates={} fetch_ms={} total_ms={} previous_blockhash={f} blockhash={f}\n",
         .{
             slot,
             block.parentSlot,
+            slot - block.parentSlot,
             transactions.len,
             entries.len,
             sig.core.entry.tickCount(entries),
@@ -558,7 +817,7 @@ fn deinitTransactions(allocator: Allocator, transactions: []Transaction) void {
 
 fn buildSyntheticEntries(
     allocator: Allocator,
-    ticks_per_slot_value: u64,
+    expected_tick_count_value: u64,
     hashes_per_tick: u64,
     previous_blockhash: Hash,
     official_blockhash: Hash,
@@ -566,16 +825,16 @@ fn buildSyntheticEntries(
 ) ![]Entry {
     if (transactions.len == 0) return error.EmptyTransactionBlock;
     if (hashes_per_tick == 0) return error.HashesPerTickDisabled;
-    const ticks_per_slot: usize = @intCast(ticks_per_slot_value);
-    if (ticks_per_slot == 0) return error.TicksPerSlotDisabled;
+    const expected_tick_count: usize = @intCast(expected_tick_count_value);
+    if (expected_tick_count == 0) return error.TicksPerSlotDisabled;
     const hash_count: usize = @intCast(hashes_per_tick);
 
-    const entries = try allocator.alloc(Entry, ticks_per_slot + 1);
+    const entries = try allocator.alloc(Entry, expected_tick_count + 1);
     errdefer allocator.free(entries);
     var current_hash = previous_blockhash;
     var entry_index: usize = 0;
 
-    for (0..ticks_per_slot - 1) |_| {
+    for (0..expected_tick_count - 1) |_| {
         Hash.hashRepeated(&current_hash, &current_hash, hash_count);
         entries[entry_index] = .{
             .num_hashes = hashes_per_tick,
@@ -611,7 +870,7 @@ fn buildSyntheticEntries(
         hashes_per_tick,
     )) return error.InvalidSyntheticTickHashCount;
     if (tick_hash_count != 0) return error.IncompleteSyntheticTickHashCount;
-    if (sig.core.entry.tickCount(entries) != ticks_per_slot_value)
+    if (sig.core.entry.tickCount(entries) != expected_tick_count_value)
         return error.InvalidSyntheticTickCount;
     if (!sig.core.entry.verifyPoh(entries, previous_blockhash))
         return error.InvalidSyntheticPoh;
@@ -621,10 +880,23 @@ fn buildSyntheticEntries(
     return entries;
 }
 
+fn expectedTicksForProducedSlot(
+    ticks_per_slot: u64,
+    slot: Slot,
+    parent_slot: Slot,
+) !u64 {
+    if (slot <= parent_slot) return error.InvalidParentSlotOffset;
+    return std.math.mul(u64, ticks_per_slot, slot - parent_slot) catch
+        return error.TickCountOverflow;
+}
+
 fn buildDataShreds(
     allocator: Allocator,
     slot: Slot,
     parent_slot: Slot,
+    shred_version: u16,
+    proof_size: u8,
+    data_shreds_per_fec_set: u32,
     serialized_entries: []const u8,
 ) ![]Shred {
     if (serialized_entries.len == 0) return error.EmptySerializedEntries;
@@ -632,9 +904,16 @@ fn buildDataShreds(
     const parent_offset = std.math.cast(u16, parent_offset_value) orelse
         return error.ParentSlotOffsetOverflow;
     if (parent_offset == 0) return error.InvalidParentSlotOffset;
+    if (data_shreds_per_fec_set == 0) return error.InvalidFecSetSize;
 
-    const shred_count = (serialized_entries.len + DATA_SHRED_CAPACITY - 1) /
-        DATA_SHRED_CAPACITY;
+    const proof_bytes = std.math.mul(usize, proof_size, MERKLE_PROOF_ENTRY_SIZE) catch
+        return error.InvalidProofSize;
+    const data_shred_capacity = std.math.sub(usize, DATA_SHRED_CAPACITY, proof_bytes) catch
+        return error.InvalidProofSize;
+    if (data_shred_capacity == 0) return error.InvalidProofSize;
+
+    const shred_count = (serialized_entries.len + data_shred_capacity - 1) /
+        data_shred_capacity;
     if (shred_count > sig.ledger.shred.DataShred.constants.max_per_slot)
         return error.TooManyDataShreds;
 
@@ -645,14 +924,14 @@ fn buildDataShreds(
 
     const variant = sig.ledger.shred.ShredVariant{
         .shred_type = .data,
-        .proof_size = 0,
+        .proof_size = proof_size,
         .chained = false,
         .resigned = false,
     };
 
     for (shreds, 0..) |*out, i| {
-        const start = i * DATA_SHRED_CAPACITY;
-        const end = @min(serialized_entries.len, start + DATA_SHRED_CAPACITY);
+        const start = i * data_shred_capacity;
+        const end = @min(serialized_entries.len, start + data_shred_capacity);
         const data = serialized_entries[start..end];
         const is_last = i + 1 == shred_count;
         const index: u32 = @intCast(i);
@@ -661,9 +940,9 @@ fn buildDataShreds(
             .variant = variant,
             .slot = slot,
             .index = index,
-            .version = 0,
-            .erasure_set_index = (index / DATA_SHREDS_PER_FEC_SET) *
-                DATA_SHREDS_PER_FEC_SET,
+            .version = shred_version,
+            .erasure_set_index = (index / data_shreds_per_fec_set) *
+                data_shreds_per_fec_set,
         };
         const data_header = sig.ledger.shred.DataHeader{
             .parent_slot_offset = parent_offset,

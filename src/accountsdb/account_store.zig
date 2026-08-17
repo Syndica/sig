@@ -716,6 +716,61 @@ pub const SlotAccountReader = union(enum) {
         };
     }
 
+    /// Loads only accounts retained in the recent rooted SQLite overlay. This
+    /// must run after fork-visible unrooted loading and before compressed cold
+    /// state so writes moved across the rooting boundary retain precedence.
+    pub fn batchLoadRootedOverlayAccounts(
+        self: SlotAccountReader,
+        allocator: std.mem.Allocator,
+        pubkeys: []const Pubkey,
+        accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    ) !accounts_db.Rooted.BatchLoadOverlayResult {
+        return switch (self) {
+            .accounts_db => |pair| try pair[0].rooted.batchLoadOverlayAccounts(
+                allocator,
+                pubkeys,
+                accounts,
+            ),
+            .cached_accounts_db => |tuple| try tuple[0].rooted.batchLoadOverlayAccounts(
+                allocator,
+                pubkeys,
+                accounts,
+            ),
+            else => .{ .pubkeys = @intCast(pubkeys.len) },
+        };
+    }
+
+    /// Loads only versions written in `slot`, without scanning the rest of the
+    /// fork. Slot initialization writes sysvars and rewards before transaction
+    /// execution, so a read frame must prefer these versions over rooted
+    /// compressed state even on the slot's first replay invocation.
+    pub fn batchLoadUnrootedAccountsAtSlot(
+        self: SlotAccountReader,
+        allocator: std.mem.Allocator,
+        slot: Slot,
+        pubkeys: []const Pubkey,
+        accounts: *sig.utils.collections.PubkeyMap(AccountSharedData),
+    ) !accounts_db.Unrooted.BatchLoadResult {
+        var current_slot_ancestors = try Ancestors.initWithSlots(allocator, &.{slot});
+        defer current_slot_ancestors.deinit(allocator);
+
+        return switch (self) {
+            .accounts_db => |pair| try pair[0].unrooted.batchLoad(
+                allocator,
+                pubkeys,
+                &current_slot_ancestors,
+                accounts,
+            ),
+            .cached_accounts_db => |tuple| try tuple[0].unrooted.batchLoad(
+                allocator,
+                pubkeys,
+                &current_slot_ancestors,
+                accounts,
+            ),
+            else => .{ .pubkeys = @intCast(pubkeys.len) },
+        };
+    }
+
     pub fn hasUnrootedAccount(self: SlotAccountReader, address: Pubkey) bool {
         return switch (self) {
             .accounts_db => |pair| pair[0].unrooted.get(address, pair[1]) != null,
@@ -1837,6 +1892,54 @@ test "put and get across competing forks" {
     try expectAccountFromStores(&stores, &fork_a, pk, asd_a.asAccount());
     try expectAccountFromStores(&stores, &fork_b, pk, asd_b.asAccount());
     try expectAccountFromStores(&stores, &fork_c, pk, asd_c.asAccount());
+}
+
+test "SlotAccountReader batch-loads only current-slot unrooted versions" {
+    const allocator = std.testing.allocator;
+
+    var test_state = try accounts_db.Db.initTest(allocator);
+    defer test_state.deinit();
+
+    const address: Pubkey = .parse("GBuP6xK2zcUHbQuUWM4gbBjom46AomsG8JzSp1bzJyn8");
+    const parent_slot: Slot = 10;
+    const current_slot: Slot = 11;
+    try test_state.db.put(parent_slot, address, .{
+        .data = &.{},
+        .executable = false,
+        .lamports = 10,
+        .owner = .ZEROES,
+        .rent_epoch = 0,
+    });
+    try test_state.db.put(current_slot, address, .{
+        .data = &.{},
+        .executable = false,
+        .lamports = 11,
+        .owner = .ZEROES,
+        .rent_epoch = 0,
+    });
+
+    var ancestors = try Ancestors.initWithSlots(
+        allocator,
+        &.{ parent_slot, current_slot },
+    );
+    defer ancestors.deinit(allocator);
+
+    var accounts: sig.utils.collections.PubkeyMap(AccountSharedData) = .{};
+    defer {
+        for (accounts.values()) |*account| account.deinit(allocator);
+        accounts.deinit(allocator);
+    }
+
+    const reader: SlotAccountReader = .{ .accounts_db = .{ &test_state.db, &ancestors } };
+    const result = try reader.batchLoadUnrootedAccountsAtSlot(
+        allocator,
+        parent_slot,
+        &.{address},
+        &accounts,
+    );
+
+    try std.testing.expectEqual(@as(u64, 1), result.resolved);
+    try std.testing.expectEqual(@as(u64, 10), accounts.get(address).?.lamports);
 }
 
 fn expectDbUnrootedPubkeysInSlot(

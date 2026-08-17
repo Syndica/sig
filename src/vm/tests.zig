@@ -49,7 +49,7 @@ fn testAsmWithMemory(
     var executable = try Executable.fromAsm(allocator, source, config);
     defer executable.deinit(allocator);
 
-    try executable.verify(&loader);
+    try executable.verify();
 
     const mutable = try allocator.dupe(u8, program_memory);
     defer allocator.free(mutable);
@@ -2382,7 +2382,7 @@ pub fn testElfWithSyscalls(
     var executable = try elf.load(allocator, bytes, &loader, config);
     defer executable.deinit(allocator);
 
-    try executable.verify(&loader);
+    try executable.verify();
 
     const stack_memory = try allocator.alloc(u8, config.stackSize());
     defer allocator.free(stack_memory);
@@ -2610,7 +2610,7 @@ fn testVerifyTextBytesWithSyscalls(
     );
     defer executable.deinit(allocator);
 
-    const result = executable.verify(&loader);
+    const result = executable.verify();
     try expectEqual(expected, result);
 }
 
@@ -2628,7 +2628,7 @@ fn testVerifyWithSyscalls(
     var executable = try Executable.fromAsm(allocator, source, config);
     defer executable.deinit(allocator);
 
-    const result = executable.verify(&loader);
+    const result = executable.verify();
     try expectEqual(expected, result);
 }
 

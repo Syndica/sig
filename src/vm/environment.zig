@@ -79,6 +79,10 @@ pub const Environment = struct {
                 .stricter_abi_and_runtime_constraints,
                 slot,
             ),
+            .allow_memory_region_zero = feature_set.active(
+                .enable_sbpf_v3_deployment_and_execution,
+                slot,
+            ),
             .minimum_version = min_sbpf_version,
             .maximum_version = max_sbpf_version,
         };

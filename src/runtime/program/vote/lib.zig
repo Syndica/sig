@@ -11,4 +11,7 @@ pub const vote_instruction = @import("instruction.zig");
 
 pub const VoteError = @import("error.zig").VoteError;
 pub const VoteAuthorize = state.VoteAuthorize;
-pub const execute = @import("execute.zig").execute;
+const execute_impl = @import("execute.zig");
+pub const execute = execute_impl.execute;
+pub const ReplayTowerSyncAttestation = execute_impl.ReplayTowerSyncAttestation;
+pub const takeReplayTowerSyncAttestation = execute_impl.takeReplayTowerSyncAttestation;

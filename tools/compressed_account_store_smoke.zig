@@ -9,6 +9,8 @@ const DEFAULT_ROOTED_DB = "/private/tmp/chimera-compressed-rooted-smoke/accounts
 
 const Args = struct {
     rooted_db: []u8,
+    pubkey: ?Pubkey = null,
+    print_data_base64: bool = false,
     sample_count: usize = 1000,
     print_samples: usize = 5,
     batch_size: usize = 0,
@@ -41,6 +43,45 @@ pub fn main() !void {
     if (!rooted.hasCompressedAccountStore()) return error.MissingCompressedAccountStore;
     if (rooted.count() != 0) return error.RootedSmokeDbMustBeEmpty;
     if (rooted.snapshotRefCount() != 0) return error.RootedSmokeDbMustNotHaveSnapshotRefs;
+
+    if (args.pubkey) |pubkey| {
+        const maybe_account = try rooted.get(allocator, pubkey);
+        var account = maybe_account orelse {
+            std.debug.print(
+                "compressed_account_store_query pubkey={s} status=missing\n",
+                .{pubkey.base58String().constSlice()},
+            );
+            return;
+        };
+        defer account.deinit(allocator);
+        const data_tag = if (account.data.len >= 1) account.data[0] else 0;
+        const data_u64_le = if (account.data.len >= 9)
+            std.mem.readInt(u64, account.data[1..9], .little)
+        else
+            0;
+        std.debug.print(
+            "compressed_account_store_query pubkey={s} status=found lamports={} data_len={} data_tag={} data_u64_le={} owner={s} executable={} rent_epoch={}\n",
+            .{
+                pubkey.base58String().constSlice(),
+                account.lamports,
+                account.data.len,
+                data_tag,
+                data_u64_le,
+                account.owner.base58String().constSlice(),
+                account.executable,
+                account.rent_epoch,
+            },
+        );
+        if (args.print_data_base64) {
+            const data = account.data;
+            const encoded_len = std.base64.standard.Encoder.calcSize(data.len);
+            const encoded = try allocator.alloc(u8, encoded_len);
+            defer allocator.free(encoded);
+            _ = std.base64.standard.Encoder.encode(encoded, data);
+            std.debug.print("compressed_account_store_query_data_base64={s}\n", .{encoded});
+        }
+        return;
+    }
 
     const samples = if (args.chunk_local)
         try rooted.compressedStoreSamplePubkeysFromChunks(allocator, args.sample_count, args.accounts_per_chunk)
@@ -202,6 +243,11 @@ fn parseArgs(allocator: std.mem.Allocator) !Args {
             i += 1;
             allocator.free(args.rooted_db);
             args.rooted_db = try allocator.dupe(u8, argv[i]);
+        } else if (std.mem.eql(u8, arg, "--pubkey") and i + 1 < argv.len) {
+            i += 1;
+            args.pubkey = try Pubkey.parseRuntime(argv[i]);
+        } else if (std.mem.eql(u8, arg, "--print-data-base64")) {
+            args.print_data_base64 = true;
         } else if (std.mem.eql(u8, arg, "--sample") and i + 1 < argv.len) {
             i += 1;
             args.sample_count = try std.fmt.parseInt(usize, argv[i], 10);
@@ -251,6 +297,7 @@ fn printHelp() void {
     std.debug.print(
         \\Usage:
         \\  zig build compressed_store_smoke -- --rooted-db /private/tmp/chimera-smoke/accounts.db --sample 1000
+        \\  zig build compressed_store_smoke -- --rooted-db /private/tmp/chimera-smoke/accounts.db --pubkey <base58-pubkey> --print-data-base64
         \\  zig build compressed_store_smoke -- --rooted-db /private/tmp/chimera-smoke/accounts.db --sample 16384 --batch-size 4096 --batch-only
         \\  zig build compressed_store_smoke -- --rooted-db /private/tmp/chimera-smoke/accounts.db --sample 16384 --batch-size 4096 --batch-only --chunk-local --accounts-per-chunk 16 --batch-repeats 2
         \\  zig build compressed_store_smoke -- --rooted-db /private/tmp/chimera-smoke/accounts.db --sample 131072 --lookup-only --lookup-repeats 5 --lookup-warmup-repeats 1

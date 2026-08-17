@@ -11,12 +11,16 @@ const Shred = sig.ledger.shred.Shred;
 const MISSING_DETAIL_LIMIT = 256;
 const INVALID_TX_DETAIL_LIMIT = 64;
 const SUMMARY_FORMAT_VERSION = "ledger-inspect-summary-v1";
+const REPAIR_BUNDLE_MAGIC = "CHRP0001";
+const REPAIR_PLAN_MAX_BYTES = 4 * 1024 * 1024;
 
 const InspectMode = enum {
     full,
     summary,
     tx_check,
     repair_plan,
+    export_repair_plan,
+    purge_compact_shreds,
 };
 
 pub fn main() !void {
@@ -32,19 +36,57 @@ pub fn main() !void {
         return;
     }
 
+    if (args.len > 1 and std.mem.eql(u8, args[1], "--export-repair-plan")) {
+        if (args.len != 5) {
+            std.debug.print(
+                "usage: ledger-inspect --export-repair-plan <ledger-path> <repair-plan-path> <output-bundle-path>\n",
+                .{},
+            );
+            return;
+        }
+        try exportRepairPlan(allocator, args[2], args[3], args[4]);
+        return;
+    }
+
+    if (args.len > 1 and std.mem.eql(u8, args[1], "--slot-bounds")) {
+        if (args.len != 3) {
+            std.debug.print("usage: ledger-inspect --slot-bounds <ledger-path>\n", .{});
+            return;
+        }
+        try rejectExternalVolumePath(args[2]);
+        var ledger = try Ledger.initReadOnly(
+            allocator,
+            sig.trace.Logger("ledger").noop,
+            args[2],
+            null,
+        );
+        defer ledger.deinit();
+        std.debug.print(
+            "slot_bounds ledger_path={s} lowest_slot={} highest_slot={?} max_root={}\n",
+            .{ args[2], try ledger.reader().lowestSlot(), try ledger.reader().highestSlot(), ledger.reader().maxRoot() },
+        );
+        return;
+    }
+
     const mode: InspectMode = if (args.len > 1 and std.mem.eql(u8, args[1], "--summary"))
         .summary
     else if (args.len > 1 and std.mem.eql(u8, args[1], "--tx-check"))
         .tx_check
     else if (args.len > 1 and std.mem.eql(u8, args[1], "--repair-plan"))
         .repair_plan
+    else if (args.len > 1 and std.mem.eql(u8, args[1], "--export-repair-plan"))
+        .export_repair_plan
+    else if (args.len > 1 and std.mem.eql(u8, args[1], "--purge-compact-shreds"))
+        .purge_compact_shreds
     else
         .full;
     const first_positional_arg: usize = if (mode == .full) 1 else 2;
 
     if (args.len < first_positional_arg + 3) {
         std.debug.print(
-            "usage: ledger-inspect [--summary|--tx-check|--repair-plan] <ledger-path> <start-slot> <end-slot>\n",
+            "usage: ledger-inspect [--summary|--tx-check|--repair-plan|--purge-compact-shreds] <ledger-path> <start-slot> <end-slot>\n" ++
+                "       ledger-inspect --slot-bounds <ledger-path>\n" ++
+                "       ledger-inspect --export-repair-plan <ledger-path> <repair-plan-path> <output-bundle-path>\n",
             .{},
         );
         return;
@@ -54,11 +96,32 @@ pub fn main() !void {
     const start_slot = try std.fmt.parseUnsigned(Slot, args[first_positional_arg + 1], 10);
     const end_slot = try std.fmt.parseUnsigned(Slot, args[first_positional_arg + 2], 10);
 
-    var ledger = try Ledger.initReadOnly(allocator, sig.trace.Logger("ledger").noop, ledger_path, null);
+    var ledger = if (mode == .purge_compact_shreds)
+        try Ledger.init(allocator, sig.trace.Logger("ledger").noop, ledger_path, null)
+    else
+        try Ledger.initReadOnly(allocator, sig.trace.Logger("ledger").noop, ledger_path, null);
     defer ledger.deinit();
 
     std.debug.print("ledger_path={s}\n", .{ledger_path});
     std.debug.print("slot_range={}..{}\n", .{ start_slot, end_slot });
+
+    if (mode == .purge_compact_shreds) {
+        const did_purge = try sig.ledger.cleanup_service.purgeSlots(
+            &ledger.db,
+            start_slot,
+            end_slot,
+        );
+        try sig.ledger.cleanup_service.compactPurgedShreds(
+            &ledger.db,
+            start_slot,
+            end_slot,
+        );
+        std.debug.print(
+            "purge_compact_shreds status=pass start_slot={} end_slot={} did_purge={}\n",
+            .{ start_slot, end_slot, did_purge },
+        );
+        return;
+    }
 
     var repair_plan_requests: usize = 0;
     var repair_plan_slots: usize = 0;
@@ -77,6 +140,8 @@ pub fn main() !void {
                 repair_plan_meta_missing += @intFromBool(stats.meta_missing);
                 repair_plan_last_index_missing += @intFromBool(stats.last_index_missing);
             },
+            .export_repair_plan => unreachable,
+            .purge_compact_shreds => unreachable,
         }
     }
     if (mode == .repair_plan) {
@@ -92,6 +157,119 @@ pub fn main() !void {
             },
         );
     }
+}
+
+const RepairRequest = struct {
+    slot: Slot,
+    index: u32,
+};
+
+fn rejectExternalVolumePath(path: []const u8) !void {
+    if (std.mem.eql(u8, path, "/Volumes") or std.mem.startsWith(u8, path, "/Volumes/")) {
+        return error.ExternalVolumePathRejected;
+    }
+}
+
+fn parseRepairPlan(
+    allocator: std.mem.Allocator,
+    plan_path: []const u8,
+) !std.ArrayListUnmanaged(RepairRequest) {
+    try rejectExternalVolumePath(plan_path);
+    const contents = try std.fs.cwd().readFileAlloc(allocator, plan_path, REPAIR_PLAN_MAX_BYTES);
+    defer allocator.free(contents);
+
+    var requests: std.ArrayListUnmanaged(RepairRequest) = .empty;
+    errdefer requests.deinit(allocator);
+    var seen: std.AutoHashMapUnmanaged(u128, void) = .empty;
+    defer seen.deinit(allocator);
+
+    var lines = std.mem.splitScalar(u8, contents, '\n');
+    while (lines.next()) |raw_line| {
+        const line = std.mem.trim(u8, raw_line, " \t\r");
+        if (line.len == 0 or line[0] == '#') continue;
+
+        var fields = std.mem.tokenizeAny(u8, line, " \t");
+        if (!std.mem.eql(u8, fields.next() orelse return error.InvalidRepairPlanLine, "repair_data_shred")) {
+            return error.InvalidRepairPlanLine;
+        }
+        const slot_field = fields.next() orelse return error.InvalidRepairPlanLine;
+        const index_field = fields.next() orelse return error.InvalidRepairPlanLine;
+        if (fields.next() != null) return error.InvalidRepairPlanLine;
+        if (!std.mem.startsWith(u8, slot_field, "slot=") or
+            !std.mem.startsWith(u8, index_field, "index="))
+        {
+            return error.InvalidRepairPlanLine;
+        }
+
+        const slot = try std.fmt.parseUnsigned(Slot, slot_field["slot=".len..], 10);
+        const index = try std.fmt.parseUnsigned(u32, index_field["index=".len..], 10);
+        const key: u128 = (@as(u128, slot) << 32) | @as(u128, index);
+        const result = try seen.getOrPut(allocator, key);
+        if (result.found_existing) return error.DuplicateRepairRequest;
+        try requests.append(allocator, .{ .slot = slot, .index = index });
+    }
+    if (requests.items.len == 0) return error.EmptyRepairPlan;
+    if (requests.items.len > std.math.maxInt(u32)) return error.RepairPlanTooLarge;
+    return requests;
+}
+
+fn exportRepairPlan(
+    allocator: std.mem.Allocator,
+    ledger_path: []const u8,
+    plan_path: []const u8,
+    output_path: []const u8,
+) !void {
+    try rejectExternalVolumePath(ledger_path);
+    try rejectExternalVolumePath(output_path);
+
+    var requests = try parseRepairPlan(allocator, plan_path);
+    defer requests.deinit(allocator);
+
+    var ledger = try Ledger.initReadOnly(
+        allocator,
+        sig.trace.Logger("ledger").noop,
+        ledger_path,
+        null,
+    );
+    defer ledger.deinit();
+
+    const file = try std.fs.cwd().createFile(output_path, .{ .exclusive = true });
+    var keep_output = false;
+    defer {
+        file.close();
+        if (!keep_output) std.fs.cwd().deleteFile(output_path) catch {};
+    }
+    var write_buffer: [4096]u8 = undefined;
+    var file_writer = file.writer(&write_buffer);
+    const writer = &file_writer.interface;
+    try writer.writeAll(REPAIR_BUNDLE_MAGIC);
+    try writer.writeInt(u32, @intCast(requests.items.len), .little);
+
+    for (requests.items) |request| {
+        const payload_ref = try ledger.reader().getDataShred(request.slot, request.index) orelse
+            return error.RequestedDataShredMissing;
+        defer payload_ref.deinit();
+
+        var shred = try Shred.fromPayload(allocator, payload_ref.data);
+        defer shred.deinit();
+        const header = shred.commonHeader();
+        if (shred != .data or header.slot != request.slot or header.index != request.index) {
+            return error.RepairShredIdentityMismatch;
+        }
+        if (payload_ref.data.len > std.math.maxInt(u32)) return error.RepairShredTooLarge;
+
+        try writer.writeInt(u64, request.slot, .little);
+        try writer.writeInt(u32, request.index, .little);
+        try writer.writeInt(u32, @intCast(payload_ref.data.len), .little);
+        try writer.writeAll(payload_ref.data);
+    }
+    try writer.flush();
+    try file.sync();
+    keep_output = true;
+    std.debug.print(
+        "export_repair_plan status=pass ledger_path={s} plan_path={s} output_path={s} records={}\n",
+        .{ ledger_path, plan_path, output_path, requests.items.len },
+    );
 }
 
 const RepairPlanSlotStats = struct {

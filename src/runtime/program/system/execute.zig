@@ -55,6 +55,13 @@ pub fn execute(
             args.space,
             args.owner,
         ),
+        .create_account_allow_prefund => |args| try executeCreateAccountAllowPrefund(
+            allocator,
+            ic,
+            args.lamports,
+            args.space,
+            args.owner,
+        ),
         .assign => |args| try executeAssign(
             ic,
             args.owner,
@@ -170,6 +177,39 @@ fn executeCreateAccountWithSeed(
         owner,
         base,
     );
+}
+
+/// [agave] https://github.com/anza-xyz/agave/blob/master/programs/system/src/system_processor.rs
+fn executeCreateAccountAllowPrefund(
+    allocator: std.mem.Allocator,
+    ic: *InstructionContext,
+    lamports: u64,
+    space: u64,
+    owner: Pubkey,
+) (error{OutOfMemory} || InstructionError)!void {
+    const zone = tracy.Zone.init(@src(), .{ .name = "executeCreateAccountAllowPrefund" });
+    defer zone.deinit();
+
+    if (!ic.tc.feature_set.active(.create_account_allow_prefund, ic.tc.slot))
+        return InstructionError.InvalidInstructionData;
+
+    if (lamports > 0) {
+        try ic.ixn_info.checkNumberOfAccounts(2);
+    } else {
+        try ic.ixn_info.checkNumberOfAccounts(1);
+    }
+
+    const to_index = 0;
+    const to_address = ic.ixn_info.account_metas.items[to_index].pubkey;
+    {
+        var account = try ic.borrowInstructionAccount(to_index);
+        defer account.release();
+
+        try allocate(allocator, ic, &account, space, to_address);
+        try assign(ic, &account, owner, to_address);
+    }
+
+    if (lamports > 0) try transfer(ic, 1, to_index, lamports);
 }
 
 //// [agave] https://github.com/anza-xyz/agave/blob/faea52f338df8521864ab7ce97b120b2abb5ce13/programs/system/src/system_processor.rs#L365-L375
@@ -889,6 +929,106 @@ test "executeCreateAccount" {
                 .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
             },
             .accounts_resize_delta = 2,
+        },
+        .{},
+    );
+}
+
+test "executeCreateAccountAllowPrefund" {
+    const ids = sig.runtime.ids;
+    const testing = sig.runtime.program.testing;
+
+    var prng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const to_key = Pubkey.initRandom(prng.random());
+    const from_key = Pubkey.initRandom(prng.random());
+    const new_owner = Pubkey.initRandom(prng.random());
+    const instruction = SystemProgramInstruction{ .create_account_allow_prefund = .{
+        .lamports = 50,
+        .space = 2,
+        .owner = new_owner,
+    } };
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        system_program.ID,
+        instruction,
+        &.{
+            .{ .is_signer = true, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = true, .index_in_transaction = 1 },
+        },
+        .{
+            .feature_set = &.{.{ .feature = .create_account_allow_prefund }},
+            .accounts = &.{
+                .{ .pubkey = to_key, .lamports = 100, .owner = system_program.ID },
+                .{ .pubkey = from_key, .lamports = 100, .owner = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = system_program.COMPUTE_UNITS,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = to_key,
+                    .lamports = 150,
+                    .owner = new_owner,
+                    .data = &.{ 0, 0 },
+                },
+                .{ .pubkey = from_key, .lamports = 50, .owner = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .accounts_resize_delta = 2,
+        },
+        .{},
+    );
+
+    try testing.expectProgramExecuteResult(
+        std.testing.allocator,
+        system_program.ID,
+        SystemProgramInstruction{ .create_account_allow_prefund = .{
+            .lamports = 0,
+            .space = 2,
+            .owner = new_owner,
+        } },
+        &.{.{ .is_signer = true, .is_writable = true, .index_in_transaction = 0 }},
+        .{
+            .feature_set = &.{.{ .feature = .create_account_allow_prefund }},
+            .accounts = &.{
+                .{ .pubkey = to_key, .lamports = 100, .owner = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = system_program.COMPUTE_UNITS,
+        },
+        .{
+            .accounts = &.{
+                .{
+                    .pubkey = to_key,
+                    .lamports = 100,
+                    .owner = new_owner,
+                    .data = &.{ 0, 0 },
+                },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .accounts_resize_delta = 2,
+        },
+        .{},
+    );
+
+    try testing.expectProgramExecuteError(
+        InstructionError.InvalidInstructionData,
+        std.testing.allocator,
+        system_program.ID,
+        instruction,
+        &.{
+            .{ .is_signer = true, .is_writable = true, .index_in_transaction = 0 },
+            .{ .is_signer = true, .is_writable = true, .index_in_transaction = 1 },
+        },
+        .{
+            .accounts = &.{
+                .{ .pubkey = to_key, .lamports = 100, .owner = system_program.ID },
+                .{ .pubkey = from_key, .lamports = 100, .owner = system_program.ID },
+                .{ .pubkey = system_program.ID, .owner = ids.NATIVE_LOADER_ID },
+            },
+            .compute_meter = system_program.COMPUTE_UNITS,
         },
         .{},
     );

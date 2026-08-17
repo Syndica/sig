@@ -26,7 +26,7 @@ const RepairRequester = shred_network.repair_service.RepairRequester;
 const RepairService = shred_network.repair_service.RepairService;
 const ShredReceiver = shred_network.shred_receiver.ShredReceiver;
 
-const REPAIR_TRACKER_LEDGER_SEED_SLOT_WINDOW = 128;
+const REPAIR_TRACKER_LEDGER_SEED_SLOT_WINDOW: Slot = BasicShredTracker.capacity_slots;
 
 /// Settings which instruct the Shred Network how to behave.
 pub const ShredNetworkConfig = struct {
@@ -225,6 +225,7 @@ pub fn start(
             repair_requester,
             repair_peer_provider,
             shred_tracker,
+            deps.ledger,
         );
         try service_manager.spawn("Repair Service", RepairService.run, .{repair_svc});
     }

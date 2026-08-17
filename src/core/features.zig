@@ -210,6 +210,11 @@ pub fn activationStateFromAccount(account: sig.core.Account) !FeatureActivationS
     return if (maybe_slot) |slot| .{ .activated = slot } else .pending;
 }
 
+test "SBPF v3 feature id matches current Agave" {
+    const expected = Pubkey.parse("5cC3foj77CWun58pC51ebHFUWavHWKarWyR5UUik7dnC");
+    try std.testing.expect(map.get(.enable_sbpf_v3_deployment_and_execution).key.equals(&expected));
+}
+
 test "full inflation enabled" {
     var feature_set: Set = .ALL_DISABLED;
     var new_feature_set: Set = .ALL_DISABLED;

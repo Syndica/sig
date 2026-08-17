@@ -96,6 +96,15 @@ pub fn Database(comptime Impl: type) type {
             return try self.impl.deleteFilesInRange(cf, start, end);
         }
 
+        pub fn compactRange(
+            self: *Self,
+            comptime cf: ColumnFamily,
+            start: cf.Key,
+            end: cf.Key,
+        ) anyerror!void {
+            return try self.impl.compactRange(cf, start, end);
+        }
+
         pub fn initWriteBatch(self: *Self) anyerror!WriteBatch {
             return .{ .impl = try self.impl.initWriteBatch() };
         }

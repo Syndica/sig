@@ -194,7 +194,7 @@ pub const ReplaySlotFuture = struct {
                 scheduler_stats.inline_ready_continuations,
             );
             self.logger.info().logf(
-                "slot_replay_scheduler_stats slot={} poh_entries={} poh_tasks={} poh_wall={D} poh_cpu={D} scheduler_build={D} preprocess_tasks={} preprocess_wall={D} preprocess_cpu={D} scheduler_execute_wall={D} workers={} dependency_edges={} initial_ready={} max_dependencies={} critical_path={} overlap_preprocess={} priority_critical_preprocess={} priority_critical_preprocess_first_worker={} priority_critical_preprocess_first_tail={} inline_ready_continuations={} inline_critical_chain={} inline_critical_chain_min_tail={} inline_critical_chain_continuations={} singleton_temp_stack_arena={}",
+                "slot_replay_scheduler_stats slot={} poh_entries={} poh_tasks={} poh_wall={D} poh_cpu={D} scheduler_build={D} preprocess_tasks={} preprocess_wall={D} preprocess_cpu={D} scheduler_execute_wall={D} workers={} dependency_edges={} initial_ready={} max_dependencies={} critical_path={} overlap_preprocess={} priority_critical_preprocess={} priority_critical_preprocess_first_worker={} priority_critical_preprocess_first_tail={} priority_critical_ready={} priority_critical_ready_waiter_lists={} inline_ready_continuations={} inline_critical_chain={} inline_critical_chain_min_tail={} inline_critical_chain_budget={} inline_critical_chain_continuations={} inline_critical_chain_budget_yields={} singleton_temp_stack_arena={}",
                 .{
                     slot,
                     poh_stats.entries,
@@ -215,10 +215,14 @@ pub const ReplaySlotFuture = struct {
                     scheduler_stats.priority_critical_preprocess,
                     scheduler_stats.priority_critical_preprocess_first_worker,
                     scheduler_stats.priority_critical_preprocess_first_tail,
+                    scheduler_stats.priority_critical_ready,
+                    scheduler_stats.priority_critical_ready_waiter_lists,
                     scheduler_stats.inline_ready_continuations,
                     scheduler_stats.inline_critical_chain,
                     scheduler_stats.inline_critical_chain_min_tail,
+                    scheduler_stats.inline_critical_chain_budget,
                     scheduler_stats.inline_critical_chain_continuations,
+                    scheduler_stats.inline_critical_chain_budget_yields,
                     scheduler_stats.singleton_temp_stack_arena,
                 },
             );
@@ -236,6 +240,21 @@ pub const ReplaySlotFuture = struct {
                 slot,
                 self.txn_scheduler.svm_gateway.programLoadStats(),
             );
+            if (sig.runtime.program.vote.takeReplayTowerSyncAttestation(slot)) |attestation| {
+                self.logger.info().logf(
+                    "replay_tower_sync_attestation observed_slot={} attested_slot={} bank_hash={s} winning_votes={} total_votes={} conflicting_votes={} distinct_candidates={} overflowed_candidates={}",
+                    .{
+                        attestation.observed_slot,
+                        attestation.attested_slot,
+                        attestation.bank_hash.base58String().slice(),
+                        attestation.winning_votes,
+                        attestation.total_votes,
+                        attestation.conflicting_votes,
+                        attestation.distinct_candidates,
+                        attestation.overflowed_candidates,
+                    },
+                );
+            }
             const stats_log_ns = phase_timer.read().asNanos();
             phase_timer.reset();
             if (self.result_ptr.load(.acquire) != null) {
@@ -268,30 +287,40 @@ pub const ReplaySlotFuture = struct {
                     };
                     if (delta_result) |result| {
                         if (result.current_missing == 0) {
-                            std.debug.assert(
-                                self.txn_scheduler.committer.slot_state.replay_lt_hash_delta_keys.readCopy() == null,
-                            );
-                            self.txn_scheduler.committer.slot_state.replay_lt_hash_delta.set(
+                            const accumulation = replay.execution.accumulateSlotCacheLtHashDelta(
+                                self.allocator,
+                                &self.txn_scheduler.committer.slot_state.replay_lt_hash_delta,
+                                &self.txn_scheduler.committer.slot_state.replay_lt_hash_delta_keys,
                                 result.delta,
-                            );
-                            self.txn_scheduler.committer.slot_state.replay_lt_hash_delta_keys.set(
                                 result.keys,
-                            );
-                            self.logger.info().logf(
-                                "slot_lt_hash_cache_delta status=pass slot={} dirty_accounts={} excluded_accounts={} previous_unrooted={} previous_rooted={} previous_owned={} previous_borrowed={} previous_missing={} unchanged={} current_missing={}",
-                                .{
-                                    slot,
-                                    result.dirty_accounts,
-                                    result.excluded_accounts,
-                                    result.previous_unrooted,
-                                    result.previous_rooted,
-                                    result.previous_owned,
-                                    result.previous_borrowed,
-                                    result.previous_missing,
-                                    result.unchanged,
-                                    result.current_missing,
-                                },
-                            );
+                            ) catch |err| blk: {
+                                self.allocator.free(result.keys);
+                                self.logger.err().logf(
+                                    "slot_lt_hash_cache_delta status=error slot={} reason=accumulate error={}",
+                                    .{ slot, err },
+                                );
+                                self.setError(Error.ReplayBatchFailed);
+                                break :blk null;
+                            };
+                            if (accumulation) |accumulated| {
+                                self.logger.info().logf(
+                                    "slot_lt_hash_cache_delta status=pass slot={} dirty_accounts={} excluded_accounts={} previous_unrooted={} previous_rooted={} previous_owned={} previous_borrowed={} previous_missing={} unchanged={} current_missing={} accumulated_previous={} accumulated_covered_keys={}",
+                                    .{
+                                        slot,
+                                        result.dirty_accounts,
+                                        result.excluded_accounts,
+                                        result.previous_unrooted,
+                                        result.previous_rooted,
+                                        result.previous_owned,
+                                        result.previous_borrowed,
+                                        result.previous_missing,
+                                        result.unchanged,
+                                        result.current_missing,
+                                        accumulated.had_previous,
+                                        accumulated.covered_keys,
+                                    },
+                                );
+                            }
                         } else {
                             self.allocator.free(result.keys);
                             self.logger.err().logf(
@@ -496,11 +525,16 @@ const TransactionScheduler = struct {
     priority_critical_preprocess: bool = false,
     priority_critical_preprocess_first_worker: u64 = 0,
     priority_critical_preprocess_first_tail: u64 = 0,
+    priority_critical_ready: bool = false,
+    priority_critical_ready_waiter_lists: u64 = 0,
     inline_ready_continuation: bool = false,
     inline_ready_continuations: Atomic(u64) = .init(0),
     inline_critical_chain: bool = false,
     inline_critical_chain_min_tail: u64 = 512,
+    inline_critical_chain_budget: u64 = 0,
     inline_critical_chain_continuations: Atomic(u64) = .init(0),
+    inline_critical_chain_budget_yields: Atomic(u64) = .init(0),
+    critical_path_transaction_timings: bool = false,
     singleton_temp_stack_arena: bool = false,
     stats_sink: ?*Stats = null,
 
@@ -556,10 +590,14 @@ const TransactionScheduler = struct {
         priority_critical_preprocess: bool,
         priority_critical_preprocess_first_worker: u64,
         priority_critical_preprocess_first_tail: u64,
+        priority_critical_ready: bool,
+        priority_critical_ready_waiter_lists: u64,
         inline_ready_continuations: u64,
         inline_critical_chain: bool,
         inline_critical_chain_min_tail: u64,
+        inline_critical_chain_budget: u64,
         inline_critical_chain_continuations: u64,
+        inline_critical_chain_budget_yields: u64,
         singleton_temp_stack_arena: bool,
     };
 
@@ -567,9 +605,11 @@ const TransactionScheduler = struct {
         overlap_preprocess: ?bool = null,
         overlap_preprocess_workers: ?usize = null,
         priority_critical_preprocess: ?bool = null,
+        priority_critical_ready: ?bool = null,
         inline_ready_continuation: ?bool = null,
         inline_critical_chain: ?bool = null,
         inline_critical_chain_min_tail: ?u64 = null,
+        inline_critical_chain_budget: ?u64 = null,
         singleton_temp_stack_arena: ?bool = null,
         stats_sink: ?*Stats = null,
     };
@@ -601,6 +641,8 @@ const TransactionScheduler = struct {
             envBool("SIG_REPLAY_SCHEDULER_OVERLAP_PREPROCESS", false);
         self.priority_critical_preprocess = options.priority_critical_preprocess orelse
             envBool("SIG_REPLAY_SCHEDULER_PRIORITY_CRITICAL_PREPROCESS", false);
+        self.priority_critical_ready = options.priority_critical_ready orelse
+            envBool("SIG_REPLAY_SCHEDULER_PRIORITY_CRITICAL_READY", false);
         self.inline_ready_continuation = options.inline_ready_continuation orelse
             envBool("SIG_REPLAY_SCHEDULER_INLINE_READY_CONTINUATION", false);
         const inline_critical_chain_requested = options.inline_critical_chain orelse
@@ -614,6 +656,8 @@ const TransactionScheduler = struct {
                 512,
             ),
         );
+        self.inline_critical_chain_budget = options.inline_critical_chain_budget orelse
+            envU64("SIG_REPLAY_SCHEDULER_INLINE_CRITICAL_CHAIN_BUDGET", 0);
         self.singleton_temp_stack_arena = options.singleton_temp_stack_arena orelse
             envBool("SIG_REPLAY_SINGLETON_TEMP_STACK_ARENA", false);
         self.stats_sink = options.stats_sink;
@@ -791,6 +835,7 @@ const TransactionScheduler = struct {
                 }
                 // Create job with a ref_count for each dependency.
                 try self.workers.append(allocator, .{
+                    .id = id,
                     .scheduler = self,
                     .transaction = transaction,
                     .ref_count = .init(@intCast(dependency_count)),
@@ -806,7 +851,10 @@ const TransactionScheduler = struct {
         // Dependencies always point from an earlier worker to a later worker, so a reverse
         // pass computes the longest remaining dependency tail without changing ready order.
         // Keep this work behind the opt-in flag so the disabled control remains unchanged.
-        if (self.inline_critical_chain or self.priority_critical_preprocess) {
+        if (self.inline_critical_chain or
+            self.priority_critical_preprocess or
+            self.priority_critical_ready)
+        {
             for (0..self.workers.items.len) |reverse_index| {
                 const worker_index = self.workers.items.len - 1 - reverse_index;
                 const worker = &self.workers.items[worker_index];
@@ -816,6 +864,37 @@ const TransactionScheduler = struct {
                         self.workers.items[waiter_id].critical_tail + 1,
                     );
                 }
+            }
+        }
+
+        // Newly-unblocked workers are submitted as one thread-pool batch. Keep all
+        // runnable parallelism, but put the already-computed longest tails first so
+        // a critical successor does not sit behind unrelated ready work in the local
+        // FIFO run buffer. Dependency counts, locks, and commit semantics are unchanged.
+        if (self.priority_critical_ready) {
+            for (self.workers.items) |*worker| {
+                if (worker.waiters.items.len < 2) continue;
+                std.mem.sort(
+                    u32,
+                    worker.waiters.items,
+                    self,
+                    criticalPreprocessLessThan,
+                );
+                self.priority_critical_ready_waiter_lists += 1;
+            }
+        }
+
+        // The existing dependency-hotspot diagnostic is intentionally slot-scoped.
+        // Mark the single computed longest path so completed workers can attribute
+        // actual transaction execution cost and invoked programs without changing
+        // scheduling, account locks, execution, or commit behavior.
+        self.critical_path_transaction_timings = dependency_hotspots_enabled;
+        if (self.critical_path_transaction_timings) {
+            var critical_worker = self.critical_worker;
+            while (critical_worker) |worker_id| {
+                const worker = &self.workers.items[worker_id];
+                worker.on_critical_path = true;
+                critical_worker = worker.critical_parent;
             }
         }
 
@@ -1009,10 +1088,14 @@ const TransactionScheduler = struct {
             .priority_critical_preprocess = self.priority_critical_preprocess,
             .priority_critical_preprocess_first_worker = self.priority_critical_preprocess_first_worker,
             .priority_critical_preprocess_first_tail = self.priority_critical_preprocess_first_tail,
+            .priority_critical_ready = self.priority_critical_ready,
+            .priority_critical_ready_waiter_lists = self.priority_critical_ready_waiter_lists,
             .inline_ready_continuations = self.inline_ready_continuations.load(.acquire),
             .inline_critical_chain = self.inline_critical_chain,
             .inline_critical_chain_min_tail = self.inline_critical_chain_min_tail,
+            .inline_critical_chain_budget = self.inline_critical_chain_budget,
             .inline_critical_chain_continuations = self.inline_critical_chain_continuations.load(.acquire),
+            .inline_critical_chain_budget_yields = self.inline_critical_chain_budget_yields.load(.acquire),
             .singleton_temp_stack_arena = self.singleton_temp_stack_arena,
         };
     }
@@ -1084,6 +1167,7 @@ const TransactionScheduler = struct {
 
     const Worker = struct {
         task: ThreadPool.Task = .{ .callback = run },
+        id: u32,
         scheduler: *TransactionScheduler,
         transaction: ResolvedTransaction,
         ref_count: Atomic(u32),
@@ -1092,6 +1176,7 @@ const TransactionScheduler = struct {
         critical_tail: u64,
         critical_parent: ?u32,
         critical_account: ?Pubkey,
+        on_critical_path: bool = false,
         preprocessed: ?PreprocessedTransaction = null,
         preprocess_ready: Atomic(bool) = .init(false),
         ready_scheduled: Atomic(bool) = .init(false),
@@ -1107,9 +1192,38 @@ const TransactionScheduler = struct {
             defer self.scheduler.future.finish();
 
             var current: ?*Worker = self;
+            var inline_critical_continuations_in_task: u64 = 0;
             while (current) |worker| {
-                current = worker.executeAndReleaseWaiters();
+                const inline_worker = worker.executeAndReleaseWaiters();
                 worker.scheduler.finishWorker();
+                const next = inline_worker orelse break;
+                if (worker.scheduler.inline_critical_chain and
+                    worker.scheduler.inline_critical_chain_budget > 0 and
+                    inline_critical_continuations_in_task >=
+                        worker.scheduler.inline_critical_chain_budget)
+                {
+                    var task_batch = ThreadPool.Batch{};
+                    task_batch.push(.from(&next.task));
+                    worker.scheduler.future.schedule(task_batch);
+                    _ = worker.scheduler.inline_critical_chain_budget_yields.fetchAdd(
+                        1,
+                        .monotonic,
+                    );
+                    break;
+                }
+                if (worker.scheduler.inline_critical_chain) {
+                    inline_critical_continuations_in_task += 1;
+                    _ = worker.scheduler.inline_critical_chain_continuations.fetchAdd(
+                        1,
+                        .monotonic,
+                    );
+                } else {
+                    _ = worker.scheduler.inline_ready_continuations.fetchAdd(
+                        1,
+                        .monotonic,
+                    );
+                }
+                current = next;
             }
         }
 
@@ -1154,6 +1268,35 @@ const TransactionScheduler = struct {
                 future.setError(Error.ReplayBatchFailed);
                 return null;
             };
+            if (self.scheduler.critical_path_transaction_timings and self.on_critical_path) {
+                const signature = self.transaction.transaction.signatures[0].base58String();
+                future.logger.info().logf(
+                    "replay_critical_path_transaction slot={} worker={} critical_depth={} critical_tail={} signature={s} instructions={} preprocess_ns={} execute_ns={} commit_ns={} total_ns={}",
+                    .{
+                        self.scheduler.svm_gateway.params.slot,
+                        self.id,
+                        self.critical_depth,
+                        self.critical_tail,
+                        signature.constSlice(),
+                        self.transaction.instructions.len,
+                        resolved_outcome.stats.preprocess_ns,
+                        resolved_outcome.stats.execute_ns,
+                        resolved_outcome.stats.commit_ns,
+                        resolved_outcome.stats.total_ns,
+                    },
+                );
+                for (self.transaction.instructions, 0..) |instruction, instruction_index| {
+                    future.logger.info().logf(
+                        "replay_critical_path_program slot={} worker={} instruction={} program={s}",
+                        .{
+                            self.scheduler.svm_gateway.params.slot,
+                            self.id,
+                            instruction_index,
+                            instruction.program_meta.pubkey.base58String().constSlice(),
+                        },
+                    );
+                }
+            }
             self.scheduler.batch_stats.add(resolved_outcome.stats);
             const result = resolved_outcome.result;
 
@@ -1198,16 +1341,6 @@ const TransactionScheduler = struct {
             // Preserve all existing parallelism: queue every additional ready worker before
             // continuing one dependency-chain successor on this already-running pool thread.
             future.schedule(task_batch);
-            if (inline_waiter != null) {
-                if (self.scheduler.inline_critical_chain) {
-                    _ = self.scheduler.inline_critical_chain_continuations.fetchAdd(
-                        1,
-                        .monotonic,
-                    );
-                } else {
-                    _ = self.scheduler.inline_ready_continuations.fetchAdd(1, .monotonic);
-                }
-            }
             return inline_waiter;
         }
 
@@ -1530,6 +1663,7 @@ test "TransactionScheduler: overlap preprocessing preserves fanout and fanin" {
                 .inline_ready_continuation = false,
                 .inline_critical_chain = true,
                 .inline_critical_chain_min_tail = 512,
+                .priority_critical_ready = true,
                 .singleton_temp_stack_arena = true,
                 .stats_sink = &scheduler_stats,
             },
@@ -1540,6 +1674,8 @@ test "TransactionScheduler: overlap preprocessing preserves fanout and fanin" {
     try std.testing.expect(!scheduler_stats.priority_critical_preprocess);
     try std.testing.expectEqual(0, scheduler_stats.priority_critical_preprocess_first_worker);
     try std.testing.expectEqual(0, scheduler_stats.priority_critical_preprocess_first_tail);
+    try std.testing.expect(scheduler_stats.priority_critical_ready);
+    try std.testing.expect(scheduler_stats.priority_critical_ready_waiter_lists > 0);
     try std.testing.expectEqual(0, scheduler_stats.inline_ready_continuations);
     try std.testing.expect(scheduler_stats.inline_critical_chain);
     try std.testing.expectEqual(512, scheduler_stats.inline_critical_chain_min_tail);
@@ -1601,6 +1737,8 @@ test "TransactionScheduler: critical preprocessing priority starts the longest t
     try std.testing.expectEqual(3, scheduler_stats.critical_path);
     try std.testing.expectEqual(1, scheduler_stats.priority_critical_preprocess_first_worker);
     try std.testing.expectEqual(3, scheduler_stats.priority_critical_preprocess_first_tail);
+    try std.testing.expect(!scheduler_stats.priority_critical_ready);
+    try std.testing.expectEqual(0, scheduler_stats.priority_critical_ready_waiter_lists);
     try std.testing.expectEqual(0, scheduler_stats.inline_ready_continuations);
     try std.testing.expectEqual(0, scheduler_stats.inline_critical_chain_continuations);
 }
@@ -1709,10 +1847,67 @@ test "TransactionScheduler: selective inline continuation handles only a long cr
     try std.testing.expectEqual(0, scheduler_stats.inline_ready_continuations);
     try std.testing.expect(scheduler_stats.inline_critical_chain);
     try std.testing.expectEqual(min_tail, scheduler_stats.inline_critical_chain_min_tail);
+    try std.testing.expectEqual(0, scheduler_stats.inline_critical_chain_budget);
     try std.testing.expectEqual(
         transaction_count - min_tail,
         scheduler_stats.inline_critical_chain_continuations,
     );
+    try std.testing.expectEqual(0, scheduler_stats.inline_critical_chain_budget_yields);
+}
+
+test "TransactionScheduler: budgeted critical continuation periodically yields" {
+    const allocator = std.testing.allocator;
+    const transaction_count = 32;
+    const min_tail = 16;
+    const continuation_budget = 4;
+    var rng = std.Random.DefaultPrng.init(std.testing.random_seed);
+    const shared_account = Pubkey.initRandom(rng.random());
+
+    const transactions = try allocator.alloc(Transaction, transaction_count);
+    defer allocator.free(transactions);
+    var initialized_count: usize = 0;
+    defer for (transactions[0..initialized_count]) |transaction| transaction.deinit(allocator);
+    for (transactions, 0..) |*transaction, index| {
+        transaction.* = try initSchedulerAccessTransaction(
+            allocator,
+            rng.random(),
+            @intCast(index + 1),
+            shared_account,
+            true,
+        );
+        initialized_count += 1;
+    }
+
+    const batches = try allocator.alloc([]const Transaction, transaction_count);
+    defer allocator.free(batches);
+    for (batches, 0..) |*batch, index| batch.* = transactions[index .. index + 1];
+
+    var state = try replay.execution.TestState.init(allocator);
+    defer state.deinit(allocator);
+    var scheduler_stats: TransactionScheduler.Stats = undefined;
+
+    try std.testing.expectEqual(
+        null,
+        try testSchedulerForBatchesWithOptions(
+            allocator,
+            &state,
+            batches,
+            .{
+                .inline_critical_chain = true,
+                .inline_critical_chain_min_tail = min_tail,
+                .inline_critical_chain_budget = continuation_budget,
+                .stats_sink = &scheduler_stats,
+            },
+        ),
+    );
+    try std.testing.expectEqual(transaction_count, scheduler_stats.workers);
+    try std.testing.expectEqual(transaction_count - 1, scheduler_stats.dependency_edges);
+    try std.testing.expectEqual(transaction_count, scheduler_stats.critical_path);
+    try std.testing.expect(scheduler_stats.inline_critical_chain);
+    try std.testing.expectEqual(min_tail, scheduler_stats.inline_critical_chain_min_tail);
+    try std.testing.expectEqual(continuation_budget, scheduler_stats.inline_critical_chain_budget);
+    try std.testing.expectEqual(13, scheduler_stats.inline_critical_chain_continuations);
+    try std.testing.expectEqual(3, scheduler_stats.inline_critical_chain_budget_yields);
 }
 
 test "TransactionScheduler: overlap preprocessing handles a long writable chain" {

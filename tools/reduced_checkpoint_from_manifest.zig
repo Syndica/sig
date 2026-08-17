@@ -35,12 +35,18 @@ pub fn main() !void {
         const bank_fields = checkpoint.bank_fields;
         const expected_max_tick_height = (bank_fields.slot + 1) * bank_fields.ticks_per_slot;
         const expected_epoch = bank_fields.epoch_schedule.getEpoch(bank_fields.slot);
+        const accounts_lt_hash_digest = sig.core.hash.Hash.init(
+            checkpoint.bank_extra.accounts_lt_hash.constBytes(),
+        );
         std.debug.print(
-            "reduced_checkpoint_dump path={s} slot={} parent_slot={} ticks_per_slot={} max_tick_height={} expected_max_tick_height={} max_tick_height_valid={} epoch={} expected_epoch={} epoch_valid={} block_height={} transaction_count={} capitalization={}\n",
+            "reduced_checkpoint_dump path={s} slot={} parent_slot={} bank_hash={s} parent_hash={s} accounts_lt_hash_digest={s} ticks_per_slot={} max_tick_height={} expected_max_tick_height={} max_tick_height_valid={} epoch={} expected_epoch={} epoch_valid={} block_height={} transaction_count={} capitalization={} rent_lamports_per_byte_year={} rent_exemption_threshold={} rent_burn_percent={} fee_burn_percent={}\n",
             .{
                 path,
                 bank_fields.slot,
                 bank_fields.parent_slot,
+                bank_fields.hash.base58String().slice(),
+                bank_fields.parent_hash.base58String().slice(),
+                accounts_lt_hash_digest.base58String().slice(),
                 bank_fields.ticks_per_slot,
                 bank_fields.max_tick_height,
                 expected_max_tick_height,
@@ -51,6 +57,10 @@ pub fn main() !void {
                 bank_fields.block_height,
                 bank_fields.transaction_count,
                 bank_fields.capitalization,
+                bank_fields.rent_collector.rent.lamports_per_byte_year,
+                bank_fields.rent_collector.rent.exemption_threshold,
+                bank_fields.rent_collector.rent.burn_percent,
+                bank_fields.fee_rate_governor.burn_percent,
             },
         );
         std.debug.print(

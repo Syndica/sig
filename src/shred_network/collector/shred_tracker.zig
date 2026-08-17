@@ -53,7 +53,11 @@ pub const BasicShredTracker = struct {
     slide_lag_slots: ?Slot,
     disable_optimistic_skip: bool,
 
-    const num_slots: usize = 1024;
+    /// Maximum number of slots that can be represented at once. Startup
+    /// ledger seeding uses this same bound so repair begins after the existing
+    /// ledger prefix instead of from an unrelated, smaller window.
+    pub const capacity_slots: usize = 1024;
+    const num_slots = capacity_slots;
 
     const Metrics = struct {
         finished_slots_through: *Gauge(u64),

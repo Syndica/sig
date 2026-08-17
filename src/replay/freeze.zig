@@ -68,6 +68,11 @@ pub const FreezeParams = struct {
                 .blockhash = blockhash,
                 .feature_set = &constants.feature_set,
                 .signature_count = state.signature_count.load(.monotonic),
+                .transaction_count = state.transaction_count.load(.monotonic),
+                .collected_transaction_fees = state.collected_transaction_fees.load(.monotonic),
+                .collected_priority_fees = state.collected_priority_fees.load(.monotonic),
+                .collected_rent = state.collected_rent.load(.monotonic),
+                .logger = logger,
                 .precomputed_delta_lt_hash = &state.replay_lt_hash_delta,
                 .precomputed_delta_lt_hash_keys = &state.replay_lt_hash_delta_keys,
             },
@@ -83,6 +88,7 @@ pub const FreezeParams = struct {
                 .capitalization = &state.capitalization,
                 .blockhash_queue = &state.blockhash_queue,
                 .rent = constants.rent_collector.rent,
+                .fee_burn_percent = constants.fee_rate_governor.burn_percent,
                 .slot = slot,
                 .blockhash = blockhash,
                 .lamports_per_signature = constants.fee_rate_governor.lamports_per_signature,
@@ -172,6 +178,7 @@ const FinalizeStateParams = struct {
 
     // data params
     rent: Rent,
+    fee_burn_percent: u8,
     slot: Slot,
     blockhash: Hash,
     lamports_per_signature: u64,
@@ -205,6 +212,7 @@ fn finalizeState(allocator: Allocator, params: FinalizeStateParams) !void {
         params.account_reader,
         params.capitalization,
         params.rent,
+        params.fee_burn_percent,
         params.slot,
         params.collector_id,
         params.collected_transaction_fees,
@@ -242,6 +250,7 @@ fn distributeTransactionFees(
     account_reader: SlotAccountReader,
     capitalization: *std.atomic.Value(u64),
     rent: Rent,
+    fee_burn_percent: u8,
     slot: Slot,
     collector_id: Pubkey,
     collected_transaction_fees: u64,
@@ -253,7 +262,11 @@ fn distributeTransactionFees(
     const zone = tracy.Zone.init(@src(), .{ .name = "distributeTransactionFees" });
     defer zone.deinit();
 
-    var burn = collected_transaction_fees * rent.burn_percent / 100;
+    // Transaction-fee burning is governed by FeeRateGovernor, not the Rent
+    // sysvar. Modern snapshots legitimately carry Rent.FREE after rent-fee
+    // collection was disabled, while the mainnet fee governor still burns
+    // half of the base transaction fee.
+    var burn = collected_transaction_fees * fee_burn_percent / 100;
     const total_fees = collected_priority_fees + collected_transaction_fees;
     const payout = total_fees -| burn;
 
@@ -415,6 +428,11 @@ pub const HashSlotParams = struct {
     account_reader: AccountReader,
     slot: Slot,
     signature_count: u64,
+    transaction_count: u64 = 0,
+    collected_transaction_fees: u64 = 0,
+    collected_priority_fees: u64 = 0,
+    collected_rent: u64 = 0,
+    logger: ?Logger = null,
     parent_slot_hash: *const Hash,
     parent_lt_hash: *const ?LtHash,
     ancestors: *const Ancestors,
@@ -433,14 +451,20 @@ pub fn hashSlot(
     var zone = tracy.Zone.init(@src(), .{ .name = "hashSlot" });
     defer zone.deinit();
 
+    if (params.logger) |logger| {
+        try logFreezeAccountFingerprints(allocator, params.account_reader, params.slot, logger);
+    }
+
     var signature_count_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &signature_count_bytes, params.signature_count, .little);
 
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update(&params.parent_slot_hash.data);
     const remove_delta_hash = params.feature_set.active(.remove_accounts_delta_hash, params.slot);
+    var maybe_delta_merkle_hash: ?Hash = null;
     if (!remove_delta_hash) {
         const merkle_hash = try deltaMerkleHash(params.account_reader, allocator, params.slot);
+        maybe_delta_merkle_hash = merkle_hash;
         hasher.update(&merkle_hash.data);
     }
     hasher.update(&signature_count_bytes);
@@ -466,6 +490,36 @@ pub fn hashSlot(
                 &parent_ancestors,
                 covered_keys,
             ));
+            if (ltHashVerificationSlotEnabled(allocator, params.slot)) {
+                const accounts_db_delta = try deltaLtHash(
+                    allocator,
+                    thread_pool,
+                    params.account_reader,
+                    params.slot,
+                    &parent_ancestors,
+                );
+                const matched = std.mem.eql(u16, &combined.data, &accounts_db_delta.data);
+                try maybeWriteLtHashVerificationArtifacts(
+                    allocator,
+                    params.slot,
+                    combined,
+                    accounts_db_delta,
+                    params.logger,
+                );
+                if (params.logger) |logger| {
+                    logger.logf(
+                        if (matched) .info else .@"error",
+                        "replay_lt_hash_dual_verification status={s} slot={} covered_keys={} slot_cache_delta_digest={s} accounts_db_delta_digest={s}",
+                        .{
+                            if (matched) "pass" else "fail",
+                            params.slot,
+                            covered_keys.len,
+                            Hash.init(combined.constBytes()).base58String().slice(),
+                            Hash.init(accounts_db_delta.constBytes()).base58String().slice(),
+                        },
+                    );
+                }
+            }
             break :blk combined;
         } else try deltaLtHash(
             allocator,
@@ -476,16 +530,245 @@ pub fn hashSlot(
         );
         lt_hash.mixIn(delta_lt_hash);
 
-        return .{
-            lt_hash,
-            Hash.initMany(&.{ &initial_hash, lt_hash.constBytes() }),
-        };
+        const bank_hash = Hash.initMany(&.{ &initial_hash, lt_hash.constBytes() });
+        if (params.logger) |logger| {
+            const merkle_hash = maybe_delta_merkle_hash orelse Hash.ZEROES;
+            const delta_lt_hash_digest = Hash.init(delta_lt_hash.constBytes());
+            const accounts_lt_hash_digest = Hash.init(lt_hash.constBytes());
+            logger.info().logf(
+                "replay_freeze_fingerprint slot={} transactions={} signatures={} transaction_fees={} priority_fees={} rent={} delta_merkle={s} delta_lt_digest={s} accounts_lt_digest={s} initial_hash={s} bank_hash={s}",
+                .{
+                    params.slot,
+                    params.transaction_count,
+                    params.signature_count,
+                    params.collected_transaction_fees,
+                    params.collected_priority_fees,
+                    params.collected_rent,
+                    merkle_hash.base58String().slice(),
+                    delta_lt_hash_digest.base58String().slice(),
+                    accounts_lt_hash_digest.base58String().slice(),
+                    (Hash{ .data = initial_hash }).base58String().slice(),
+                    bank_hash.base58String().slice(),
+                },
+            );
+        }
+        return .{ lt_hash, bank_hash };
     } else {
-        return .{
-            null,
-            .{ .data = initial_hash },
-        };
+        const bank_hash = Hash{ .data = initial_hash };
+        if (params.logger) |logger| {
+            const merkle_hash = maybe_delta_merkle_hash orelse Hash.ZEROES;
+            logger.info().logf(
+                "replay_freeze_fingerprint slot={} transactions={} signatures={} transaction_fees={} priority_fees={} rent={} delta_merkle={s} initial_hash={s} bank_hash={s}",
+                .{
+                    params.slot,
+                    params.transaction_count,
+                    params.signature_count,
+                    params.collected_transaction_fees,
+                    params.collected_priority_fees,
+                    params.collected_rent,
+                    merkle_hash.base58String().slice(),
+                    bank_hash.base58String().slice(),
+                    bank_hash.base58String().slice(),
+                },
+            );
+        }
+        return .{ null, bank_hash };
     }
+}
+
+fn ltHashVerificationSlotEnabled(allocator: Allocator, slot: Slot) bool {
+    const raw_target = std.process.getEnvVarOwned(
+        allocator,
+        "SIG_REPLAY_LT_HASH_VERIFY_SLOT",
+    ) catch return false;
+    defer allocator.free(raw_target);
+    const target = std.fmt.parseUnsigned(
+        Slot,
+        std.mem.trim(u8, raw_target, " \t\r\n"),
+        10,
+    ) catch return false;
+    return target == slot;
+}
+
+fn writeLtHashFileAtomic(
+    allocator: Allocator,
+    path: []const u8,
+    value: LtHash,
+) !void {
+    const next_path = try std.fmt.allocPrint(allocator, "{s}.next", .{path});
+    defer allocator.free(next_path);
+    errdefer std.fs.cwd().deleteFile(next_path) catch {};
+
+    const file = try std.fs.cwd().createFile(next_path, .{ .truncate = true });
+    defer file.close();
+    try file.writeAll(value.constBytes());
+    try file.sync();
+    try std.fs.cwd().rename(next_path, path);
+}
+
+fn writeLtHashVerificationArtifactsAtDir(
+    allocator: Allocator,
+    output_dir: []const u8,
+    slot: Slot,
+    slot_cache_delta: LtHash,
+    accounts_db_delta: LtHash,
+) !void {
+    if (!std.fs.path.isAbsolute(output_dir))
+        return error.LtHashVerificationOutputMustBeAbsolute;
+    if (std.mem.eql(u8, output_dir, "/Volumes") or
+        std.mem.startsWith(u8, output_dir, "/Volumes/"))
+    {
+        return error.LtHashVerificationExternalStorageForbidden;
+    }
+    try std.fs.cwd().makePath(output_dir);
+
+    const slot_cache_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/slot-{}-slot-cache.lt-hash",
+        .{ output_dir, slot },
+    );
+    defer allocator.free(slot_cache_path);
+    const accounts_db_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/slot-{}-accounts-db.lt-hash",
+        .{ output_dir, slot },
+    );
+    defer allocator.free(accounts_db_path);
+    const correction_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/slot-{}-correction.lt-hash",
+        .{ output_dir, slot },
+    );
+    defer allocator.free(correction_path);
+
+    var correction = accounts_db_delta;
+    correction.mixOut(slot_cache_delta);
+    try writeLtHashFileAtomic(allocator, slot_cache_path, slot_cache_delta);
+    try writeLtHashFileAtomic(allocator, accounts_db_path, accounts_db_delta);
+    try writeLtHashFileAtomic(allocator, correction_path, correction);
+}
+
+fn maybeWriteLtHashVerificationArtifacts(
+    allocator: Allocator,
+    slot: Slot,
+    slot_cache_delta: LtHash,
+    accounts_db_delta: LtHash,
+    maybe_logger: ?Logger,
+) !void {
+    const output_dir = std.process.getEnvVarOwned(
+        allocator,
+        "SIG_REPLAY_LT_HASH_VERIFY_OUTPUT_DIR",
+    ) catch return;
+    defer allocator.free(output_dir);
+    if (output_dir.len == 0) return;
+
+    try writeLtHashVerificationArtifactsAtDir(
+        allocator,
+        output_dir,
+        slot,
+        slot_cache_delta,
+        accounts_db_delta,
+    );
+    if (maybe_logger) |logger| {
+        var correction = accounts_db_delta;
+        correction.mixOut(slot_cache_delta);
+        logger.info().logf(
+            "replay_lt_hash_dual_artifacts status=pass slot={} output_dir={s} bytes_each={} correction_digest={s}",
+            .{
+                slot,
+                output_dir,
+                slot_cache_delta.constBytes().len,
+                Hash.init(correction.constBytes()).base58String().slice(),
+            },
+        );
+    }
+}
+
+test "LT hash dual verification artifacts preserve correction" {
+    const allocator = std.testing.allocator;
+    var temp = std.testing.tmpDir(.{});
+    defer temp.cleanup();
+    const output_dir = try temp.dir.realpathAlloc(allocator, ".");
+    defer allocator.free(output_dir);
+
+    var slot_cache_delta = LtHash.IDENTITY;
+    slot_cache_delta.data[0] = 5;
+    slot_cache_delta.data[512] = 65_535;
+    var accounts_db_delta = LtHash.IDENTITY;
+    accounts_db_delta.data[0] = 8;
+    accounts_db_delta.data[512] = 2;
+    try writeLtHashVerificationArtifactsAtDir(
+        allocator,
+        output_dir,
+        123,
+        slot_cache_delta,
+        accounts_db_delta,
+    );
+
+    const correction_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}/slot-123-correction.lt-hash",
+        .{output_dir},
+    );
+    defer allocator.free(correction_path);
+    const correction_bytes = try std.fs.cwd().readFileAlloc(
+        allocator,
+        correction_path,
+        @sizeOf(LtHash),
+    );
+    defer allocator.free(correction_bytes);
+    try std.testing.expectEqual(@sizeOf(LtHash), correction_bytes.len);
+    var correction = LtHash.IDENTITY;
+    @memcpy(correction.bytes(), correction_bytes);
+
+    var expected = accounts_db_delta;
+    expected.mixOut(slot_cache_delta);
+    try std.testing.expectEqualSlices(u16, &expected.data, &correction.data);
+}
+
+fn logFreezeAccountFingerprints(
+    allocator: Allocator,
+    account_reader: AccountReader,
+    slot: Slot,
+    logger: Logger,
+) !void {
+    const raw_target = std.process.getEnvVarOwned(
+        allocator,
+        "SIG_REPLAY_FREEZE_ACCOUNT_FINGERPRINT_SLOT",
+    ) catch return;
+    defer allocator.free(raw_target);
+    const target = std.fmt.parseUnsigned(
+        Slot,
+        std.mem.trim(u8, raw_target, " \t\r\n"),
+        10,
+    ) catch return;
+    if (target != slot) return;
+
+    var iterator = account_reader.slotModifiedIterator(slot) orelse return;
+    defer iterator.unlock();
+    logger.info().logf(
+        "replay_freeze_account_fingerprints_begin slot={} accounts={}",
+        .{ slot, iterator.len() },
+    );
+    while (try iterator.next(allocator)) |pubkey_account| {
+        const pubkey, const account = pubkey_account;
+        defer account.deinit(allocator);
+        const account_hash = account.hash(pubkey);
+        logger.info().logf(
+            "replay_freeze_account_fingerprint slot={} pubkey={s} account_hash={s} lamports={} data_len={} owner={s} executable={} rent_epoch={}",
+            .{
+                slot,
+                pubkey.base58String().slice(),
+                account_hash.base58String().slice(),
+                account.lamports,
+                account.data.len(),
+                account.owner.base58String().slice(),
+                account.executable,
+                account.rent_epoch,
+            },
+        );
+    }
+    logger.info().logf("replay_freeze_account_fingerprints_end slot={}", .{slot});
 }
 
 /// Returns the merkle root of all accounts modified in the slot

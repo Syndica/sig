@@ -989,6 +989,25 @@ fn parseSystemInstruction(
             try result.put("info", .{ .object = info });
             try result.put("type", .{ .string = "createAccountWithSeed" });
         },
+        .create_account_allow_prefund => |args| {
+            try checkNumSystemAccounts(instruction.accounts, if (args.lamports == 0) 1 else 2);
+            var info = ObjectMap.init(arena);
+            try info.put("newAccount", try pubkeyToValue(
+                arena,
+                account_keys.get(@intCast(instruction.accounts[0])).?,
+            ));
+            if (args.lamports > 0) {
+                try info.put("source", try pubkeyToValue(
+                    arena,
+                    account_keys.get(@intCast(instruction.accounts[1])).?,
+                ));
+                try info.put("lamports", .{ .integer = @intCast(args.lamports) });
+            }
+            try info.put("owner", try pubkeyToValue(arena, args.owner));
+            try info.put("space", .{ .integer = @intCast(args.space) });
+            try result.put("info", .{ .object = info });
+            try result.put("type", .{ .string = "createAccountAllowPrefund" });
+        },
         .advance_nonce_account => {
             try checkNumSystemAccounts(instruction.accounts, 3);
             var info = ObjectMap.init(arena);
