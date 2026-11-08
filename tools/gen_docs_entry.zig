@@ -51,14 +51,23 @@ pub fn main() !void {
     const writer = &writer_state.interface;
     defer writer.flush() catch {};
 
+    try generateDocs(writer, service_names_str, module_names_str);
+    try writer.flush();
+}
+
+fn generateDocs(
+    writer: *std.Io.Writer,
+    service_names_str: []const u8,
+    module_names_str: []const u8,
+) std.Io.Writer.Error!void {
     try writer.writeAll(preamble);
 
     {
         var module_names = std.mem.splitScalar(u8, module_names_str, ',');
         while (module_names.next()) |mod_name| {
             try writer.print(
-                "pub const {[mod]s} = @import(\"{[mod]s}\");\n",
-                .{ .mod = mod_name },
+                "pub const {f} = @import(\"{s}\");\n",
+                .{ std.zig.fmtId(mod_name), mod_name },
             );
         }
     }
@@ -68,12 +77,34 @@ pub fn main() !void {
         try writer.print("pub const services = struct {{\n", .{});
         while (service_names.next()) |svc_name| {
             try writer.print(
-                "    pub const {[svc]s} = @import(\"{[svc]s}\");\n",
-                .{ .svc = svc_name },
+                "    pub const {f} = @import(\"{s}\");\n",
+                .{ std.zig.fmtId(svc_name), svc_name },
             );
         }
         try writer.print("}};\n\n", .{});
     }
+}
 
-    try writer.flush();
+test "generated docs escape module and service identifiers" {
+    const allocator = std.testing.allocator;
+    var buf: [4096]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try generateDocs(&writer, "gossip-service,replay", "lib,feature-set-id,while");
+
+    const source = try allocator.dupeZ(u8, writer.buffered());
+    defer allocator.free(source);
+    var ast = try std.zig.Ast.parse(allocator, source, .zig);
+    defer ast.deinit(allocator);
+    try std.testing.expectEqual(@as(usize, 0), ast.errors.len);
+
+    const expected_declarations = [_][]const u8{
+        "pub const lib = @import(\"lib\");",
+        "pub const @\"feature-set-id\" = @import(\"feature-set-id\");",
+        "pub const @\"while\" = @import(\"while\");",
+        "pub const @\"gossip-service\" = @import(\"gossip-service\");",
+        "pub const replay = @import(\"replay\");",
+    };
+    for (expected_declarations) |declaration| {
+        try std.testing.expect(std.mem.indexOf(u8, source, declaration) != null);
+    }
 }

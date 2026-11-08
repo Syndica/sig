@@ -671,14 +671,16 @@ const Tools = struct {
         // NOTE: have to specify `-Dno-bin` & `-Dno-run` in order to
         // avoid needing to run codegen for the sig binaries.
         const install_docs = blk: {
+            const gen_docs_module = b.createModule(.{
+                .target = b.graph.host,
+                .optimize = .Debug,
+                .root_source_file = b.path("tools/gen_docs_entry.zig"),
+            });
+            unit_tests.add("gen-docs-entry", gen_docs_module);
             const gen_docs_run = b.addRunArtifact(
                 b.addExecutable(.{
                     .name = "gen-docs-entry",
-                    .root_module = b.createModule(.{
-                        .target = b.graph.host,
-                        .optimize = .Debug,
-                        .root_source_file = b.path("tools/gen_docs_entry.zig"),
-                    }),
+                    .root_module = gen_docs_module,
                 }),
             );
 
