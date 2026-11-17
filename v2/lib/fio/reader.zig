@@ -50,8 +50,17 @@ pub fn FileReader(
         };
 
         pub fn init(self: *Self, file: std.fs.File) !void {
+            try self.initAt(file, 0);
+        }
+
+        /// Same as `init`, but starts reading at `start_offset` instead of
+        /// the beginning of the file. `start_offset` must be block aligned.
+        /// Used to iterate over the committed ranges of a ring file, which are
+        /// not necessarily contiguous.
+        pub fn initAt(self: *Self, file: std.fs.File, start_offset: u64) !void {
+            std.debug.assert(start_offset % block_size == 0);
             self.file = file;
-            self.offset = 0;
+            self.offset = start_offset;
 
             self.io_transferred = 0;
             self.io_inflight = 0;
@@ -61,12 +70,25 @@ pub fn FileReader(
             errdefer self.ring.deinit();
 
             self.read_pos = 0;
-            self.read_offset = 0;
+            self.read_offset = start_offset;
             @memset(&self.block_states, .{ .status = .idle, .len = 0 });
 
             // start reading in blocks
             for (0..num_blocks) |block_idx| {
                 try self.submitNext(@intCast(block_idx));
+            }
+        }
+
+        /// Advances the reader by `n` bytes without returning the data.
+        /// Used to reach an offset that is not block aligned.
+        pub fn skip(self: *Self, n: u64, logger: tel.Logger("FileReader.skip")) !void {
+            var remaining = n;
+            while (remaining > 0) {
+                const buf = try self.getBuffer(.from(logger));
+                if (buf.len == 0) return error.EndOfStream;
+                const take: u64 = @min(@as(u64, buf.len), remaining);
+                try self.advance(@intCast(take));
+                remaining -= take;
             }
         }
 

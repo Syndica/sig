@@ -38,6 +38,7 @@ pub fn serviceMain(runner: lib.runner.Connection, _: ReadOnly, rw: ReadWrite) !n
         runner,
         std.fs.cwd(),
         file_path,
+        rw.config.capacity,
         rw.config.memory[0..].ptr[0..rw.config.memory_len],
         rw.account_pool,
         rw.snapshot_metadata_out,
