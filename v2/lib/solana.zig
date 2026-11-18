@@ -8,6 +8,7 @@ comptime {
         _ = @import("solana/hash.zig");
         _ = @import("solana/ids.zig");
         _ = @import("solana/leader_schedule.zig");
+        _ = @import("solana/lt_hash.zig");
         _ = @import("solana/pubkey.zig");
         _ = @import("solana/signature.zig");
         _ = @import("solana/snapshot.zig");
@@ -33,6 +34,7 @@ pub const Pubkey = pubkey.Pubkey;
 pub const Signature = signature.Signature;
 pub const Cluster = @import("solana/cluster.zig").Cluster;
 pub const LeaderSchedule = @import("solana/leader_schedule.zig").LeaderSchedule;
+pub const LtHash = @import("solana/lt_hash.zig").LtHash;
 pub const EpochSchedule = epoch_schedule.EpochSchedule;
 
 pub const Lamports = u64;

@@ -70,6 +70,9 @@ const Config = struct {
 
     const AccountsDb = struct {
         file: []const u8,
+        /// Fixed size of the on-disk rooted db. Must be large enough to hold
+        /// the live account set; stale data is reclaimed by ring compaction.
+        disk: MemorySize,
         rooted: MemorySize,
         unrooted: MemorySize,
 
@@ -243,6 +246,7 @@ pub fn main() !void {
         @sizeOf(accounts_db.RootedConfig) + config.accounts_db.rooted.toBytes(),
     );
     accounts_db_config.ptr().file_len = @intCast(config.accounts_db.file.len);
+    accounts_db_config.ptr().capacity = config.accounts_db.disk.toBytes();
     @memcpy(
         accounts_db_config.ptr().file_path[0..accounts_db_config.ptr().file_len],
         config.accounts_db.file,

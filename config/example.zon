@@ -21,6 +21,9 @@
     },
     .accounts_db = .{
         .file = "./validator/accounts.db",
+        // Fixed maximum size of the on-disk rooted db. Must be large enough
+        // for a full snapshot's live account set; stale data is compacted.
+        .disk = .{ .gb = 64 },
         .rooted = .{ .gb = 8 }, // mainnet needs 64, testnet only 8 or so
         .unrooted = .{ .gb = 8 }, // TODO
     },

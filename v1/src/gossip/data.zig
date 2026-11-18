@@ -897,9 +897,30 @@ pub fn BitVec(comptime T: type) type {
         }
 
         pub fn deinit(self: *const BitVec(T), allocator: std.mem.Allocator) void {
-            allocator.free(self.bits.?);
+            // `bits` is null for zero-capacity bit vectors, which is a valid
+            // state produced both by `initFromBitSet` on an empty set and by
+            // deserializing a gossip message whose bits vec is absent. Freeing
+            // unconditionally would panic on eviction. See issue #1564.
+            if (self.bits) |bits| allocator.free(bits);
         }
     };
+}
+
+test "BitVec with null bits can be deinitialized" {
+    // Regression test for #1564: a gossip `Uncompressed` entry may legitimately
+    // carry `bits = null` (zero capacity). It used to panic in `deinit` when
+    // the gossip table evicted the entry.
+    const slot: Uncompressed = .{
+        .first_slot = 0,
+        .num = 0,
+        .slots = .{ .bits = null, .len = 0 },
+    };
+    try slot.sanitize();
+    slot.deinit(std.testing.allocator);
+
+    // Same path the gossip table takes when evicting an EpochSlots entry.
+    const compressed: CompressedSlots = .{ .Uncompressed = slot };
+    compressed.deinit(std.testing.allocator);
 }
 
 pub const LegacyVersion = struct {

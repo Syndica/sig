@@ -183,6 +183,56 @@ pub const Table = struct {
         }
     }
 
+    /// One live entry yielded by `Table.iterator`.
+    pub const Item = struct {
+        key: Key,
+        slot: Slot,
+        value: Value,
+    };
+
+    /// Iterates over the live entries of the table, in unspecified order.
+    ///
+    /// The zero pubkey is special-cased by `put` and lives in `zero_entry`
+    /// instead of `entries`, so it is yielded separately and only when it has
+    /// actually been populated. Entries still sitting in a `PutBatch` are not
+    /// visible until `flushPuts` is called.
+    pub fn iterator(self: *const Table) Iterator {
+        return .{ .table = self };
+    }
+
+    pub const Iterator = struct {
+        table: *const Table,
+        index: usize = 0,
+        zero_visited: bool = false,
+
+        pub fn next(self: *Iterator) ?Item {
+            if (!self.zero_visited) {
+                self.zero_visited = true;
+                const zero_entry = self.table.zero_entry;
+                if (!zero_entry.value.isEmpty()) {
+                    return .{
+                        .key = zero_entry.key,
+                        .slot = zero_entry.slot,
+                        .value = zero_entry.value,
+                    };
+                }
+            }
+
+            while (self.index < self.table.entries.len) {
+                const entry = &self.table.entries[self.index];
+                self.index += 1;
+                // A zeroed key marks an empty slot. See flushPuts().
+                if (entry.key.isZeroed()) continue;
+                return .{
+                    .key = entry.key,
+                    .slot = entry.slot,
+                    .value = entry.value,
+                };
+            }
+            return null;
+        }
+    };
+
     /// Reduce a hash into a table index.
     fn hashToIndex(self: *const Table, pubkey: *const Pubkey) u64 {
         const hash = pubkey.hash(self.seed);
@@ -341,4 +391,62 @@ test "accounts table flushes automatically when put batch fills" {
     state.table.flushPuts(&state.batch);
     try std.testing.expectEqual(last_value, state.table.get(&keys[Table.PARALLEL_SCAN]));
     try std.testing.expectEqual(@as(u64, Table.PARALLEL_SCAN + 1), state.table.count());
+}
+
+test "accounts table iterator yields each live entry once" {
+    var state: TestTableState(16) = undefined;
+    state.init();
+
+    const zero = Pubkey.ZEROES;
+    const key_a = testKey(1);
+    const key_b = testKey(2);
+
+    const old_value = testValue(11, 111);
+    const new_value = testValue(22, 222);
+    const other_value = testValue(33, 333);
+    const zero_value = testValue(44, 444);
+
+    state.table.put(&state.batch, &key_a, 5, old_value);
+    state.table.put(&state.batch, &key_b, 6, other_value);
+    state.table.put(&state.batch, &key_a, 7, new_value); // supersedes key_a
+    state.table.put(&state.batch, &zero, 8, zero_value);
+    state.table.flushPuts(&state.batch);
+
+    try std.testing.expectEqual(@as(u64, 3), state.table.count());
+
+    var items: [4]Table.Item = undefined;
+    var n: usize = 0;
+    var it = state.table.iterator();
+    while (it.next()) |item| : (n += 1) items[n] = item;
+    try std.testing.expectEqual(@as(usize, 3), n);
+
+    var seen_a = false;
+    var seen_b = false;
+    var seen_zero = false;
+    for (items[0..n]) |item| {
+        if (item.key.isZeroed()) {
+            seen_zero = true;
+            try std.testing.expectEqual(@as(Slot, 8), item.slot);
+            try std.testing.expectEqual(zero_value, item.value);
+        } else if (item.key.equals(&key_a)) {
+            seen_a = true;
+            try std.testing.expectEqual(@as(Slot, 7), item.slot);
+            try std.testing.expectEqual(new_value, item.value);
+        } else if (item.key.equals(&key_b)) {
+            seen_b = true;
+            try std.testing.expectEqual(@as(Slot, 6), item.slot);
+            try std.testing.expectEqual(other_value, item.value);
+        } else {
+            return error.UnexpectedKey;
+        }
+    }
+    try std.testing.expect(seen_a and seen_b and seen_zero);
+}
+
+test "accounts table iterator is empty before any puts" {
+    var state: TestTableState(8) = undefined;
+    state.init();
+
+    var it = state.table.iterator();
+    try std.testing.expect(it.next() == null);
 }

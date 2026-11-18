@@ -20,6 +20,12 @@ pub fn FileWriter(
         io_inflight: u32, // current inflight blocks being written to disk.
         io_stalled: u64, // total time spent stalled waiting for disk.
 
+        /// When set, the writer wraps from `ring_end` back to `ring_start` on
+        /// block boundaries instead of appending indefinitely. `ring_end` must
+        /// be block aligned, and `ring_start` must be too.
+        ring_start: u64,
+        ring_end: u64,
+
         ring: std.os.linux.IoUring,
         write_pos: u64,
         writing_mask: [@divExact(num_blocks, 64)]u64,
@@ -52,11 +58,26 @@ pub fn FileWriter(
             self.io_inflight = 0;
             self.io_stalled = 0;
 
+            self.ring_start = 0;
+            self.ring_end = 0;
+
             self.ring = try .init(num_blocks, std.os.linux.IORING_SETUP_SQPOLL);
             errdefer self.ring.deinit();
 
             self.write_pos = 0;
             @memset(&self.writing_mask, 0);
+        }
+
+        /// Restricts writes to `[start, end)`, wrapping at `end` back to
+        /// `start` on block boundaries. Both values must be block aligned, and
+        /// `end` must be greater than `start`. Passing `end = 0` disables
+        /// wrapping.
+        pub fn setRing(self: *Self, start: u64, end: u64) void {
+            std.debug.assert(start % block_size == 0);
+            std.debug.assert(end % block_size == 0);
+            std.debug.assert(end == 0 or end > start);
+            self.ring_start = start;
+            self.ring_end = end;
         }
 
         pub fn deinit(self: *const Self) void {
@@ -127,6 +148,9 @@ pub fn FileWriter(
 
                 const disk_block = @divExact(self.offset, block_size);
                 self.offset += block_size;
+                if (self.ring_end != 0 and self.offset == self.ring_end) {
+                    self.offset = self.ring_start;
+                }
 
                 try self.submit(.{
                     .disk_block = @intCast(disk_block),

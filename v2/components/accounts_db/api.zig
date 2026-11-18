@@ -8,6 +8,9 @@ const Slot = lib.solana.Slot;
 
 pub const RootedConfig = extern struct {
     file_len: u32,
+    /// Fixed on-disk size of the rooted db. Most of the file is a ring of
+    /// sector data; it must be large enough to hold the live account set.
+    capacity: u64,
     file_path: [std.fs.max_path_bytes]u8,
 
     memory_len: usize,
